@@ -1,0 +1,29 @@
+{
+  "name": "langly-dsl",
+  "displayName": "Langly DSL",
+  "description": "Syntax highlighting for the Langly DSL (.ly files)",
+  "version": "0.1.0",
+  "publisher": "langly",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "langly",
+        "aliases": ["Langly", "langly"],
+        "extensions": [".ly"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "langly",
+        "scopeName": "source.langly",
+        "path": "./syntaxes/langly.tmLanguage.json",
+        "injectTo": []
+      }
+    ]
+  }
+}

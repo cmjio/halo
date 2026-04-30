@@ -1,0 +1,244 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Langly",
+  "scopeName": "source.langly",
+  "fileTypes": [".ly"],
+  "foldingStartMarker": "^//\\s*\\{",
+  "foldingStopMarker": "^//\\s*\\}",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#mind-decl"
+    },
+    {
+      "include": "#stream-decl"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.langly",
+      "begin": "//",
+      "end": "$",
+      "captures": {
+        "0": { "name": "punctuation.definition.comment.langly" }
+      }
+    },
+    "mind-decl": {
+      "begin": "\\b(mind)\\b\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "beginCaptures": {
+        "1": { "name": "storage.type.langly" },
+        "2": { "name": "entity.name.type.mind.langly" }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.brackets.end.langly" }
+      },
+      "patterns": [
+        {
+          "include": "#model-config"
+        }
+      ]
+    },
+    "model-config": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.brackets.begin.langly" }
+      },
+      "end": "(?=\\])",
+      "patterns": [
+        {
+          "include": "#model-ref"
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.parameter.langly" },
+            "2": { "name": "keyword.operator.assignment.langly" }
+          }
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#boolean"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.langly"
+        }
+      ]
+    },
+    "model-ref": {
+      "match": "(?=/?[a-zA-Z_][a-zA-Z0-9_-]*([\\-\\/][a-zA-Z0-9_-]+)*)(/?[a-zA-Z_][a-zA-Z0-9_/-]*)",
+      "captures": {
+        "1": { "name": "entity.name.model.langly" }
+      }
+    },
+    "stream-decl": {
+      "begin": "\\b(stream)\\b",
+      "beginCaptures": {
+        "1": { "name": "storage.type.langly" }
+      },
+      "end": "(?=$|\\n(?=\\s*[^ \\t]))",
+      "patterns": [
+        {
+          "include": "#stream-body"
+        }
+      ]
+    },
+    "stream-signature": {
+      "begin": "\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\(",
+      "beginCaptures": {
+        "1": { "name": "entity.name.function.stream.langly" }
+      },
+      "end": "(?=:)",
+      "patterns": [
+        {
+          "include": "#stream-params"
+        },
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.langly"
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "name": "entity.name.type.langly"
+        }
+      ]
+    },
+    "stream-params": {
+      "begin": "\\(",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.parens.begin.langly" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.parens.end.langly" }
+      },
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b\\s*(:)\\s*\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "variable.parameter.langly" },
+            "2": { "name": "keyword.operator.assignment.langly" },
+            "3": { "name": "entity.name.type.langly" }
+          }
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.langly"
+        }
+      ]
+    },
+    "stream-body": {
+      "patterns": [
+        {
+          "include": "#stream-signature"
+        },
+        {
+          "include": "#pipeline-stages"
+        }
+      ]
+    },
+    "pipeline-stages": {
+      "patterns": [
+        {
+          "match": "\\|>",
+          "name": "keyword.operator.pipe.langly"
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\.\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.object.langly" },
+            "2": { "name": "entity.name.function.call.langly" }
+          }
+        },
+        {
+          "include": "#call-args"
+        },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "name": "variable.other.langly"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#boolean"
+        }
+      ]
+    },
+    "call-args": {
+      "begin": "\\(",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.parens.begin.langly" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.parens.end.langly" }
+      },
+      "patterns": [
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#boolean"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.langly"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.langly",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "match": "\\\\([\"'/\\\\nrt]|.)",
+              "name": "constant.character.escape.langly"
+            }
+          ],
+          "captures": {
+            "0": { "name": "punctuation.definition.string.langly" }
+          }
+        },
+        {
+          "name": "string.quoted.single.langly",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "match": "\\\\([\"'/\\\\nrt]|.)",
+              "name": "constant.character.escape.langly" }
+          ],
+          "captures": {
+            "0": { "name": "punctuation.definition.string.langly" }
+          }
+        }
+      ]
+    },
+    "number": {
+      "match": "\\b-?[0-9]+(\\.[0-9]+)?\\b",
+      "name": "constant.numeric.langly"
+    },
+    "boolean": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.langly"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+// ============================================================
+// STEP 16: Retry & Checkpoint Directives
+// ============================================================
+// LEARN: How to add resilience with @retry and @checkpoint
+// WHY:  Handle transient failures, save intermediate state
+// ============================================================
+
+mind Resilient [openai/gpt-4o, temp: 0.7]
+
+// Retry directive: retry up to 3 times, wait 5s between retries
+@retry(3, 5s)
+// Checkpoint: save state after this stream completes
+@checkpoint
+stream RobustCall(data: String) -> Result:
+  data
+    |> Resilient.prompt("Process: {{data}}")
+    // If this fails, retries happen automatically
+    |> System.Print()
+
+// Retry syntax: @retry(count, delay)
+//   count: number of retry attempts
+//   delay: time to wait between retries (e.g., 5s, 1m)
+//
+// Checkpoint syntax: @checkpoint
+//   Saves stream state for recovery
+//   (Implementation: logs checkpoint, full persistence pending)

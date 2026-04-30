@@ -1,0 +1,108 @@
+// ============================================================
+// ROLE: Software Engineer
+// PURPOSE: Auto-remediate production incidents with guardrails,
+//          parallel diagnosis, and human sign-off for deploys
+// ============================================================
+
+// --- Guardrails ---
+guardrail ChangeSafety    : Block(DestructiveOps) & Require(Approver)
+guardrail CostControl     : MaxSpend(5.00)
+
+// --- Tools ---
+tool GitHub         : POST("api.github.com/repos", apiKey: Env.GH_TOKEN)
+tool PagerDuty      : POST("api.pagerduty.com/incidents")
+tool SlackDev       : POST("hooks.slack.com/services/eng-oncall")
+tool RunbookDB      : PostgreSQL(Env.DB_URI, schema: "runbooks")
+
+// --- Memory ---
+tool PastIncidents  : VectorStore(Env.PINECONE_KEY, namespace: "incident-history")
+tool CodebaseIndex  : VectorStore(Env.PINECONE_KEY, namespace: "code-embeddings")
+
+// --- Minds ---
+// Cheap triage — runs fast on every alert
+mind Triage [openai/gpt-4o-mini, temp: 0.0]
+  requires CostControl
+
+// Deep analyzer — correlates logs, metrics, and code
+@shadow(Triage)
+mind Diagnoser [anthropic/claude-sonnet-4, temp: 0.05]
+  equips GitHub, CodebaseIndex, PastIncidents
+  requires CostControl
+
+// Code reviewer — validates any generated fix
+mind CodeReviewer [anthropic/claude-sonnet-4, temp: 0.0]
+  equips GitHub
+  requires ChangeSafety, CostControl
+
+// --- The Stream ---
+@timeout(15m)
+@retry(2, 5s)
+stream AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
+  incident
+    // Step 1: Fast classification — is this a known issue type?
+    |> Triage.classify(
+         context.data.incident.summary,
+         context.data.incident.last_50_errors
+       )
+
+    // Step 2: Fan-out — parallel investigation across three signals
+    |* {
+         Diagnoser.analyze_logs(
+           context.data.incident.error_window,
+           context.data.incident.service_name
+         ),
+         Diagnoser.search_codebase(
+           CodebaseIndex,
+           context.data.incident.affected_endpoint,
+           10
+         ),
+         Diagnoser.search_history(
+           PastIncidents,
+           context.data.incident.summary,
+           0.8
+         )
+       }
+
+    // Step 3: Gate — only auto-fix if confidence > 85%
+    |? (context.data.diagnosis.confidence > 85)
+
+    // Step 4: Generate the fix
+    |> Diagnoser.generate_fix(
+         context.data.diagnosis,
+         context.data.codebase.matches,
+         context.data.incident.service_language
+       )
+
+    // Step 5: Code review gate — must pass automated review
+    |> CodeReviewer.review(
+         context.data.fix.diff,
+         context.data.incident.service_name
+       )
+
+    // Step 6: Gate on review approval
+    |? (context.data.review.approved == true)
+
+    // Step 7: Create PR and notify on-call engineer
+    |> GitHub.create_pull_request(
+         context.data.incident.repo,
+         context.data.fix.title,
+         context.data.fix.description
+       )
+
+    // Step 8: Human-in-the-loop — engineer must merge
+    |! yield(
+         SlackDev,
+         context.data.fix.summary,
+         [context.data.github.pr_url, context.data.fix.diff],
+         1h
+       )
+
+    // Step 9: Wait for engineer action
+    ~> listen(SlackDev.Reaction)
+
+    // Step 10: Gate on merge confirmation
+    |? (context.data.engineer.action == "merged")
+    |> System.ResolveIncident(
+         context.data.incident.id,
+         context.data.fix.title
+       )

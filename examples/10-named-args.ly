@@ -1,0 +1,30 @@
+// ============================================================
+// STEP 10: Named Arguments
+// ============================================================
+// LEARN: How to use named arguments in mind/tool calls
+// WHY:   Named args make calls more readable and flexible
+// ============================================================
+
+mind Translator [openai/gpt-4o-mini, temp: 0.3]
+
+// Using named args: key: value syntax
+stream GreetPerson(name: String, lang: String) -> Result:
+  name
+    // Positional arg: first arg is the prompt template
+    // Named args: language to translate to
+    |> Translator.prompt(
+        "Write a warm greeting for {{name}}.",
+        target_lang: lang,
+        tone: "warm"
+      )
+    |> System.Print()
+
+// Named args preserve order independence
+stream Summarize(text: String) -> Result:
+  text
+    |> Translator.prompt(
+        max_tokens: 100,
+        tone: "concise",
+        "Summarize this text in one sentence: {{text}}"
+      )
+    |> System.Print()

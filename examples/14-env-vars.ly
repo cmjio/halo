@@ -1,0 +1,33 @@
+// ============================================================
+// STEP 14: Environment Variables
+// ============================================================
+// LEARN: How to use Env.* to access environment variables
+// WHY:  API keys and config should come from environment
+// ============================================================
+
+// Define tools that use environment variables for API keys
+tool StripeAPI : REST("api.stripe.com/v1", apiKey: Env.STRIPE_KEY)
+tool SlackBot  : POST("hooks.slack.com/services/alerts", apiKey: Env.SLACK_TOKEN)
+tool VectorDB  : VectorStore(Env.PINECONE_KEY, namespace: "production")
+
+guardrail Privacy : Redact(SalaryData) & Redact(Revenue)
+
+// Mind that uses environment for API key
+mind Analyst [openai/gpt-4o, temp: 0.3]
+  equips StripeAPI, VectorDB
+  requires Privacy
+
+stream DailyReport(date: String) -> Result:
+  date
+    // Tool calls automatically use Env.* keys at runtime
+    |> Analyst.fetch_metric(
+        tool: StripeAPI,
+        metric: "mrr",
+        date: context.input.date
+      )
+    |> System.Print()
+
+// At runtime, set environment variables:
+//   export STRIPE_KEY="sk_live_..."
+//   export SLACK_TOKEN="xoxb-..."
+//   export PINECONE_KEY="pc-..."

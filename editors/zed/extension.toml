@@ -1,0 +1,18 @@
+id = "langly"
+name = "Langly DSL"
+version = "0.1.0"
+schema_version = 2
+description = "Syntax highlighting for the Langly DSL (.ly files)"
+repository = ""
+authors = []
+themes = []
+icon_themes = []
+languages = ["languages/langly"]
+
+[language_servers]
+
+[context_servers]
+
+[agent_servers]
+
+[slash_commands]

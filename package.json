@@ -1,0 +1,31 @@
+{
+  "name": "langly",
+  "version": "0.1.0",
+  "description": "AI Workflow Language - Declarative LLM orchestration",
+  "type": "module",
+  "main": "./index.ts",
+  "bin": {
+    "langly": "./index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build ./index.ts --outdir ./dist",
+    "validate": "bun run index.ts validate",
+    "lint": "bun run index.ts validate examples/"
+  },
+  "keywords": ["ai", "llm", "dsl", "workflow", "pipeline"],
+  "exports": {
+    ".": "./index.ts",
+    "./parser": "./src/parser/index.ts",
+    "./runtime": "./src/runtime/runtime.ts",
+    "./adapter": "./src/runtime/adapter.ts",
+    "./router": "./src/runtime/router.ts"
+  },
+  "dependencies": {
+    "antlr4ng": "^3.0.16"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "@types/bun": "latest"
+  }
+}

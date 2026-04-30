@@ -1,0 +1,22 @@
+{
+  "grammars": [
+    {
+      "name": "langly",
+      "scope": "source.langly",
+      "path": ".",
+      "file-types": ["ly"]
+    }
+  ],
+  "metadata": {
+    "name": "tree-sitter-langly",
+    "version": "0.1.0"
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false
+  }
+}
