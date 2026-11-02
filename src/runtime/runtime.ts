@@ -37,6 +37,7 @@ import type {
 } from "../parser/types.js";
 import { SYSTEM_EVENTS, includes, parseDuration } from "../parser/builtins.js";
 import { render } from "../parser/index.js";
+import { producedKeys } from "../parser/validate.js";
 import { AdapterRegistry, type LLMRequest, type ProviderAdapter } from "./adapter.js";
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
@@ -45,7 +46,7 @@ import { BUILTIN_PROVIDERS, declArgs, type ToolProvider, type ToolServices } fro
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateSchema } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
-import { formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
+import { asNumber, asText, formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
 
 export * from "./errors.js";
 export type { Violation } from "./policies.js";
@@ -317,6 +318,8 @@ interface ExecutionContext {
   answers?: Record<number, unknown>;
   /** The calling pipeline's context, for a called pipeline. */
   parent?: ExecutionContext;
+  /** When this pipeline's @timeout runs out (ms since epoch). */
+  deadline?: number;
 }
 
 /** Thrown inside a run to pause it at a yield/listen with no handler. */
@@ -333,6 +336,7 @@ interface LLMOptions {
 /** Named args on an agent call that configure the request rather than the prompt. */
 const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system"]);
 const MAX_STREAM_DEPTH = 16;
+const MAX_PIPELINE_CALLS = 100_000;
 const GENESIS = "0".repeat(64);
 
 function sha256(...parts: string[]): string {
@@ -346,6 +350,14 @@ function safeJson(v: unknown): string {
     return JSON.stringify(v) ?? "undefined";
   } catch {
     return String(v);
+  }
+}
+
+function copy<T>(v: T): T {
+  try {
+    return structuredClone(v);
+  } catch {
+    return JSON.parse(formatValue(v));
   }
 }
 
@@ -365,14 +377,21 @@ function estimateTokens(text: string): number {
 }
 
 /**
- * Like Promise.all, but on a failure it waits for the other branches to finish first,
- * so the calls they already sent are counted in the run's cost before it reports.
+ * Run parallel branches under their own signal. The first failure stops the others, and
+ * waits for them to wind down, so the calls they already sent count in the run's cost
+ * before it reports (and runaway branches don't keep going in the background).
  */
-async function settleAll<T>(work: Promise<T>[]): Promise<T[]> {
-  const settled = await Promise.allSettled(work);
-  const failure = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
-  if (failure) throw failure.reason;
-  return settled.map((r) => (r as PromiseFulfilledResult<T>).value);
+async function branches<T>(signal: AbortSignal, start: (signal: AbortSignal) => Promise<T>[]): Promise<T[]> {
+  const controller = childSignal(signal);
+  try {
+    const work = start(controller.signal).map((p) => p.catch((err: unknown) => (controller.abort(err), Promise.reject(err))));
+    const settled = await Promise.allSettled(work);
+    const failure = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failure) throw failure.reason;
+    return settled.map((r) => (r as PromiseFulfilledResult<T>).value);
+  } finally {
+    controller.abort(DONE);
+  }
 }
 
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -385,12 +404,23 @@ function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+/**
+ * A controller that aborts when `parent` does. Abort it when its work is done: that also
+ * detaches it from the parent, which otherwise collects one listener per call for the
+ * whole run (and makes every later listener slower to add).
+ */
 function childSignal(parent: AbortSignal): AbortController {
   const c = new AbortController();
   if (parent.aborted) c.abort(parent.reason);
-  else parent.addEventListener("abort", () => c.abort(parent.reason), { once: true });
+  else {
+    const onAbort = () => c.abort(parent.reason);
+    parent.addEventListener("abort", onAbort, { once: true });
+    c.signal.addEventListener("abort", () => parent.removeEventListener("abort", onAbort), { once: true });
+  }
   return c;
 }
+
+const DONE = new HaloError("Done");
 
 function directiveArgs(d: Directive | undefined): string[] {
   return d?.value ? d.value.split(/\s*,\s*/) : [];
@@ -450,6 +480,8 @@ export class HaloRuntime {
    * costs in sub-pipelines not yet added to the top, so MaxSpend holds across parallel calls.
    */
   private unsettled = new WeakMap<RunMeta, number>();
+  /** Sub-pipeline calls per run, to stop runaway recursion. */
+  private pipelineCalls = new WeakMap<RunMeta, number>();
   /** Model calls in flight per run, and calls waiting under MaxSpend for one of them to settle. */
   private inflight = new WeakMap<RunMeta, { calls: number; waiting: Array<() => void> }>();
   private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
@@ -483,7 +515,13 @@ export class HaloRuntime {
   load(ast: ParseResult): this {
     if (ast.errors.length > 0) throw new HaloError(`Cannot load a program with parse errors:\n  ${ast.errors.join("\n  ")}`);
     for (const m of ast.agents) this.agents.set(m.name, m);
-    for (const s of ast.pipelines) this.pipelines.set(s.name, s);
+    for (const s of ast.pipelines) {
+      for (const stage of s.pipeline) {
+        const unsafe = producedKeys(stage).find((k) => !isSafeKey(k));
+        if (unsafe) throw new HaloError(`Pipeline "${s.name}": "${unsafe}" can't be used as a name (as ${unsafe})`, { code: "UNSAFE_NAME" });
+      }
+      this.pipelines.set(s.name, s);
+    }
     for (const g of ast.policies) this.policies.set(g.name, g);
     for (const t of [...ast.tools, ...ast.stores]) this.tools.set(t.name, t);
     for (const sc of ast.schemas) this.schemas.set(sc.name, sc);
@@ -736,6 +774,7 @@ export class HaloRuntime {
     const timeoutMs = timeout ? parseDuration(timeout.value) : NaN;
     const controller = childSignal(ctx.signal);
     ctx.signal = controller.signal;
+    if (timeoutMs > 0) ctx.deadline = Date.now() + timeoutMs;
     const timer =
       timeoutMs > 0
         ? setTimeout(() => controller.abort(new TimeoutError(`Pipeline "${ctx.pipeline.name}" timed out after ${timeout!.value}`)), timeoutMs)
@@ -777,6 +816,12 @@ export class HaloRuntime {
   private async executeStages(ctx: ExecutionContext, start: number): Promise<RunResult["status"]> {
     const { pipeline, name } = ctx.pipeline;
     for (let i = start; i < pipeline.length; i++) {
+      // A stopped run (timeout, a failed sibling branch) starts no more stages. The deadline is
+      // checked directly too: work that never waits on I/O (mocks, cached calls) can starve the timer.
+      if (ctx.signal.aborted) throw ctx.signal.reason;
+      for (let c: ExecutionContext | undefined = ctx; c; c = c.parent) {
+        if (c.deadline !== undefined && Date.now() > c.deadline) throw new TimeoutError(`Pipeline "${c.pipeline.name}" timed out after ${findDirective(c.pipeline.directives, "timeout")!.value}`);
+      }
       const stage = pipeline[i]!;
       const label = stageLabel(stage);
       const t0 = performance.now();
@@ -904,9 +949,10 @@ export class HaloRuntime {
 
   private contextPath(path: string[], ctx: ExecutionContext): unknown {
     const [ns, ...rest] = path;
-    if (ns === undefined) return this.snapshot(ctx);
+    // A whole container is copied: stored back into context.data, the original would contain itself.
+    if (ns === undefined) return copy(this.snapshot(ctx));
     const roots: Record<string, unknown> = { data: ctx.data, input: ctx.input, meta: ctx.meta, trace: ctx.trace, current: ctx.current };
-    return getPath(roots[ns], rest);
+    return rest.length || ns === "current" ? getPath(roots[ns], rest) : copy(roots[ns]);
   }
 
   /** Resolve a `{{path}}` placeholder or bare name against the context. */
@@ -989,7 +1035,7 @@ export class HaloRuntime {
         const r = this.evalCond(c.right, ctx);
         if (c.op === "==") return looseEquals(l, r);
         if (c.op === "!=") return !looseEquals(l, r);
-        const [a, b] = [Number(l), Number(r)];
+        const [a, b] = [asNumber(l), asNumber(r)];
         if (l === null || l === undefined || r === null || r === undefined || Number.isNaN(a) || Number.isNaN(b)) return false;
         return c.op === ">" ? a > b : c.op === "<" ? a < b : c.op === ">=" ? a >= b : a <= b;
       }
@@ -1066,6 +1112,7 @@ export class HaloRuntime {
         await sleep(delayMs, ctx.signal);
       } finally {
         clearTimeout(timer);
+        controller.abort(DONE);
       }
     }
   }
@@ -1105,15 +1152,27 @@ export class HaloRuntime {
       this.flight(ctx).calls++;
       return { options: fitted, reserve };
     };
-    const attempt = (): { options: LLMOptions; reserve: number } | Promise<{ options: LLMOptions; reserve: number }> => {
-      const fitted = this.fitBudget(agent, model, prompt, system, options, ctx);
-      return fitted instanceof Promise ? fitted.then(attempt) : take(fitted);
+    // Waiters are woken one at a time: one that goes ahead (or is refused) wakes the next, and
+    // one that has to wait again goes back to the front, so a settle costs one check, not one per waiter.
+    const wakeNext = () => this.flight(ctx).waiting.shift()?.();
+    const attempt = (woken: boolean): { options: LLMOptions; reserve: number } | Promise<{ options: LLMOptions; reserve: number }> => {
+      let fitted;
+      try {
+        fitted = this.fitBudget(agent, model, prompt, system, options, ctx, woken);
+      } catch (err) {
+        if (woken) wakeNext();
+        throw err;
+      }
+      if (fitted instanceof Promise) return fitted.then(() => attempt(true));
+      const taken = take(fitted);
+      if (woken) wakeNext();
+      return taken;
     };
-    return Promise.resolve(attempt());
+    return Promise.resolve(attempt(false));
   }
 
   /** The options a call fits the budget with, or a promise to wait on (for a call in flight) before trying again. */
-  private fitBudget(agent: Agent, model: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext): LLMOptions | Promise<void> {
+  private fitBudget(agent: Agent, model: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext, again = false): LLMOptions | Promise<void> {
     const limit = this.guard.spendLimit(agent);
     const adapter = this.adapterRegistry.findAdapter(model);
     if (limit === undefined || !adapter?.estimateCost) return options;
@@ -1126,7 +1185,7 @@ export class HaloRuntime {
     if (room > 0 && cap >= wanted) return { ...options, maxTokens: wanted };
     // Calls in flight hold their full estimate; most settle for less, so wait for one before shrinking or refusing.
     if (flight.calls > 0) {
-      return raceAbort(new Promise<void>((done) => flight.waiting.push(done)), ctx.signal);
+      return raceAbort(new Promise<void>((done) => (again ? flight.waiting.unshift(done) : flight.waiting.push(done))), ctx.signal);
     }
     if (room <= 0 || cap < 1) this.guard.refuseOverBudget(agent, this.guardHooks(ctx));
     return { ...options, maxTokens: cap };
@@ -1317,7 +1376,7 @@ export class HaloRuntime {
     } finally {
       this.unsettle(ctx, -reserve);
       flight.calls--;
-      for (const wake of flight.waiting.splice(0)) wake();
+      flight.waiting.shift()?.();
     }
     const { result, attempts } = outcome;
 
@@ -1480,13 +1539,13 @@ export class HaloRuntime {
         this.logger.log(`[${ctx.pipeline.name}]`, ...(positional.length ? positional : [ctx.current]));
         return ctx.current;
       case "Sleep": {
-        const ms = parseDuration(String(positional[0] ?? ""));
+        const ms = parseDuration(asText(positional[0] ?? ""));
         if (!(ms >= 0)) throw new HaloError(`System.Sleep needs a duration, e.g. System.Sleep(2s)`);
         await sleep(ms, ctx.signal);
         return ctx.current;
       }
       case "Fail":
-        throw new HaloError(String(positional[0] ?? named.message ?? `Pipeline "${ctx.pipeline.name}" failed`));
+        throw new HaloError(asText(positional[0] ?? named.message ?? `Pipeline "${ctx.pipeline.name}" failed`));
       case "Value":
         // Make a value the flowing value, e.g. to end a pipeline with a result
         // computed earlier: |> System.Value(context.data.review)
@@ -1495,13 +1554,13 @@ export class HaloRuntime {
       case "Pick": {
         const fields = named.fields ?? positional.slice(1);
         if (!Array.isArray(fields) || !fields.length) throw new HaloError(`System.Pick needs fields, e.g. System.Pick(context.data.x, fields: ["id", "user.login"])`);
-        const maxChars = named.maxChars === undefined ? Infinity : Number(named.maxChars);
+        const maxChars = named.maxChars === undefined ? Infinity : asNumber(named.maxChars);
         const source = positional.length ? positional[0] : ctx.current;
         // Picking "fields" of plain values does nothing: say how to take items instead.
         if (Array.isArray(source) && source.some((v) => v === null || typeof v !== "object")) {
           throw new HaloError(`System.Pick keeps fields of objects, but this list holds plain values (${formatValue(source.slice(0, 3)).replace(/\s+/g, " ")}...). To take the first items, use |* each(x in list, limit: 5) or list.0`);
         }
-        return pick(source, fields.map(String), maxChars);
+        return pick(source, fields.map(asText), maxChars);
       }
     }
 
@@ -1519,7 +1578,14 @@ export class HaloRuntime {
   private async pipelineCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
     const target = this.pipelines.get(stage.callee);
     if (!target) throw new HaloError(`Pipeline "${stage.callee}" not found`);
-    if (ctx.depth + 1 >= MAX_STREAM_DEPTH) throw new HaloError(`Pipeline call depth exceeded ${MAX_STREAM_DEPTH} (recursive "${stage.callee}"?)`);
+    if (ctx.depth + 1 >= MAX_STREAM_DEPTH) throw new HaloError(`Pipeline calls are nested more than ${MAX_STREAM_DEPTH} deep (calling "${stage.callee}"); a pipeline that calls itself needs a way to stop`);
+    // Recursion inside a fan-out or each multiplies at every level (3 branches, 16 deep, is 43 million runs).
+    const top = this.topMeta(ctx);
+    const calls = (this.pipelineCalls.get(top) ?? 0) + 1;
+    this.pipelineCalls.set(top, calls);
+    if (calls > MAX_PIPELINE_CALLS) throw new HaloError(`More than ${MAX_PIPELINE_CALLS} pipeline calls in one run (calling "${stage.callee}"); is a pipeline calling itself from |* or each?`);
+    // Mocked or cached work can finish without ever yielding; let timers (@timeout) run now and then.
+    if (calls % 1000 === 0) await new Promise((done) => setImmediate(done));
 
     const { positional, named } = this.resolveArgs(stage, ctx);
     const args: Record<string, unknown> = {};
@@ -1537,14 +1603,13 @@ export class HaloRuntime {
     if (!ctx.parent) this.unsettle(ctx, -child.meta.cost);
     ctx.meta.tokens.prompt += child.meta.tokens.prompt;
     ctx.meta.tokens.completion += child.meta.tokens.completion;
-    ctx.meta.calls.push(...child.meta.calls);
-    ctx.meta.violations.push(...child.meta.violations);
-    ctx.meta.shadows.push(...child.meta.shadows);
+    // A loop, not push(...list): a sub-pipeline with a million calls would overflow the call stack.
+    for (const list of ["calls", "violations", "shadows"] as const) for (const item of child.meta[list]) (ctx.meta[list] as unknown[]).push(item);
     return result.output;
   }
 
   private async fanout(stage: FanOutStage, ctx: ExecutionContext): Promise<unknown[]> {
-    const results = await settleAll(stage.stages.map((sub) => this.callStage(sub, ctx)));
+    const results = await branches(ctx.signal, (signal) => stage.stages.map((sub) => this.callStage(sub, { ...ctx, signal })));
     if (stage.bind) ctx.data[stage.bind] = results;
     return results;
   }
@@ -1577,21 +1642,21 @@ export class HaloRuntime {
     const results: unknown[] = new Array(list.length);
     let next = 0;
     let failed = false;
-    const worker = async () => {
+    const worker = async (signal: AbortSignal) => {
       while (next < list.length && !failed) {
         const i = next++;
         // Each iteration sees the item under its own name and as the flowing value.
         const data: Record<string, unknown> = { ...ctx.data, [stage.item]: list[i], index: i };
         if (isPlainObject(data[callee])) data[callee] = { ...(data[callee] as object) };
         try {
-          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i] });
+          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i], signal });
         } catch (err) {
           failed = true;
           throw err;
         }
       }
     };
-    await settleAll(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+    await branches(ctx.signal, (signal) => Array.from({ length: Math.min(concurrency, list.length) }, () => worker(signal)));
 
     if (callee !== "System") this.store(ctx, callee, method, results);
     if (stage.bind) ctx.data[stage.bind] = results;
@@ -1635,7 +1700,7 @@ export class HaloRuntime {
     if (req.timeoutMs) {
       const controller = childSignal(ctx.signal);
       const timer = setTimeout(() => controller.abort(new TimeoutError(`No response to |! yield(...) within ${req.timeoutMs}ms`)), req.timeoutMs);
-      work = raceAbort(work, controller.signal).finally(() => clearTimeout(timer));
+      work = raceAbort(work, controller.signal).finally(() => (clearTimeout(timer), controller.abort(DONE)));
     }
     this.deliver(stage, ctx, await work, "yield");
   }

@@ -118,6 +118,8 @@ class Validator {
         this.add("error", `Policy "${g.name}": Validate needs a field, an operator, and a value, e.g. Validate("amount", "<=", "context.data.limit")`, g.loc);
       } else if (rule.name === "Enforce" && !rule.args.every((a) => a.toUpperCase() === "JSON")) {
         this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
+      } else if (rule.name === "MatchRegex" && !validRegex(unquoteArg(rule.args[0] ?? ""))) {
+        this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
         this.add("error", `Policy "${g.name}": ${rule.name} needs a numeric limit`, g.loc);
       }
@@ -189,6 +191,10 @@ class Validator {
     const data = new Set<string>(params);
 
     s.pipeline.forEach((stage, i) => {
+      // `as __proto__` would replace context.data's prototype instead of naming a result.
+      for (const key of producedKeys(stage)) {
+        if (UNSAFE_NAMES.has(key)) this.add("error", `Pipeline "${s.name}": "${key}" can't be used as a name (as ${key})`, stage.loc);
+      }
       if (stage.kind === "expression") {
         if (stage.expr.kind === "ref" && !params.has(stage.expr.path[0]!)) {
           this.add("error", `Pipeline "${s.name}": undefined variable "${stage.expr.path[0]}"`, stage.loc);
@@ -197,6 +203,9 @@ class Validator {
         }
         if (i !== 0) this.add("error", `Pipeline "${s.name}": an expression can only start a pipeline`, stage.loc);
         return;
+      }
+      if (stage.kind === "loop" && this.agents.has(stage.target) && !s.pipeline.slice(0, i).some((x) => x.kind === "call" && x.callee === stage.target)) {
+        this.add("error", `Pipeline "${s.name}": loop(${stage.target}, ...) needs an earlier ${stage.target} stage to go back to`, stage.loc);
       }
       this.checkStage(stage, s, params, data);
       for (const key of producedKeys(stage)) data.add(key);
@@ -261,11 +270,19 @@ class Validator {
     if (call.callee === "System") {
       const known = includes(SYSTEM_METHODS, call.method) || includes(SYSTEM_EVENTS, call.method) || this.options.systemMethods?.includes(call.method);
       if (!known) this.add("error", `${where}: unknown System method "${call.method}"`, call.loc);
+      else this.checkSystem(call, where);
       return;
     }
     if (!call.method) {
-      if (!this.pipelines.has(call.callee)) this.add("error", `${where}: "${call.callee}(...)" is not a defined pipeline`, call.loc);
-      else if (call.callee === s.name) this.add("warning", `${where}: calls itself recursively`, call.loc);
+      const callee = this.pipelines.get(call.callee);
+      if (!callee) this.add("error", `${where}: "${call.callee}(...)" is not a defined pipeline`, call.loc);
+      else {
+        if (call.callee === s.name) this.add("warning", `${where}: calls itself recursively`, call.loc);
+        // With no arguments, the flowing value fills the first parameter.
+        const positional = call.argList.filter((a) => !a.name).length;
+        const missing = callee.params.filter((p, i) => (call.argList.length ? i >= positional : i > 0) && !call.argList.some((a) => a.name === p.name));
+        if (missing.length) this.add("warning", `${where}: ${call.callee}(...) is called without ${missing.map((p) => `"${p.name}"`).join(", ")}`, call.loc);
+      }
       return;
     }
 
@@ -309,6 +326,19 @@ class Validator {
     if (/\b(?:eval|(?:ba|z|da)?sh\s+-c)\s+\{\{/.test(cmd) || /\{\{[^}]*\}\}[^\n;&]*\|\s*(?:ba|z|da)?sh\b/.test(cmd)) warn("runs a {{placeholder}}'s value as shell code (eval, sh -c, or | sh); pass it as data instead");
   }
 
+  /** System calls whose arguments are wrong in a way the runtime would only find when it gets there. */
+  private checkSystem(call: CallStage, where: string) {
+    const positional = call.argList.filter((a) => !a.name);
+    if (call.method === "Value" && call.argList.length !== 1) this.add("error", `${where}: System.Value takes exactly one value, e.g. System.Value(context.data.review)`, call.loc);
+    if (call.method === "Pick" && !call.argList.some((a) => a.name === "fields") && positional.length < 2) {
+      this.add("error", `${where}: System.Pick needs fields, e.g. System.Pick(context.data.x, fields: ["id", "user.login"])`, call.loc);
+    }
+    const first = positional[0]?.value;
+    if (call.method === "Sleep" && (!first || ((first.kind === "string" || first.kind === "duration") && !(parseDuration(first.kind === "string" ? first.value : first.raw) >= 0)))) {
+      this.add("error", `${where}: System.Sleep needs a duration, e.g. System.Sleep(2s)`, call.loc);
+    }
+  }
+
   private checkArgs(args: Arg[], s: PipelineDeclaration, params: Set<string>, data: Set<string>, loc?: Loc) {
     for (const a of args) this.checkValue(a.value, s, params, data, loc);
   }
@@ -345,7 +375,9 @@ class Validator {
         break;
       case "value":
         if (c.value.kind === "context") this.checkContextRef(c.value.path, s, data, loc);
-        else if (c.value.kind === "ref" && !params.has(c.value.path[0]!) && !data.has(c.value.path[0]!)) {
+        else if (c.value.kind === "ref" && c.value.path[0] === "Env") {
+          this.add("error", `Pipeline "${s.name}": ${c.value.path.join(".")} can only be used in tool declarations, not in a condition`, loc);
+        } else if (c.value.kind === "ref" && !params.has(c.value.path[0]!) && !data.has(c.value.path[0]!)) {
           this.add("warning", `Pipeline "${s.name}": "${c.value.path.join(".")}" in a gate is not a parameter or result; it compares as a string`, loc);
         }
         break;
@@ -396,3 +428,16 @@ function callKeys(call: CallStage): string[] {
   if (call.callee === "System") return [];
   return call.method ? [call.callee, call.method] : [call.callee];
 }
+
+const UNSAFE_NAMES = new Set(["__proto__", "prototype", "constructor"]);
+
+function validRegex(pattern: string): boolean {
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const unquoteArg = (s: string) => s.replace(/^(["'])(.*)\1$/, "$2");

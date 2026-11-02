@@ -136,6 +136,21 @@ async function readEntries(path: string): Promise<string[]> {
   return Array.isArray(data) ? data.map(str) : [];
 }
 
+const fileQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Run read-modify-write steps on one file one at a time: parallel appends (an agent that
+ * equips the file, called from each) would otherwise read the same entries and drop each other's.
+ */
+function oneAtATime<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const key = resolve(path);
+  const next = (fileQueues.get(key) ?? Promise.resolve()).then(work, work);
+  const tail = next.catch(() => {});
+  fileQueues.set(key, tail);
+  void tail.then(() => fileQueues.get(key) === tail && fileQueues.delete(key));
+  return next;
+}
+
 /** A JSON file of text entries: `read` (the last `keep`), `append`, `clear`. */
 export const fileStore: ToolProvider = async (call) => {
   const path = call.config(0);
@@ -165,10 +180,12 @@ export const fileStore: ToolProvider = async (call) => {
     case "save":
     case "write": {
       const entry = need(call, "content", call.named.content ?? call.positional[0]);
-      const entries = [...(await readEntries(path)), entry].slice(-Math.max(keep, 1) * 5);
-      mkdirSync(dirname(path), { recursive: true });
-      await Bun.write(path, JSON.stringify(entries, null, 2));
-      return { saved: true, entries: entries.length };
+      return oneAtATime(path, async () => {
+        const entries = [...(await readEntries(path)), entry].slice(-Math.max(keep, 1) * 5);
+        mkdirSync(dirname(path), { recursive: true });
+        await Bun.write(path, JSON.stringify(entries, null, 2));
+        return { saved: true, entries: entries.length };
+      });
     }
     case "clear":
       await Bun.write(path, "[]");

@@ -491,7 +491,7 @@ describe("policies", () => {
     expect(await ok.execute("S", { xs: Array.from({ length: 20 }, (_, i) => i) })).toHaveLength(20);
   });
 
-  test("a failed each counts the calls its other branches already sent", async () => {
+  test("a failed each stops its other branches, and still counts the calls they sent", async () => {
     let cost = 0;
     const fakeFetch = (async (_u: string, init: RequestInit) => {
       const n = JSON.parse(String(init.body)).messages.at(-1).content;
@@ -503,7 +503,8 @@ describe("policies", () => {
       parse(`agent M [openai/gpt-4o]\npipeline S(xs: List) -> Result:\n  xs |* each(x in xs, concurrency: 4) => M.a(x)`),
     );
     await expect(r.execute("S", { xs: [0, 1, 2, 3] })).rejects.toThrow("400");
-    expect(cost).toBeCloseTo(3 * 0.005, 5);
+    // Stopped mid-flight, they count at their estimate (prompt plus a full reply): at least what they'd have cost.
+    expect(cost).toBeGreaterThanOrEqual(3 * 0.005);
   });
 
   test("MaxSpend holds when calls run in parallel: calls in flight count at their estimate", async () => {

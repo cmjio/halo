@@ -55,7 +55,9 @@ Each arm is a single call. To run several stages in an arm, call a pipeline.
 
 ## Fan-out `|* { … }`
 
-Runs the calls in parallel on the same input. The result is a list in the same order. Each call's result is also stored at its usual places, and per-call `as` bindings work. A bare agent name is shorthand for `Agent.prompt()`, and a bare pipeline name calls that pipeline.
+Runs the calls in parallel on the same input. The result is a list in the same order. Each call's result is also stored at its usual places, and per-call `as` bindings work. A bare agent name is shorthand for `Agent.prompt()`, and a bare pipeline name calls that pipeline. If one call fails, the others are stopped, and the calls they already made still count toward the run's cost.
+
+Pipelines can call pipelines (themselves too) up to 16 deep, and at most 100,000 times in one run, so recursion inside `|*` or `each` can't multiply without end.
 
 ```halo
 agent Optimist  [openai/gpt-4o-mini]
@@ -70,7 +72,7 @@ pipeline Debate(claim: String) -> Result:
 
 ## Each `|* each(item in list) => Call()`
 
-Calls once per item of a list, at most `concurrency` at a time (default 4). `limit: n` uses only the first `n` items. Inside the call, the item is available by its name and as the flowing value, and `index` is its position. The result is the list of results.
+Calls once per item of a list, at most `concurrency` at a time (default 4). `limit: n` uses only the first `n` items. Inside the call, the item is available by its name and as the flowing value, and `index` is its position. The result is the list of results. As with fan-out, the first failure stops the rest.
 
 ```halo
 agent Summarizer [openai/gpt-4o-mini]

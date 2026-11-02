@@ -43,7 +43,7 @@ You can forward these events to any logging or tracing system. There are no buil
 
 ## Halo Studio
 
-The CLI records every `run`, `debug`, `test`, and `resume` to `.halo/telemetry.db` (SQLite, the last 100 runs) in the current directory. Pass `--no-telemetry` to turn this off. `halo serve` records its runs to the same file and serves Studio at `/`:
+The CLI records every `run`, `debug`, `test`, and `resume` to `.halo/telemetry.db` (SQLite, the last 100 finished runs; runs still going are never pruned, and a field over 32 KB, like a huge output, is kept as a preview) in the current directory. Pass `--no-telemetry` to turn this off. `halo serve` records its runs to the same file and serves Studio at `/`:
 
 ```bash
 halo serve        # Studio at http://127.0.0.1:8080/ (also: bun run studio)

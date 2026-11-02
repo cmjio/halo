@@ -654,3 +654,109 @@ describe("paths, System.Value, memory filters, and corrected violations", () => 
   });
 });
 
+
+describe("limits found by fuzzing and scale runs", () => {
+  test("a pipeline calling itself from a fan-out stops at its @timeout instead of running forever", async () => {
+    const r = rt(`@timeout(300ms)\npipeline P(x: String) -> Result:\n  x\n    |* { P, P, P }`);
+    const t0 = performance.now();
+    await expect(r.execute("P", { x: "a" })).rejects.toThrow('Pipeline "P" timed out after 300ms');
+    expect(performance.now() - t0).toBeLessThan(5000);
+  });
+
+  test("calls don't pile up abort listeners on the run's signal", async () => {
+    const proto = EventTarget.prototype;
+    const [add, remove] = [proto.addEventListener, proto.removeEventListener];
+    // Listeners still attached, per signal (a leak piles them all onto the run's one signal).
+    const attached = new Map<EventTarget, number>();
+    const bump = (t: EventTarget, d: number) => attached.set(t, (attached.get(t) ?? 0) + d);
+    proto.addEventListener = function (this: EventTarget, type: string, ...rest: any[]) {
+      if (type === "abort") bump(this, 1);
+      return (add as any).call(this, type, ...rest);
+    } as typeof add;
+    proto.removeEventListener = function (this: EventTarget, type: string, ...rest: any[]) {
+      if (type === "abort") bump(this, -1);
+      return (remove as any).call(this, type, ...rest);
+    } as typeof remove;
+    try {
+      const r = rt(`agent M [openai/gpt-4o]\npipeline P(items: List) -> Result:\n  items |* each(x in items, concurrency: 10) => M.work()`, { "M.work": 1 });
+      await r.execute("P", { items: Array.from({ length: 2000 }, (_, i) => i) });
+    } finally {
+      [proto.addEventListener, proto.removeEventListener] = [add, remove];
+    }
+    // A leak would leave about 2000 on one signal.
+    expect(Math.max(...attached.values())).toBeLessThan(50);
+  });
+
+  test("JSON with toString or valueOf keys compares like any other value", async () => {
+    const r = rt(`agent A [openai/gpt-4o]\npipeline S(x: String) -> Result:\n  x |> A.score() as r |? (context.data.r == 1) |> System.Fail(context.data.r)`, { "A.score": '{"toString": 1, "valueOf": 2}' });
+    expect((await r.run("S", { x: "a" })).status).toBe("halted");
+    const fail = rt(`agent A [openai/gpt-4o]\npipeline S(x: String) -> Result:\n  x |> A.score() as r |> System.Fail(context.data.r)`, { "A.score": '{"toString": 1}' });
+    await expect(fail.execute("S", { x: "a" })).rejects.toThrow('"toString": 1');
+  });
+
+  test("a whole context container can flow back into context.data without containing itself", async () => {
+    const r = rt(`pipeline S(x: String) -> Result:\n  context.data\n    |> System.Print() as y\n    |> System.Value("{{y}}")`);
+    const realLog = console.log;
+    console.log = () => {};
+    try {
+      expect(await r.execute("S", { x: "a" })).toContain('"x": "a"');
+    } finally {
+      console.log = realLog;
+    }
+  });
+
+  test("values nested too deeply fail with a clear error", async () => {
+    let v: unknown = "x";
+    for (let i = 0; i < 100_000; i++) v = { a: v };
+    const r = rt(`policy G : Redact(PII)\nagent M [openai/gpt-4o]\n  requires G\npipeline P(x: JSON) -> Result:\n  x |> M.go()`, { "M.go": "ok" });
+    await expect(r.execute("P", { x: v })).rejects.toThrow("nested too deeply");
+  }, 30_000);
+
+  test("parallel appends to one File store all land", async () => {
+    const file = join(tmp, "parallel-history.json");
+    const r = rt(`store H : File("${file}", keep: 1000)\nagent M [openai/gpt-4o]\n  equips H\npipeline P(items: List) -> Result:\n  items |* each(x in items, concurrency: 10) => M.reply()`, {
+      "M.reply": async (q: MockRequest) => (await Bun.sleep(Math.random() * 3), `ok ${q.input}`),
+    });
+    await r.execute("P", { items: Array.from({ length: 100 }, (_, i) => i) });
+    expect((await Bun.file(file).json()) as string[]).toHaveLength(100);
+  });
+
+  test("telemetry never prunes a run that is still going, and cuts huge fields to a preview", () => {
+    const telemetry = new SqliteTelemetry(":memory:", 2);
+    const event = (runId: string, e: Record<string, unknown>) => telemetry.handler({ runId, pipeline: "P", ...e } as RuntimeEvent);
+    event("long", { type: "run", status: "start" });
+    for (let i = 0; i < 25; i++) {
+      event(`r${i}`, { type: "run", status: "start" });
+      event(`r${i}`, { type: "run", status: "completed", output: "x".repeat(i === 24 ? 200_000 : 1), cost: 0.5 });
+    }
+    event("long", { type: "run", status: "completed", output: "done", cost: 0 });
+    const ids = telemetry.listRuns(100).map((r) => r.run_id);
+    expect(ids).toContain("long");
+    expect(ids.length).toBeLessThan(25);
+    const last = JSON.parse(String(telemetry.run("r24").at(-1)!.payload));
+    expect(last.cost).toBe(0.5);
+    expect(last.output).toMatchObject({ truncated: true, length: 200_002 });
+    expect(telemetry.listRuns(Number("abc")).length).toBeGreaterThan(0);
+    telemetry.close();
+  });
+
+  test("validate catches what used to fail only at run time", () => {
+    const errors = (body: string, extra = "") => messages(`agent A [openai/gpt-4o]\n${extra}pipeline S(x: String) -> Result:\n  x ${body}`, "error");
+    expect(errors(`|<> loop(A, "true")`)).toContain('Pipeline "S": loop(A, ...) needs an earlier A stage to go back to');
+    expect(errors(`|> System.Value()`)[0]).toContain("System.Value takes exactly one value");
+    expect(errors(`|> System.Pick(context.data.x)`)[0]).toContain("System.Pick needs fields");
+    expect(errors(`|> System.Sleep("soon")`)[0]).toContain("System.Sleep needs a duration");
+    expect(errors(`|> A.go() as __proto__`)[0]).toContain('"__proto__" can\'t be used as a name');
+    expect(errors(`|? (Env.MODE == "a")`)[0]).toContain("Env.MODE can only be used in tool declarations");
+    expect(errors(`|> A.go()`, `policy P : MatchRegex("[")\n`)[0]).toContain("is not a valid regular expression");
+    expect(messages(`pipeline T(a: String, b: String) -> Result:\n  a |> System.Value(b)\npipeline S(x: String) -> Result:\n  x |> T()`, "warning")).toContain('Pipeline "S": T(...) is called without "b"');
+    expect(() => new HaloRuntime().load(parse(`pipeline S(x: String) -> Result:\n  x |> System.Value(x) as __proto__`))).toThrow("can't be used as a name");
+  });
+
+  test("an over-long dotted name is a parse error, not a long parse", () => {
+    const t0 = performance.now();
+    const r = parse(`pipeline P(x: String) -> Result:\n  x |> System.Value(context.data.${"a.".repeat(20_000)}a)`);
+    expect(r.errors[0]).toContain("too long");
+    expect(performance.now() - t0).toBeLessThan(500);
+  });
+});

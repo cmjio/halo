@@ -1,3 +1,4 @@
+import { HaloError } from "./errors.js";
 /** Helpers for walking, formatting, and parsing runtime values. */
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -59,7 +60,26 @@ export function pick(value: unknown, fields: string[], maxChars = Infinity): unk
 export function formatValue(v: unknown): string {
   if (v === undefined) return "";
   if (typeof v === "string") return v;
-  return JSON.stringify(v, null, 2) ?? String(v);
+  try {
+    return JSON.stringify(v, null, 2) ?? String(v);
+  } catch (err) {
+    if (err instanceof RangeError) throw new HaloError("A value is nested too deeply to use (thousands of levels of lists or objects)", { code: "VALUE_TOO_DEEP" });
+    // A value that contains itself: show the repeat instead of failing.
+    const seen = new WeakSet<object>();
+    return JSON.stringify(v, (_k, x: unknown) => (x && typeof x === "object" ? (seen.has(x) ? "[Circular]" : (seen.add(x), x)) : x), 2) ?? "";
+  }
+}
+
+/**
+ * A value as text, or as a number, without trusting the value's own methods: JSON with a
+ * "toString" or "valueOf" key (from a model or a request) makes String() and Number() throw.
+ */
+export function asText(v: unknown): string {
+  return v !== null && typeof v === "object" ? formatValue(v) : String(v);
+}
+
+export function asNumber(v: unknown): number {
+  return v !== null && typeof v === "object" ? NaN : Number(v);
 }
 
 /** Replace `{{path}}` placeholders. Unresolved placeholders are left as written. */
@@ -94,9 +114,9 @@ export function humanize(method: string): string {
 /** Loose equality used by gates: numbers compare numerically, everything else as strings. */
 export function looseEquals(a: unknown, b: unknown): boolean {
   if (a === null || a === undefined || b === null || b === undefined) return (a ?? null) === (b ?? null);
-  if (typeof a === "boolean" || typeof b === "boolean") return String(a) === String(b);
-  const na = Number(a);
-  const nb = Number(b);
+  if (typeof a === "boolean" || typeof b === "boolean") return asText(a) === asText(b);
+  const na = asNumber(a);
+  const nb = asNumber(b);
   if (typeof a !== "object" && typeof b !== "object" && a !== "" && b !== "" && !Number.isNaN(na) && !Number.isNaN(nb)) return na === nb;
   return formatValue(a) === formatValue(b);
 }

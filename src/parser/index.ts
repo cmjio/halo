@@ -109,7 +109,16 @@ function makeParser(source: string) {
 
 const empty = (errors: string[]): ParseResult => ({ policies: [], tools: [], stores: [], schemas: [], agents: [], pipelines: [], errors });
 
+/** Longest run of letters, digits and dots allowed outside strings: the lexer tries a model name from every dot, so longer runs parse in quadratic time. */
+const MAX_NAME = 512;
+
 export function parse(source: string): ParseResult {
+  const code = source.replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, " "));
+  const long = new RegExp(`[A-Za-z0-9_.]{${MAX_NAME + 1},}`).exec(code);
+  if (long) {
+    const line = source.slice(0, long.index).split("\n").length;
+    return empty([`line ${line}: a name or path is too long (over ${MAX_NAME} characters)`]);
+  }
   try {
     return parseProgram(source);
   } catch (err) {

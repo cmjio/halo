@@ -67,13 +67,27 @@ export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow 
   }
 }
 
+/** The most a single event keeps of one payload field; a 10 MB value would otherwise be stored at every stage. */
+const MAX_FIELD = 32_000;
+
 function json(v: unknown): string | null {
   if (v === undefined) return null;
+  let text: string;
   try {
-    return JSON.stringify(v);
+    text = JSON.stringify(v);
   } catch {
-    return String(v);
+    return JSON.stringify(String(v));
   }
+  if (text.length <= MAX_FIELD * 2 || !v || typeof v !== "object" || Array.isArray(v)) return text.length <= MAX_FIELD * 2 ? text : JSON.stringify(cut(text));
+  // Keep small fields (cost, status, model) whole and cut the big ones to a preview.
+  return JSON.stringify(Object.fromEntries(Object.entries(v).map(([k, x]) => {
+    const field = JSON.stringify(x) ?? "";
+    return [k, field.length > MAX_FIELD ? cut(field) : x];
+  })));
+}
+
+function cut(text: string): { truncated: true; length: number; preview: string } {
+  return { truncated: true, length: text.length, preview: text.slice(0, MAX_FIELD) };
 }
 
 /** Writes telemetry rows to a SQLite file, keeping the most recent `keepRuns` runs. */
@@ -84,6 +98,8 @@ export class SqliteTelemetry {
   constructor(readonly path = ".halo/telemetry.db", private keepRuns = 100) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path, { create: true });
+    // WAL: Studio reads while runs write, and each event doesn't wait for a full sync.
+    if (path !== ":memory:") this.db.run("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
     this.db.run(`CREATE TABLE IF NOT EXISTS telemetry (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id TEXT, timestamp INTEGER, type TEXT, stage TEXT, payload TEXT, duration_ms INTEGER, tokens INTEGER
@@ -96,16 +112,21 @@ export class SqliteTelemetry {
   handler = (event: RuntimeEvent): void => {
     const row = toTelemetryRow(event);
     if (!row) return;
-    if (row.type === "stream_start") this.prune();
+    if (row.type === "stream_start" && ++this.starts % 20 === 1) this.prune();
     this.insert.run(row.runId, row.timestamp, row.type, row.stage, json(row.payload), row.durationMs ?? null, row.tokens ?? null);
   };
 
+  private starts = 0;
+
+  /** Drop finished runs beyond the newest `keepRuns`. Runs still going are never cut off mid-run. */
   private prune() {
     this.db.run(
-      `DELETE FROM telemetry WHERE run_id NOT IN (
-         SELECT run_id FROM telemetry GROUP BY run_id ORDER BY MIN(timestamp) DESC LIMIT ?
+      `DELETE FROM telemetry WHERE run_id IN (
+         SELECT run_id FROM telemetry GROUP BY run_id
+         HAVING SUM(type IN ('stream_end', 'error')) > 0
+         ORDER BY MIN(id) DESC LIMIT -1 OFFSET ?
        )`,
-      [this.keepRuns - 1],
+      [this.keepRuns],
     );
   }
 
@@ -121,7 +142,7 @@ export class SqliteTelemetry {
               FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS cost
          FROM telemetry t GROUP BY t.run_id ORDER BY start_time DESC LIMIT ?`,
       )
-      .all(limit) as RunSummary[];
+      .all(Math.min(1000, Math.max(1, Math.floor(Number(limit)) || 50))) as RunSummary[];
   }
 
   /** Rows for one run, oldest first. */

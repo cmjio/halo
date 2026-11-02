@@ -7,7 +7,7 @@
  */
 
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
-import { PolicyViolation } from "./errors.js";
+import { HaloError, PolicyViolation } from "./errors.js";
 
 export interface Violation {
   policy: string;
@@ -160,7 +160,7 @@ function scanText(value: unknown): string {
     else if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) (parts.push(k), walk(x));
   };
-  walk(value);
+  shallowEnough(() => walk(value));
   return parts.join("\n");
 }
 
@@ -286,7 +286,13 @@ export class PolicyEngine {
       }
       if (name === "MatchRegex") {
         const pattern = unquote(args[0]);
-        if (!new RegExp(pattern).test(text)) this.violate(b, `Output does not match the pattern /${pattern}/`, "output", hooks);
+        let re: RegExp;
+        try {
+          re = new RegExp(pattern);
+        } catch {
+          throw new PolicyViolation(`Policy "${b.policy}": MatchRegex(${args[0]}) is not a valid regular expression`, b.policy, name);
+        }
+        if (!re.test(text)) this.violate(b, `Output does not match the pattern /${pattern}/`, "output", hooks);
       }
       if (name === "MaxTokens" && usage.completionTokens !== undefined) {
         const limit = Number(args[0]);
@@ -368,6 +374,20 @@ function redactText(text: string, categories: string[]): string {
 }
 
 function mapStrings(value: unknown, fn: (s: string) => string): unknown {
+  return shallowEnough(() => mapStringsDeep(value, fn));
+}
+
+/** Walking a value thousands of levels deep overflows the stack; fail with a clear error instead. */
+function shallowEnough<T>(walk: () => T): T {
+  try {
+    return walk();
+  } catch (err) {
+    if (err instanceof RangeError) throw new HaloError("A value is nested too deeply to check against policies (thousands of levels of lists or objects)", { code: "VALUE_TOO_DEEP" });
+    throw err;
+  }
+}
+
+function mapStringsDeep(value: unknown, fn: (s: string) => string): unknown {
   if (typeof value === "string") return fn(value);
   // A card number sent as a number is still a card number.
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -375,9 +395,9 @@ function mapStrings(value: unknown, fn: (s: string) => string): unknown {
     const out = fn(text);
     return out === text ? value : out;
   }
-  if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn));
+  if (Array.isArray(value)) return value.map((v) => mapStringsDeep(v, fn));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), mapStrings(v, fn)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), mapStringsDeep(v, fn)]));
   }
   return value;
 }

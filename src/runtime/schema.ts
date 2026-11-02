@@ -33,6 +33,7 @@ function parseType(type: string): { base: string; args: string[] } {
 
 function describe(v: unknown): string {
   if (v === null) return "null";
+  if (v === undefined) return "nothing";
   if (Array.isArray(v)) return "a list";
   return typeof v === "object" ? "an object" : `a ${typeof v} (${JSON.stringify(v)?.slice(0, 40)})`;
 }
