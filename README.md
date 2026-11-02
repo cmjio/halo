@@ -192,7 +192,19 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 
 ## 📚 Examples
 
-`examples/` is a learning path: 01–19 introduce one concept each, 20–25 are role-based workflows, 30–38 are larger systems (moderation routing, a multi-agent swarm, local automation, schema validation), 40–46 are industry examples, and 50 is the flagship. Every example validates, and `test/examples.test.ts` runs them.
+`examples/` is a learning path: 01–19 introduce one concept each, 20–25 are role-based workflows, 30–38 are larger systems (moderation routing, a multi-agent swarm, local automation, schema validation), 40–46 are industry examples, 50 is the flagship, and 60–66 are everyday domains:
+
+| # | Example | What it shows |
+|---|---|---|
+| 60 | HR applicant screening | Contact details redacted before scoring, `\|* each`, a recruiter approves the shortlist |
+| 61 | School essay feedback | Draft feedback per essay, `@correct` fixes drafts that break policy, the teacher approves before release |
+| 62 | Shopping restock | The budget enforced in code with `Validate`, approval before ordering |
+| 63 | Weekly team report | GitHub issues trimmed with `System.Pick`, reviewed, then posted to Slack |
+| 64 | Sports scouting | Two analysts in parallel, output checked against a `schema` |
+| 65 | Esports match review | OpenDota's free API (runs for real), memory of past reviews |
+| 66 | Meal planner | Allergens checked by `grep`, `\|<> loop` replans until the plan is clean |
+
+Every example validates, and `test/examples.test.ts` runs them.
 
 ## 🏗 Layout
 

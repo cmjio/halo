@@ -1,0 +1,48 @@
+// ============================================================
+// Management: Weekly team report
+// ============================================================
+// Pulls the week's issues and pull requests from GitHub, summarizes
+// progress per person, flags blocked or stale work, and posts to
+// Slack after you've read it. Schedule it in halo.json, e.g.
+//   { "pipeline": "WeeklyTeamReport", "cron": "0 16 * * fri", "args": {...} }
+// ============================================================
+
+policy Private : Redact(Email) & Redact(APIKey)
+policy Brief   : MaxWords(350) & MaxSpend(0.25)
+
+tool Repo     : GitHub(Env.GITHUB_TOKEN)
+tool TeamChat : Slack(Env.SLACK_BOT_TOKEN)
+
+agent Lead [anthropic/claude-sonnet-4-5, temp: 0.2]
+  system """
+    You write a weekly engineering report for a manager. Per person:
+    what shipped, what's in progress. Then a short "Needs attention"
+    list: blocked, stale (no update in 7+ days), or unassigned work.
+    Be factual and kind; never rank people.
+  """
+  requires Private, Brief
+
+pipeline WeeklyTeamReport(repo: String, channel: String) -> Result:
+  repo
+    // 1. Open and recently closed work
+    |* {
+         Repo.list_issues(repo: repo, state: "open", limit: 50) as open_work,
+         Repo.list_issues(repo: repo, state: "closed", limit: 50) as closed_work
+       }
+
+    // 2. Keep only what the report needs
+    |> System.Pick(
+         context.data.open_work,
+         fields: ["number", "title", "assignee.login", "labels.name", "updated_at", "pull_request.url"],
+         maxChars: 200
+       ) as open_items
+    |> System.Pick(context.data.closed_work, fields: ["number", "title", "assignee.login", "closed_at"]) as closed_items
+
+    // 3. Write the report
+    |> Lead.weekly_report("Weekly report for {{repo}}.", context.data.open_items, context.data.closed_items) as report
+
+    // 4. You read it before the team does
+    |! yield(msg: "Post this report to {{channel}}?", [context.data.report]) as review
+    |? (context.data.review.approved == true)
+    |> TeamChat.post(channel: channel, text: "{{report}}")
+    |> System.Print(context.data.report)

@@ -1,0 +1,47 @@
+// ============================================================
+// Shopping: Restock within a budget, with your approval
+// ============================================================
+// Checks prices for what's running low, proposes a cart, and refuses
+// any cart over budget in code (Validate), not just in the prompt.
+// You approve the cart from a link on your phone before anything
+// is ordered. Schedule it with halo.json for a weekly restock.
+// ============================================================
+
+policy Budget    : MaxSpend(0.20)
+policy CartShape : Require(JSON) & Validate("total", "<=", "context.input.budget")
+
+tool Prices : REST("api.example-grocer.com/v1", apiKey: Env.GROCER_KEY)
+tool Orders : POST("api.example-grocer.com/v1/orders", apiKey: Env.GROCER_KEY, sendInput: false)
+
+schema Cart {
+  items: Array<Object>
+  total: Number
+  notes: String
+}
+
+agent Shopper [anthropic/claude-haiku-4-5, temp: 0.0]
+  system """
+    You build grocery carts. Prefer the cheapest item that meets the need,
+    respect the budget, and say what you skipped and why. Answer with
+    JSON: {"items": [{"sku": "...", "name": "...", "qty": 1, "price": 0}], "total": 0, "notes": "..."}
+  """
+  equips Prices
+  requires Budget, CartShape
+
+@correct(2)
+@retry(2, 5s)
+pipeline RestockPantry(running_low: List, budget: Number) -> Cart:
+  running_low
+    // 1. Current prices for everything on the list
+    |> Prices.search(items: running_low) as prices
+
+    // 2. Propose a cart; a cart over budget is rejected and @correct asks again
+    |> Shopper.build_cart("Restock these within a budget of {{budget}}.", context.data.prices) as cart
+
+    // 3. You approve before money is spent
+    |! yield(msg: "Order this cart?", [context.data.cart]) as approval
+    |? (context.data.approval.approved == true)
+
+    // 4. Place the order
+    |> Orders.create(items: context.data.cart.items, total: context.data.cart.total) as order
+    |> System.Pick(context.data.cart, fields: ["items", "total", "notes"])

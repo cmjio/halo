@@ -282,6 +282,8 @@ interface ExecutionContext {
   shadowTasks: Promise<void>[];
   /** How many times each loop stage (by index) has jumped back. */
   loops: Record<number, number>;
+  /** Set while a loop sends the run back: the stage being retried and what the check saw. */
+  loopFeedback?: { stage: number; condition: string; value: unknown; iteration: number };
   /** The calling pipeline's context, for a called pipeline. */
   parent?: ExecutionContext;
 }
@@ -774,6 +776,7 @@ export class HaloRuntime {
     if (!holds) {
       if (stage.bind) ctx.data[stage.bind] = done;
       delete ctx.loops[index];
+      ctx.loopFeedback = undefined;
       return undefined;
     }
     const max = Number(this.resolveArgs({ argList: stage.options }, ctx).named.max ?? 3);
@@ -783,6 +786,7 @@ export class HaloRuntime {
     const to = ctx.pipeline.pipeline.findLastIndex((s, j) => j < index && s.kind === "call" && s.callee === stage.target);
     if (to < 0) throw new HaloError(`loop(${stage.target}, ...) needs an earlier ${stage.target} stage to go back to`, { code: "LOOP_TARGET_NOT_FOUND" });
     ctx.loops[index] = done + 1;
+    ctx.loopFeedback = { stage: to, condition: stage.condition, value: ctx.current, iteration: done + 1 };
     ctx.data.loop = { target: stage.target, iteration: done + 1, condition: stage.condition };
     this.emit({ type: "loop", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index, to, iteration: done + 1, condition: stage.condition });
     return to;
@@ -1031,7 +1035,13 @@ export class HaloRuntime {
       current: !templated && inputs.length === 0 ? ctx.current : undefined,
     };
     const memory = await this.equippedContext(agent, toolName, parts, ctx);
-    const prompt = buildPrompt({ ...parts, context: memory.context });
+    // On a loop retry, always show the agent what the check found, even if its
+    // instructions are templated (which otherwise leaves the pipeline value out).
+    const retry = ctx.loopFeedback?.stage === ctx.stageIndex ? ctx.loopFeedback : undefined;
+    const feedback = retry
+      ? [{ source: "the check", label: `Attempt ${retry.iteration} was sent back because "${retry.condition}" held`, text: formatValue(retry.value) }]
+      : [];
+    const prompt = buildPrompt({ ...parts, context: [...feedback, ...memory.context] });
     if (!prompt.trim()) throw new HaloError(`${target} has an empty prompt (its arguments and the pipeline value are all empty)`);
     const system = String(callOptions.system ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined;
     const options = llmOptions(agent.params, callOptions);

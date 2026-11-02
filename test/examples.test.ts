@@ -532,3 +532,171 @@ describe("examples run to completion with realistic data", () => {
     });
   });
 });
+
+// Domain examples 60-66: each run through its decision points with realistic data.
+describe("domain examples", () => {
+  const approve = () => ({ approved: true, action: "approve" });
+  const reject = () => ({ approved: false, action: "reject" });
+  const silent = async <T>(work: () => Promise<T>) => {
+    const print = console.log;
+    console.log = () => {};
+    try {
+      return await work();
+    } finally {
+      console.log = print;
+    }
+  };
+
+  test("60 HR: scores each application with contact details redacted; shares the shortlist only after approval", async () => {
+    const prompts: string[] = [];
+    const posted: unknown[] = [];
+    const mocks = {
+      "Screener.score": (r: MockRequest) => {
+        prompts.push(r.prompt!);
+        const id = (r.input as { id: string }).id;
+        return JSON.stringify({ applicant_id: id, score: id === "a1" ? 88 : 61, strengths: ["TypeScript"], gaps: [] });
+      },
+      "Recruiter.shortlist": "1. a1: strong TypeScript and design-system work",
+      HiringChannel: (r: MockRequest) => (posted.push(r.named), { ok: true }),
+    };
+    const applications = [
+      { id: "a1", text: "Ana, ana@example.com, +1 415 555 0134. 6 years TypeScript, led a design system." },
+      { id: "a2", text: "Ben, ben@example.com. 2 years PHP." },
+    ];
+    const args = { role: "Senior frontend engineer", applications, shortlist_size: 1 };
+
+    const { rt } = await load("60-hr-screening.halo", { onInterrupt: approve }, mocks);
+    const result = await silent(() => rt.run("ScreenApplicants", args));
+    expect(result.status).toBe("completed");
+    expect((result.context.data.scores as Array<{ score: number }>).map((s) => s.score)).toEqual([88, 61]);
+    for (const p of prompts) {
+      expect(p).not.toContain("@example.com");
+      expect(p).not.toContain("555 0134");
+    }
+    expect(posted).toEqual([{ channel: "#hiring", text: "Shortlist for Senior frontend engineer:\n1. a1: strong TypeScript and design-system work" }]);
+
+    posted.length = 0;
+    const { rt: rejecting } = await load("60-hr-screening.halo", { onInterrupt: reject }, mocks);
+    expect((await silent(() => rejecting.run("ScreenApplicants", args))).status).toBe("halted");
+    expect(posted).toEqual([]);
+  });
+
+  test("61 schools: drafts feedback per essay, fixes a draft that breaks policy, saves only after the teacher approves", async () => {
+    const saved: unknown[] = [];
+    let teacherSaw: unknown;
+    let s2Tries = 0;
+    const { rt } = await load("61-school-feedback.halo", { onInterrupt: (req) => ((teacherSaw = req.attachments), approve()) }, {
+      "Tutor.feedback": (r: MockRequest) =>
+        r.prompt!.includes("Essay s-2") && ++s2Tries === 1 ? "This is damn good." : `Feedback for ${r.prompt!.includes("Essay s-1") ? "s-1" : "s-2"}: strong thesis; add evidence.`,
+      Feedback: (r: MockRequest) => (saved.push(r.named.content), { saved: true }),
+    });
+    const result = await silent(() =>
+      rt.run("ReviewEssays", {
+        assignment: "Persuasive essay",
+        rubric: "thesis, evidence, structure",
+        grade_level: "8",
+        essays: [{ id: "s-1", text: "Schools should start later." }, { id: "s-2", text: "Homework helps." }],
+      }),
+    );
+    expect(result.status).toBe("completed");
+    expect(s2Tries).toBe(2); // the profane draft was sent back by @correct
+    expect(teacherSaw).toEqual([["Feedback for s-1: strong thesis; add evidence.", "Feedback for s-2: strong thesis; add evidence."]]);
+    expect(saved).toEqual([
+      "Persuasive essay | essay 0: Feedback for s-1: strong thesis; add evidence.",
+      "Persuasive essay | essay 1: Feedback for s-2: strong thesis; add evidence.",
+    ]);
+  });
+
+  test("62 shopping: an over-budget cart is rejected in code and redone; ordering waits for approval", async () => {
+    const orders: unknown[] = [];
+    let carts = 0;
+    const mocks = {
+      Prices: { results: [{ sku: "oat-1", price: 3.5 }, { sku: "rice-2", price: 9 }] },
+      "Shopper.build_cart": () =>
+        ++carts === 1
+          ? JSON.stringify({ items: [{ sku: "rice-2", qty: 3, price: 9 }], total: 27, notes: "" })
+          : JSON.stringify({ items: [{ sku: "oat-1", qty: 2, price: 3.5 }, { sku: "rice-2", qty: 1, price: 9 }], total: 16, notes: "1 rice instead of 3" }),
+      Orders: (r: MockRequest) => (orders.push(r.named), { id: "ord_1" }),
+    };
+    const { rt } = await load("62-shopping-restock.halo", { onInterrupt: approve }, mocks);
+    const cart = await silent(() => rt.execute("RestockPantry", { running_low: ["oats", "rice"], budget: 20 }));
+    expect(carts).toBe(2);
+    expect(cart).toEqual({ items: [{ sku: "oat-1", qty: 2, price: 3.5 }, { sku: "rice-2", qty: 1, price: 9 }], total: 16, notes: "1 rice instead of 3" });
+    expect(orders).toEqual([{ items: [{ sku: "oat-1", qty: 2, price: 3.5 }, { sku: "rice-2", qty: 1, price: 9 }], total: 16 }]);
+
+    orders.length = 0;
+    carts = 1;
+    const { rt: no } = await load("62-shopping-restock.halo", { onInterrupt: reject }, mocks);
+    expect((await silent(() => no.run("RestockPantry", { running_low: ["oats"], budget: 20 }))).status).toBe("halted");
+    expect(orders).toEqual([]);
+  });
+
+  test("63 management: summarizes open and closed work, then posts to Slack after review", async () => {
+    let leadPrompt = "";
+    const posted: unknown[] = [];
+    const { rt } = await load("63-team-report.halo", { onInterrupt: approve }, {
+      Repo: (r: MockRequest) =>
+        r.named.state === "open"
+          ? [{ number: 4, title: "Fix login", assignee: { login: "ana" }, labels: [{ name: "bug" }], updated_at: "2026-10-20", body: "long..." }]
+          : [{ number: 2, title: "Ship search", assignee: { login: "ben" }, closed_at: "2026-10-30" }],
+      "Lead.weekly_report": (r: MockRequest) => ((leadPrompt = r.prompt!), "ben shipped search; ana's login fix is stale (12 days)."),
+      TeamChat: (r: MockRequest) => (posted.push(r.named), { ok: true }),
+    });
+    const result = await silent(() => rt.run("WeeklyTeamReport", { repo: "acme/app", channel: "#eng" }));
+    expect(result.status).toBe("completed");
+    expect(leadPrompt).toContain('"assignee.login": "ana"');
+    expect(leadPrompt).not.toContain("long...");
+    expect(posted).toEqual([{ channel: "#eng", text: "ben shipped search; ana's login fix is stale (12 days)." }]);
+  });
+
+  test("64 sports: two analysts in parallel; the report must match the ScoutingReport schema", async () => {
+    const report = { opponent: "t-9", formation: "4-3-3", threats: ["left wing"], weaknesses: ["high line"], game_plan: ["play behind"] };
+    const mocks = (coach: unknown) => ({
+      Stats: { matches: [] },
+      "AttackAnalyst.analyze_attack": "Scores from the left.",
+      "DefenseAnalyst.analyze_defense": "Concedes behind a high line.",
+      "Coach.scouting_report": (r: MockRequest) => (expect(r.prompt).toContain("Concedes behind a high line."), JSON.stringify(coach)),
+    });
+    const { rt } = await load("64-sports-scouting.halo", {}, mocks(report));
+    expect(await rt.execute("ScoutOpponent", { team_id: "t-9", last_matches: 5 })).toEqual(report);
+    const { rt: bad } = await load("64-sports-scouting.halo", {}, mocks({ opponent: "t-9", formation: "4-3-3" }));
+    await expect(bad.execute("ScoutOpponent", { team_id: "t-9", last_matches: 5 })).rejects.toThrow(`Schema validation failed for "ScoutingReport": missing field "threats"`);
+  });
+
+  test("65 esports: reviews a match from OpenDota and remembers past reviews", async () => {
+    const urls: string[] = [];
+    const fakeFetch = (async (input: string | URL) => {
+      urls.push(String(input));
+      return Response.json({ duration: 2400, radiant_win: true, players: [{ player_slot: 0, hero_id: 14, kills: 3, deaths: 9, assists: 5, last_hits: 120, denies: 4, gold_per_min: 380, xp_per_min: 450, net_worth: 12000, win: 1, ability_upgrades_arr: [1, 2, 3] }] });
+    }) as typeof fetch;
+    const prompts: string[] = [];
+    const { rt } = await load("65-esports-review.halo", { fetch: fakeFetch }, {
+      "Coach.review": (r: MockRequest) => (prompts.push(r.prompt!), "Pudge died 9 times: practice hook angles."),
+    });
+    await silent(() => rt.execute("ReviewMatch", { match_id: 8000000001, player: 0 }));
+    await silent(() => rt.execute("ReviewMatch", { match_id: 8000000002, player: 0 }));
+    expect(new URL(urls[0]!).pathname).toBe("/api/matches/8000000001");
+    expect(prompts[0]).toContain("duration 2400s, radiant_win true");
+    expect(prompts[0]).toContain('"deaths": 9');
+    expect(prompts[0]).not.toContain("ability_upgrades_arr");
+    expect(prompts[0]).toContain("- past_reviews: []");
+    expect(prompts[1]).toContain('"content": "Pudge died 9 times: practice hook angles."');
+    await rt.close();
+  });
+
+  test("66 cooking: an allergen found by grep sends the plan back; the chef sees what was found", async () => {
+    const prompts: string[] = [];
+    const { rt } = await load("66-meal-planner.halo", {}, {
+      "Chef.plan": (r: MockRequest) => {
+        prompts.push(r.prompt!);
+        const dish = prompts.length === 1 ? { day: "Mon", dish: "Satay", ingredients: ["chicken", "Peanut butter"] } : { day: "Mon", dish: "Teriyaki", ingredients: ["chicken", "soy"] };
+        return JSON.stringify({ meals: [dish], shopping_list: dish.ingredients });
+      },
+    });
+    const result = await rt.run("PlanMeals", { pantry: ["rice", "chicken"], diet: "high protein", allergens: "peanut|shellfish", days: 1 });
+    expect(result.status).toBe("completed");
+    expect(result.context.data.replans).toBe(1);
+    expect(prompts[1]).toContain('"stdout": "Peanut"');
+    expect(result.output).toEqual({ meals: [{ day: "Mon", dish: "Teriyaki", ingredients: ["chicken", "soy"] }], shopping_list: ["chicken", "soy"] });
+  });
+});

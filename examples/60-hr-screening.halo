@@ -1,0 +1,55 @@
+// ============================================================
+// HR: Applicant screening with a human decision
+// ============================================================
+// Scores each application against the role, with contact details
+// redacted before the model sees them, then asks a recruiter to
+// approve the shortlist before it's shared with the hiring team.
+// The model only recommends; a person decides who moves forward.
+//
+// Note: automated candidate scoring is regulated in some places
+// (e.g. NYC Local Law 144, the EU AI Act). Keep the human approval.
+// ============================================================
+
+policy CandidatePrivacy : Redact(Email) & Redact(Phone) & Redact(SSN) & Block(PromptInjection)
+policy Fair             : Require(JSON)
+policy Budget           : MaxSpend(0.50)
+
+tool HiringChannel : Slack(Env.SLACK_BOT_TOKEN)
+
+agent Screener [anthropic/claude-haiku-4-5, temp: 0.0]
+  system """
+    You screen job applications against a role description. Judge only
+    job-relevant skills and experience. Ignore names, age, gender,
+    nationality, photos, and anything else not about the work.
+    Answer with JSON only.
+  """
+  requires CandidatePrivacy, Fair, Budget
+
+agent Recruiter [anthropic/claude-sonnet-4-5, temp: 0.2]
+  system "You turn scored applications into a short, fair shortlist with reasons."
+  requires CandidatePrivacy, Budget
+
+@timeout(10m)
+@retry(2, 5s)
+pipeline ScreenApplicants(role: String, applications: List, shortlist_size: Number) -> Result:
+  applications
+    // 1. Score every application against the role, two at a time
+    |* each(application in applications, concurrency: 2) => Screener.score("""
+         Role: {{role}}
+         Score this application from 0 to 100 for fit. Reply as JSON:
+         {"applicant_id": "...", "score": 0, "strengths": ["..."], "gaps": ["..."]}
+       """, application) as scores
+
+    // 2. Draft the shortlist
+    |> Recruiter.shortlist(
+         "Pick the top {{shortlist_size}} applicants for {{role}} and give one line of reasoning each.",
+         context.data.scores
+       ) as shortlist
+
+    // 3. A recruiter approves before anyone is contacted
+    |! yield(msg: "Share this shortlist with the hiring team?", [context.data.shortlist, context.data.scores]) as decision
+    |? (context.data.decision.approved == true)
+
+    // 4. Share it
+    |> HiringChannel.post(channel: "#hiring", text: "Shortlist for {{role}}:\n{{shortlist}}")
+    |> System.Print(context.data.shortlist)

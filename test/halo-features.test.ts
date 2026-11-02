@@ -183,6 +183,29 @@ describe("|<> loop", () => {
     expect(result.context.trace.filter((t) => t.stage === "loop")).toHaveLength(3);
   });
 
+  test("a retried agent with templated instructions still sees what the check found", async () => {
+    const prompts: string[] = [];
+    let attempt = 0;
+    const r = rt(
+      `agent Chef [openai/gpt-4o]
+       tool Check : Bash()
+       pipeline Plan(diet: String) -> Result:
+         diet
+           |> Chef.plan("Plan meals for a {{diet}} diet.") as plan
+           |> Check.run(command: "x")
+           |<> loop(Chef, "context.data.Check.run.exitCode == 0")`,
+      {
+        "Chef.plan": (req: MockRequest) => (prompts.push(req.prompt!), `plan ${++attempt}`),
+        Check: () => ({ exitCode: attempt === 1 ? 0 : 1, stdout: attempt === 1 ? "peanut" : "" }),
+      },
+    );
+    await r.run("Plan", { diet: "vegan" });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).not.toContain("sent back");
+    expect(prompts[1]).toContain(`Attempt 1 was sent back because "context.data.Check.run.exitCode == 0" held (from the check):`);
+    expect(prompts[1]).toContain(`"stdout": "peanut"`);
+  });
+
   test("gives up after max tries", async () => {
     const r = rt(src, { "SWE.write_code": "code", Shell: { exitCode: 1 }, "SWE.summarize": "x" });
     const err = await r.execute("Fix", { task: "t" }).catch((e: unknown) => e);

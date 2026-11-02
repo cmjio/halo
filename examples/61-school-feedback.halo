@@ -1,0 +1,45 @@
+// ============================================================
+// Schools: Draft essay feedback for a teacher to approve
+// ============================================================
+// Drafts rubric-based feedback for each essay. Nothing reaches a
+// student until the teacher approves it. It never assigns grades.
+//
+// Pass essays as { "id": "s-14", "text": "..." } with no names: student
+// data is protected (FERPA in the US, GDPR in the EU). Run it on
+// infrastructure the school controls (e.g. `halo serve` on its server).
+// ============================================================
+
+policy StudentPrivacy : Redact(PII) & Block(PromptInjection)
+policy Appropriate    : Block(Profanity) & MaxWords(220)
+policy Budget         : MaxSpend(1.00)
+
+tool Feedback : File(".halo/feedback.json", keep: 200)
+
+agent Tutor [anthropic/claude-haiku-4-5, temp: 0.3]
+  system """
+    You are a supportive writing teacher. Give feedback a student can act
+    on: one thing done well, two specific improvements tied to the rubric,
+    and one sentence of encouragement. Never give a grade or a score.
+    Write for the student's grade level.
+  """
+  requires StudentPrivacy, Appropriate, Budget
+
+@correct(2)
+pipeline ReviewEssays(assignment: String, rubric: String, grade_level: String, essays: List) -> Result:
+  essays
+    // 1. Draft feedback for each essay (if a draft breaks a policy, @correct asks again)
+    |* each(essay in essays, concurrency: 3) => Tutor.feedback("""
+         Assignment: {{assignment}}
+         Rubric: {{rubric}}
+         Grade level: {{grade_level}}
+         Essay {{essay.id}}:
+         {{essay.text}}
+       """) as drafts
+
+    // 2. The teacher reviews every draft before release
+    |! yield(msg: "Release this feedback to students?", [context.data.drafts]) as teacher
+    |? (context.data.teacher.approved == true)
+
+    // 3. Save the approved feedback (one entry per essay)
+    |* each(draft in drafts) => Feedback.append(content: "{{assignment}} | essay {{index}}: {{draft}}")
+    |> System.Print(context.data.drafts)

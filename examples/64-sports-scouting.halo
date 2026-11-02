@@ -1,0 +1,54 @@
+// ============================================================
+// Sports: Opponent scouting report
+// ============================================================
+// Fetches an opponent's recent results and team stats, has an attack
+// analyst and a defense analyst work in parallel, and combines them
+// into a structured scouting report for the coaching staff.
+// Swap the REST base URL for your stats provider.
+// ============================================================
+
+policy Budget : MaxSpend(0.30)
+policy Shape  : Require(JSON)
+
+tool Stats : REST("api.example-sportsdata.com/v3", apiKey: Env.SPORTS_DATA_KEY)
+
+schema ScoutingReport {
+  opponent: String
+  formation: String
+  threats: Array<String>
+  weaknesses: Array<String>
+  game_plan: Array<String>
+}
+
+agent AttackAnalyst [anthropic/claude-haiku-4-5, temp: 0.2]
+  system "You analyze how a team scores: patterns, key players, set pieces."
+  requires Budget
+
+agent DefenseAnalyst [anthropic/claude-haiku-4-5, temp: 0.2]
+  system "You analyze how a team concedes: gaps, pressing, transitions."
+  requires Budget
+
+agent Coach [anthropic/claude-sonnet-4-5, temp: 0.2]
+  system """
+    You combine analysts' notes into a practical scouting report. Answer
+    with JSON: {"opponent": "", "formation": "", "threats": [], "weaknesses": [], "game_plan": []}
+  """
+  requires Budget, Shape
+
+@retry(2, 5s)
+pipeline ScoutOpponent(team_id: String, last_matches: Number) -> ScoutingReport:
+  team_id
+    // 1. Recent results and season stats
+    |* {
+         Stats.results(team: team_id, limit: last_matches) as results,
+         Stats.team_stats(team: team_id) as season
+       }
+
+    // 2. Two analysts in parallel
+    |* {
+         AttackAnalyst.analyze_attack(context.data.results, context.data.season) as attack,
+         DefenseAnalyst.analyze_defense(context.data.results, context.data.season) as defense
+       }
+
+    // 3. One report, checked against the ScoutingReport schema
+    |> Coach.scouting_report("Opponent {{team_id}}.", context.data.attack, context.data.defense)

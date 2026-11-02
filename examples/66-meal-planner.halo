@@ -1,0 +1,41 @@
+// ============================================================
+// Cooking: Weekly meal plan that never includes your allergens
+// ============================================================
+// Plans meals from what's in the pantry. Allergens are checked in
+// code, not just asked for in the prompt: a grep over the plan, and
+// if it finds one, |<> loop sends the planner back to fix it.
+// The plan's shopping list can feed 62-shopping-restock.
+// ============================================================
+
+policy Budget : MaxSpend(0.10)
+policy Shape  : Require(JSON)
+
+tool Shell : Bash()
+
+schema MealPlan {
+  meals: Array<Object>
+  shopping_list: Array<String>
+}
+
+agent Chef [anthropic/claude-haiku-4-5, temp: 0.5]
+  system """
+    You plan simple, varied home meals. Use pantry items first.
+    Answer with JSON: {"meals": [{"day": "Mon", "dish": "...", "ingredients": ["..."]}], "shopping_list": ["..."]}
+  """
+  requires Budget, Shape
+
+pipeline PlanMeals(pantry: List, diet: String, allergens: String, days: Number) -> MealPlan:
+  pantry
+    // 1. Plan the week (on a retry, the input is the allergen check that failed)
+    |> Chef.plan(
+         "Plan {{days}} dinners. Diet: {{diet}}. Never use: {{allergens}}.",
+         "Pantry: {{pantry}}"
+       ) as plan
+
+    // 2. Check in code: grep exits 0 when an allergen appears anywhere in the plan
+    //    (pipefail, so the exit code is grep's and not sort's)
+    |> Shell.run(command: "set -o pipefail; echo {{plan}} | grep -i -o -E {{allergens}} | sort -u") as allergen_check
+    |<> loop(Chef, "context.data.allergen_check.exitCode == 0", max: 3) as replans
+
+    // 3. The checked plan
+    |> System.Pick(context.data.plan, fields: ["meals", "shopping_list"])

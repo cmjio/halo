@@ -1,0 +1,52 @@
+// ============================================================
+// Esports: Dota 2 match review
+// ============================================================
+// Fetches a match from OpenDota's free public API (no key needed),
+// keeps the stats that matter, recalls the latest reviews kept in
+// local memory, and writes a coaching review. Each review is saved,
+// so later reviews can spot recurring habits.
+//
+// RUN: ANTHROPIC_API_KEY=... halo run examples/65-esports-review.halo \
+//        --arg match_id=8000000000 --arg player=0
+// ============================================================
+
+policy Budget : MaxSpend(0.10) & MaxWords(350)
+
+tool OpenDota      : REST("api.opendota.com/api")
+store PastReviews  : VectorStore(namespace: "dota-reviews")
+
+// If a review runs over MaxWords, @correct asks the coach to shorten it.
+@correct(2)
+agent Coach [anthropic/claude-haiku-4-5, temp: 0.3]
+  system """
+    You are a Dota 2 coach. Be concrete: name the moments and numbers
+    (deaths, last hits, net worth, item timings). Give the player three
+    things to practice. If past reviews show the same habit, say so.
+  """
+  requires Budget
+
+@retry(2, 3s)
+pipeline ReviewMatch(match_id: Number, player: Number) -> Result:
+  match_id
+    // 1. The match from OpenDota
+    |> OpenDota.match(path: "/matches/{{match_id}}") as match
+
+    // 2. Keep the per-player stats (the full payload is large)
+    |> System.Pick(
+         context.data.match.players,
+         fields: ["player_slot", "hero_id", "kills", "deaths", "assists", "last_hits", "denies", "gold_per_min", "xp_per_min", "net_worth", "win"]
+       ) as players
+
+    // 3. The latest earlier reviews (by tag: review text shares few words with raw stats)
+    |> PastReviews.search(query: "coaching review", tags: ["review"], limit: 3) as history
+
+    // 4. The review
+    |> Coach.review(
+         "Review player index {{player}} in match {{match_id}} (duration {{match.duration}}s, radiant_win {{match.radiant_win}}). Earlier reviews, if any, are in past_reviews.",
+         context.data.players,
+         past_reviews: context.data.history
+       ) as review
+
+    // 5. Remember it
+    |> PastReviews.log(content: context.data.review, tags: ["review"])
+    |> System.Print(context.data.review)
