@@ -94,12 +94,21 @@
         <!-- Install -->
         <section id="install">
           <h2>Install</h2>
-          <p>Halo runs on <a href="https://bun.sh">Bun</a>. From a checkout of the repository:</p>
-          <pre class="code term"><code><span class="p">$</span> bun install
-<span class="p">$</span> bun link             <span class="c"># puts `halo` on your PATH</span>
-<span class="p">$</span> halo init my-flow    <span class="c"># main.halo, .env.example, .gitignore</span>
-<span class="p">$</span> cd my-flow &amp;&amp; halo test main.halo --arg topic=tides</code></pre>
-          <p>Set a key for the model you use (<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>GEMINI_API_KEY</code>, or <code>HALO_API_KEY</code> for any of them), then <code>halo run</code>. Editor support: VS Code (LSP), Zed, and Sublime grammars live in <code>editors/</code>.</p>
+          <div class="tabs-block install" data-tabs>
+            <div class="tabs-head" role="tablist">
+              <button role="tab" aria-selected="true" data-t="0">macOS · Linux</button>
+              <button role="tab" aria-selected="false" data-t="1">Windows</button>
+              <button role="tab" aria-selected="false" data-t="2">From source</button>
+            </div>
+            <div class="tab-pane" data-p="0"><pre class="code term"><code><span class="p">$</span> curl -fsSL https://halolang.com/install.sh | sh</code></pre></div>
+            <div class="tab-pane" data-p="1" hidden><pre class="code term"><code><span class="p">PS&gt;</span> irm https://halolang.com/install.ps1 | iex</code></pre></div>
+            <div class="tab-pane" data-p="2" hidden><pre class="code term"><code><span class="p">$</span> bun install &amp;&amp; bun link   <span class="c"># in a checkout; `halo` runs the source</span></code></pre></div>
+          </div>
+          <p>One standalone binary with Bun built in: nothing else to install. The script picks the build for your OS and CPU, checks it against the release's <code>SHA256SUMS</code>, and puts it in <code>~/.halo/bin</code>. <a href="/install.sh">Read the script</a> before piping it to a shell. Update with <code>halo upgrade</code>.</p>
+          <pre class="code term"><code><span class="p">$</span> halo init my-flow && cd my-flow
+<span class="p">$</span> halo test main.halo --arg topic=tides   <span class="c"># offline: every model and tool mocked</span>
+<span class="p">$</span> halo run main.halo --arg topic=tides    <span class="c"># with ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY set</span></code></pre>
+          <p class="note">Builds: macOS (Apple Silicon, Intel), Linux x64 and arm64 (glibc and musl), Windows x64. Editor support (VS Code with a language server, Zed, Sublime) is in <code>editors/</code>.</p>
         </section>
 
         <!-- Syntax -->

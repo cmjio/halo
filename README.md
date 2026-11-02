@@ -21,14 +21,16 @@ pipeline Explain(topic: String) -> Result:
 ## 🚀 Quick Start
 
 ```bash
-bun install
-bun link                                   # makes the `halo` command available
+curl -fsSL https://halolang.com/install.sh | sh     # macOS, Linux
+# Windows (PowerShell): irm https://halolang.com/install.ps1 | iex
 
 halo init my-project && cd my-project
 halo test main.halo --arg topic="tide pools"   # offline: every call mocked
 cp .env.example .env                           # add your API key
 halo run main.halo --arg topic="tide pools"    # for real
 ```
+
+The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it. To work on Halo itself: `bun install && bun link` in a checkout.
 
 Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 

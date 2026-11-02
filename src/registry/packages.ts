@@ -29,8 +29,14 @@ export const REGISTRY_FORMAT = "halo-registry/1";
 export const LOCK_FILE = "halo.lock";
 export const TOOLS_DIR = ".halo/tools";
 export const TRUST_FILE = ".halo/trust.json";
-/** The registry that ships with Halo (its first-party packages). */
-export const DEFAULT_REGISTRY = resolve(import.meta.dir, "../../registry/index.json");
+/** The public registry of first-party packages, published with the site. */
+export const HOSTED_REGISTRY = "https://halolang.com/registry/index.json";
+const BUNDLED_REGISTRY = resolve(import.meta.dir, "../../registry/index.json");
+/**
+ * The registry Halo uses by default: the copy in a checkout of Halo, or the hosted one for
+ * an installed `halo` binary (which carries no registry files).
+ */
+export const DEFAULT_REGISTRY = existsSync(BUNDLED_REGISTRY) ? BUNDLED_REGISTRY : HOSTED_REGISTRY;
 const MAX_PACKAGE_BYTES = 5 * 1024 * 1024;
 
 export class PackageError extends Error {}
@@ -202,7 +208,8 @@ function writeTrust(root: string, trust: Record<string, string>) {
 }
 
 /** A registry as halo.lock names it: "default" for the one that ships with Halo, so the lock works on any machine. */
-const registryName = (index: string) => (resolve(index) === DEFAULT_REGISTRY ? "default" : index);
+const isDefault = (index: string) => index === DEFAULT_REGISTRY || index === HOSTED_REGISTRY || (!/^https?:/.test(index) && resolve(index) === BUNDLED_REGISTRY);
+const registryName = (index: string) => (isDefault(index) ? "default" : index);
 const registryPath = (name: string) => (name === "default" ? DEFAULT_REGISTRY : name);
 
 function writeLock(root: string, lock: Lockfile) {

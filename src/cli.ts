@@ -48,6 +48,7 @@ USAGE:
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name]                      Create a new Halo project
+  halo upgrade                          Update an installed halo to the latest release
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
   halo plan <file.halo>                 Show what a run could do: model calls and worst-case
@@ -582,6 +583,30 @@ async function cmdMcp(flags: Flags): Promise<number> {
   return 0;
 }
 
+// ── Upgrading an installed binary ──
+
+/** Running as the standalone binary from halolang.com/install.sh (not `bun index.ts` in a checkout)? */
+const compiled = () => Bun.main.startsWith("/$bunfs/") || /[\\/]~BUN[\\/]/.test(Bun.main);
+
+async function cmdUpgrade(): Promise<number> {
+  if (!compiled()) {
+    console.log(`This halo runs from a checkout of the source (${process.execPath} ${Bun.main}); update it with git pull.`);
+    return 0;
+  }
+  const latest = (await (await fetch("https://halolang.com/dl/latest.json")).json()) as { version: string };
+  if (latest.version === pkg.version) {
+    console.log(`${green("✓")} halo ${pkg.version} is the latest release.`);
+    return 0;
+  }
+  console.log(`Upgrading halo ${pkg.version} → ${latest.version}`);
+  // The installer replaces this binary where it is, and leaves PATH alone.
+  const installDir = resolve(process.execPath, "..", "..");
+  const env = { ...process.env, HALO_INSTALL: installDir, HALO_NO_MODIFY_PATH: "1", HALO_VERSION: latest.version };
+  const cmd = process.platform === "win32" ? ["powershell", "-NoProfile", "-Command", "irm https://halolang.com/install.ps1 | iex"] : ["sh", "-c", "curl -fsSL https://halolang.com/install.sh | sh"];
+  const proc = Bun.spawn(cmd, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+  return await proc.exited;
+}
+
 // ── Tool packages ──
 
 async function registryIndex(flags: Flags): Promise<string> {
@@ -687,6 +712,8 @@ export async function main(argv: string[]): Promise<number> {
       }
       case "init":
         return await initProject(flags.positional[0] ?? "my-halo-project");
+      case "upgrade":
+        return await cmdUpgrade();
       case "serve":
         return await cmdServe(flags);
       case "validate":

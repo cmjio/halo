@@ -215,7 +215,10 @@ if (!built.success) {
   for (const log of built.logs) console.error(log);
   process.exit(1);
 }
-for (const extra of ["favicon.svg", "og.png", "robots.txt"]) {
+// The package registry is served from the site: `halo add` in an installed binary reads it there.
+cpSync(join(root, "registry/index.json"), join(dist, "registry/index.json"));
+cpSync(join(root, "registry/packages"), join(dist, "registry/packages"), { recursive: true });
+for (const extra of ["favicon.svg", "og.png", "robots.txt", "install.sh", "install.ps1"]) {
   if (existsSync(join(site, "src", extra))) cpSync(join(site, "src", extra), join(dist, extra));
 }
 console.log(`page: ${built.outputs.length} files`);

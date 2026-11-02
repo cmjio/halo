@@ -12,6 +12,8 @@
     { "pattern": "halolang.com", "custom_domain": true },
     { "pattern": "www.halolang.com", "custom_domain": true }
   ],
+  // Release binaries (too big for static assets), served at /dl/ by worker.ts.
+  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "halo-releases" }],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

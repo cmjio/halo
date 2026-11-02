@@ -1267,3 +1267,10 @@ section > p,
     white-space: normal;
   }
 }
+
+/* The install tabs hold one line each. */
+.install .tab-pane .code {
+  min-height: 0;
+  font-size: 14px;
+  padding: 16px 18px;
+}

@@ -288,7 +288,10 @@ function addCopy(root: ParentNode = document) {
     btn.addEventListener("click", async () => {
       // A terminal copies its commands (no "$ ", no output, no comments); code copies as is.
       const text = [...pre.childNodes].filter((n) => n !== btn).map((n) => n.textContent).join("");
-      const commands = text.split("\n").filter((l) => l.startsWith("$ ")).map((l) => l.slice(2).replace(/\s+#.*$/, "").trimEnd());
+      const commands = text
+        .split("\n")
+        .filter((l) => /^(\$|PS>) /.test(l))
+        .map((l) => l.replace(/^(\$|PS>) /, "").replace(/\s+#.*$/, "").trimEnd());
       try {
         await navigator.clipboard.writeText(commands.length ? commands.join("\n") : text);
         btn.textContent = "copied";

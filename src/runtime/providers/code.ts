@@ -39,9 +39,16 @@ type Lang = "js" | "ts" | "python";
 
 const LANGS: Record<string, Lang> = { js: "js", javascript: "js", ts: "ts", typescript: "ts", python: "python", py: "python" };
 
-function bunPath(): string {
-  // Under `bun`, reuse this executable; a compiled Halo binary isn't bun, so look it up on PATH.
-  return /^bun(\.exe)?$/i.test(basename(process.execPath)) ? process.execPath : (Bun.which("bun") ?? "bun");
+/**
+ * How to run a JS/TS snippet: under `bun`, this same executable. A compiled `halo` binary
+ * carries Bun inside it, and acts as Bun when started with BUN_BE_BUN=1, so it needs no
+ * separate install.
+ */
+function bunCommand(): { cmd: string; env: Record<string, string> } {
+  if (/^bun(\.exe)?$/i.test(basename(process.execPath))) return { cmd: process.execPath, env: {} };
+  const compiled = Bun.main.startsWith("/$bunfs/") || /[\\/]~BUN[\\/]/.test(Bun.main);
+  if (compiled) return { cmd: process.execPath, env: { BUN_BE_BUN: "1" } };
+  return { cmd: Bun.which("bun") ?? "bun", env: {} };
 }
 
 function jsWrapper(code: string, marker: string): string {
@@ -107,6 +114,7 @@ export const codeRunner: ToolProvider = async (call) => {
   const dir = mkdtempSync(join(tmpdir(), "halo-code-"));
   try {
     let cmd: string[];
+    let runner: Record<string, string> = {};
     if (lang === "python") {
       await Bun.write(join(dir, "snippet.py"), code);
       await Bun.write(join(dir, "main.py"), pythonWrapper(marker));
@@ -115,13 +123,15 @@ export const codeRunner: ToolProvider = async (call) => {
     } else {
       const file = lang === "ts" ? "main.ts" : "main.js";
       await Bun.write(join(dir, file), jsWrapper(code, marker));
-      cmd = [bunPath(), "run", "--no-install", file];
+      const bun = bunCommand();
+      cmd = [bun.cmd, "run", "--no-install", file];
+      runner = bun.env;
     }
     await Bun.write(join(dir, "input.json"), input === undefined ? "" : JSON.stringify(input));
 
     const proc = Bun.spawn(cmd, {
       cwd: dir,
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: dir, TMPDIR: dir, PYTHONDONTWRITEBYTECODE: "1", NO_COLOR: "1" },
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: dir, TMPDIR: dir, PYTHONDONTWRITEBYTECODE: "1", NO_COLOR: "1", ...runner },
       stdin: Bun.file(join(dir, "input.json")),
       stdout: "pipe",
       stderr: "pipe",

@@ -2,19 +2,29 @@
 
 ## 1. Install
 
-Halo runs on [Bun](https://bun.sh). Clone the repository and install its dependencies:
+One command. On macOS and Linux:
 
 ```bash
-git clone <halo repo> halo && cd halo
-bun install
-bun run index.ts --help
+curl -fsSL https://halolang.com/install.sh | sh
 ```
 
-`bun run index.ts` is the CLI. The docs call it `halo`; to use that name, link the package once:
+On Windows, in PowerShell:
 
-```bash
-bun link
+```powershell
+irm https://halolang.com/install.ps1 | iex
 ```
+
+This installs `halo`, a single standalone binary with Bun built in, so nothing else needs to be installed. The script picks the build for your OS and CPU (Intel or ARM; glibc or musl on Linux), checks it against the release's `SHA256SUMS`, puts it in `~/.halo/bin`, and adds that folder to your shell's `PATH`. Check it with `halo --version`; update with `halo upgrade`.
+
+| Variable | Effect |
+|---|---|
+| `HALO_VERSION=0.1.0` | Install that version instead of the latest |
+| `HALO_INSTALL=/opt/halo` | Install into `/opt/halo/bin` |
+| `HALO_NO_MODIFY_PATH=1` | Leave your shell's rc file alone |
+
+On Alpine, install the C++ runtime first: `apk add libstdc++ libgcc`. To uninstall, delete `~/.halo/bin` and the `PATH` line the installer added.
+
+To work on Halo itself, run it from a checkout instead: `bun install`, then `bun link` makes `halo` run the source.
 
 ## 2. Create a project
 
