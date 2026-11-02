@@ -15,7 +15,7 @@ languages = ["languages/halo"]
 # changing grammar.js: run ./build.sh, commit, and set `rev` to that commit.
 [grammars.halo]
 repository = "file:///Users/cmj/projects/oneshots/halo"
-rev = "e6e3114019dcf148f06f4f4aaff6d38876f87878"
+rev = "1b0353b3dee70474132451c515f87a33920f2ea4"
 path = "editors/tree-sitter-halo"
 
 [language_servers]
