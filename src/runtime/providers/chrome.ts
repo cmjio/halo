@@ -260,27 +260,35 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
   ];
   let proc: ReturnType<typeof Bun.spawn>;
   try {
-    proc = Bun.spawn([path, ...args], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    // Chrome's stderr is kept, so a launch that fails can say why.
+    proc = Bun.spawn([path, ...args], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
   } catch (e) {
     rmSync(dir, { recursive: true, force: true });
     throw new HaloError(`Tool "${call.tool.name}" could not start ${path}: ${(e as Error).message}`, { code: "TOOL_CONFIG" });
   }
   installExitHook();
+  let stderr = "";
+  void (async () => {
+    for await (const chunk of proc.stderr as ReadableStream<Uint8Array>) stderr = (stderr + new TextDecoder().decode(chunk)).slice(-4000);
+  })().catch(() => {});
+  const why = () => (stderr.trim() ? `; Chrome said: ${stderr.trim().split("\n").slice(-6).join(" | ")}` : "");
 
   try {
     // Chrome writes its port and browser WebSocket path here once it's listening.
     const portFile = join(dir, "DevToolsActivePort");
-    const deadline = Date.now() + 20_000;
+    // A first start on a cold machine (fonts, profile, GPU probing) can take a while.
+    const launchMs = Number(call.config("launch_timeout_ms") ?? 45_000);
+    const deadline = Date.now() + launchMs;
     let lines: string[] = [];
     while (Date.now() < deadline) {
-      if (proc.exitCode !== null) throw new HaloError(`${path} exited (code ${proc.exitCode}) before it was ready`, { code: "TOOL_CONFIG" });
+      if (proc.exitCode !== null) throw new HaloError(`${path} exited (code ${proc.exitCode}) before it was ready${why()}`, { code: "TOOL_CONFIG" });
       if (existsSync(portFile)) {
         lines = readFileSync(portFile, "utf8").trim().split("\n");
         if (lines.length >= 2) break;
       }
       await sleep(50);
     }
-    if (lines.length < 2) throw new TimeoutError(`${path} did not open a debugging port within 20s`);
+    if (lines.length < 2) throw new TimeoutError(`${path} did not open a debugging port within ${Math.round(launchMs / 1000)}s (launch_timeout_ms)${why()}`);
     const cdp = new Cdp(await connect(`ws://127.0.0.1:${lines[0]}${lines[1]}`, 10_000));
 
     const { targetInfos } = await cdp.send("Target.getTargets");

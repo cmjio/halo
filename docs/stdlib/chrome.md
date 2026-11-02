@@ -33,7 +33,7 @@ An agent can use it too (`Agent.task(tool: Web, ...)`): it sees each method belo
 
 Selectors are CSS. `click`, `fill`, `press` and `select` wait up to `timeout_ms` (default 5 seconds) for a visible match, and `click` waits for any navigation it starts. `open`'s `text` and `text`/`html` are capped at `maxChars` (default 15000).
 
-Declaration arguments: `allow:` (hosts), `allowScript:`, `maxChars:`, `timeout_ms:` (each browser command and page load, default 30000), `idle_ms:` (default 300000), `headless:` (default `true`), and `chrome:` (the browser's path).
+Declaration arguments: `allow:` (hosts), `allowScript:`, `maxChars:`, `timeout_ms:` (each browser command and page load, default 30000), `idle_ms:` (default 300000), `launch_timeout_ms:` (how long the browser may take to start, default 45000; a cold first start can be slow), `headless:` (default `true`), and `chrome:` (the browser's path).
 
 **Sessions.** Each tool gets one browser per run, with a fresh, empty profile, so `open` → `fill` → `click` → `text` all act on the same tab. Calls on it run one at a time. The browser closes after `idle_ms` without calls, when the runtime closes, and when the process exits; its profile directory is deleted.
 
