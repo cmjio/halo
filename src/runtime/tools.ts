@@ -15,6 +15,8 @@ export interface ToolCall {
   method: string;
   /** Positional call args. The first defaults to the pipeline value when none are given. */
   positional: unknown[];
+  /** True when `positional` is just the pipeline value, because the call passed no positional args. */
+  implicitInput?: boolean;
   named: Record<string, unknown>;
   /** Resolve one of the tool declaration's own args (e.g. `apiKey: Env.KEY`). */
   config(name: string | number): unknown;
@@ -44,19 +46,25 @@ function baseUrl(call: ToolCall): string {
 }
 
 /**
- * Request params: named args plus the first positional arg as `input`.
- * A tool declared with `sendInput: false` sends named args only (for strict APIs).
+ * Request params: named args, plus an explicit first positional arg as `input`.
+ * The pipeline value is never sent implicitly (strict APIs reject unknown
+ * params), and args that filled a {{placeholder}} in the URL aren't sent again.
+ * A tool declared with `sendInput: false` sends named args only.
  */
 function params(call: ToolCall): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  if (call.config("sendInput") !== false) {
+  if (call.config("sendInput") !== false && !call.implicitInput) {
     const [input, ...rest] = call.positional;
     if (input !== undefined) out.input = input;
     if (rest.length) out.args = rest;
   }
-  for (const [k, v] of Object.entries(call.named)) if (!RESERVED.has(k)) out[k] = v;
+  const inUrl = new Set([...String(call.config(0) ?? "").matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]!));
+  for (const [k, v] of Object.entries(call.named)) if (!RESERVED.has(k) && !inUrl.has(k)) out[k] = v;
   return out;
 }
+
+/** Methods named after the request itself call the URL as declared, with no extra path segment. */
+const PLAIN_METHODS = new Set(["get", "fetch", "request", "call", "execute", "send"]);
 
 function buildUrl(call: ToolCall, defaultPath: string): URL {
   let base = baseUrl(call);
@@ -75,8 +83,10 @@ function authHeaders(call: ToolCall): Record<string, string> {
   return typeof key === "string" && key ? { Authorization: `Bearer ${key}` } : {};
 }
 
-async function readResponse(res: Response, label: string): Promise<unknown> {
+/** Parse a response. A tool declared with `allowNotFound: true` returns null on 404 (for APIs that 404 when nothing matches). */
+async function readResponse(res: Response, label: string, call?: ToolCall): Promise<unknown> {
   const text = await res.text();
+  if (res.status === 404 && call?.config("allowNotFound") === true) return null;
   if (!res.ok) throw new HttpError(`${label} failed (${res.status}): ${text.slice(0, 500)}`, res.status, text);
   if ((res.headers.get("content-type") ?? "").includes("json") || /^\s*[[{]/.test(text)) {
     try {
@@ -87,10 +97,10 @@ async function readResponse(res: Response, label: string): Promise<unknown> {
 }
 
 const rest: ToolProvider = async (call, { fetch }) => {
-  const url = buildUrl(call, call.viaAgent ? "" : call.method);
+  const url = buildUrl(call, call.viaAgent || PLAIN_METHODS.has(call.method.toLowerCase()) ? "" : call.method);
   for (const [k, v] of Object.entries(params(call))) url.searchParams.set(k, str(v));
   const res = await fetch(url, { method: "GET", headers: authHeaders(call), signal: call.signal });
-  return readResponse(res, `GET ${url.origin}${url.pathname}`);
+  return readResponse(res, `GET ${url.origin}${url.pathname}`, call);
 };
 
 const post: ToolProvider = async (call, { fetch }) => {
@@ -101,7 +111,7 @@ const post: ToolProvider = async (call, { fetch }) => {
     body: JSON.stringify(params(call)),
     signal: call.signal,
   });
-  return readResponse(res, `POST ${url.origin}${url.pathname}`);
+  return readResponse(res, `POST ${url.origin}${url.pathname}`, call);
 };
 
 const VECTOR_METHODS = new Set(["log", "insert", "add", "upsert", "save", "store", "search", "query", "find", "recall", "similar", "delete", "forget", "count"]);

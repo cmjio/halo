@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, validate } from "../src/parser/index";
-import { HaloRuntime, PolicyViolation, SchemaValidationError, type MockRequest, type MockValue, type RunResult, type RuntimeConfig } from "../src/runtime/runtime";
+import { HaloRuntime, LoopLimitError, PolicyViolation, SchemaValidationError, type MockRequest, type MockValue, type RunResult, type RuntimeConfig } from "../src/runtime/runtime";
 
 const dir = `${import.meta.dir}/../examples`;
 const files = readdirSync(dir).filter((f) => f.endsWith(".halo")).sort();
@@ -41,7 +41,9 @@ describe("all examples", () => {
           if (result instanceof Error) {
             // Generic string mocks can't satisfy a declared output schema or Require(JSON); those are tested with real data.
             const jsonRequired = result instanceof PolicyViolation && result.message === "Output is not valid JSON";
-            expect(result instanceof SchemaValidationError || jsonRequired).toBe(true);
+            // A loop whose check needs a real result (e.g. a shell exit code) can't pass with dummy mocks
+            const loopNeedsReal = result instanceof LoopLimitError;
+            expect(result instanceof SchemaValidationError || jsonRequired || loopNeedsReal).toBe(true);
             continue;
           }
           expect(["completed", "halted"]).toContain((result as RunResult).status);
@@ -72,7 +74,8 @@ describe("examples run to completion with realistic data", () => {
     const url = new URL(requests[0]!.url);
     expect(url.origin + url.pathname).toBe("https://api.deepl.com/v2/translate");
     expect(url.searchParams.get("target_lang")).toBe("es");
-    expect(url.searchParams.get("input")).toBe("Hello, Ana!");
+    expect(url.searchParams.get("text")).toBe("Hello, Ana!");
+    expect(url.searchParams.has("input")).toBe(false);
     expect(requests[0]!.headers.get("authorization")).toBe("Bearer dk-123");
   });
 
@@ -717,5 +720,112 @@ describe("domain examples", () => {
     expect(result.context.data.replans).toBe(1);
     expect(prompts[1]).toContain('"stdout": "Peanut"');
     expect(result.output).toEqual({ meals: [{ day: "Mon", dish: "Teriyaki", ingredients: ["chicken", "soy"] }], shopping_list: ["chicken", "soy"] });
+  });
+});
+
+// Examples 70-72 use real free services; here the services and models are faked, but the shell steps are real.
+describe("public-data examples", () => {
+  const approve = () => ({ approved: true, action: "approve" });
+  const silent = async <T>(work: () => Promise<T>) => {
+    const print = console.log;
+    console.log = () => {};
+    try {
+      return await work();
+    } finally {
+      console.log = print;
+    }
+  };
+
+  test("70 pipeline author: an invalid draft goes back with the validator's errors; the valid one is saved after approval", async () => {
+    const saveAs = join(tmp, "authored", "hn.halo");
+    const prompts: string[] = [];
+    const bad = `agent Writer [anthropic/claude-haiku-4-5]\npipeline Digest(topic: String) -> Result:\n  topic |> Ghost.summarize()`;
+    const good = "```halo\n" + `agent Writer [anthropic/claude-haiku-4-5]\npipeline Digest(topic: String) -> Result:\n  topic |> Writer.summarize("Summarize {{topic}}") as summary |> System.Print(context.data.summary)` + "\n```";
+    let asked: unknown[] = [];
+    const { rt } = await load("70-pipeline-author.halo", { onInterrupt: (req) => ((asked = req.attachments), approve()) }, {
+      "Author.write": (r: MockRequest) => (prompts.push(r.prompt!), prompts.length === 1 ? bad : good),
+    });
+    const result = await silent(() => rt.run("AuthorPipeline", { request: "Summarize a topic", save_as: saveAs }));
+    expect(result.status).toBe("completed");
+    expect(result.context.data.fixes).toBe(1);
+    expect(prompts[1]).toContain(`unknown callee \\"Ghost\\"`);
+    expect(String(result.output)).toContain("1 file(s), 0 error(s)");
+    expect(await Bun.file(saveAs).text()).toBe(good.replace(/^```.*\n|\n```$/g, "") + "\n");
+    expect(asked[0]).toBe(good);
+  }, 30_000);
+
+  test("71 dependency watch: checks installed versions with OSV, marks what's new, alerts only on new advisories", async () => {
+    const project = join(tmp, "app");
+    await Bun.write(join(project, "package.json"), JSON.stringify({ dependencies: { lodash: "^4.17.0", zod: "^3.0.0" } }));
+    await Bun.write(join(project, "node_modules/lodash/package.json"), JSON.stringify({ version: "4.17.20" }));
+    const queries: unknown[] = [];
+    const fakeFetch = (async (input: string | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init!.body));
+      queries.push(body);
+      if (body.package.name !== "lodash") return Response.json({});
+      return Response.json({ vulns: [{ id: "GHSA-29mw-wpgm-hmr9", aliases: ["CVE-2020-28500"], summary: "ReDoS in lodash", database_specific: { severity: "MODERATE" }, affected: [{ ranges: [{ events: [{ introduced: "0" }, { fixed: "4.17.21" }] }] }], details: "long ".repeat(500) }] });
+    }) as typeof fetch;
+    const prompts: string[] = [];
+    const posted: unknown[] = [];
+    const { rt } = await load("71-dependency-watch.halo", { fetch: fakeFetch }, {
+      "Analyst.report": (r: MockRequest) => (prompts.push(r.prompt!), JSON.stringify({ vulnerable: 1, new: prompts.length === 1 ? 1 : 0, report: "lodash@4.17.20: GHSA-29mw-wpgm-hmr9 (MODERATE), fixed in 4.17.21" })),
+      Chat: (r: MockRequest) => (posted.push(r.named), { ok: true }),
+    });
+    const first = await silent(() => rt.run("DependencyWatch", { project, slack_channel: "#security" }));
+    expect(first.output).toBe("lodash@4.17.20: GHSA-29mw-wpgm-hmr9 (MODERATE), fixed in 4.17.21");
+    // Installed version from node_modules; the range prefix stripped when not installed
+    expect(queries).toEqual([
+      { package: { name: "lodash", ecosystem: "npm" }, version: "4.17.20" },
+      { package: { name: "zod", ecosystem: "npm" }, version: "3.0.0" },
+    ]);
+    expect(prompts[0]).toContain('"vulns.id": [\n      "GHSA-29mw-wpgm-hmr9"');
+    expect(prompts[0]).toContain('"4.17.21"');
+    expect(prompts[0]).not.toContain("long long");
+    expect(posted).toEqual([{ channel: "#security", text: "lodash@4.17.20: GHSA-29mw-wpgm-hmr9 (MODERATE), fixed in 4.17.21" }]);
+
+    // Second run: the previous report is passed in; nothing new, so no alert
+    await silent(() => rt.run("DependencyWatch", { project, slack_channel: "#security" }));
+    expect(prompts[1]).toContain('- previous_report: [\n  "lodash@4.17.20: GHSA-29mw-wpgm-hmr9');
+    expect(posted).toHaveLength(1);
+    await rt.close();
+  }, 30_000);
+
+  test("72 recall monitor: queries openFDA, explains recalls, posts new ones only after approval; no matches is not an error", async () => {
+    const urls: URL[] = [];
+    let empty = false;
+    const fakeFetch = (async (input: string | URL) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      if (empty) return Response.json({ error: { code: "NOT_FOUND", message: "No matches found!" } }, { status: 404 });
+      return Response.json({ results: [{ recall_number: "H-0021-2027", report_date: "20261014", classification: "Class II", status: "Ongoing", recalling_firm: "Saint Francis Apizza", product_description: "Frozen Pepperoni Pizza", reason_for_recall: "Undeclared peanut", distribution_pattern: "CT, NY", openfda: { big: true } }] });
+    }) as typeof fetch;
+    const prompts: string[] = [];
+    const posted: unknown[] = [];
+    let reviewed = 0;
+    const { rt } = await load("72-recall-monitor.halo", { fetch: fakeFetch, onInterrupt: () => (reviewed++, approve()) }, {
+      "Explainer.summarize": (r: MockRequest) => (prompts.push(r.prompt!), JSON.stringify({ new: 1, summary: "NEW H-0021-2027 (Class II): Saint Francis Apizza frozen pizza, undeclared peanut, CT and NY." })),
+      Chat: (r: MockRequest) => (posted.push(r.named), { ok: true }),
+    });
+    const result = await silent(() => rt.run("RecallMonitor", { product: "food", keyword: "peanut", slack_channel: "#safety" }));
+    expect(result.status).toBe("completed");
+    expect(urls[0]!.pathname).toBe("/food/enforcement.json");
+    // Exactly these parameters: openFDA rejects unknown ones (such as the pipeline value as `input`)
+    expect(Object.fromEntries(urls[0]!.searchParams)).toEqual({ search: "reason_for_recall:peanut", sort: "report_date:desc", limit: "10" });
+    expect(prompts[0]).toContain('"recall_number": "H-0021-2027"');
+    expect(prompts[0]).not.toContain("openfda");
+    expect(reviewed).toBe(1);
+    expect(posted).toEqual([{ channel: "#safety", text: "NEW H-0021-2027 (Class II): Saint Francis Apizza frozen pizza, undeclared peanut, CT and NY." }]);
+
+    // No channel: the summary is kept, nothing is posted or asked
+    const quiet = await silent(() => rt.run("RecallMonitor", { product: "food", keyword: "peanut", slack_channel: "" }));
+    expect(quiet.output).toContain("H-0021-2027");
+    expect(reviewed).toBe(1);
+
+    // openFDA 404s when nothing matches: the run stops quietly instead of failing
+    empty = true;
+    const none = await silent(() => rt.run("RecallMonitor", { product: "food", keyword: "zzz", slack_channel: "#safety" }));
+    expect(none.status).toBe("halted");
+    expect(none.context.meta.halted?.condition).toBe("context.data.reports != null");
+    await rt.close();
   });
 });

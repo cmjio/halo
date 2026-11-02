@@ -1240,7 +1240,8 @@ export class HaloRuntime {
 
   private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean): Promise<unknown> {
     const target = `${tool.name}.${method}`;
-    const args = positional.length || ctx.current === undefined ? positional : [ctx.current];
+    const implicitInput = !positional.length && ctx.current !== undefined;
+    const args = implicitInput ? [ctx.current] : positional;
     const decl = declArgs(tool);
     const config = (key: string | number) => {
       const v = typeof key === "number" ? decl.positional[key] : decl.named[key];
@@ -1255,7 +1256,7 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, named, config, viaAgent, signal }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, viaAgent, signal }, this.toolServices()), mocked: false },
     );
 
     const latencyMs = Math.round(performance.now() - t0);
@@ -1298,7 +1299,12 @@ export class HaloRuntime {
         const fields = named.fields ?? positional.slice(1);
         if (!Array.isArray(fields) || !fields.length) throw new HaloError(`System.Pick needs fields, e.g. System.Pick(context.data.x, fields: ["id", "user.login"])`);
         const maxChars = named.maxChars === undefined ? Infinity : Number(named.maxChars);
-        return pick(positional.length ? positional[0] : ctx.current, fields.map(String), maxChars);
+        const source = positional.length ? positional[0] : ctx.current;
+        // Picking "fields" of plain values does nothing: say how to take items instead.
+        if (Array.isArray(source) && source.some((v) => v === null || typeof v !== "object")) {
+          throw new HaloError(`System.Pick keeps fields of objects, but this list holds plain values (${formatValue(source.slice(0, 3)).replace(/\s+/g, " ")}...). To take the first items, use |* each(x in list, limit: 5) or list.0`);
+        }
+        return pick(source, fields.map(String), maxChars);
       }
     }
 
@@ -1355,12 +1361,19 @@ export class HaloRuntime {
   }
 
   private async each(stage: EachStage, ctx: ExecutionContext): Promise<unknown[]> {
-    const list = this.resolveValue(stage.list, ctx);
-    if (!Array.isArray(list)) {
-      throw new HaloError(`each(${stage.item} in ${render(stage.list)}) needs a list, got ${list === undefined ? "nothing" : typeof list}`);
+    const value = this.resolveValue(stage.list, ctx);
+    if (!Array.isArray(value)) {
+      throw new HaloError(`each(${stage.item} in ${render(stage.list)}) needs a list, got ${value === undefined ? "nothing" : typeof value}`);
     }
+    let list: unknown[] = value;
     const options = this.resolveArgs({ argList: stage.options }, ctx).named;
     const concurrency = Math.max(1, Number(options.concurrency ?? 4) || 1);
+    // `limit: n` takes only the first n items.
+    if (options.limit !== undefined) {
+      const n = Number(options.limit);
+      if (!Number.isInteger(n) || n < 0) throw new HaloError(`each(...) limit must be a whole number, got ${formatValue(options.limit)}`);
+      list = list.slice(0, n);
+    }
     const { callee, method } = stage.call;
 
     const results: unknown[] = new Array(list.length);

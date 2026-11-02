@@ -55,7 +55,8 @@ function unknownMethod(call: ToolCall, methods: string[]): never {
  * Runs `command:` with bash in the current directory. Values inserted into the
  * command with {{...}} are shell-quoted by the runtime, so model output or user
  * input can't inject commands. A failing command is not an error: check
- * `exitCode` (e.g. with `|<> loop`).
+ * `exitCode` (e.g. with `|<> loop`). When stdout is JSON, it is also returned
+ * parsed as `json`.
  */
 export const bash: ToolProvider = async (call) => {
   const command = call.named.command;
@@ -69,7 +70,15 @@ export const bash: ToolProvider = async (call) => {
   const timer = setTimeout(kill, timeoutMs);
   try {
     const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { command, stdout: stdout.trimEnd(), stderr: stderr.trimEnd(), exitCode };
+    const out = stdout.trimEnd();
+    // Commands that print JSON (jq, curl, a script) also get it parsed, as `json`.
+    let json: unknown;
+    if (/^\s*[[{]/.test(out)) {
+      try {
+        json = JSON.parse(out);
+      } catch {}
+    }
+    return { command, stdout: out, stderr: stderr.trimEnd(), exitCode, ...(json !== undefined ? { json } : {}) };
   } finally {
     clearTimeout(timer);
     call.signal.removeEventListener("abort", kill);

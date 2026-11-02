@@ -1,0 +1,92 @@
+// ============================================================
+// Halo on Halo: describe a workflow, get a validated pipeline
+// ============================================================
+// An agent writes a .halo program from a plain-English request.
+// The real validator checks it; if there are errors, |<> loop sends
+// the agent the validator's messages to fix. You approve the result
+// before it's saved.
+//
+// RUN (from the Halo repo, or anywhere `halo` is installed):
+//   halo run examples/70-pipeline-author.halo \
+//     --arg request="Every morning, summarize the top 5 Hacker News stories" \
+//     --arg save_as=pipelines/hn-digest.halo
+// ============================================================
+
+policy Budget : MaxSpend(0.30)
+
+tool Shell : Bash()
+
+agent Author [anthropic/claude-sonnet-4-5, temp: 0.2]
+  system """
+    You write programs in Halo, a language for AI workflows. Reply with
+    only the program: no Markdown fences, no commentary.
+
+    Declarations (top level, any order):
+      policy Name : Rule(args) & Rule(args)
+        Rules: Block(PromptInjection | Profanity | PII | Email | APIKey | DestructiveOps | Markdown),
+        Redact(PII | Email | Phone | APIKey | SSN | CreditCard), MaxWords(n), MaxChars(n),
+        MaxTokens(n), MaxSpend(usd), Require(JSON | XML | Citation), MatchRegex("re"),
+        Validate("field", "<=", "context.data.x.limit"), LogViolation()
+      tool Name : Provider(args)
+        REST("host/base") GET with named args as query params; `path: "/x/{{id}}"`
+        POST("host/url", apiKey: Env.KEY, sendInput: false) named args as JSON body
+        Bash() run(command: "...") -> {stdout, stderr, exitCode, json}
+        Browser() fetch(url: "...") -> {title, content}
+        File(".halo/x.json", keep: 10) read / append(content: ...)
+        Slack(Env.SLACK_BOT_TOKEN) post(channel: "#c", text: "...")
+        Email(Env.RESEND_API_KEY, from: "a@b.c") send(to:, subject:, body:)
+        GitHub(Env.GITHUB_TOKEN) create_issue(repo:, title:, body:), list_issues(repo:, state:, limit:)
+      store Name : VectorStore(namespace: "x")   log(content:, tags: [..]), search(query:, tags:, exclude_tags:, order: "recent", limit:)
+      schema Name { field: String, n: Number, items: Array<String>, ok: Boolean }
+      agent Name [anthropic/claude-haiku-4-5, temp: 0.2]
+        system "..."          (optional; use triple quotes for several lines)
+        equips ToolA, StoreB  (tools it may use)
+        requires PolicyA      (policies it must obey)
+      pipeline Name(arg: String, n: Number, items: List) -> Result:
+        arg
+          |> Agent.task("instructions with {{arg}}", context.data.x, key: value) as result
+          |> Tool.method(named: value) as other
+
+    Operators (each on its own line, indented under the pipeline):
+      |> Call(...) as name                 run a call; `as` binds context.data.name
+      |? (cond)                            stop unless the condition holds (&&, ||, !, ==, !=, <, >=, null)
+      |? { (cond) => Call(), else => Call() }   branch
+      |* { A.x() as a, B.y() as b }        parallel calls
+      |* each(item in list) => Call(item)  one call per item; each(item in list, limit: 5) takes the first 5
+      |<> loop(Agent, "cond", max: 3)      go back to the agent's stage while the condition (a string) holds
+      |! yield(msg: "Approve?", [context.data.x]) as answer   ask a human; check context.data.answer.approved
+      System.Print(x), System.Value(x) (makes x the flowing value),
+      System.Pick(x, fields: ["a", "b.c"]) (keeps fields of an object or of each object in a list)
+    Paths: list.0 is the first item, list.length the count, list.title every item's title.
+    To use only the first N items of a list, write |* each(x in list, limit: N) => Call(x).
+    Never use System.Pick to take items: it only keeps fields of objects.
+    Directives above an agent or pipeline: @retry(2, 5s), @timeout(5m), @correct(2).
+
+    Rules: a pipeline starts with one of its arguments. Read results only
+    after they are produced (bind them with `as`). An agent may only call a
+    tool through `tool: Name` if it equips it. Use Env.NAME only inside tool
+    declarations. Prefer free public APIs that need no key.
+  """
+  requires Budget
+
+pipeline AuthorPipeline(request: String, save_as: String) -> Result:
+  request
+    // 1. Draft the program
+    |> Author.write("Write a complete Halo program for this request: {{request}}") as draft
+
+    // 2. Validate it with the real validator (fences stripped, just in case)
+    |> Shell.run(command: """
+         mkdir -p .halo/drafts
+         printf '%s\n' {{draft}} | sed '/^```/d' > .halo/drafts/draft.halo
+         if command -v halo >/dev/null 2>&1; then CLI="halo"; else CLI="bun run index.ts"; fi
+         NO_COLOR=1 $CLI validate .halo/drafts/draft.halo
+       """) as check
+
+    // 3. Errors? The author gets the validator's messages and tries again
+    |<> loop(Author, "context.data.check.exitCode != 0", max: 4) as fixes
+
+    // 4. You approve before it's saved
+    |! yield(msg: "Save this pipeline to {{save_as}}?", [context.data.draft, context.data.check.stdout]) as review
+    |? (context.data.review.approved == true)
+    |> Shell.run(command: "mkdir -p \"$(dirname {{save_as}})\" && cp .halo/drafts/draft.halo {{save_as}} && echo {{save_as}}") as saved
+    |> System.Value(context.data.check.stdout)

@@ -224,7 +224,7 @@ class Validator {
           this.add("error", `Pipeline "${s.name}": each(${stage.item} in ...) reuses the name "${stage.item}"; pick a new loop variable`, stage.loc);
         }
         for (const o of stage.options) {
-          if (o.name !== "concurrency") this.add("warning", `Pipeline "${s.name}": each(...) has no option "${o.name ?? "(positional)"}" (only concurrency: n)`, stage.loc);
+          if (o.name !== "concurrency" && o.name !== "limit") this.add("warning", `Pipeline "${s.name}": each(...) has no option "${o.name ?? "(positional)"}" (use concurrency: n or limit: n)`, stage.loc);
         }
         // The loop variable and its index are visible only inside the call.
         this.checkCall(stage.call, s, params, new Set([...data, stage.item, "index"]));

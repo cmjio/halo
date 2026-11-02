@@ -143,7 +143,7 @@ describe("parser: syntax added for the runtime", () => {
       `Pipeline "S": each(n in ...) reuses the name "n"; pick a new loop variable`,
       `Pipeline "S": each(M in ...) reuses the name "M"; pick a new loop variable`,
     ]);
-    expect(messages(src, "warning")).toEqual([`Pipeline "S": each(...) has no option "parallel" (only concurrency: n)`]);
+    expect(messages(src, "warning")).toEqual([`Pipeline "S": each(...) has no option "parallel" (use concurrency: n or limit: n)`]);
   });
 
   test("the loop variable is in scope inside the loop only; branch and each results are tracked", () => {

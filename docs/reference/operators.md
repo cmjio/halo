@@ -70,7 +70,7 @@ pipeline Debate(claim: String) -> Result:
 
 ## Each `|* each(item in list) => Call()`
 
-Calls once per item of a list, at most `concurrency` at a time (default 4). Inside the call, the item is available by its name and as the flowing value, and `index` is its position. The result is the list of results.
+Calls once per item of a list, at most `concurrency` at a time (default 4). `limit: n` uses only the first `n` items. Inside the call, the item is available by its name and as the flowing value, and `index` is its position. The result is the list of results.
 
 ```halo
 agent Summarizer [openai/gpt-4o-mini]

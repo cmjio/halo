@@ -63,7 +63,7 @@ ANTHROPIC_API_KEY=... halo debug examples/50-github-triage.halo --arg repo=oven-
 | `\|? (cond)` | Gate: stop the run (status `halted`) unless the condition holds. `&&`, `\|\|`, `!`, `==`, `>=`, `null`, ... |
 | `\|? { (cond) => A(), else => B() }` | Branch: run the first matching arm |
 | `\|* { A(), B() }` | Fan out: run calls in parallel; the result is the list |
-| `\|* each(item in list, concurrency: 2) => Call()` | One call per item, in parallel |
+| `\|* each(item in list, concurrency: 2, limit: 5) => Call()` | One call per item (the first 5), in parallel |
 | `\|<> loop(Agent, "cond", max: 3)` | While the condition holds, go back to the agent's stage (e.g. until tests pass) |
 | `\|! yield(msg: "...")` | Ask a human |
 | `~> listen(Slack.Reaction)` | Wait for an external event |
@@ -157,8 +157,8 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 
 | Provider | What it does |
 |---|---|
-| `REST(url)` / `GET` | `Tool.method(...)` sends a GET to `url/method` (or `path:`), named args as query params |
-| `POST(url)` | Named args as a JSON body (`sendInput: false` to send only those) |
+| `REST(url)` / `GET` | `Tool.method(...)` sends a GET to `url/method` (or `path:`; `Tool.get()` calls `url` itself), named args as query params |
+| `POST(url)` | Named args as a JSON body. Only what you pass is sent |
 | `VectorStore(namespace: "x")` | Local vector store in `.halo/vectors.sqlite`: `log`, `search` (filter with `tags:` and `exclude_tags:`, `order: "recent"` for newest first), `delete`, `count`. Lexical (hashed) embeddings, no network |
 | `File(path, keep: 10)` | Text entries in a JSON file: `read`, `append`, `clear`. Equipped by an agent, it's that agent's chat history |
 | `PostgreSQL(url)` / `SQL` | `query(sql: "...", params: [...])` via `Bun.SQL`; read-only unless `readOnly: false` |
@@ -193,7 +193,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 
 ## 📚 Examples
 
-`examples/` is a learning path: 01–19 introduce one concept each, 20–25 are role-based workflows, 30–38 are larger systems (moderation routing, a multi-agent swarm, local automation, schema validation), 40–46 are industry examples, 50 is the flagship, and 60–66 are everyday domains:
+`examples/` is a learning path: 01–19 introduce one concept each, 20–25 are role-based workflows, 30–38 are larger systems (moderation routing, a multi-agent swarm, local automation, schema validation), 40–46 are industry examples, 50 is the flagship, 60–66 are everyday domains, and 70–72 run for real on free public data:
 
 | # | Example | What it shows |
 |---|---|---|
@@ -204,6 +204,9 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 | 64 | Sports scouting | Two analysts in parallel, output checked against a `schema` |
 | 65 | Esports match review | OpenDota's free API (runs for real); reuses a saved review; compares a player only with their own past matches |
 | 66 | Meal planner | Allergens checked by `grep`, `\|<> loop` replans until the plan is clean |
+| 70 | **Pipeline author** | Describe a workflow in English; an agent writes the `.halo` file, the real validator checks it, and `\|<> loop` sends errors back until it passes |
+| 71 | Dependency security watch | Installed versions checked against OSV.dev (free), sorted by severity, alerts only on new advisories |
+| 72 | FDA recall monitor | openFDA (free) recalls explained in plain language; publishing waits for approval |
 
 Every example validates, and `test/examples.test.ts` runs them.
 

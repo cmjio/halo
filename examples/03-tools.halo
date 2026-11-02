@@ -16,7 +16,7 @@ agent Greeter [gemini-3-1-pro, temp: 0.7]
 
 pipeline MultiLangHello(name: String, lang: String) -> Result:
   name
-    |> Greeter.prompt("Write a warm, one-sentence greeting for {{name}}.")
-    // Call tool method with named args (pipeline passes previous output as first arg)
-    |> Translator.translate(target_lang: lang)
+    |> Greeter.prompt("Write a warm, one-sentence greeting for {{name}}.") as greeting
+    // Call a tool method with named args: GET api.deepl.com/v2/translate?text=...&target_lang=...
+    |> Translator.translate(text: context.data.greeting, target_lang: lang)
     |> System.Print()

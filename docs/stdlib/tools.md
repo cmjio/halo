@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directly (`|> Name.method(...)`), or an equipped agent can call it first (`Agent.task(tool: Name, ...)`). If a call has no positional arguments, its first argument is the flowing value. Tokens can be written as `Env.NAME` or `"Env.NAME"`, and they are read only when the tool is used.
+Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directly (`|> Name.method(...)`), or an equipped agent can call it first (`Agent.task(tool: Name, ...)`). If a call has no positional arguments, its first argument is the flowing value (Browser's URL, a memory search's query, a File entry); REST and POST don't send it. Tokens can be written as `Env.NAME` or `"Env.NAME"`, and they are read only when the tool is used.
 
 | Provider | What it does |
 |---|---|
@@ -27,10 +27,11 @@ pipeline Issues(repo: String) -> Result:
 
 - The first argument is the base URL. `https://` is added if it's missing.
 - `apiKey:` adds `Authorization: Bearer …`.
-- **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`, and when called by an agent it requests just `base`. Named arguments become query parameters, and the input is sent as `input=…`. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments.
-- **POST** sends the named arguments, plus `input`, as a JSON body to `base + path`. The method name is ignored.
-- `sendInput: false` (on the declaration) stops the flowing value from being sent as `input`.
+- **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`; a method named `get`, `fetch`, `request`, `call`, `execute`, or `send` (or a call by an agent) requests just `base`. Named arguments become query parameters. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments, which are then not sent again as parameters.
+- **POST** sends the named arguments as a JSON body to `base + path`. The method name is ignored.
+- Only what you pass is sent: the flowing value is never added implicitly. An explicit first positional argument is sent as `input` (`sendInput: false` on the declaration turns that off too).
 - 408, 429, and 5xx responses are retryable under `@retry`.
+- `allowNotFound: true` (on the declaration) returns `null` for a 404, for APIs that answer "no matches" with 404 (openFDA does); check it with `|? (context.data.x != null)`.
 
 ## `PostgreSQL` / `SQL`
 
@@ -52,7 +53,7 @@ pipeline Check(file: String) -> Result:
   file |> Shell.run(command: "wc -l {{file}}") as count
 ```
 
-`command:` is required. Any method name works. Values inserted with `{{…}}` are **shell-quoted**, so model output and user input can't add commands. Don't wrap placeholders in your own quotes, because that undoes the quoting. The result is `{ command, stdout, stderr, exitCode }`. A non-zero exit code is not an error, so you can check it with a gate or `|<> loop`. The default timeout is 120 seconds.
+`command:` is required. Any method name works. Values inserted with `{{…}}` are **shell-quoted**, so model output and user input can't add commands. Don't wrap placeholders in your own quotes, because that undoes the quoting. The result is `{ command, stdout, stderr, exitCode }`, plus `json` (stdout, parsed) when the command prints JSON, so `context.data.x.json.length` and `each(item in x.json)` work. A non-zero exit code is not an error, so you can check it with a gate or `|<> loop`. The default timeout is 120 seconds.
 
 ## `Browser`
 

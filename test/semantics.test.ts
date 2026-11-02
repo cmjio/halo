@@ -156,6 +156,11 @@ describe("System", () => {
     expect(events).toEqual(["Publish:doc:team"]);
   });
 
+  test("Pick on a list of plain values explains how to take items instead", async () => {
+    const r = rt(`pipeline S(ids: List) -> Result:\n  ids |> System.Pick(ids, fields: ["0", "1"])`);
+    await expect(r.execute("S", { ids: [101, 102, 103] })).rejects.toThrow("To take the first items, use |* each(x in list, limit: 5) or list.0");
+  });
+
   test("Pick keeps dotted fields of each item, maps over nested lists, and clips long strings", async () => {
     const r = rt(
       `pipeline S(items: List) -> Result:
@@ -324,7 +329,30 @@ describe("tools", () => {
     expect(await r.execute("S", { msg: "deploy" })).toEqual({ ok: true });
     expect(req!.url).toBe("https://hooks.example.com/eng/v1");
     expect(req!.headers.get("authorization")).toBe("Bearer h");
-    expect(await req!.json()).toEqual({ input: "deploy", team: "eng", text: "deploy!" });
+    // Only what the call passes, minus `team`, which went into the URL; the pipeline value isn't sent implicitly
+    expect(await req!.json()).toEqual({ text: "deploy!" });
+  });
+
+  test("REST: an explicit positional value is sent as input; get() calls the URL as declared", async () => {
+    const urls: string[] = [];
+    const fetchSpy = (async (u: string | URL) => (urls.push(String(u)), Response.json([1, 2]))) as typeof fetch;
+    const r = rt(
+      `tool HN : REST("hacker-news.firebaseio.com/v0/item/{{id}}.json")
+       tool Api : REST("api.example.com/v1")
+       pipeline S(x: String) -> Result:
+         x
+           |> HN.get(id: 42)
+           |> Api.search(x, limit: 3)
+           |> Api.search(limit: 3)`,
+      {},
+      { fetch: fetchSpy },
+    );
+    await r.execute("S", { x: "hello" });
+    expect(urls).toEqual([
+      "https://hacker-news.firebaseio.com/v0/item/42.json",
+      "https://api.example.com/v1/search?input=hello&limit=3",
+      "https://api.example.com/v1/search?limit=3",
+    ]);
   });
 });
 
@@ -446,6 +474,13 @@ describe("each: |* each(item in list) => Call()", () => {
       expect(await r.execute("S", { xs: [1, 2, 3, 4, 5, 6] })).toEqual(["ok", "ok", "ok", "ok", "ok", "ok"]);
       expect(peak).toBe(expected);
     }
+  });
+
+  test("limit: n takes the first n items", async () => {
+    const r = rt(`agent M [openai/gpt-4o]\npipeline S(xs: List) -> Result:\n  xs |* each(x in xs, limit: 2) => M.work(x)`, { "M.work": (req: MockRequest) => `w${req.args[0]}` });
+    expect(await r.execute("S", { xs: [1, 2, 3, 4] })).toEqual(["w1", "w2"]);
+    const bad = rt(`agent M [openai/gpt-4o]\npipeline S(xs: List) -> Result:\n  xs |* each(x in xs, limit: "lots") => M.work(x)`, { "M.work": "w" });
+    await expect(bad.execute("S", { xs: [1] })).rejects.toThrow("limit must be a whole number");
   });
 
   test("an empty list gives an empty result; a non-list is an error", async () => {
