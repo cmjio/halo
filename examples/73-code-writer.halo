@@ -1,0 +1,53 @@
+// ============================================================
+// Developer: write code until the tests pass
+// ============================================================
+// Reads a test file (the spec), has an agent write the implementation,
+// runs the tests, and while they fail sends the agent the failing
+// output to fix (|<> loop). The tests decide when it's done, not the model.
+//
+// This runs model-written code on your machine: point `workdir` at a
+// sandbox (a scratch folder or a container), not at anything you care
+// about. Block(DestructiveOps) rejects code with things like `rm -rf`.
+//
+// RUN:  halo run examples/73-code-writer.halo --arg workdir=/tmp/calc \
+//         --arg test_file=calc.test.ts --arg target_file=calc.ts \
+//         --arg task="Evaluate arithmetic expressions"
+// ============================================================
+
+policy SafeCode : Block(DestructiveOps) & Block(APIKey) & MaxSpend(0.50)
+
+tool Shell : Bash()
+
+agent Coder [anthropic/claude-sonnet-4-5, temp: 0.0]
+  system """
+    You are a careful TypeScript engineer working in a Bun project.
+    Write the complete contents of the requested file: no Markdown fences,
+    no commentary, no placeholders. Make the tests pass without special-
+    casing test inputs. When test output is shown, fix the root cause.
+  """
+  requires SafeCode
+
+pipeline WriteCode(task: String, workdir: String, test_file: String, target_file: String) -> Result:
+  task
+    // 1. The tests are the spec
+    |> Shell.run(command: "cat {{workdir}}/{{test_file}}") as spec
+    |? (context.data.spec.exitCode == 0)
+
+    // 2. Write the implementation
+    |> Coder.implement(
+         "Task: {{task}}. Write {{target_file}} so that {{test_file}} passes.",
+         context.data.spec.stdout
+       ) as code
+
+    // 3. Save it and run the tests (pipefail: the exit code is bun test's)
+    |> Shell.run(command: """
+         set -o pipefail
+         cd {{workdir}}
+         printf '%s\n' {{code}} | sed '/^```/d' > {{target_file}}
+         bun test {{test_file}} 2>&1 | tail -60
+       """) as result
+
+    // 4. Failing? The coder sees the test output and tries again
+    |<> loop(Coder, "context.data.result.exitCode != 0", max: 4) as fixes
+
+    |> System.Value(context.data.result.stdout)

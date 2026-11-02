@@ -829,3 +829,25 @@ describe("public-data examples", () => {
     await rt.close();
   });
 });
+
+test("73 code writer: failing test output goes back to the coder until the real tests pass", async () => {
+  const work = join(tmp, "coder");
+  await Bun.write(join(work, "package.json"), '{"name":"t","type":"module"}');
+  await Bun.write(join(work, "add.test.ts"), `import { test, expect } from "bun:test";\nimport { add } from "./add";\ntest("adds", () => expect(add(2, 3)).toBe(5));\n`);
+  const prompts: string[] = [];
+  const ast = parse(await Bun.file(`${dir}/73-code-writer.halo`).text());
+  const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
+    "Coder.implement": (r: MockRequest) => {
+      prompts.push(r.prompt!);
+      return prompts.length === 1 ? "export const add = (a: number, b: number) => a - b;" : "```ts\nexport const add = (a: number, b: number) => a + b;\n```";
+    },
+  });
+  const result = await rt.run("WriteCode", { task: "Add numbers", workdir: work, test_file: "add.test.ts", target_file: "add.ts" });
+  expect(result.status).toBe("completed");
+  expect(result.context.data.fixes).toBe(1);
+  expect(prompts[0]).toContain('test("adds"');
+  expect(prompts[1]).toContain("Expected: 5");
+  expect(prompts[1]).toContain("Received: -1");
+  expect(String(result.output)).toContain("1 pass");
+  expect(await Bun.file(join(work, "add.ts")).text()).toBe("export const add = (a: number, b: number) => a + b;\n");
+}, 30_000);

@@ -207,6 +207,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 | 70 | **Pipeline author** | Describe a workflow in English; an agent writes the `.halo` file, the real validator checks it, and `\|<> loop` sends errors back until it passes |
 | 71 | Dependency security watch | Installed versions checked against OSV.dev (free), sorted by severity, alerts only on new advisories |
 | 72 | FDA recall monitor | openFDA (free) recalls explained in plain language; publishing waits for approval |
+| 73 | **Code writer** | An agent writes code, the real tests run, and failing output goes back until they pass (run it in a sandbox) |
 
 Every example validates, and `test/examples.test.ts` runs them.
 
