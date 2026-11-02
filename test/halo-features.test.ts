@@ -760,3 +760,72 @@ describe("limits found by fuzzing and scale runs", () => {
     expect(performance.now() - t0).toBeLessThan(500);
   });
 });
+
+describe("long runs and big stores stay fast", () => {
+  test("a snapshot saved again only appends to its log, and a crash mid-save leaves it readable", async () => {
+    const { writeSnapshot, readSnapshot, logPathFor } = await import("../src/runtime/snapshots");
+    const file = join(tmp, "snap", "run.json");
+    const entry = (i: number) => ({ index: i, stage: "call" as const, label: `s${i}`, at: "t", outputHash: "h", prev: "p", hash: `x${i}` });
+    const snap = (n: number) => ({ version: 1 as const, pipeline: "P", nextStage: n, input: {}, data: { n }, current: n, loops: {}, trace: Array.from({ length: n }, (_, i) => entry(i)), meta: { runId: "r", pipeline: "P", startedAt: "t", cost: 0, tokens: { prompt: 0, completion: 0 }, calls: [], violations: [], shadows: [] } });
+    await writeSnapshot(file, snap(100) as any);
+    const size = Bun.file(logPathFor(file)).size;
+    await writeSnapshot(file, snap(101) as any);
+    // One new entry, not the whole trace again.
+    expect(Bun.file(logPathFor(file)).size - size).toBeLessThan(200);
+    expect(Bun.file(file).size).toBeLessThan(500);
+    const read = await readSnapshot(file);
+    expect(read!.trace).toHaveLength(101);
+    expect(read!.data).toEqual({ n: 101 });
+
+    // A crash after appending but before the core was written: the extra lines are ignored, then cut off.
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(logPathFor(file), `${JSON.stringify({ t: entry(999) })}\n`);
+    expect((await readSnapshot(file))!.trace).toHaveLength(101);
+    await writeSnapshot(file, snap(102) as any);
+    expect((await readSnapshot(file))!.trace.map((t) => t.index)).toEqual(Array.from({ length: 102 }, (_, i) => i));
+
+    // Snapshots saved as one file (before logs) still load.
+    const old = join(tmp, "snap", "old.json");
+    await Bun.write(old, JSON.stringify(snap(3)));
+    expect((await readSnapshot(old))!.trace).toHaveLength(3);
+  });
+
+  test("pausing and resuming one run many times stays fast, and a fresh store reads it back whole", async () => {
+    const dir = join(tmp, "many-pauses");
+    const looped = `agent A [openai/gpt-4o]\npipeline P(n: Number) -> Result:\n  n\n    |> A.step() as s\n    |! yield("again?")\n    |<> loop(A, "context.data.yield.action == 'more'", max: 400)`;
+    const r = rt(looped, { "A.step": "ok" }, { runStore: new FileRunStore(dir) });
+    let res = await r.run("P", { n: 1 });
+    const t0 = performance.now();
+    for (let i = 0; i < 300; i++) res = await r.signal(res.runId, "yield", { action: "more" });
+    expect(res.status).toBe("paused");
+    expect(performance.now() - t0).toBeLessThan(5000);
+    // Another process (no cache) sees the whole history.
+    const other = rt(looped, { "A.step": "ok" }, { runStore: new FileRunStore(dir) });
+    const done = await other.signal(res.runId, "yield", { action: "stop" });
+    expect(done.status).toBe("completed");
+    expect(done.context.trace.length).toBeGreaterThan(900);
+    const { readdirSync } = await import("node:fs");
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("vector search keeps up with rows added or deleted elsewhere", async () => {
+    const { LocalVectorStore } = await import("../src/runtime/vectors");
+    const path = join(tmp, "vectors-sync.sqlite");
+    const a = new LocalVectorStore(path);
+    const b = new LocalVectorStore(path);
+    a.insert("ns", "refund for a broken blender", ["billing"]);
+    a.insert("ns", "the app crashes on login", ["bug"]);
+    expect(b.search("ns", "blender refund")[0]!.content).toBe("refund for a broken blender");
+    a.insert("ns", "login page shows a blank screen", ["bug"]);
+    expect(b.search("ns", "blank login screen")[0]!.content).toBe("login page shows a blank screen");
+    expect(a.delete("ns", { tags: ["bug"] })).toBe(2);
+    a.insert("ns", "password reset email never arrives", ["bug"]);
+    // Every entry left (any score), and none of the deleted ones.
+    expect(b.search("ns", "login", { limit: 10, minScore: -1 }).map((h) => h.content).sort()).toEqual(["password reset email never arrives", "refund for a broken blender"]);
+    expect(b.count("ns")).toBe(2);
+    expect(b.search("ns", "refund", { tags: ["billing"] })).toHaveLength(1);
+    expect(b.search("ns", "anything", { excludeTags: ["billing", "bug"] })).toEqual([]);
+    a.close();
+    b.close();
+  });
+});

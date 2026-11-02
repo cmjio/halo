@@ -14,7 +14,7 @@
  *      the run pauses (status "paused") and `signal(runId, ...)` resumes it.
  */
 
-import { mkdirSync, renameSync } from "node:fs";
+import { mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
   BranchStage,
@@ -42,6 +42,7 @@ import { AdapterRegistry, type LLMRequest, type ProviderAdapter } from "./adapte
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
 import { LocalVectorStore } from "./vectors.js";
+import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { BUILTIN_PROVIDERS, declArgs, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateSchema } from "./schema.js";
@@ -195,6 +196,8 @@ export interface RunStore {
    * is only safe within one process.
    */
   take?(runId: string): RunSnapshot | undefined | Promise<RunSnapshot | undefined>;
+  /** A resumed run has ended (it didn't pause again): drop anything kept for its next pause. */
+  finished?(runId: string): void | Promise<void>;
 }
 
 /** Keeps paused runs in this process (the default). */
@@ -218,24 +221,45 @@ export class MemoryRunStore implements RunStore {
 }
 
 /** Keeps paused runs as JSON files, so another process (or `halo resume`) can continue them. */
+/**
+ * Keeps paused runs as files (see snapshots.ts: a small core file plus an append-only
+ * log, so pausing a long run again only writes what's new). A snapshot this process
+ * saved is reused while its file is unchanged, so resuming doesn't re-read its history.
+ */
 export class FileRunStore implements RunStore {
+  private saved = new Map<string, { snapshot: RunSnapshot; version: string }>();
   constructor(readonly dir = ".halo/runs") {}
   private path(runId: string) {
     if (!/^[\w-]+$/.test(runId)) throw new SignalError(`Invalid run id "${runId}"`, "RUN_NOT_FOUND");
     return `${this.dir}/${runId}.json`;
   }
+  private version(file: string): string | undefined {
+    try {
+      const s = statSync(file);
+      return `${s.mtimeMs}:${s.size}`;
+    } catch {
+      return undefined;
+    }
+  }
+  private async read(runId: string, file: string): Promise<RunSnapshot | undefined> {
+    const cached = this.saved.get(runId);
+    if (cached && cached.version === this.version(file)) return cached.snapshot;
+    return readSnapshot(file, logPathFor(this.path(runId)));
+  }
   async save(runId: string, snapshot: RunSnapshot) {
-    mkdirSync(this.dir, { recursive: true });
-    await Bun.write(this.path(runId), JSON.stringify(snapshot, null, 2));
+    const file = this.path(runId);
+    await writeSnapshot(file, snapshot);
+    this.saved.set(runId, { snapshot, version: this.version(file)! });
   }
   async load(runId: string) {
-    const file = Bun.file(this.path(runId));
-    return (await file.exists()) ? ((await file.json()) as RunSnapshot) : undefined;
+    return this.read(runId, this.path(runId));
   }
   async delete(runId: string) {
+    this.saved.delete(runId);
     await Bun.file(this.path(runId)).delete().catch(() => {});
+    await deleteLog(logPathFor(this.path(runId)));
   }
-  /** Atomic across processes: renaming the file claims it; a second claimer finds it gone. */
+  /** Atomic across processes: renaming the core file claims it; a second claimer finds it gone. The log stays for the next pause. */
   async take(runId: string) {
     const claimed = `${this.path(runId)}.taken-${crypto.randomUUID()}`;
     try {
@@ -244,10 +268,14 @@ export class FileRunStore implements RunStore {
       return undefined;
     }
     try {
-      return (await Bun.file(claimed).json()) as RunSnapshot;
+      return await this.read(runId, claimed);
     } finally {
+      this.saved.delete(runId);
       await Bun.file(claimed).delete().catch(() => {});
     }
+  }
+  async finished(runId: string) {
+    await deleteLog(logPathFor(this.path(runId)));
   }
 }
 
@@ -665,7 +693,8 @@ export class HaloRuntime {
 
   /** Continue a run from a @checkpoint file. */
   async resume(checkpointPath: string): Promise<RunResult> {
-    const cp = (await Bun.file(checkpointPath).json()) as RunSnapshot;
+    const cp = await readSnapshot(checkpointPath);
+    if (!cp) throw new HaloError(`No checkpoint at ${checkpointPath}`);
     return this.runTop(this.restore(cp), cp.nextStage);
   }
 
@@ -710,7 +739,15 @@ export class HaloRuntime {
       this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
       // The paused stage is done now that it has its response.
       this.emit({ type: "stage", pipeline: ctx.pipeline.name, runId, index: snap.nextStage, kind: stage.kind, label: stageLabel(stage), status: "end", value: ctx.current, durationMs: 0 });
-      return { pipeline: snap.pipeline, result: this.runTop(ctx, snap.nextStage + 1) };
+      // Once it ends without pausing again, the store can drop what it kept for the next pause.
+      const result = this.runTop(ctx, snap.nextStage + 1).then(
+        async (r) => (r.status !== "paused" && (await this.runStore.finished?.(runId)), r),
+        async (err: unknown) => {
+          await this.runStore.finished?.(runId);
+          throw err;
+        },
+      );
+      return { pipeline: snap.pipeline, result };
     } finally {
       this.resuming.delete(runId);
     }
@@ -889,8 +926,8 @@ export class HaloRuntime {
     if (!findDirective(ctx.pipeline.directives, "checkpoint") || ctx.depth > 0) return;
     const path = `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
     ctx.meta.checkpoint = path;
-    mkdirSync(dirname(path), { recursive: true });
-    await Bun.write(path, JSON.stringify(this.toSnapshot(ctx, nextStage), null, 2));
+    // Appends to the checkpoint's log, so checkpointing every stage of a long run stays cheap.
+    await writeSnapshot(path, this.toSnapshot(ctx, nextStage));
     this.emit({ type: "checkpoint", runId: ctx.meta.runId, path });
   }
 

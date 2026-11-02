@@ -4,7 +4,7 @@
 
 ## `VectorStore`
 
-A searchable memory kept in a local SQLite file (`.halo/vectors.sqlite`, or `vectorPath` in `RuntimeConfig`). Entries are embedded as hashed bag-of-words vectors (words and word pairs). Search is lexical and deterministic, and it needs no network or API key. There is no hosted vector database support (Pinecone, Chroma, …), and there are no model embeddings.
+A searchable memory kept in a local SQLite file (`.halo/vectors.sqlite`, or `vectorPath` in `RuntimeConfig`). Entries are embedded as hashed bag-of-words vectors (words and word pairs). Search is lexical and deterministic, and it needs no network or API key. There is no hosted vector database support (Pinecone, Chroma, …), and there are no model embeddings. Each namespace is kept in memory as an inverted index, so a search at 100,000 entries takes tens of milliseconds (the first search in a process builds the index, about a second at that size), and entries added or deleted by another process are picked up on the next search.
 
 ```halo
 store Notes : VectorStore(namespace: "support")

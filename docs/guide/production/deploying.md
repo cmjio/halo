@@ -13,7 +13,7 @@ bun run index.ts run workflows/triage.halo --arg repo=acme/api --json --no-telem
 ```
 
 - Set the provider keys (`ANTHROPIC_API_KEY`, …) in the environment.
-- Without a terminal, a run that reaches `|! yield` or `~> listen` **pauses**. It is saved to `.halo/runs/<runId>.json` and prints the `halo resume` command. Use `--auto-approve` for unattended jobs that should never wait.
+- Without a terminal, a run that reaches `|! yield` or `~> listen` **pauses**. It is saved to `.halo/runs/<runId>.json` (with its trace and call history in `<runId>.log.jsonl`, which each later pause only appends to) and prints the `halo resume` command. Use `--auto-approve` for unattended jobs that should never wait.
 - `--json` prints the output, status, and full `context` (cost, calls, trace) for your logs.
 - The exit code is 1 when validation fails, an error is thrown, or a policy blocks the run. Halted and paused runs exit with 0, so check `status` in the JSON.
 
@@ -59,7 +59,7 @@ Bun.serve({
 
 ## Long runs
 
-Multi-agent pipelines can take minutes. If your HTTP host has a request time limit, accept the request, run the pipeline in the background (or in a queue worker), and report `result.status` and `output` when it finishes. `@checkpoint` writes a snapshot after each stage to `.halo/checkpoints/`, so a crashed run can continue with `runtime.resume(path)` or `halo run --checkpoint <path>`.
+Multi-agent pipelines can take minutes. If your HTTP host has a request time limit, accept the request, run the pipeline in the background (or in a queue worker), and report `result.status` and `output` when it finishes. `@checkpoint` writes a snapshot after each stage to `.halo/checkpoints/` (appending to its log, so a long run stays cheap to checkpoint), so a crashed run can continue with `runtime.resume(path)` or `halo run --checkpoint <path>`.
 
 ## Configuration
 

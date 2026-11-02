@@ -51,16 +51,25 @@ export function embed(text: string): Float32Array {
   return v;
 }
 
-function cosine(a: Float32Array, b: Float32Array): number {
-  let dot = 0;
-  for (let i = 0; i < a.length; i++) dot += a[i]! * b[i]!;
-  return dot;
-}
-
 const asText = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
+
+/**
+ * One namespace's embeddings in memory as an inverted index: for each dimension, the rows
+ * that use it and their weights. A text sets about 50 of the 512 dimensions, so a search
+ * only visits the rows that share a dimension with the query.
+ */
+interface Index {
+  ids: number[];
+  tags: string[][];
+  postings: Array<{ rows: number[]; weights: number[] }>;
+  /** Highest row id loaded, and the row count when loaded: new rows are read incrementally. */
+  maxId: number;
+  count: number;
+}
 
 export class LocalVectorStore {
   private db: Database;
+  private indexes = new Map<string, Index>();
 
   constructor(path = ".halo/vectors.sqlite") {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -99,29 +108,74 @@ export class LocalVectorStore {
   ): SearchHit[] {
     const { limit = 5, minScore = 0, tags, excludeTags, order = "score" } = options;
     const q = embed(asText(query));
-    const rows = this.db.query("SELECT * FROM entries WHERE namespace = ?").all(namespace) as any[];
-    return rows
-      .map((r) => {
-        const emb = new Float32Array(new Uint8Array(r.embedding).buffer);
-        return { ...this.toRecord(r), score: Math.round(cosine(q, emb) * 1e4) / 1e4 };
-      })
-      .filter(
-        (h) =>
-          h.score >= minScore &&
-          (!tags?.length || tags.every((t) => h.tags.includes(t))) &&
-          !excludeTags?.some((t) => h.tags.includes(t)),
-      )
-      .sort((a, b) => (order === "recent" ? b.id - a.id : b.score - a.score))
-      .slice(0, limit);
+    // Score from the inverted index; only the hits that make the cut are read from SQLite.
+    const index = this.index(namespace);
+    const dots = new Float64Array(index.ids.length);
+    for (let d = 0; d < DIMS; d++) {
+      const w = q[d]!;
+      if (w === 0) continue;
+      const { rows, weights } = index.postings[d]!;
+      for (let k = 0; k < rows.length; k++) dots[rows[k]!]! += w * weights[k]!;
+    }
+    const matches: Array<{ id: number; score: number }> = [];
+    for (let row = 0; row < index.ids.length; row++) {
+      const score = Math.round(dots[row]! * 1e4) / 1e4;
+      if (score < minScore) continue;
+      const t = index.tags[row]!;
+      if ((tags?.length && !tags.every((x) => t.includes(x))) || excludeTags?.some((x) => t.includes(x))) continue;
+      matches.push({ id: index.ids[row]!, score });
+    }
+    const top = matches.sort((a, b) => (order === "recent" ? b.id - a.id : b.score - a.score || a.id - b.id)).slice(0, limit);
+    if (!top.length) return [];
+    const rows = this.db.query(`SELECT id, content, tags, metadata, created_at FROM entries WHERE id IN (${top.map(() => "?").join(",")})`).all(...top.map((h) => h.id)) as any[];
+    const byId = new Map(rows.map((r) => [r.id as number, r]));
+    return top.filter((h) => byId.has(h.id)).map((h) => ({ ...this.toRecord(byId.get(h.id)), score: h.score }));
+  }
+
+  /**
+   * The namespace's packed index, brought up to date: rows added since it was built are
+   * appended; if any went away (deleted, possibly by another process), it is rebuilt.
+   */
+  private index(namespace: string, rebuild = false): Index {
+    const { n, maxId } = this.db.query("SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS maxId FROM entries WHERE namespace = ?").get(namespace) as { n: number; maxId: number };
+    const old = rebuild ? undefined : this.indexes.get(namespace);
+    if (old && old.count === n && old.maxId === maxId) return old;
+    // Rows only added since the last build are appended in place; anything else starts over.
+    const index: Index = old && n >= old.count && maxId >= old.maxId ? old : { ids: [], tags: [], postings: Array.from({ length: DIMS }, () => ({ rows: [], weights: [] })), maxId: 0, count: 0 };
+    const base = index === old;
+    const rows = this.db.query("SELECT id, tags, embedding FROM entries WHERE namespace = ? AND id > ? ORDER BY id").all(namespace, index.maxId) as Array<{ id: number; tags: string; embedding: Uint8Array }>;
+    for (const r of rows) {
+      const v = new Float32Array(new Uint8Array(r.embedding).buffer);
+      const row = index.ids.length;
+      for (let d = 0; d < DIMS; d++) {
+        if (v[d] === 0) continue;
+        index.postings[d]!.rows.push(row);
+        index.postings[d]!.weights.push(v[d]!);
+      }
+      index.ids.push(r.id);
+      index.tags.push(JSON.parse(r.tags) as string[]);
+    }
+    index.maxId = maxId;
+    index.count = n;
+    // Rows were added and others deleted since the last build: start over once.
+    if (index.ids.length !== n) {
+      this.indexes.delete(namespace);
+      return base ? this.index(namespace, true) : index;
+    }
+    this.indexes.set(namespace, index);
+    return index;
   }
 
   delete(namespace: string, filter: { id?: number; tags?: string[] }): number {
     if (filter.id !== undefined) {
       return this.db.query("DELETE FROM entries WHERE namespace = ? AND id = ?").run(namespace, filter.id).changes;
     }
-    const rows = this.db.query("SELECT id, tags FROM entries WHERE namespace = ?").all(namespace) as Array<{ id: number; tags: string }>;
-    const ids = rows.filter((r) => filter.tags?.every((t) => (JSON.parse(r.tags) as string[]).includes(t))).map((r) => r.id);
-    for (const id of ids) this.db.query("DELETE FROM entries WHERE id = ?").run(id);
+    const index = this.index(namespace);
+    const ids = index.ids.filter((_, row) => filter.tags?.every((t) => index.tags[row]!.includes(t)));
+    const remove = this.db.prepare("DELETE FROM entries WHERE id = ?");
+    this.db.transaction(() => {
+      for (const id of ids) remove.run(id);
+    })();
     return ids.length;
   }
 

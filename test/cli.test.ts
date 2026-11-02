@@ -105,7 +105,7 @@ pipeline Approve(doc: String) -> Result:
       expect(paused.code).toBe(0);
       expect(paused.err).toContain("⏸ Paused at stage 2 |! yield, waiting for a human response: Publish this draft?");
       const runId = paused.err.match(/halo resume flow\.halo ([\w-]+)/)![1]!;
-      expect(readdirSync(join(dir, ".halo/runs"))).toEqual([`${runId}.json`]);
+      expect(readdirSync(join(dir, ".halo/runs")).sort()).toEqual([`${runId}.json`, `${runId}.log.jsonl`]);
 
       const done = cliIn(dir, "resume", "flow.halo", runId, "--payload", "approve", "--mock");
       expect(done.code).toBe(0);
