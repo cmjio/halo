@@ -9,11 +9,29 @@ const haloGrammar = JSON.parse(fs.readFileSync(haloGrammarPath, 'utf-8'))
 // Ensure the grammar name matches the markdown code block identifier (```halo)
 haloGrammar.name = 'halo'
 
+// A page per example, written by site/build.ts (bun site/build.ts --generate).
+const examplesSidebarPath = path.resolve(__dirname, 'generated/examples-sidebar.json')
+const examplesSidebar = fs.existsSync(examplesSidebarPath) ? JSON.parse(fs.readFileSync(examplesSidebarPath, 'utf-8')) : []
+const version = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf-8')).version
+
 export default defineConfig({
-  // The showcase site serves the docs under /docs/ (site/build.ts sets DOCS_BASE).
-  base: process.env.DOCS_BASE || '/',
   title: "Halo",
-  description: "A small language for AI workflows",
+  description: "A language for AI pipelines: agents, tools, and the policies the runtime enforces on every call.",
+  cleanUrls: true,
+  // Served next to the docs, but not pages: the installers, the package registry, release downloads.
+  ignoreDeadLinks: [/^\/install\.(sh|ps1)$/, /^\/registry\//, /^\/dl\//],
+  appearance: 'dark',
+  lastUpdated: false,
+  sitemap: { hostname: 'https://halolang.com' },
+  head: [
+    ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+    ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
+    ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
+    ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap' }],
+    ['meta', { property: 'og:title', content: 'Halo · a language for AI pipelines' }],
+    ['meta', { property: 'og:description', content: 'Agents, tools, and the policies the runtime enforces on every call. Plan a run before it starts; replay it after.' }],
+    ['meta', { property: 'og:url', content: 'https://halolang.com/' }],
+  ],
   markdown: {
     theme: {
       light: 'light-plus',
@@ -29,20 +47,31 @@ export default defineConfig({
     }
   },
   themeConfig: {
+    logo: '/favicon.svg',
+    siteTitle: 'halo',
+    search: { provider: 'local' },
     nav: [
-      { text: 'Home', link: '/' },
-      { text: 'Guide', link: '/guide/quickstart' },
-      { text: 'Agents & Tools', link: '/guide/agents-with-tools' },
-      { text: 'Reference', link: '/guide/reference' }
+      { text: 'Guide', link: '/guide/quickstart', activeMatch: '^/(guide|dx|stdlib)/' },
+      { text: 'Reference', link: '/guide/reference', activeMatch: '^/(reference/|spec|dictionary)' },
+      { text: 'Examples', link: '/examples/', activeMatch: '^/examples/' },
+      { text: 'Playground', link: '/playground' },
+      { text: 'Packages', link: '/packages' },
+      { text: `v${version}`, items: [{ text: 'Install', link: '/guide/quickstart#_1-install' }, { text: 'Upgrade: halo upgrade', link: '/reference/cli' }] },
     ],
 
-    sidebar: [
+    outline: { level: [2, 3] },
+    footer: { message: 'curl -fsSL https://halolang.com/install.sh | sh' },
+
+    sidebar: {
+      '/examples/': [{ text: 'Examples', link: '/examples/', items: examplesSidebar }],
+      '/': [
       {
         text: 'Introduction',
         items: [
           { text: 'Quickstart', link: '/guide/quickstart' },
           { text: 'Core Concepts', link: '/guide/concepts' },
           { text: 'Language Overview', link: '/guide/reference' },
+          { text: 'CLI', link: '/reference/cli' },
           { text: 'Using Halo as a Library', link: '/guide/sdk' },
         ]
       },
@@ -53,6 +82,7 @@ export default defineConfig({
           { text: 'Context & Scope', link: '/reference/context-and-scope' },
           { text: 'Pipe Operators', link: '/reference/operators' },
           { text: 'Directives', link: '/reference/compiler-directives' },
+          { text: 'Tool Providers', link: '/reference/providers' },
         ]
       },
       {
@@ -71,6 +101,7 @@ export default defineConfig({
         items: [
           { text: 'Agents with Tools', link: '/guide/agents-with-tools' },
           { text: 'Tool Packages', link: '/guide/tool-packages' },
+          { text: 'Package Registry', link: '/packages' },
           { text: 'Plan and Replay', link: '/guide/plan-and-replay' },
         ]
       },
@@ -111,7 +142,7 @@ export default defineConfig({
           { text: 'Dictionary', link: '/dictionary' },
         ]
       }
-    ],
+    ]},
 
     socialLinks: []
   }

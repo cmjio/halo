@@ -1,14 +1,16 @@
 /**
- * Build the showcase site into site/dist:
+ * Build halolang.com into site/dist. The site is the VitePress docs, at the root.
  *
- *   1. Gather real data from the repo: the examples and their headers, the
- *      bundled registry's packages, every built-in provider's methods, a real
- *      `halo plan`, and a recorded run.
- *   2. Bundle the page and its playground, which runs Halo's own parser,
- *      validator, and planner in the browser.
- *   3. Build the docs (VitePress) under /docs/.
+ *   1. Gather real data from the repo: the examples, the bundled registry's packages,
+ *      every built-in provider's methods, real CLI output, and a recorded run.
+ *   2. Write it where the docs read it: docs/.vitepress/generated/ (data for the theme's
+ *      components, and code groups of real output to include) and docs/examples/ (a page
+ *      per example).
+ *   3. Build the docs, then add the package registry.
  *
- *   bun site/build.ts            (add --no-docs to skip the docs build)
+ *   bun site/build.ts                 everything (runs the test suite first)
+ *   bun site/build.ts --generate      only step 2 (bun run docs:dev runs this first)
+ *   bun site/build.ts --no-tests      skip the test suite
  */
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -26,11 +28,15 @@ const gen = join(site, ".gen");
 
 // ── Data ──
 
-/** An example's header: the text between its first two `// ====` rules. */
+/**
+ * An example's header: the text between its first two `// ====` rules, or, when that's
+ * just a title in its own box, the title plus the text in the box after it.
+ */
 function header(source: string): { title: string; about: string; run?: string } {
   const lines = source.split("\n");
   const rules = lines.flatMap((l, i) => (/^\/\/ ?=+\s*$/.test(l) ? [i] : []));
-  const head = rules.length >= 2 ? lines.slice(rules[0]! + 1, rules[1]) : [];
+  let head = rules.length >= 2 ? lines.slice(rules[0]! + 1, rules[1]) : [];
+  if (head.length === 1 && rules.length >= 3) head = [...head, ...lines.slice(rules[1]! + 1, rules[2])];
   const text = head.map((l) => l.replace(/^\/\/ ?/, ""));
   const title = (text[0] ?? "").replace(/^(STEP \d+|FLAGSHIP|PURPOSE)\s*:\s*/i, "").trim();
   const about: string[] = [];
@@ -40,7 +46,8 @@ function header(source: string): { title: string; about: string; run?: string } 
     else if (run && /^\s{4,}/.test(l)) run.push(l.trim());
     else if (!run) about.push(l.replace(/^(PURPOSE|Learn)\s*:\s*/i, "").trim());
   }
-  return { title, about: about.join(" ").replace(/\s+/g, " ").trim(), run: run?.join(" ") };
+  // A RUN block is shell commands, one per line (continuation lines end with \).
+  return { title, about: about.join(" ").replace(/\s+/g, " ").trim(), run: run?.join("\n") };
 }
 
 const examples = readdirSync(join(root, "examples"))
@@ -103,7 +110,7 @@ const planned = (file: string, pipeline: string) => {
 
 /** Run the test suite: the site shows how many pass, and a failing suite stops the build. */
 function passingTests(): number {
-  if (process.argv.includes("--no-tests")) return 0;
+  if (process.argv.includes("--no-tests") || process.argv.includes("--generate")) return 0;
   const run = Bun.spawnSync(["bun", "test"], { cwd: root, stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
   const out = run.stdout.toString() + run.stderr.toString();
   const pass = Number(out.match(/^\s*(\d+) pass/m)?.[1] ?? 0);
@@ -198,37 +205,66 @@ const data = {
   },
 };
 
-mkdirSync(gen, { recursive: true });
-await Bun.write(join(gen, "data.json"), JSON.stringify(data));
+// ── What the docs read ──
 
-// ── Page ──
+const generated = join(root, "docs/.vitepress/generated");
+const examplesDir = join(root, "docs/examples");
+rmSync(generated, { recursive: true, force: true });
+rmSync(examplesDir, { recursive: true, force: true });
+mkdirSync(generated, { recursive: true });
+mkdirSync(examplesDir, { recursive: true });
+await Bun.write(join(generated, "data.json"), JSON.stringify(data));
+// Everything but the example sources, for the components on ordinary pages.
+await Bun.write(join(generated, "lite.json"), JSON.stringify({ ...data, examples: [], snippets: {}, runs: {}, docPages: [] }));
 
-rmSync(dist, { recursive: true, force: true });
-const built = await Bun.build({
-  entrypoints: [join(site, "src/index.html"), join(site, "src/404.html")],
-  outdir: dist,
-  target: "browser",
-  minify: true,
-  sourcemap: "none",
-});
-if (!built.success) {
-  for (const log of built.logs) console.error(log);
-  process.exit(1);
+/** Text that goes into markdown outside a code block: Vue reads {{ }} there, so escape it. */
+const md = (text: string) => text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!).replace(/\{\{/g, "&#123;&#123;").replace(/\}\}/g, "&#125;&#125;");
+const fence = (lang: string, label: string, body: string) => `\`\`\`${lang}${label ? ` [${label}]` : ""}\n${body.replace(/\n+$/, "")}\n\`\`\`\n`;
+const shell = (r: { cmd: string; out: string }) => `$ ${r.cmd}\n${r.out}`;
+
+// The home page's tabs: a file, and what the CLI says about it.
+await Bun.write(
+  join(generated, "hero.md"),
+  `::: code-group\n\n${fence("halo", "triage.halo", SNIPPETS["triage.halo"]!)}\n${fence("txt", "$ halo plan", shell(runs.plan))}\n${fence("halo", "typo.halo", SNIPPETS["typo.halo"]!)}\n${fence("txt", "$ halo validate", shell(runs.validate))}\n${fence("halo", "hello.halo", SNIPPETS["hello.halo"]!)}\n${fence("txt", "$ halo test", shell(runs.hello))}\n:::\n`,
+);
+await Bun.write(join(generated, "help.md"), fence("txt", "", `$ halo --help\n${runs.help.out.trim()}`));
+await Bun.write(join(generated, "plan-research.md"), fence("txt", "", `$ halo plan examples/75-research-assistant.halo\n${data.plans.research}`));
+
+// A page per example, and the list of them.
+const slug = (file: string) => file.replace(/\.halo$/, "");
+const tags = (f: Record<string, boolean>) =>
+  Object.entries({ tools: "tools:", policies: "policies", loops: "|<> loops", parallel: "|* parallel", humans: "|! people" })
+    .filter(([k]) => f[k])
+    // Labels go in table cells too, where a bare | would end the cell.
+    .map(([, label]) => `<span class="tag">${md(label).replace(/\|/g, "&#124;")}</span>`)
+    .join(" ");
+for (const e of examples) {
+  const title = e.title || e.file;
+  await Bun.write(
+    join(examplesDir, `${slug(e.file)}.md`),
+    `---\ntitle: ${JSON.stringify(`${e.file} · ${title}`)}\n---\n\n# ${md(title)}\n\n<p class="ex-meta"><code>examples/${e.file}</code> ${tags(e.features)}</p>\n\n${e.about ? `${md(e.about)}\n\n` : ""}<p class="ex-actions"><a href="/playground?example=${encodeURIComponent(e.file)}">Open in the playground →</a></p>\n\n${e.run ? fence("bash", "", e.run) + "\n" : ""}${fence("halo", e.file, e.source)}`,
+  );
 }
+await Bun.write(
+  join(examplesDir, "index.md"),
+  `---\ntitle: Examples\n---\n\n# Examples\n\n${examples.length} working examples, from hello world to a team of agents that builds a spreadsheet engine from a spec. The test suite runs every one. Each page has the full source; open any of them in the [playground](/playground).\n\n| | Example | |\n|---|---|---|\n${examples
+    .map((e) => `| \`${String(e.number).padStart(2, "0")}\` | [${md(e.title || e.file).replace(/\|/g, "\\|")}](/examples/${slug(e.file)}) | ${tags(e.features)} |`)
+    .join("\n")}\n`,
+);
+await Bun.write(join(generated, "examples-sidebar.json"), JSON.stringify(examples.map((e) => ({ text: `${String(e.number).padStart(2, "0")} ${e.title || e.file}`, link: `/examples/${slug(e.file)}` }))));
+
+if (process.argv.includes("--generate")) {
+  console.log(`generated docs/.vitepress/generated and ${examples.length} example pages`);
+  process.exit(0);
+}
+
+// ── Build ──
+
+const docs = Bun.spawnSync(["bunx", "vitepress", "build", "docs"], { cwd: root, stdout: "inherit", stderr: "inherit" });
+if (docs.exitCode !== 0) process.exit(docs.exitCode ?? 1);
+rmSync(dist, { recursive: true, force: true });
+cpSync(join(root, "docs/.vitepress/dist"), dist, { recursive: true });
 // The package registry is served from the site: `halo add` in an installed binary reads it there.
 cpSync(join(root, "registry/index.json"), join(dist, "registry/index.json"));
 cpSync(join(root, "registry/packages"), join(dist, "registry/packages"), { recursive: true });
-for (const extra of ["favicon.svg", "og.png", "robots.txt", "install.sh", "install.ps1"]) {
-  if (existsSync(join(site, "src", extra))) cpSync(join(site, "src", extra), join(dist, extra));
-}
-console.log(`page: ${built.outputs.length} files`);
-
-// ── Docs ──
-
-if (!process.argv.includes("--no-docs")) {
-  const docs = Bun.spawnSync(["bunx", "vitepress", "build", "docs"], { cwd: root, env: { ...process.env, DOCS_BASE: "/docs/" }, stdout: "inherit", stderr: "inherit" });
-  if (docs.exitCode !== 0) process.exit(docs.exitCode ?? 1);
-  cpSync(join(root, "docs/.vitepress/dist"), join(dist, "docs"), { recursive: true });
-  console.log("docs: copied to /docs/");
-}
 console.log(`built ${dist}`);

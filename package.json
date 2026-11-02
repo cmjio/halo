@@ -16,12 +16,12 @@
     "build:zed": "bash editors/zed/build.sh",
     "build:vsx": "bun build src/lsp/server.ts --target node --outfile editors/vscode/server.js && cd editors/vscode && npm run compile",
     "package:vsx": "bun run build:vsx && cd editors/vscode && bunx vsce package",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
+    "docs:dev": "bun site/build.ts --generate && vitepress dev docs",
+    "docs:build": "bun site/build.ts --generate && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "studio": "bun run index.ts serve",
     "site:build": "bun site/build.ts",
-    "site:dev": "bun site/build.ts --no-docs && bunx wrangler dev --config site/wrangler.jsonc",
+    "site:dev": "bun site/build.ts --no-tests && bunx wrangler dev --config site/wrangler.jsonc",
     "site:deploy": "bun site/build.ts && bunx wrangler deploy --config site/wrangler.jsonc"
   },
   "keywords": [

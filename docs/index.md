@@ -1,59 +1,89 @@
 ---
 layout: home
+title: Halo
+titleTemplate: a language for AI pipelines
 
 hero:
-  name: "Halo"
-  text: "A small language for AI workflows"
-  tagline: "Declare agents, tools, policies, and pipelines in a .halo file. The Bun runtime runs them with policies enforced, results traced, and humans in the loop."
+  name: "halo"
+  text: "A language for AI pipelines"
+  tagline: "Declare agents, tools, and the policies that bound them, then chain them with pipeline operators. The runtime checks every tool call an agent makes against its policies before it runs. halo plan shows what a run could do; halo replay reruns exactly what it did."
   actions:
     - theme: brand
-      text: Get Started
+      text: Install
+      link: "#install"
+    - theme: alt
+      text: Quickstart
       link: /guide/quickstart
     - theme: alt
-      text: Language Reference
-      link: /guide/reference
-
-features:
-  - title: Declarative pipelines
-    details: Agents, tools, policies, and schemas are language constructs. Pipelines chain them with operators for piping, gates, branches, fan-out, loops, and human approval.
-  - title: Enforced policies
-    details: Block prompt injection and PII, redact secrets, cap words and spend, and require JSON. These rules are checked in code on every agent call. Rules the runtime can't check produce a validator warning.
-  - title: Inspectable runs
-    details: Every run records cost, tokens, calls, and a SHA-256 hash-chained trace. The CLI saves runs for Halo Studio. Paused runs resume from the CLI or from your server.
+      text: Playground
+      link: /playground
 ---
+
+## Install
+
+::: code-group
+
+```bash [macOS · Linux]
+curl -fsSL https://halolang.com/install.sh | sh
+```
+
+```powershell [Windows]
+irm https://halolang.com/install.ps1 | iex
+```
+
+```bash [From source]
+# in a checkout of the repository: `halo` then runs the source
+bun install && bun link
+```
+
+:::
+
+One standalone binary with Bun built in, so there's nothing else to install. The script picks the build for your OS and CPU, checks it against the release's `SHA256SUMS`, and puts it in `~/.halo/bin`. [Read the script](/install.sh) before piping it to a shell. `halo upgrade` updates it.
+
+```bash
+halo init my-flow && cd my-flow
+halo test main.halo --arg topic=tides   # offline: every model and tool mocked
+halo run main.halo --arg topic=tides    # with ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY set
+```
 
 ## What it looks like
 
-```halo
-policy Safe   : Block(PromptInjection) & Redact(Email)
-policy Budget : MaxSpend(0.50)
+A file, and what the CLI says about it. The outputs are the real CLI, run on these files when this site was built.
 
-schema Assessment {
-  fraudRisk: Number,
-  summary: String,
-}
+<!--@include: ./.vitepress/generated/hero.md-->
 
-agent Assessor [anthropic/claude-haiku-4-5, temp: 0.2]
-  system "You assess insurance claims. Reply with JSON only."
-  requires Safe, Budget
+## Agents choose their tools; policy sets the fence
 
-pipeline ProcessClaim(claim: String) -> Assessment:
-  claim
-    |> Assessor.assess("""
-         Assess this claim. Reply as {"fraudRisk": <0-1>, "summary": "<one sentence>"}.
-         Claim: {{claim}}
-       """) as assessment
-```
+Give an agent `tools: [...]` and it calls them until it has an answer, using each provider's native tool calling. Every call is checked against the agent's policies first:
 
-```bash
-halo run claim.halo --arg claim="Rear-ended at a stop light, bumper damage"
-halo test claim.halo --arg claim="..."   # offline: every call mocked
-```
+- `AllowTools` / `AllowEffects` decide what it can see at all.
+- `DenyArgs` refuses calls whose arguments match a pattern.
+- `ApproveTools` asks a person first (terminal, approval link, or Slack buttons); the run waits on disk until someone answers.
+- Tool results go through the agent's `Redact` and `Block` rules before the model reads them.
 
-The run fails with a `SchemaValidationError` if the answer isn't JSON matching `Assessment`. It fails with a `PolicyViolation` if the input contains an injection attempt or the run has already spent $0.50.
+A real run of the fixer in [example 74](/examples/74-software-team), on a small project with two bugs, as `halo run` recorded it:
 
-## Why Halo?
+<RecordedRun />
 
-1. **The prompt is the program.** Halo handles provider APIs, API keys, retries, timeouts, output parsing, and schema checks.
-2. **Real tools.** REST, Postgres, Bash, a fetch-based Browser, headless Chrome, local files, a key-value store, a code runner, document text, MCP servers, Slack, Email (Resend), GitHub, Linear, Figma, and a vector store are built in. Agents can call them on their own, under tool policies. More come as tool packages, and you can register your own in TypeScript.
-3. **Embeddable.** The parser and runtime are a TypeScript library for Bun. You can run pipelines from your own server and resume paused runs with `runtime.signal()`.
+[Agents with tools →](/guide/agents-with-tools)
+
+## Plan before; replay after
+
+`halo plan` lists every model call with its worst-case cost, every tool it could call and what that changes, and what needs approval. Nothing runs.
+
+<!--@include: ./.vitepress/generated/plan-research.md-->
+
+Every run keeps a recording of what it got back. `halo replay <file> <run>` feeds it back with no model or tool calls (the fixer run above replays in 19 ms, for $0); `--live-models` or `--live-tools` redo one side. [Plan and replay →](/guide/plan-and-replay)
+
+## Where next
+
+| | |
+|---|---|
+| [Quickstart](/guide/quickstart) | Install, write a pipeline, run it |
+| [Language reference](/guide/reference) | Every declaration, operator, and built-in |
+| [CLI](/reference/cli) | Every command and flag |
+| [Tool providers](/reference/providers) | Every built-in and packaged tool, with its methods and effects |
+| [Policies](/stdlib/policies) | Every rule the runtime enforces |
+| [Examples](/examples/) | Working pipelines, from hello world to a team of agents |
+| [Packages](/packages) | Install tools for Stripe, Notion, Jira, Sentry, GitHub; publish your own |
+| [Serving](/guide/production/serving) | HTTP API, webhooks, schedules, watches, Slack approvals, MCP |

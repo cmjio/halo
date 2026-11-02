@@ -2,6 +2,7 @@
  * halolang.com: static files, plus
  *   - /dl/<version>/<file> and /dl/latest.json: release binaries, from R2
  *   - a 301 from www (and the old workers.dev address) to halolang.com, keeping the path
+ *   - a 301 from /docs/<page> (where the docs used to be) to /<page>
  */
 
 interface R2Object {
@@ -26,6 +27,10 @@ export default {
       url.protocol = "https:";
       url.port = "";
       return Response.redirect(url.toString(), 301);
+    }
+    if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) {
+      const page = url.pathname.slice("/docs".length).replace(/\.html$/, "").replace(/\/index$/, "/") || "/";
+      return Response.redirect(new URL(page + url.search + url.hash, url).toString(), 301);
     }
     if (url.pathname.startsWith("/dl/")) return download(req, url, env);
     return env.ASSETS.fetch(req);
