@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directly (`|> Name.method(...)`), or an equipped agent can call it first (`Agent.task(tool: Name, ...)`). If a call has no positional arguments, its first argument is the flowing value (Browser's URL, a memory search's query, a File entry); REST and POST don't send it. Tokens can be written as `Env.NAME` or `"Env.NAME"`, and they are read only when the tool is used.
+Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directly (`|> Name.method(...)`), an equipped agent can call it first (`Agent.task(tool: Name, ...)`), or an equipped agent can choose its own calls (`Agent.task(tools: [Name])`, see [Agents with Tools](../guide/agents-with-tools.md)). If a call has no positional arguments, its first argument is the flowing value (Browser's URL, a memory search's query, a File entry); REST and POST don't send it. Tokens can be written as `Env.NAME` or `"Env.NAME"`, and they are read only when the tool is used.
 
 | Provider | What it does |
 |---|---|
@@ -9,9 +9,17 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `PostgreSQL` / `SQL` | SQL queries, read-only by default |
 | `Bash` | Run a shell command |
 | `Browser` | Fetch a page's readable text |
+| `Chrome` | A headless browser tab that runs JavaScript, clicks and types (see [Chrome](./chrome.md)) |
 | `File` | JSON-file history or notes (see [Stores](./stores.md)) |
-| `VectorStore` | Local searchable memory (see [Stores](./stores.md)) |
+| `VectorStore` | Searchable memory, with hashed or model embeddings, in SQLite or Postgres (see [Stores](./stores.md) and [Embeddings](./embeddings.md)) |
+| `Workspace` | Read, search and edit files in one folder (see [Local Tools](./local-tools.md)) |
+| `KV` | A key-value store in a local SQLite file (see [Local Tools](./local-tools.md)) |
+| `Code` | Run a JavaScript, TypeScript or Python snippet in its own process (see [Local Tools](./local-tools.md)) |
+| `Documents` | Text from text, HTML, CSV, JSON, Word and PDF files (see [Local Tools](./local-tools.md)) |
+| `MCP` | Any Model Context Protocol server's tools (see [MCP](../guide/integrations/mcp.md)) |
 | `Slack`, `Email`, `GitHub`, `Linear`, `Figma` | API clients for those services |
+
+More providers come as [tool packages](../guide/tool-packages.md) (`halo add stripe`), and `halo tools` lists every provider in a project with its methods and their effects.
 
 ## `REST` / `GET` and `POST`
 
@@ -76,7 +84,7 @@ pipeline Alert(msg: String) -> Result:
   msg |> Chat.post(text: "{{msg}}", buttons: ["Approve", "Reject"])
 ```
 
-`post` (also `send`, `message`, `notify`, `execute`) calls `chat.postMessage` with `channel:`, `text:`, and optional `buttons:`, and returns `{ ok, channel, ts }`. Halo doesn't receive button clicks. Your server handles them and calls `runtime.signal()` (see [Human-in-the-Loop](../guide/architecture/human-in-the-loop.md)).
+`post` (also `send`, `message`, `notify`, `execute`) calls `chat.postMessage` with `channel:`, `text:`, and optional `buttons:`, and returns `{ ok, channel, ts }`. During a run, each button's value is JSON with the run id, how many times the run has paused so far (`after`), and the button's label (`answer`). Under `halo serve` with `slack.signingSecret`, a click answers the run's next pause after the post (never a tool-call approval), with the label as the answer (see [Serving pipelines](../guide/production/serving.md#slack-buttons)). Elsewhere, Halo doesn't receive the clicks: your Slack app's endpoint calls `runtime.signal()` (see [Human-in-the-Loop](../guide/architecture/human-in-the-loop.md)).
 
 ## `Email` (Resend)
 
@@ -142,4 +150,4 @@ pipeline Sync(note: String) -> Result:
 
 ## Not built in
 
-These have no built-in provider: headless-browser automation (clicking, JavaScript), Jira, Stripe, a SQLite key-value store, and hosted vector databases. To add one, register a provider: see [Custom Tools](../guide/integrations/custom-tools.md).
+Hosted vector databases other than Postgres with pgvector (Pinecone, Chroma, …) have no provider. Jira, Stripe, Notion and Sentry are [tool packages](../guide/tool-packages.md) rather than built-ins. For anything else, install or write a package, use an [MCP](../guide/integrations/mcp.md) server, or register a provider in TypeScript (see [Custom Tools](../guide/integrations/custom-tools.md)).

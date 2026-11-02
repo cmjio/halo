@@ -50,7 +50,7 @@ Key lookup order for each provider: `apiKeys[id]`, then the provider's env var (
 | `run(name, args, { signal? })` | Run a pipeline and return a `RunResult`. Pass an `AbortSignal` to cancel. |
 | `execute(name, args)` | Run a pipeline and return only its output. |
 | `stream(name, args)` | Async generator of events, ending with `{ type: "done", result }` or `{ type: "error", error }`. |
-| `signal(runId, event, payload)` | Resume a paused run. `event` is `"yield"` or the listen target. |
+| `signal(runId, event, payload)` | Resume a paused run. `event` is `"yield"`, the listen target, or `"approval"`. |
 | `resume(checkpointPath)` | Continue from a `@checkpoint` file. |
 | `onInterrupt(fn)`, `onListen(fn)` | Set human and event handlers. |
 | `registerToolProvider(name, fn)` | Add a tool provider ([Custom Tools](./integrations/custom-tools.md)). |

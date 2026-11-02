@@ -19,12 +19,18 @@ export default defineConfig({
     },
     languages: [
       haloGrammar
-    ]
+    ],
+    // Halo templates look like Vue interpolation ({{name}}): keep inline code literal.
+    config: (md) => {
+      const render = md.renderer.rules.code_inline!
+      md.renderer.rules.code_inline = (...args) => render(...args).replace(/^<code/, '<code v-pre')
+    }
   },
   themeConfig: {
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Guide', link: '/guide/quickstart' },
+      { text: 'Agents & Tools', link: '/guide/agents-with-tools' },
       { text: 'Reference', link: '/guide/reference' }
     ],
 
@@ -51,8 +57,19 @@ export default defineConfig({
         text: 'Standard Library',
         items: [
           { text: 'Built-in Tools', link: '/stdlib/tools' },
+          { text: 'Chrome', link: '/stdlib/chrome' },
+          { text: 'Local Tools', link: '/stdlib/local-tools' },
           { text: 'Policies', link: '/stdlib/policies' },
           { text: 'Stores', link: '/stdlib/stores' },
+          { text: 'Embeddings', link: '/stdlib/embeddings' },
+        ]
+      },
+      {
+        text: 'Agents & Tools',
+        items: [
+          { text: 'Agents with Tools', link: '/guide/agents-with-tools' },
+          { text: 'Tool Packages', link: '/guide/tool-packages' },
+          { text: 'Plan and Replay', link: '/guide/plan-and-replay' },
         ]
       },
       {
@@ -67,6 +84,7 @@ export default defineConfig({
         text: 'Integrations',
         items: [
           { text: 'Custom Tools', link: '/guide/integrations/custom-tools' },
+          { text: 'MCP', link: '/guide/integrations/mcp' },
           { text: 'Telemetry & Tracing', link: '/guide/integrations/telemetry-and-tracing' },
         ]
       },

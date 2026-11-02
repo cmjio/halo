@@ -1,6 +1,6 @@
 # Core Concepts
 
-A Halo program is a set of declarations (`policy`, `tool`, `store`, `schema`, `agent`) and one or more `pipeline`s that use them. Agents are not autonomous loops. Each one is a model plus a configuration, and a pipeline calls it as one step in a fixed sequence of stages.
+A Halo program is a set of declarations (`policy`, `tool`, `store`, `schema`, `agent`) and one or more `pipeline`s that use them. Each agent is a model plus a configuration, and a pipeline calls it as one step in a fixed sequence of stages. Within that step, an agent given `tools:` may choose its own tool calls, under its policies (see [Agents with Tools](./agents-with-tools.md)).
 
 ## Pipelines and the flowing value
 
@@ -41,7 +41,7 @@ pipeline Review(number: Number) -> Result:
   number |> Reviewer.get_issue("Review this issue and list what is missing.", tool: Repo, number: number)
 ```
 
-The agent's method name becomes the task line of the prompt. String arguments become instructions. With `tool: Repo`, the runtime first calls `Repo.get_issue(number: ...)` and then sends the agent its result. There is no model-driven function-calling loop. Tools run only when the pipeline calls them. The one exception is equipped stores: a `VectorStore` adds its closest matches to the prompt, and a `File` store adds the conversation history.
+The agent's method name becomes the task line of the prompt. String arguments become instructions. With `tool: Repo`, the runtime first calls `Repo.get_issue(number: ...)` and then sends the agent its result. Without `tools:`, tools run only when the pipeline calls them. With `tools: [Repo]`, the agent calls `Repo`'s methods itself, as many times as it needs, up to `max_steps` (see [Agents with Tools](./agents-with-tools.md)). Equipped stores also add context on their own: a `VectorStore` adds its closest matches to the prompt, and a `File` store adds the conversation history.
 
 Agents keep no memory between calls. Pass earlier results explicitly (`context.data.…`) or equip a store.
 

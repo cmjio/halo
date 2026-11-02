@@ -32,7 +32,7 @@ runtime.onInterrupt(async (req) => {
 });
 ```
 
-**2. Pause and signal.** With no handler, a top-level run stops with `status: "paused"`. `context.meta.paused` is `{ stage, waitingFor, message }`, where `waitingFor` is `"yield"` or the listen target. The run is saved in the `runStore`. Later, from any process that shares the store:
+**2. Pause and signal.** With no handler, a top-level run stops with `status: "paused"`. `context.meta.paused` is `{ stage, waitingFor, message }`, where `waitingFor` is `"yield"`, the listen target, or `"approval"` (an agent's [tool call](../agents-with-tools.md#approvals)). The run is saved in the `runStore`. Later, from any process that shares the store:
 
 ```ts
 import { FileRunStore, HaloRuntime, parse } from "halo";
@@ -64,4 +64,10 @@ halo resume deploy.halo 3f2c…-run-id --payload '{"approved": false, "note": "w
 
 ## Slack-style approvals
 
-`Slack.post(..., buttons: [...])` posts buttons, but Halo doesn't receive the clicks. Have your Slack app's interaction endpoint call `runtime.signal(runId, "Slack.Interaction", payload)` for a run paused at `~> listen(Slack.Interaction)`. You need to map the message back to its run yourself, for example by putting `{{context.meta.runId}}` in the message text.
+Under `halo serve` with `slack.signingSecret`, pause announcements get Approve / Reject buttons, and a `Slack` tool's `buttons:` answer the next pause of the run that posted them (see [Slack buttons](../production/serving.md#slack-buttons)).
+
+In your own server, `Slack.post(..., buttons: [...])` posts buttons whose value is `{"runId": "...", "after": <pauses so far>, "answer": "<label>"}` (JSON, during a run; `context.meta.pauses` counts a run's pauses). Have your Slack app's interaction endpoint verify Slack's signature, read that value, and call `runtime.signal(runId, ...)` with the event the run is waiting for.
+
+## Approving tool calls
+
+An agent that chooses its own tool calls can be made to ask first, with `ApproveTools(...)` or `ApproveEffects(...)`. Those requests come to the same `onInterrupt` handler (with `channel: "approval"`), or pause the run waiting for `"approval"`. See [Agents with Tools](../agents-with-tools.md#approvals).

@@ -22,6 +22,7 @@ With `--mock`, every agent call returns `[mock Agent.method] <prompt preview>`, 
 | `"Agent"` or `"Tool"` | any method on it |
 | `"*"` | any agent |
 | `"yield"` | every `\|! yield` |
+| `"approval"`, or `"Tool.method?"` | an agent's tool call that needs approval |
 | `"Slack.Reaction"` (a listen target) | that `~> listen` |
 | `"Primary@openai/gpt-4o"` | a model shadow |
 
@@ -50,6 +51,8 @@ test("policies run on mocked answers too", async () => {
   await expect(runtime.execute("HandleTicket", { ticket: "hi" })).rejects.toBeInstanceOf(PolicyViolation);
 });
 ```
+
+For an agent with `tools:`, a mock can return `useTool("Tool.method", args)` (or a list) to call tools; see [Agents with Tools](../guide/agents-with-tools.md#testing-with-mocks). `--auto-approve` also approves every tool call that needs approval.
 
 Mocked answers go through the same policies, `@correct`, schemas, gates, and events as real ones. Policies and schemas can therefore be tested deterministically. The repository's `test/` directory has many more examples.
 

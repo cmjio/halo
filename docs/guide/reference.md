@@ -25,9 +25,9 @@ agent Name [model, param: value, ...]
 ```
 
 - **model**: a model id. Its prefix chooses the provider: `openai/`, `anthropic/`, `google/` or `gemini/`, `openrouter/`, `together/`, `replicate/`, `ollama/` or `local/`. Bare `gpt-*`, `claude-*`, and `gemini-*` ids also work. See [Quickstart](./quickstart.md#3-set-an-api-key) for each provider's key variable.
-- **params**: `temp` / `temperature`, `max_tokens`, and `top_p` are sent to the model. `system:` or `role:` here sets the system prompt when there is no `system` modifier.
+- **params**: `temp` / `temperature`, `max_tokens`, and `top_p` are sent to the model. `system:` or `role:` here sets the system prompt when there is no `system` modifier. `tools: auto`, `max_steps`, and `tool_result_chars` control [tool calls the agent chooses](./agents-with-tools.md).
 - **system**: the system prompt.
-- **equips**: tools and stores the agent may use with `tool:`. Equipped `VectorStore`s and `File` stores also add context automatically (see [Stores](../stdlib/stores.md)).
+- **equips**: tools and stores the agent may use with `tool:` or `tools:`. Equipped `VectorStore`s and `File` stores also add context automatically (see [Stores](../stdlib/stores.md)).
 - **requires**: policies checked on every call (see [Policies](../stdlib/policies.md)).
 - **directives**: `@timeout`, `@retry`, `@shadow`, `@correct` (see [Directives](../reference/compiler-directives.md)).
 
@@ -38,7 +38,7 @@ tool  Name : Provider(args...)
 store Name : Provider(args...)
 ```
 
-`tool` and `store` mean the same thing. Use `store` for things that hold data. The providers are `REST`/`GET`, `POST`, `PostgreSQL`/`SQL`, `VectorStore`, `File`, `Bash`, `Browser`, `Slack`, `Email`, `GitHub`, `Linear`, and `Figma` (see [Built-in Tools](../stdlib/tools.md)). You can add more with `runtime.registerToolProvider`.
+`tool` and `store` mean the same thing. Use `store` for things that hold data. The providers are `REST`/`GET`, `POST`, `PostgreSQL`/`SQL`, `VectorStore`, `File`, `Bash`, `Browser`, `Chrome`, `Workspace`, `KV`, `Code`, `Documents`, `MCP`, `Slack`, `Email`, `GitHub`, `Linear`, and `Figma` (see [Built-in Tools](../stdlib/tools.md)). You can add more with [tool packages](./tool-packages.md) or `runtime.registerToolProvider`.
 
 `Env.NAME` reads an environment variable. It works **only in tool and store declarations**, written either bare (`Env.GITHUB_TOKEN`) or as a string (`"Env.GITHUB_TOKEN"`). In a pipeline it is an error, and `{{Env.X}}` is never filled in, so secrets can't reach prompts.
 
@@ -87,6 +87,7 @@ On an agent call:
 - other positional values are inputs
 - named args are listed as parameters
 - `tool: T` runs the equipped tool first
+- `tools: [A, B]` (or `auto`, or `none`) lets the agent choose its own calls to those tools; `max_steps: n` limits the requests
 - `temperature`, `max_tokens`, `top_p`, and `system` override the agent's settings
 
 If an agent call passes no inputs and its instructions have no `{{…}}` placeholders, the flowing value is sent as the input.

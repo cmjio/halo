@@ -4,7 +4,7 @@
 
 ## `VectorStore`
 
-A searchable memory kept in a local SQLite file (`.halo/vectors.sqlite`, or `vectorPath` in `RuntimeConfig`). Entries are embedded as hashed bag-of-words vectors (words and word pairs). Search is lexical and deterministic, and it needs no network or API key. There is no hosted vector database support (Pinecone, Chroma, …), and there are no model embeddings. Each namespace is kept in memory as an inverted index, so a search at 100,000 entries takes tens of milliseconds (the first search in a process builds the index, about a second at that size), and entries added or deleted by another process are picked up on the next search.
+A searchable memory kept in a local SQLite file (`.halo/vectors.sqlite`, or `vectorPath` in `RuntimeConfig`). Entries are embedded as hashed bag-of-words vectors (words and word pairs). Search is lexical and deterministic, and it needs no network or API key. For search by meaning, give it `embeddings:` (an OpenAI, Gemini, Ollama or OpenAI-compatible model), and for a shared database, `url:` (Postgres with pgvector): see [Embeddings](./embeddings.md). Other hosted vector databases (Pinecone, Chroma, …) aren't supported. With hashed vectors, each namespace is kept in memory as an inverted index, so a search at 100,000 entries takes tens of milliseconds (the first search in a process builds the index, about a second at that size), and entries added or deleted by another process are picked up on the next search.
 
 ```halo
 store Notes : VectorStore(namespace: "support")
@@ -55,4 +55,4 @@ The path can hold placeholders, for one file per user: `File(".halo/history-{{us
 
 ## Databases
 
-`PostgreSQL(Env.DATABASE_URL)` is a tool, not an automatic memory. Query it explicitly (see [Built-in Tools](./tools.md#postgresql-sql)). There is no SQLite key-value store provider.
+`PostgreSQL(Env.DATABASE_URL)` is a tool, not an automatic memory. Query it explicitly (see [Built-in Tools](./tools.md#postgresql-sql)). For a key-value store in a local SQLite file, use [`KV`](./local-tools.md#kv).

@@ -55,5 +55,5 @@ The run fails with a `SchemaValidationError` if the answer isn't JSON matching `
 ## Why Halo?
 
 1. **The prompt is the program.** Halo handles provider APIs, API keys, retries, timeouts, output parsing, and schema checks.
-2. **Real tools.** REST, Postgres, Bash, a fetch-based Browser, Slack, Email (Resend), GitHub, Linear, Figma, and a local vector store are built in. You can register your own in TypeScript.
+2. **Real tools.** REST, Postgres, Bash, a fetch-based Browser, headless Chrome, local files, a key-value store, a code runner, document text, MCP servers, Slack, Email (Resend), GitHub, Linear, Figma, and a vector store are built in. Agents can call them on their own, under tool policies. More come as tool packages, and you can register your own in TypeScript.
 3. **Embeddable.** The parser and runtime are a TypeScript library for Bun. You can run pipelines from your own server and resume paused runs with `runtime.signal()`.

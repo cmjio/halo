@@ -1,6 +1,6 @@
 # Halo
 
-A **declarative language for AI workflows**. A `.halo` file declares agents, tools, policies, and schemas, then wires them into pipelines with pipe operators, with gates, branches, loops, parallel calls, and human approval built in.
+A **declarative language for AI workflows**. A `.halo` file declares agents, tools, policies, and schemas, then wires them into pipelines with pipe operators, with gates, branches, loops, parallel calls, and human approval built in. Agents can also choose their own tool calls, fenced in by tool policies.
 
 ```halo
 policy Safe   : Block(PromptInjection) & Redact(APIKey)
@@ -75,6 +75,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint`, `@shadow(Primary)` (
 - The flowing value is `context.current`. Each call's result is also stored at `context.data.<Callee>.<method>`, at `context.data.<method>`, and at any `as` binding. Pipeline arguments are bare names (`lang`) and `context.input.lang`.
 - Paths reach into lists: `issues.0.title` is the first title, `issues.length` the count, and `issues.title` every title. `System.Value(x)` makes `x` the flowing value.
 - `{{name}}` and `{{context.data.x.y}}` in strings are filled in at runtime. `Env.*` is only readable in tool declarations, so secrets can't leak into prompts.
+- `Agent.task(tools: [Files, Shell])` lets the agent choose its own calls (native tool calling) until it answers, up to `max_steps` (10). Each call is checked first against its policies' tool rules; results pass through its input policies; errors go back to the model. See [Agents with Tools](docs/guide/agents-with-tools.md).
 - An agent's prompt is built from the method name (as the task), its string arguments, the input, any `tool:` result, its named arguments, and context from what it `equips`: the closest entries of an equipped `VectorStore` and the recent conversation in an equipped `File` store. JSON answers are parsed, so gates can read `context.data.review.approved`.
 - A pipeline whose return type is a declared `schema` must produce matching output, or the run fails with a `SchemaValidationError`.
 - `|! yield` and `~> listen` ask your handler. With no handler, the run **pauses** (status `paused`) and `runtime.signal(runId, ...)` or `halo resume` continues it later.
@@ -91,18 +92,23 @@ halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
 halo init [name]                      # a new project
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
+halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
+halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-tools)
+halo mcp [files|dirs]                 # serve pipelines as MCP tools over stdio
+halo search | add | remove | install | tools | pack | publish   # tool packages
 ```
 
 `validate` catches undefined agents, tools, and policies; tools an agent uses without `equips`; unknown `System.*` methods; `context.data.x` values nothing writes; bad schema types and loop targets; and policy rules the runtime can't enforce.
 
-In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a server), the run pauses and prints the `halo resume` command; paused runs are kept in `.halo/runs`. Every CLI run is recorded to `.halo/telemetry.db` for Halo Studio unless you pass `--no-telemetry`.
+In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a server), the run pauses and prints the `halo resume` command; paused runs are kept in `.halo/runs`. Every CLI run is recorded to `.halo/telemetry.db` for Halo Studio unless you pass `--no-telemetry`, and to `.halo/recordings` for `halo replay` (unredacted; the newest 50 are kept) unless you pass `--no-record`. See [Plan and Replay](docs/guide/plan-and-replay.md).
 
 ## 🌐 Serving pipelines
 
 `halo serve` turns a folder of pipelines into a service, in one Bun process:
 
-- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), and cron schedules
-- **Approvals**: when a run pauses at `|! yield`, it gets a signed approve/reject link, logged and optionally posted to Slack. Paused runs survive restarts
+- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), cron schedules, and watches (a URL, file, or command's output changed)
+- **Approvals**: when a run pauses at `|! yield` or for a tool call, it gets a signed approve/reject link, logged and optionally posted to Slack, with Approve/Reject buttons when you give it your Slack app's signing secret. Paused runs survive restarts
+- **MCP** at `/mcp`: every pipeline as a tool for Claude, Cursor, and other MCP clients, behind the API token
 - **Halo Studio** at `/`: start runs, watch them, and approve paused ones
 
 ```json
@@ -169,8 +175,16 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 | `GitHub(token)` | `create_issue`, `comment`, `add_labels`, `create_pr`, `get_issue`, `list_issues` (`repo: "owner/name"`) |
 | `Linear(token)` | `create_issue(team:, title:, description:)` |
 | `Figma(token)` | `get_file(file:)`, `get_node(file:, node:)` |
+| `Chrome(allow: [...])` | A headless Chrome tab: `open`, `click`, `fill`, `press`, `text`, `screenshot`, ... limited to the hosts you allow |
+| `Workspace(dir, write: true)` | `read`, `write`, `edit`, `list`, `glob`, `search`, `delete` inside one folder (read-only by default) |
+| `KV(path)` | `get`, `set` (with `ttl:`), `delete`, `list`, `incr` in a local SQLite file |
+| `Code("python")` | `run(code:, input:)` in its own process, without your environment (not a sandbox) |
+| `Documents()` | `extract(path)`: text from Markdown, HTML, CSV, JSON, Word, and PDF |
+| `MCP(command)` / `MCP(url: ...)` | Every tool of an MCP server, over stdio or Streamable HTTP |
 
-Tokens can be `Env.NAME` or the string `"Env.NAME"`. An agent calls an equipped tool with `Agent.task(tool: T, ...)` and then works on its result.
+Tokens can be `Env.NAME` or the string `"Env.NAME"`. An agent calls an equipped tool first with `Agent.task(tool: T, ...)`, or chooses its own calls with `tools: [T]`. `VectorStore(embeddings: "openai/text-embedding-3-small")` searches by meaning, and `url:` keeps it in Postgres with pgvector.
+
+**Tool packages** add providers from a registry: `halo add stripe` (also `jira`, `notion`, `sentry`, `github-mcp`, `world-time`). A package is a REST API described as data, an MCP server, or code; anything that runs code needs `--trust`, and `halo.lock` pins each one's checksum. See [Tool Packages](docs/guide/tool-packages.md).
 
 ## 🛡 Policies
 
@@ -182,6 +196,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 - `Require(JSON | XML | Citation)` (`Enforce(JSON)` also works), `MatchRegex("...")`
 - `Validate("amount", "<=", "context.data.coverage.max_payout")`: compare an output field with a context value
 - `LogViolation()`
+- Tool rules, for tool calls an agent chooses: `AllowTools("Files.*")`, `DenyTools("Files.delete")`, `AllowEffects(read)`, `ApproveTools(...)` / `ApproveEffects(write, external)` (a person approves first), `DenyArgs("Shell.run", "command", "^(?!bun test)")`
 
 `Tone`, `Anonymize`, other `Require(...)` checks, and other categories need a model to judge them and are **not enforced yet**; `validate` warns wherever they're used.
 

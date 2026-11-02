@@ -46,9 +46,27 @@ pipeline FileTicket(spec: String) -> Result:
     |> Tickets.create_issue(project: "ENG", title: context.data.title)
 ```
 
-`halo validate` warns that `Jira` is an unknown provider. Pass `{ toolProviders: ["Jira"] }` to `validate()`/`compile()` to silence the warning in your own tooling.
+`halo validate` warns that `Jira` is an unknown provider (it knows built-ins and installed [tool packages](../tool-packages.md)). Pass `{ toolProviders: ["Jira"] }` to `validate()`/`compile()` to silence the warning in your own tooling.
 
-An agent doesn't decide on its own to call a tool. A tool runs when the pipeline calls it, either directly as above or through an agent with `PM.create_issue(tool: Tickets, ...)`, which calls the tool first and gives the agent its result.
+A tool runs when the pipeline calls it, either directly as above or through an agent with `PM.create_issue(tool: Tickets, ...)`, which calls the tool first and gives the agent its result. For an agent to choose its own calls (`PM.plan(tools: [Tickets])`, see [Agents with Tools](../agents-with-tools.md)), register the provider with a description of its methods:
+
+```ts
+runtime.registerToolProvider("Jira", jira, {
+  description: "Jira issues",
+  methods: [
+    {
+      name: "create_issue",
+      description: "Create a Task in a project.",
+      params: { type: "object", properties: { project: { type: "string" }, title: { type: "string" } }, required: ["project", "title"] },
+      effect: "external",
+    },
+  ],
+});
+```
+
+The model reads each method's `description` and `params` (JSON Schema). `effect` (`read`, `write`, or `external`) is what [tool rules](../../stdlib/policies.md#tool-rules) and `halo plan` go by. `methods` can also be an async function of `({ tool, config, signal }, services)`, for a provider that asks a server what it offers. Without this third argument, an agent call that offers the tool fails with `TOOL_CONFIG`.
+
+To share a provider with other projects, publish it as a [tool package](../tool-packages.md).
 
 ## System methods
 
