@@ -116,6 +116,66 @@ function passingTests(): number {
   return pass;
 }
 
+// ── Real CLI output, for the code and output pairs on the page ──
+
+const SNIPPETS: Record<string, string> = {
+  "hello.halo": `agent Greeter [anthropic/claude-haiku-4-5, temp: 0.7]
+
+pipeline Hello(name: String) -> Result:
+  name
+    |> Greeter.greet("Write a one-line greeting for {{name}}.")
+    |> System.Print()
+`,
+  "triage.halo": `policy Guard : AllowTools("Repo.get_issue", "Repo.comment", "Repo.add_labels")
+  & ApproveTools("Repo.comment")
+  & MaxSpend(0.25)
+
+tool Repo : GitHub(Env.GITHUB_TOKEN, repo: "acme/api")
+
+agent Triager [anthropic/claude-haiku-4-5, max_steps: 6]
+  equips Repo
+  requires Guard
+
+pipeline Triage(issue: Number) -> Result:
+  issue
+    |> Triager.triage("Read issue #{{issue}}, label it, and draft a reply.", tools: [Repo])
+`,
+  "typo.halo": `agent Writer [openai/gpt-4o] requires Brand
+
+pipeline Post(topic: String) -> Result:
+  topic
+    |> Writer.draft("A short post about {{topic}}") as draft
+    |> Slack.post(text: "{{draft}}")
+`,
+};
+
+/** Run the CLI on the snippets in a scratch folder and keep what it prints. */
+function cli(...args: string[]): { cmd: string; out: string } {
+  const run = Bun.spawnSync(["bun", join(root, "index.ts"), ...args], { cwd: scratch, env: { ...process.env, NO_COLOR: "1", HALO_API_KEY: "", ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", GEMINI_API_KEY: "" } });
+  const out = (run.stdout.toString() + run.stderr.toString()).replaceAll(scratch + "/", "").replace(/\d+ms · /, "6ms · ").trimEnd();
+  return { cmd: `halo ${args.filter((a) => a !== "--no-telemetry" && a !== "--no-record").join(" ")}`, out };
+}
+const scratch = join(gen, "cli");
+rmSync(scratch, { recursive: true, force: true });
+mkdirSync(scratch, { recursive: true });
+for (const [file, text] of Object.entries(SNIPPETS)) await Bun.write(join(scratch, file), text);
+const runs = {
+  hello: cli("test", "hello.halo", "--arg", "name=Ada", "--no-telemetry"),
+  plan: cli("plan", "triage.halo"),
+  validate: cli("validate", "typo.halo"),
+  help: cli("--help"),
+};
+rmSync(join(scratch, ".halo"), { recursive: true, force: true });
+
+/** Every docs page and its title, for search. */
+const docPages = [...new Bun.Glob("**/*.md").scanSync(join(root, "docs"))]
+  .filter((f) => !f.startsWith("node_modules") && !f.includes(".vitepress"))
+  .map((f) => {
+    const title = readFileSync(join(root, "docs", f), "utf8").match(/^#\s+(.+)$/m)?.[1]?.replace(/`/g, "").trim();
+    return { title: title ?? f, path: `/docs/${f.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, ".html")}` };
+  })
+  .filter((p) => p.title);
+
 const fixerRun = JSON.parse(readFileSync(join(site, "data/fixer-run.json"), "utf8"));
 
 const data = {
@@ -126,6 +186,9 @@ const data = {
   providers,
   plans: { research: planned("75-research-assistant.halo", "Research") },
   fixerRun,
+  snippets: SNIPPETS,
+  runs,
+  docPages,
   counts: {
     examples: examples.length,
     // GET and SQL are other names for REST and PostgreSQL.
