@@ -1,0 +1,16 @@
+{
+  "name": "github-mcp",
+  "version": "1.0.0",
+  "description": "GitHub through its official MCP server: repositories, issues, pull requests, code search, and more",
+  "publisher": "Halo (first-party; the server is GitHub's)",
+  "homepage": "https://github.com/github/github-mcp-server",
+  "license": "MIT",
+  "providers": {
+    "GitHubMCP": {
+      "kind": "mcp",
+      "description": "GitHub's MCP server (needs Docker)",
+      "command": "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server",
+      "env": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+    }
+  }
+}

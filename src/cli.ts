@@ -9,6 +9,9 @@
  *   halo parse <file.halo>
  *   halo init [name]
  *   halo serve [files or folders] [--port 8080]
+ *   halo plan <file.halo>              (what a run could do, before it runs)
+ *   halo mcp <files or folders>        (serve pipelines as MCP tools over stdio)
+ *   halo add | remove | install | tools | search | pack | publish   (tool packages)
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -25,6 +28,11 @@ import { loadServeConfig, startServer, ServeError } from "./serve/server.js";
 import { nextRun, parseCron } from "./serve/cron.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
+import { TOOL_PROVIDERS } from "./parser/builtins.js";
+import { formatPlan, plan } from "./plan.js";
+import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
+import { describePermissions, permissionsOf } from "./registry/manifest.js";
+import { DEFAULT_REGISTRY, install, installFromLock, loadInstalled, pack, publish, readLock, search, uninstall, type LoadedProvider } from "./registry/packages.js";
 
 const HELP = `
 Halo CLI - AI Workflow Language
@@ -38,7 +46,19 @@ USAGE:
   halo parse <file.halo>                Print the AST as JSON
   halo init [name]                      Create a new Halo project
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
-                                        approval links, and Halo Studio at /
+                                        approval links, MCP at /mcp, and Halo Studio at /
+  halo plan <file.halo>                 Show what a run could do: model calls and worst-case
+                                        cost, tool calls and their effects, approvals
+  halo mcp [files|dirs ...]             Serve pipelines as MCP tools over stdio
+
+TOOL PACKAGES:
+  halo search [query]                   Find tool packages in the registry
+  halo add <name[@version]|file|url|dir> Install a tool package (--trust if it runs code)
+  halo remove <name>                    Uninstall a tool package
+  halo install                          Install everything halo.lock pins
+  halo tools [--json]                   List every tool provider and its methods
+  halo pack <dir>                       Bundle a package folder into a .halotool file
+  halo publish <file.halotool> --registry <index.json>   Add it to a registry index
 
 RUN OPTIONS:
   --pipeline, -p <name>  Pipeline to run (default: the file's entry pipeline)
@@ -103,7 +123,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio"]);
+const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust"]);
 const ALIASES: Record<string, string> = { p: "pipeline", s: "pipeline", stream: "pipeline", resume: "checkpoint", h: "help", v: "version" };
 
 function parseFlags(argv: string[]): Flags {
@@ -180,6 +200,23 @@ function formatDiag(d: Diagnostic, file: string): string {
 const registry = new AdapterRegistry();
 const canHandleModel = (id: string) => !!registry.findAdapter(id);
 
+/** Providers from the tool packages halo.lock (in the current folder) pins. */
+let installedTools: Promise<LoadedProvider[]> | undefined;
+async function installed(): Promise<LoadedProvider[]> {
+  installedTools ??= loadInstalled(process.cwd());
+  try {
+    return await installedTools;
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+const validateOptions = async () => ({ canHandleModel, toolProviders: (await installed()).map((p) => p.name) });
+
+function registerInstalled(rt: HaloRuntime, providers: LoadedProvider[]) {
+  for (const p of providers) rt.registerToolProvider(p.name, p.provider, p.info);
+}
+
 function collectFiles(targets: string[]): string[] {
   const files: string[] = [];
   const walk = (p: string) => {
@@ -212,7 +249,7 @@ async function cmdValidate(flags: Flags): Promise<number> {
           const m = message.match(/^\[(\d+):(\d+)\] (.*)$/s);
           return m ? { severity: "error", message: m[3]!, line: Number(m[1]), column: Number(m[2]) } : { severity: "error", message };
         })
-      : validate(ast, { canHandleModel });
+      : validate(ast, await validateOptions());
     const e = diags.filter((d) => d.severity === "error").length;
     errors += e;
     warnings += diags.length - e;
@@ -327,7 +364,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
   const { path, ast } = await load(flags.positional[0]);
   const rel = relative(process.cwd(), path);
 
-  const diags = validate(ast, { canHandleModel });
+  const diags = validate(ast, await validateOptions());
   for (const d of diags) console.error(formatDiag(d, rel));
   if (diags.some((d) => d.severity === "error")) return 1;
 
@@ -348,6 +385,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
       telemetry?.handler(e);
     },
   }).load(ast);
+  registerInstalled(rt, await installed());
   if (mock) mockRuntime(rt, ast);
 
   let result: RunResult;
@@ -450,6 +488,137 @@ async function cmdServe(flags: Flags): Promise<number> {
   return 0;
 }
 
+// ── Plans and MCP ──
+
+async function cmdPlan(flags: Flags): Promise<number> {
+  const { path, ast } = await load(flags.positional[0]);
+  const diags = validate(ast, await validateOptions());
+  for (const d of diags.filter((x) => x.severity === "error")) console.error(formatDiag(d, relative(process.cwd(), path)));
+  const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
+  registerInstalled(rt, await installed());
+  const target = last(flags, "pipeline");
+  const names = target ? [pickStream(ast, target).name] : ast.pipelines.map((p) => p.name);
+  const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider) }));
+  if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));
+  else console.log(plans.map((p) => formatPlan(p, { bold, dim, red, yellow })).join("\n\n"));
+  return diags.some((d) => d.severity === "error") ? 1 : 0;
+}
+
+/** Serve pipelines as MCP tools over stdio. Nothing but protocol messages may go to stdout. */
+async function cmdMcp(flags: Flags): Promise<number> {
+  const files = collectFiles(flags.positional.length ? flags.positional : ["."]);
+  if (!files.length) fail("No .halo files found");
+  const providers = await installed();
+  const toStderr = { log: (...a: unknown[]) => console.error(...a), warn: (...a: unknown[]) => console.error(...a) };
+  const entries = new Map<string, { rt: HaloRuntime; decl: PipelineDeclaration; file: string }>();
+  const runtimes: HaloRuntime[] = [];
+  for (const file of files) {
+    const ast = parse(await Bun.file(file).text());
+    const rel = relative(process.cwd(), file);
+    if (ast.errors.length) fail(`Parse errors in ${rel}`);
+    if (validate(ast, await validateOptions()).some((d) => d.severity === "error")) fail(`${rel} has errors; run halo validate`);
+    const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs") }).load(ast);
+    registerInstalled(rt, providers);
+    runtimes.push(rt);
+    for (const decl of ast.pipelines) entries.set(decl.name, { rt, decl, file: rel });
+  }
+  const server = createMcpServer(
+    {
+      list: () => [...entries.values()].map((e) => ({ name: e.decl.name, description: `Halo pipeline ${e.decl.name} from ${e.file}`, params: e.decl.params })),
+      call: async (name, args, signal) => {
+        const e = entries.get(name);
+        if (!e) return { status: "failed", runId: "", error: `No pipeline "${name}"` };
+        try {
+          const r = await e.rt.run(name, args, { signal });
+          return { status: r.status, output: r.output, runId: r.runId, waitingFor: r.context.meta.paused?.waitingFor };
+        } catch (err) {
+          return { status: "failed", runId: "", error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    },
+    { name: "halo", version: pkg.version },
+  );
+  console.error(dim(`Halo MCP server: ${entries.size} pipeline(s) as tools, on stdio`));
+  try {
+    await serveMcpStdio(server);
+  } finally {
+    await Promise.all(runtimes.map((rt) => rt.close()));
+  }
+  return 0;
+}
+
+// ── Tool packages ──
+
+async function registryIndex(flags: Flags): Promise<string> {
+  const flag = last(flags, "registry");
+  if (flag) return flag;
+  if (Bun.env.HALO_REGISTRY) return Bun.env.HALO_REGISTRY;
+  const config = Bun.file("halo.json");
+  const fromConfig = (await config.exists()) ? ((await config.json()) as { registry?: string }).registry : undefined;
+  return fromConfig ?? DEFAULT_REGISTRY;
+}
+
+const project = () => ({ root: process.cwd(), builtins: [...TOOL_PROVIDERS] });
+
+async function cmdAdd(flags: Flags): Promise<number> {
+  const specs = flags.positional;
+  if (!specs.length) fail("Usage: halo add <name[@version] | file.halotool | https://... | ./folder> [--trust]");
+  const registry = await registryIndex(flags);
+  for (const spec of specs) {
+    const r = await install(project(), spec, { registry, trust: flags.bools.has("trust") });
+    console.log(`${green("✓")} ${bold(`${r.name}@${r.version}`)} → ${r.providers.map((p) => `tool X : ${p}(...)`).join(", ")}`);
+    for (const line of describePermissions(r.permissions)) console.log(dim(`    ${line}`));
+  }
+  return 0;
+}
+
+async function cmdTools(flags: Flags): Promise<number> {
+  const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
+  const providers = await installed();
+  registerInstalled(rt, providers);
+  const from = new Map(providers.map((p) => [p.name, p.packageName]));
+  const rows = rt.toolProviderNames().sort().map((name) => {
+    const info = rt.toolProviderInfo(name);
+    const methods = Array.isArray(info?.methods) ? info.methods.map((m) => ({ name: m.name, effect: m.effect })) : info?.methods ? "listed at run time" : "not described";
+    return { name, package: from.get(name) ?? "built in", description: info?.description, methods };
+  });
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(rows, null, 2));
+    return 0;
+  }
+  for (const r of rows) {
+    console.log(`${bold(r.name)} ${dim(`(${r.package})`)}${r.description ? ` ${r.description}` : ""}`);
+    const list = typeof r.methods === "string" ? dim(r.methods) : r.methods.map((m) => (m.effect === "external" ? red(m.name) : m.effect === "write" ? yellow(m.name) : m.name)).join(", ");
+    console.log(`  ${list}`);
+  }
+  console.log(dim(`\nMethods: plain = read, ${yellow("yellow")} = write, ${red("red")} = external`));
+  return 0;
+}
+
+async function cmdSearch(flags: Flags): Promise<number> {
+  const index = await registryIndex(flags);
+  const found = await search(index, flags.positional.join(" "));
+  const lock = readLock(process.cwd());
+  if (!found.length) console.log("No packages found.");
+  for (const p of found) {
+    const have = lock.tools[p.name];
+    console.log(`${bold(p.name)}@${p.latest}${have ? green(` (installed ${have.version})`) : ""}  ${p.description}`);
+    console.log(dim(`    providers: ${p.latestVersion.providers.join(", ")} · ${describePermissions(p.latestVersion.permissions).join(" · ")}${p.publisher ? ` · by ${p.publisher}` : ""}`));
+  }
+  return 0;
+}
+
+async function cmdPack(flags: Flags): Promise<number> {
+  const dir = flags.positional[0];
+  if (!dir) fail("Usage: halo pack <package folder> [--out <folder>]");
+  const { bytes, manifest, sha256 } = pack(dir);
+  const out = join(last(flags, "out") ?? ".", `${manifest.name}-${manifest.version}.halotool`);
+  await Bun.write(out, bytes);
+  console.log(`${green("✓")} ${out} ${dim(`(${bytes.length} bytes, sha256 ${sha256})`)}`);
+  for (const line of describePermissions(permissionsOf(manifest))) console.log(dim(`    ${line}`));
+  return 0;
+}
+
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   try {
@@ -485,6 +654,39 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdValidate(flags);
       case "parse":
         return await cmdParse(flags);
+      case "plan":
+        return await cmdPlan(flags);
+      case "mcp":
+        return await cmdMcp(flags);
+      case "add":
+        return await cmdAdd(flags);
+      case "remove":
+      case "uninstall": {
+        const name = flags.positional[0];
+        if (!name) fail("Usage: halo remove <name>");
+        if (!uninstall(process.cwd(), name)) fail(`"${name}" is not installed`);
+        console.log(`${green("✓")} removed ${name}`);
+        return 0;
+      }
+      case "install": {
+        const done = await installFromLock(project());
+        console.log(done.length ? done.map((r) => `${green("✓")} ${r.name}@${r.version}`).join("\n") : "Nothing to install (halo.lock lists no tools).");
+        return 0;
+      }
+      case "tools":
+        return await cmdTools(flags);
+      case "search":
+        return await cmdSearch(flags);
+      case "pack":
+        return await cmdPack(flags);
+      case "publish": {
+        const file = flags.positional[0];
+        const index = last(flags, "registry");
+        if (!file || !index) fail("Usage: halo publish <file.halotool> --registry <path/to/index.json>");
+        const r = publish(file, index);
+        console.log(`${green("✓")} published ${r.name}@${r.version} to ${index} (${r.file})`);
+        return 0;
+      }
       default:
         // `halo file.halo` runs the file.
         if (command.endsWith(".halo")) return await cmdRun(parseFlags(argv), false);

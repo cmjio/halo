@@ -1,0 +1,64 @@
+{
+  "name": "stripe",
+  "version": "1.0.0",
+  "description": "Stripe payments: customers, charges, refunds, and balance",
+  "publisher": "Halo (first-party)",
+  "homepage": "https://docs.stripe.com/api",
+  "license": "MIT",
+  "providers": {
+    "Stripe": {
+      "kind": "http",
+      "description": "The Stripe API",
+      "baseUrl": "https://api.stripe.com/v1",
+      "auth": { "type": "bearer", "env": "STRIPE_API_KEY" },
+      "body": "form",
+      "methods": [
+        {
+          "name": "list_customers",
+          "description": "List customers, newest first. Filter by exact email.",
+          "effect": "read",
+          "http": { "method": "GET", "path": "/customers" },
+          "params": { "type": "object", "properties": { "email": { "type": "string" }, "limit": { "type": "integer", "description": "1-100, default 10" } } }
+        },
+        {
+          "name": "get_customer",
+          "description": "Get a customer by id (cus_...).",
+          "effect": "read",
+          "http": { "method": "GET", "path": "/customers/{id}" }
+        },
+        {
+          "name": "create_customer",
+          "description": "Create a customer.",
+          "effect": "external",
+          "http": { "method": "POST", "path": "/customers" },
+          "params": { "type": "object", "properties": { "email": { "type": "string" }, "name": { "type": "string" }, "description": { "type": "string" } } }
+        },
+        {
+          "name": "list_charges",
+          "description": "List charges, newest first, optionally for one customer.",
+          "effect": "read",
+          "http": { "method": "GET", "path": "/charges" },
+          "params": { "type": "object", "properties": { "customer": { "type": "string" }, "limit": { "type": "integer" } } }
+        },
+        {
+          "name": "create_refund",
+          "description": "Refund a charge, fully or partly (amount in the smallest currency unit, e.g. cents). Moves money.",
+          "effect": "external",
+          "http": { "method": "POST", "path": "/refunds" },
+          "params": {
+            "type": "object",
+            "properties": { "charge": { "type": "string" }, "amount": { "type": "integer" }, "reason": { "type": "string", "enum": ["duplicate", "fraudulent", "requested_by_customer"] } },
+            "required": ["charge"]
+          }
+        },
+        {
+          "name": "get_balance",
+          "description": "Get the account's available and pending balance.",
+          "effect": "read",
+          "http": { "method": "GET", "path": "/balance" },
+          "params": { "type": "object", "properties": {} }
+        }
+      ]
+    }
+  }
+}

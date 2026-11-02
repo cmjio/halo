@@ -23,6 +23,9 @@ import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeCon
 import { SqliteTelemetry } from "../runtime/telemetry.js";
 import { answerToEvent, APPROVED, formatValue } from "../runtime/values.js";
 import { cronMatches, nextRun, parseCron, type CronSchedule } from "./cron.js";
+import { createMcpServer } from "./mcp-server.js";
+import { loadInstalled } from "../registry/packages.js";
+import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
 
 /** halo.json (all optional). Strings like "Env.NAME" are read from the environment. */
@@ -43,12 +46,16 @@ export interface ServeConfig {
   notify?: { slack?: string };
   /** Folder for runs, telemetry, and paused runs. Default .halo */
   stateDir?: string;
+  /** Serve the pipelines as MCP tools at /mcp (behind the API token). Default true. */
+  mcp?: boolean;
 }
 
 export interface ServeOptions extends ServeConfig {
   env?: Record<string, string | undefined>;
   /** Extra runtime options (adapters' fetch, mocks are set per runtime via onRuntime). */
   runtime?: Partial<RuntimeConfig>;
+  /** The project folder whose halo.lock lists installed tool packages. Default: the current folder. */
+  root?: string;
   /** Called for each loaded runtime, e.g. to install mocks in tests. */
   onRuntime?: (runtime: HaloRuntime, file: string) => void;
   /** Serve Halo Studio at /. Default true. */
@@ -152,6 +159,9 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   // ── Load pipelines ──
   const registry = new AdapterRegistry();
+  const installed = await loadInstalled(options.root ?? process.cwd()).catch((err: unknown) => {
+    throw new ServeError(err instanceof Error ? err.message : String(err));
+  });
   const entries = new Map<string, Entry>();
   const runtimes: HaloRuntime[] = [];
   const onEvent = (e: RuntimeEvent) => {
@@ -165,10 +175,11 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const rel = relative(process.cwd(), file) || file;
     const ast = parse(await Bun.file(file).text());
     if (ast.errors.length) throw new ServeError(`${rel} has syntax errors:\n  ${ast.errors.join("\n  ")}`);
-    const errors = validate(ast, { canHandleModel: (id) => !!registry.findAdapter(id) }).filter((d) => d.severity === "error");
+    const errors = validate(ast, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
     if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${d.line ?? "?"}: ${d.message}`).join("\n  ")}`);
     if (!ast.pipelines.length) continue;
     const runtime = new HaloRuntime({ logger, ...options.runtime, env, runStore, onEvent }).load(ast);
+    for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
     for (const decl of ast.pipelines) {
@@ -377,6 +388,27 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     );
   };
 
+  // ── MCP ──
+  const mcp = createMcpServer(
+    {
+      list: () => [...entries.values()].map((e) => ({ name: e.name, description: describePipeline(e), params: e.decl.params })),
+      call: async (name, args, signal) => {
+        const e = entry(name);
+        const runId = crypto.randomUUID();
+        logger.log(`[halo] ${name} started by MCP (run ${runId.slice(0, 8)})`);
+        const work = e.runtime.run(name, args, { runId, signal });
+        track(runId, name, work);
+        try {
+          const r = await work;
+          return { status: r.status, output: r.output, runId, waitingFor: r.context.meta.paused?.waitingFor };
+        } catch (err) {
+          return { status: "failed", runId, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    },
+    { name: "halo", version: pkg.version },
+  );
+
   const server = Bun.serve({
     port: options.port ?? 8080,
     hostname: host,
@@ -428,6 +460,12 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           }
           const runId = start(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`);
           return json({ runId, status: "running" }, 202);
+        }
+
+        // Pipelines as MCP tools, for Claude, Cursor, and other agents. Same token as the API.
+        if (path === "/mcp" && options.mcp !== false) {
+          if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
+          return mcp.handleHttp(req);
         }
 
         if (!path.startsWith("/api/")) return new Response("Not found", { status: 404 });
@@ -524,6 +562,12 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 }
 
 /** Read halo.json (if present) from a path or the current folder. */
+/** A pipeline's description for MCP clients: its signature and where it lives. */
+function describePipeline(e: Entry): string {
+  const params = e.decl.params.map((p) => `${p.name}: ${p.type}`).join(", ");
+  return `Halo pipeline ${e.name}(${params})${e.decl.returnType ? ` -> ${e.decl.returnType}` : ""} from ${e.file}. Runs it and returns its output.`;
+}
+
 export async function loadServeConfig(path?: string): Promise<ServeConfig> {
   const file = path ?? (existsSync("halo.json") ? "halo.json" : undefined);
   if (!file) return {};

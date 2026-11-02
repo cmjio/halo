@@ -1,0 +1,157 @@
+{
+  "format": "halo-registry/1",
+  "packages": {
+    "github-mcp": {
+      "description": "GitHub through its official MCP server: repositories, issues, pull requests, code search, and more",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/github-mcp-1.0.0.halotool",
+          "sha256": "505154b638a28576347a081bb734c6225f239f922640916b51b04b4e78759a56",
+          "providers": [
+            "GitHubMCP"
+          ],
+          "permissions": {
+            "network": [],
+            "env": [
+              "GITHUB_PERSONAL_ACCESS_TOKEN"
+            ],
+            "spawn": [
+              "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server"
+            ],
+            "code": true
+          },
+          "publishedAt": "2026-11-02T20:23:38.025Z"
+        }
+      },
+      "publisher": "Halo (first-party; the server is GitHub's)",
+      "homepage": "https://github.com/github/github-mcp-server"
+    },
+    "jira": {
+      "description": "Jira Cloud issues: search with JQL, read, create, comment, and transition",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/jira-1.0.0.halotool",
+          "sha256": "78a3302cd0a3946da07561638a40d22e9e46785708aa47a1357ae90f47f282e1",
+          "providers": [
+            "Jira"
+          ],
+          "permissions": {
+            "network": [
+              "*.atlassian.net"
+            ],
+            "env": [
+              "JIRA_EMAIL",
+              "JIRA_API_TOKEN"
+            ],
+            "spawn": [],
+            "code": false
+          },
+          "publishedAt": "2026-11-02T20:23:38.027Z"
+        }
+      },
+      "publisher": "Halo (first-party)",
+      "homepage": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/"
+    },
+    "notion": {
+      "description": "Notion pages and databases: search, read, query, create, and append",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/notion-1.0.0.halotool",
+          "sha256": "4045c5a9e03bdf22f0bd85694ae2f6c4d14e01b7351de90e0d4ca073babc4cfd",
+          "providers": [
+            "Notion"
+          ],
+          "permissions": {
+            "network": [
+              "api.notion.com"
+            ],
+            "env": [
+              "NOTION_API_KEY"
+            ],
+            "spawn": [],
+            "code": false
+          },
+          "publishedAt": "2026-11-02T20:23:38.029Z"
+        }
+      },
+      "publisher": "Halo (first-party)",
+      "homepage": "https://developers.notion.com/reference"
+    },
+    "sentry": {
+      "description": "Sentry error tracking: list, read, and resolve issues",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/sentry-1.0.0.halotool",
+          "sha256": "502d0a4c2e98b6c8b91f1ed274fb0b8a6a3c25ae5246ba889c679cb0eb4f6e21",
+          "providers": [
+            "Sentry"
+          ],
+          "permissions": {
+            "network": [
+              "sentry.io"
+            ],
+            "env": [
+              "SENTRY_AUTH_TOKEN"
+            ],
+            "spawn": [],
+            "code": false
+          },
+          "publishedAt": "2026-11-02T20:23:38.030Z"
+        }
+      },
+      "publisher": "Halo (first-party)",
+      "homepage": "https://docs.sentry.io/api/"
+    },
+    "stripe": {
+      "description": "Stripe payments: customers, charges, refunds, and balance",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/stripe-1.0.0.halotool",
+          "sha256": "8d8d0d3825e344e55d5fab95f9c823fd9038ad987d60367ec0be1d78c22cf421",
+          "providers": [
+            "Stripe"
+          ],
+          "permissions": {
+            "network": [
+              "api.stripe.com"
+            ],
+            "env": [
+              "STRIPE_API_KEY"
+            ],
+            "spawn": [],
+            "code": false
+          },
+          "publishedAt": "2026-11-02T20:23:38.031Z"
+        }
+      },
+      "publisher": "Halo (first-party)",
+      "homepage": "https://docs.stripe.com/api"
+    },
+    "world-time": {
+      "description": "Time zones without an API: the time anywhere, and converting a time between zones",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/world-time-1.0.0.halotool",
+          "sha256": "3d7186575592713eb122862a4003c4cb6dc6ef9b8a29f8729df92369655277c8",
+          "providers": [
+            "WorldTime"
+          ],
+          "permissions": {
+            "network": [],
+            "env": [],
+            "spawn": [],
+            "code": true
+          },
+          "publishedAt": "2026-11-02T20:23:38.033Z"
+        }
+      },
+      "publisher": "Halo (first-party)"
+    }
+  }
+}
