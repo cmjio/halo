@@ -1,0 +1,68 @@
+// ============================================================
+// Daily digest: what changed across your projects
+// ============================================================
+// Reads every project folder under `root`: commits and uncommitted
+// changes for git repos, recently edited files for the rest. Claude
+// writes a short digest, which is saved to .halo/digests/<date>.md.
+//
+// Run once:   halo run pipelines/daily-digest.halo --arg root=~/projects --arg days=1
+// Scheduled:  halo serve  (see halo.json)
+// ============================================================
+
+policy Private : Redact(APIKey) & Redact(Email)
+policy Budget  : MaxSpend(0.05) & MaxWords(400)
+
+tool Shell : Bash()
+
+agent Writer [anthropic/claude-haiku-4-5, temp: 0.2]
+  system """
+    You write a short daily engineering digest for the person who owns
+    these projects. Plain, specific, no filler. Group by project, most
+    active first. For each: one or two lines on what changed, based on
+    commit messages and file names. Mention uncommitted work and anything
+    that looks unfinished or risky. Skip projects with no activity.
+    End with one line suggesting what to pick up next.
+  """
+  requires Private, Budget
+
+pipeline DailyDigest(root: String, days: Number) -> Result:
+  root
+    // 1. Gather activity per project (values in {{...}} are shell-quoted)
+    |> Shell.run(command: """
+         for d in {{root}}/*/; do
+           name=$(basename "$d")
+           if git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+             commits=$(git -C "$d" log --since={{days}}.days.ago --no-merges --pretty='  - %s (%ar)' 2>/dev/null | head -30)
+             dirty=$(git -C "$d" status --short 2>/dev/null | head -15 | sed 's/^/  /')
+             if [ -n "$commits$dirty" ]; then
+               echo "## $name (git)"
+               [ -n "$commits" ] && echo "Commits:" && echo "$commits"
+               [ -n "$dirty" ] && echo "Uncommitted:" && echo "$dirty"
+               echo
+             fi
+           else
+             files=$(find "$d" -type f -mtime -{{days}} \
+               -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' \
+               -not -path '*/.next/*' -not -path '*/.halo/*' -not -name '.DS_Store' 2>/dev/null \
+               | sed "s|^$d||" | head -25)
+             if [ -n "$files" ]; then
+               echo "## $name (no git)"
+               echo "Edited files:"
+               echo "$files" | sed 's/^/  - /'
+               echo
+             fi
+           fi
+         done
+       """) as activity
+
+    // 2. Nothing changed: stop here
+    |? (context.data.activity.stdout != "")
+
+    // 3. Write the digest
+    |> Writer.summarize("Activity in the last {{days}} day(s):", context.data.activity.stdout) as digest
+
+    // 4. Save it as Markdown and print it
+    |> Shell.run(command: """
+         mkdir -p .halo/digests && printf '%s\n' {{digest}} > .halo/digests/$(date +%F).md && echo .halo/digests/$(date +%F).md
+       """) as saved
+    |> System.Print(context.data.digest)

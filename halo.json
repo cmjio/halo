@@ -1,0 +1,10 @@
+{
+  "files": ["pipelines/"],
+  "schedules": [
+    {
+      "pipeline": "DailyDigest",
+      "cron": "30 8 * * *",
+      "args": { "root": "/Users/cmj/projects/oneshots", "days": 1 }
+    }
+  ]
+}
