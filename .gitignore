@@ -33,8 +33,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# Zed extension build artifacts
-editors/zed/grammars/halo/src/
+# Zed extension build artifacts (the generated src/ is committed: Zed builds the grammar from it)
 editors/zed/grammars/halo/halo.wasm
 editors/zed/grammars/halo/stubs.o
 editors/zed/grammars/halo/parser.o
