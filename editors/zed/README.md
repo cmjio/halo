@@ -1,90 +1,38 @@
-# Zed Extension: Halo DSL
+# Zed extension: Halo
 
-Zed editor support for the **Halo DSL** (`.halo` files).
+Syntax highlighting, bracket matching, and indentation for `.halo` files in
+[Zed](https://zed.dev), from a tree-sitter grammar (`grammars/halo/grammar.js`,
+ported from `grammars/Halo.g4`). It has no language server.
 
-## Installation
+## Install as a dev extension
 
-### Option 1: Local Extension (Recommended for Development)
+1. In Zed, open the command palette and run **zed: install dev extension**.
+2. Pick this folder, `editors/zed` (the one with `extension.toml`). Picking the
+   repository root fails with "No extension manifest found for extension halo".
+3. Open any file in `examples/`; it should be highlighted as Halo.
 
-1. Open Zed
-2. Go to `Zed → Settings` (or `cmd + ,`)
-3. In the **User Settings** JSON, add a `languages` entry:
+Zed compiles the grammar itself (it downloads a WASI SDK the first time). If
+installing fails, run **zed: open log** for the reason. Dev extensions also need
+Rust installed with rustup.
 
-```json
-{
-  "languages": {
-    "Halo": {
-      "language_servers": []
-    }
-  }
-}
-```
+`extension.toml` points `[grammars.halo]` at this checkout with an absolute
+`file://` path. If the repository lives somewhere else on your machine, change
+`repository` to match.
 
-4. In **Keybindings** or via the command palette, you can manually associate `.halo` files with Halo syntax.
-
-### Option 2: Publish to Zed Extensions
-
-To publish this extension to the Zed extension registry, push to the community extensions repo:
-
-1. Fork [zed-industries/extensions](https://github.com/zed-industries/extensions)
-2. Add this extension under `extensions/halo/`
-3. Submit a PR
-
-The extension structure:
-
-```
-editors/zed/
-├── extension.toml             # Extension manifest
-├── languages/
-│   └── halo/
-│       ├── config.toml        # Language configuration
-│       ├── highlights.scm     # Tree-sitter highlight queries
-│       ├── indents.scm        # Tree-sitter indentation rules
-│       └── brackets.scm       # Tree-sitter bracket pairing
-├── grammars/
-│   └── halo/
-│       ├── grammar.js         # Tree-sitter grammar source
-│       ├── halo.wasm        # Pre-compiled tree-sitter parser
-│       ├── tree-sitter.json   # Tree-sitter metadata
-│       ├── stubs.c            # Minimal libc stubs for wasm build
-│       └── src/               # Generated parser (from tree-sitter generate)
-│           ├── parser.c
-│           ├── node-types.json
-│           ├── grammar.json
-│           └── tree_sitter/
-│               ├── parser.h
-│               ├── alloc.h
-│               └── array.h
-└── queries/
-    └── halo/
-        └── highlights.scm     # Alternative query location
-```
-
-## Features
-
-- **Syntax highlighting** for all Halo DSL constructs:
-  - `mind` declarations with model references and configuration
-  - `stream` declarations with typed signatures and pipelines
-  - Pipe operators (`|>`)
-  - Function calls with dot notation
-  - Strings (single and double-quoted), numbers, booleans
-  - Line comments (`// ...`)
-
-## Rebuilding the WASM Parser
-
-If you modify `grammar.js`, regenerate and rebuild:
+## Changing the grammar
 
 ```sh
-# From the grammars/halo directory
-tree-sitter generate
-# Then rebuild with zig (requires zig installed):
-zig cc -target wasm32-freestanding \
-  -isystem stub_includes \
-  -I src/ -Os \
-  -Wl,--export=tree_sitter_halo -Wl,--no-entry \
-  stubs.c src/parser.c -o halo.wasm
+cd editors/zed
+./build.sh                     # tree-sitter generate (and a local halo.wasm)
+tree-sitter parse --quiet --stat ../../examples/*.halo   # every example should parse
 ```
 
-## Grammar
+Then commit (Zed builds the grammar from a commit, including the generated
+`grammars/halo/src/`), set `rev` in `extension.toml` to that commit, and run
+**zed: rebuild dev extension** (or reinstall).
 
-The tree-sitter grammar is ported from the ANTLR grammar at `grammars/Halo.g4`.
+## Files
+
+- `extension.toml`: the manifest
+- `languages/halo/`: language config and the highlight, bracket, and indent queries
+- `grammars/halo/`: the tree-sitter grammar and its generated parser (`src/`)
