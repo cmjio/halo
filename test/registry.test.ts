@@ -143,7 +143,7 @@ describe("registries and installs", () => {
 
   test("the bundled registry's packages are all valid", async () => {
     const found = await search(DEFAULT_REGISTRY);
-    expect(found.map((p) => p.name).sort()).toEqual(["github-mcp", "jira", "notion", "sentry", "stripe", "world-time"]);
+    expect(found.map((p) => p.name).sort()).toEqual(["cloudflare", "github-mcp", "jira", "notion", "sentry", "stripe", "world-time"]);
     for (const p of found) await install({ root: fresh(), builtins }, p.name, { registry: DEFAULT_REGISTRY, trust: true });
   });
 });

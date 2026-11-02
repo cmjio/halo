@@ -61,6 +61,7 @@ The default registry is the `registry/index.json` that ships with Halo, read fro
 | `jira` | `Jira` | http | `JIRA_EMAIL`, `JIRA_API_TOKEN`; declare with your site: `Jira(site: "acme")` |
 | `notion` | `Notion` | http | `NOTION_API_KEY` |
 | `sentry` | `Sentry` | http | `SENTRY_AUTH_TOKEN` |
+| `cloudflare` | `Cloudflare`, `CloudflareZone` | http | `CLOUDFLARE_API_TOKEN`; declare with your account or zone ID: `Cloudflare(account: "...")`, `CloudflareZone(zone: "...")` |
 | `github-mcp` | `GitHubMCP` | mcp (runs GitHub's server in Docker; needs `--trust`) | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `world-time` | `WorldTime` | module (needs `--trust`) | none |
 
