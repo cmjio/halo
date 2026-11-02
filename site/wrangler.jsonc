@@ -1,10 +1,21 @@
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
-  // A static site: Cloudflare serves site/dist, no Worker code runs.
+  // Static files from site/dist, served at halolang.com. worker.ts runs first only to
+  // redirect other hostnames (www, workers.dev) to halolang.com.
   "name": "halo-showcase",
+  "main": "./worker.ts",
   "compatibility_date": "2026-10-20",
+  // Kept on so the first address, halo-showcase.cmj.workers.dev, redirects to halolang.com.
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "halolang.com", "custom_domain": true },
+    { "pattern": "www.halolang.com", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
     "not_found_handling": "404-page",
     "html_handling": "auto-trailing-slash"
   }
