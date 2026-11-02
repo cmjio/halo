@@ -1,9 +1,13 @@
 /**
  * Build `halo` as a standalone binary for every platform and publish it to halolang.com.
  *
- *   bun scripts/release.ts              build, check, upload to R2 (served at halolang.com/dl/)
- *   bun scripts/release.ts --no-upload  build and check only (into dist/release/<version>)
- *   bun scripts/release.ts --force      replace a version that's already published
+ *   bun scripts/release.ts                build, check, upload to R2 (served at halolang.com/dl/)
+ *   bun scripts/release.ts --no-upload    build and check only (into dist/release/<version>)
+ *   bun scripts/release.ts --upload-only  upload what --no-upload built (CI builds and publishes in separate jobs)
+ *   bun scripts/release.ts --force        replace a version that's already published
+ *
+ * dist/release is laid out like halolang.com/dl (latest.json, <version>/<file>), so a
+ * local server over it can stand in for the site when testing the installers.
  *
  * Each binary carries the Bun runtime, so users need nothing else installed. A version's
  * files are cached forever once published, so a new release needs a new version in
@@ -36,37 +40,45 @@ const TARGETS: Record<string, string> = {
 };
 
 const args = new Set(process.argv.slice(2));
+const uploadOnly = args.has("--upload-only");
 const sh = (cmd: string[], opts: { quiet?: boolean } = {}) => {
   const p = Bun.spawnSync(cmd, { cwd: root, stdout: opts.quiet ? "pipe" : "inherit", stderr: "inherit" });
   if (p.exitCode !== 0) throw new Error(`${cmd.join(" ")} failed (${p.exitCode})`);
   return p.stdout?.toString() ?? "";
 };
 
-if (!args.has("--no-upload") && !args.has("--force")) {
+if (!args.has("--no-upload") && !args.has("--force") && !uploadOnly) {
   const res = await fetch(`${SITE}/dl/${version}/SHA256SUMS`, { method: "HEAD" });
   if (res.ok) throw new Error(`${version} is already published; bump the version in package.json (or pass --force)`);
 }
 
-console.log(`Building halo ${version}`);
-sh(["bun", "test"]);
-rmSync(out, { recursive: true, force: true });
-mkdirSync(out, { recursive: true });
+const latest = join(root, "dist/release", "latest.json");
 
-const sums: string[] = [];
-for (const [file, target] of Object.entries(TARGETS)) {
-  const path = join(out, file);
-  sh(["bun", "build", "index.ts", "--compile", "--minify", `--target=${target}`, "--outfile", path], { quiet: true });
-  const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
-  sums.push(`${sha}  ${file}`);
-  console.log(`  ${file.padEnd(26)} ${(statSync(path).size / 1e6).toFixed(1)} MB  ${sha.slice(0, 12)}`);
+if (!uploadOnly) {
+  console.log(`Building halo ${version}`);
+  sh(["bun", "test"]);
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+
+  const sums: string[] = [];
+  for (const [file, target] of Object.entries(TARGETS)) {
+    const path = join(out, file);
+    sh(["bun", "build", "index.ts", "--compile", "--minify", `--target=${target}`, "--outfile", path], { quiet: true });
+    const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
+    sums.push(`${sha}  ${file}`);
+    console.log(`  ${file.padEnd(26)} ${(statSync(path).size / 1e6).toFixed(1)} MB  ${sha.slice(0, 12)}`);
+  }
+  await Bun.write(join(out, "SHA256SUMS"), sums.join("\n") + "\n");
+
+  // The binary for this machine must run and know its version before anything ships.
+  const here = `halo-${process.platform === "win32" ? "windows" : process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}${process.platform === "win32" ? ".exe" : ""}`;
+  const reported = sh([join(out, here), "--version"], { quiet: true }).trim();
+  if (reported !== version) throw new Error(`${here} --version printed "${reported}", expected ${version}`);
+  console.log(`  ${here} --version → ${reported}`);
+  await Bun.write(latest, JSON.stringify({ version, published: new Date().toISOString() }) + "\n");
 }
-await Bun.write(join(out, "SHA256SUMS"), sums.join("\n") + "\n");
 
-// The binary for this machine must run and know its version before anything ships.
-const here = `halo-${process.platform === "win32" ? "windows" : process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}${process.platform === "win32" ? ".exe" : ""}`;
-const reported = sh([join(out, here), "--version"], { quiet: true }).trim();
-if (reported !== version) throw new Error(`${here} --version printed "${reported}", expected ${version}`);
-console.log(`  ${here} --version → ${reported}`);
+if (uploadOnly && !Bun.file(join(out, "SHA256SUMS")).size) throw new Error(`Nothing built in ${out}; run with --no-upload first`);
 
 if (args.has("--no-upload")) {
   console.log(`Built in ${out}`);
@@ -80,7 +92,5 @@ for (const file of Object.keys(TARGETS)) {
   console.log(`  uploaded ${version}/${file}`);
 }
 put(`${version}/SHA256SUMS`, join(out, "SHA256SUMS"), "text/plain; charset=utf-8");
-const latest = join(out, "latest.json");
-await Bun.write(latest, JSON.stringify({ version, published: new Date().toISOString() }) + "\n");
 put("latest.json", latest, "application/json");
 console.log(`Published halo ${version}: curl -fsSL ${SITE}/install.sh | sh`);

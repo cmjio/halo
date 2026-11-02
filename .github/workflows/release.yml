@@ -1,0 +1,139 @@
+# Push a tag like v0.2.0 (matching package.json's version) to release:
+#
+#   1. build: the test suite, then halo for every platform (scripts/release.ts), with each
+#      Linux build run in a container (glibc, musl, arm64 under emulation)
+#   2. macos, windows: the builds run on real macOS and Windows, installed by install.sh and
+#      install.ps1 from a local copy of the release, the way users install them
+#   3. publish: a GitHub release with the binaries and SHA256SUMS, the same files to
+#      halolang.com/dl (R2), then the site
+#
+# Publishing to halolang.com needs the CLOUDFLARE_API_TOKEN secret and the
+# CLOUDFLARE_ACCOUNT_ID variable (see .github/RELEASING.md).
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  BUN_VERSION: 1.4.4
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - id: version
+        name: The tag matches package.json
+        run: |
+          version=$(jq -r .version package.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match package.json version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Test, then build every platform
+        run: bun scripts/release.ts --no-upload
+      - uses: docker/setup-qemu-action@v3
+      - name: Run the Linux builds in containers
+        run: |
+          d="$PWD/dist/release/${{ steps.version.outputs.version }}"
+          docker run --rm -v "$d:/r:ro" debian:bookworm-slim /r/halo-linux-x64 --version
+          docker run --rm -v "$d:/r:ro" debian:bookworm-slim /r/halo-linux-x64-baseline --version
+          docker run --rm -v "$d:/r:ro" alpine:3.20 sh -c "apk add -q libstdc++ libgcc && /r/halo-linux-x64-musl --version"
+          docker run --rm --platform linux/arm64 -v "$d:/r:ro" debian:bookworm-slim /r/halo-linux-arm64 --version
+          docker run --rm --platform linux/arm64 -v "$d:/r:ro" alpine:3.20 sh -c "apk add -q libstdc++ libgcc && /r/halo-linux-arm64-musl --version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/release/
+          if-no-files-found: error
+
+  macos:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: install.sh installs it, and it runs
+        run: |
+          (cd dist/release && python3 -m http.server 8731 >/dev/null 2>&1 &)
+          sleep 2
+          export HALO_DOWNLOAD_BASE=http://127.0.0.1:8731 HALO_INSTALL="$RUNNER_TEMP/halo" HALO_NO_MODIFY_PATH=1
+          sh docs/public/install.sh
+          H="$RUNNER_TEMP/halo/bin/halo"
+          test "$("$H" --version)" = "${{ needs.build.outputs.version }}"
+          cd "$(mktemp -d)" && "$H" init demo && cd demo && "$H" test main.halo --arg topic=tides
+
+  windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: install.ps1 installs it, and it runs
+        shell: pwsh
+        run: |
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8731' -WorkingDirectory dist/release -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+          $env:HALO_DOWNLOAD_BASE = 'http://127.0.0.1:8731'
+          $env:HALO_INSTALL = Join-Path $env:RUNNER_TEMP 'halo'
+          $env:HALO_NO_MODIFY_PATH = '1'
+          ./docs/public/install.ps1
+          $halo = Join-Path $env:HALO_INSTALL 'bin/halo.exe'
+          $v = & $halo --version
+          if ($v -ne '${{ needs.build.outputs.version }}') { throw "halo --version printed $v" }
+          $dir = Join-Path $env:RUNNER_TEMP 'proj'
+          New-Item -ItemType Directory $dir | Out-Null
+          Set-Location $dir
+          & $halo init demo
+          if ($LASTEXITCODE -ne 0) { throw 'halo init failed' }
+          Set-Location demo
+          & $halo test main.halo --arg topic=tides
+          if ($LASTEXITCODE -ne 0) { throw 'halo test failed' }
+          Stop-Process -Id $server.Id
+
+  publish:
+    needs: [build, macos, windows]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: GitHub release
+        run: gh release create "v$VERSION" dist/release/$VERSION/* --title "Halo $VERSION" --generate-notes --verify-tag
+      - name: halolang.com/dl, and the site
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Set the CLOUDFLARE_API_TOKEN secret and CLOUDFLARE_ACCOUNT_ID variable to publish to halolang.com (see .github/RELEASING.md). The GitHub release is published."
+            exit 1
+          fi
+          bun scripts/release.ts --upload-only
+          bun site/build.ts --no-tests
+          bunx wrangler deploy --config site/wrangler.jsonc

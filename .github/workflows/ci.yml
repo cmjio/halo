@@ -1,0 +1,69 @@
+# Every push to main and every pull request: typecheck, the test suite on Linux and
+# macOS, the examples, the compiled binary, and the docs site.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.4.4
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - name: Every example validates
+        run: bun index.ts validate examples/
+
+  binary:
+    name: Compiled binary works
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun build index.ts --compile --minify --outfile "$RUNNER_TEMP/halo"
+      - name: Run it outside the repository, with no bun on PATH
+        run: |
+          cd "$(mktemp -d)"
+          H="$RUNNER_TEMP/halo"
+          env -i PATH=/usr/bin:/bin HOME="$PWD" "$H" --version
+          env -i PATH=/usr/bin:/bin HOME="$PWD" "$H" init demo
+          cd demo
+          env -i PATH=/usr/bin:/bin HOME="$PWD" "$H" test main.halo --arg topic=tides
+          printf 'tool Js : Code(lang: "ts")\npipeline P(x: String) -> Result:\n  x |> Js.run(code: "return 6 * 7")\n' > code.halo
+          env -i PATH=/usr/bin:/bin HOME="$PWD" "$H" run code.halo --arg x=1 --no-record --no-telemetry | grep '"result": 42'
+
+  site:
+    name: Site builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun site/build.ts --no-tests
