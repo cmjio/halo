@@ -866,9 +866,12 @@ export class HaloRuntime {
     this.emit({ type: "run", ...base, status: "start" });
     try {
       const result = await this.runFrom(ctx, start);
+      // A browser the run opened stays open only while the run may still need it.
+      if (result.status !== "paused") await closeChromeSessions(ctx.meta.runId);
       this.emit({ type: "run", ...base, status: result.status, output: result.output, durationMs: ctx.meta.durationMs, cost: ctx.meta.cost });
       return result;
     } catch (err) {
+      await closeChromeSessions(ctx.meta.runId);
       this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost });
       throw err;
     }
