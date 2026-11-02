@@ -73,6 +73,7 @@ export default defineConfig({
       {
         text: 'Production',
         items: [
+          { text: 'Serving pipelines', link: '/guide/production/serving' },
           { text: 'Deploying', link: '/guide/production/deploying' },
         ]
       },

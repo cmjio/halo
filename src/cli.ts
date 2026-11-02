@@ -8,6 +8,7 @@
  *   halo validate <file.halo | dir ...>
  *   halo parse <file.halo>
  *   halo init [name]
+ *   halo serve [files or folders] [--port 8080]
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -20,7 +21,9 @@ import { AdapterRegistry } from "./runtime/adapter.js";
 import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type ListenRequest, type RunResult, type RuntimeEvent } from "./runtime/runtime.js";
 import { SqliteTelemetry } from "./runtime/telemetry.js";
 import { initProject } from "./init.js";
-import { formatValue } from "./runtime/values.js";
+import { loadServeConfig, startServer, ServeError } from "./serve/server.js";
+import { nextRun, parseCron } from "./serve/cron.js";
+import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 
 const HELP = `
@@ -34,6 +37,8 @@ USAGE:
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name]                      Create a new Halo project
+  halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
+                                        approval links, and Halo Studio at /
 
 RUN OPTIONS:
   --pipeline, -p <name>  Pipeline to run (default: the file's entry pipeline)
@@ -53,6 +58,13 @@ RUN OPTIONS:
 RESUME OPTIONS:
   --payload <value>      The response: JSON, or a word like approve/reject (default: approve)
   --event <name>         What the run is waiting for (default: whatever it is waiting for)
+
+SERVE OPTIONS:
+  --port <n>             Port (default 8080)
+  --host <addr>          Interface (default 127.0.0.1; others need HALO_SERVE_TOKEN)
+  --config <file>        Config file (default ./halo.json if present): schedules,
+                         webhooks, notify.slack, publicUrl, files
+  --no-studio            Don't serve Halo Studio
 
 VALIDATE OPTIONS:
   --strict               Treat warnings as errors
@@ -91,7 +103,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry"]);
+const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio"]);
 const ALIASES: Record<string, string> = { p: "pipeline", s: "pipeline", stream: "pipeline", resume: "checkpoint", h: "help", v: "version" };
 
 function parseFlags(argv: string[]): Flags {
@@ -247,7 +259,7 @@ function calls(stage: PipelineStage): CallStage[] {
   }
 }
 
-const AUTO_EVENT = { action: "approve", approved: true, status: "approved", reaction: "approve" };
+const AUTO_EVENT = APPROVED;
 
 async function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -266,12 +278,7 @@ async function promptInterrupt(req: InterruptRequest): Promise<unknown> {
   return answer ? toEvent(answer) : AUTO_EVENT;
 }
 
-/** A typed word like "approve" or "merged" becomes an event object gates can inspect. */
-function toEvent(answer: string): unknown {
-  const parsed = parseJsonish(answer);
-  if (typeof parsed !== "string") return parsed;
-  return { action: parsed, status: parsed, reaction: parsed, text: parsed, approved: /^(?:approved?|yes|y|ok|lgtm|merged)$/i.test(parsed) };
-}
+const toEvent = answerToEvent;
 
 async function promptListen(req: ListenRequest): Promise<unknown> {
   console.error(bold(`\n👂 ${req.pipeline} is waiting for ${req.target}`));
@@ -396,6 +403,48 @@ function stageAt(ast: ParseResult, pipeline: string, index: number): string {
   return stage ? stageLabel(stage) : "";
 }
 
+async function cmdServe(flags: Flags): Promise<number> {
+  const config = await loadServeConfig(last(flags, "config"));
+  const port = last(flags, "port");
+  let server;
+  try {
+    server = await startServer({
+      ...config,
+      files: flags.positional.length ? flags.positional : config.files,
+      port: port !== undefined ? Number(port) : config.port,
+      host: last(flags, "host") ?? config.host,
+      studio: !flags.bools.has("no-studio"),
+    });
+  } catch (err) {
+    if (err instanceof ServeError) fail(err.message);
+    throw err;
+  }
+  console.log(bold(`\nHalo is serving ${server.pipelines.length} pipeline(s) at ${server.url}`));
+  if (!flags.bools.has("no-studio")) console.log(`  Studio     ${server.url}/`);
+  console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  {"args": {...}}`);
+  for (const w of config.webhooks ?? []) console.log(`  Webhook    POST ${server.url}/hooks/${w.path.replace(/^\/+/, "")} → ${w.pipeline}`);
+  for (const s of config.schedules ?? []) {
+    let next = "";
+    try {
+      next = nextRun(parseCron(s.cron), new Date())?.toLocaleString() ?? "never";
+    } catch {}
+    console.log(`  Schedule   ${s.cron} → ${s.pipeline}${next ? dim(` (next ${next})`) : ""}`);
+  }
+  console.log(dim("  Paused runs get an approval link (logged here; also sent to notify.slack if set). Ctrl-C to stop.\n"));
+
+  await new Promise<void>((done) => {
+    const stop = () => {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      console.log(dim("\nStopping (waiting for running pipelines to reach a stopping point)..."));
+      void server.stop().then(done);
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+  return 0;
+}
+
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   try {
@@ -424,6 +473,8 @@ export async function main(argv: string[]): Promise<number> {
       }
       case "init":
         return await initProject(flags.positional[0] ?? "my-halo-project");
+      case "serve":
+        return await cmdServe(flags);
       case "validate":
       case "lint":
         return await cmdValidate(flags);

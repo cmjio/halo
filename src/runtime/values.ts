@@ -102,3 +102,20 @@ export const sleep = (ms: number, signal?: AbortSignal) =>
     const t = setTimeout(resolve, ms);
     signal?.addEventListener("abort", () => (clearTimeout(t), reject(signal.reason)), { once: true });
   });
+
+/** The response used when a yield/listen is approved without an explicit answer. */
+export const APPROVED = { action: "approve", approved: true, status: "approved", reaction: "approve" };
+
+/**
+ * Turn a human's typed answer into an event gates can inspect: JSON is used as
+ * is; a word like "approve" or "label" becomes `{ action, approved, ... }`.
+ */
+export function answerToEvent(answer: string): unknown {
+  let parsed: unknown = answer;
+  try {
+    parsed = JSON.parse(answer);
+  } catch {}
+  if (typeof parsed !== "string") return parsed;
+  const word = parsed.trim();
+  return { action: word, status: word, reaction: word, text: word, approved: /^(?:approved?|yes|y|ok|lgtm|merged)$/i.test(word) };
+}

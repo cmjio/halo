@@ -276,3 +276,137 @@ body {
   stroke: var(--text-muted);
   stroke-width: 2;
 }
+
+/* Pipelines (start a run) */
+.pipeline-list {
+  border-bottom: 1px solid var(--border);
+}
+
+.pipeline-item {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pipeline-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.pipeline-row .run-pipeline {
+  flex-shrink: 0;
+}
+
+.pipeline-row .pipeline-file {
+  min-width: 0;
+  direction: rtl;
+  text-align: left;
+}
+
+.pipeline-file,
+.param-type {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-triggers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.pipeline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pipeline-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.pipeline-form input {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-node);
+  color: var(--text-main);
+}
+
+.run-button,
+.banner button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-node);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.run-button,
+.banner button.approve {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.form-error {
+  color: var(--error);
+  font-size: 12px;
+}
+
+/* Banners */
+.banner {
+  padding: 10px 16px;
+  font-size: 13px;
+}
+
+.banner.error {
+  color: var(--error);
+}
+
+.banner.paused {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-panel);
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+}
+
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.banner-actions a {
+  color: var(--text-muted);
+  font-size: 12px;
+}

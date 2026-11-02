@@ -52,6 +52,7 @@ cp .env.example .env              # then add your API key
 halo validate .                   # check the pipeline
 halo test main.halo --arg topic="tide pools"   # run offline, every call mocked
 halo run main.halo --arg topic="tide pools"    # run for real
+halo serve                        # an API, schedules, approvals, and Studio at http://127.0.0.1:8080
 \`\`\`
 `;
 

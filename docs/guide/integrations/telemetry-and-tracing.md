@@ -43,19 +43,18 @@ You can forward these events to any logging or tracing system. There are no buil
 
 ## Halo Studio
 
-The CLI records every `run`, `debug`, `test`, and `resume` to `.halo/telemetry.db` (SQLite, the last 100 runs) in the current directory. Pass `--no-telemetry` to turn this off. Studio is a local viewer for that file:
+The CLI records every `run`, `debug`, `test`, and `resume` to `.halo/telemetry.db` (SQLite, the last 100 runs) in the current directory. Pass `--no-telemetry` to turn this off. `halo serve` records its runs to the same file and serves Studio at `/`:
 
 ```bash
-bun run studio   # API on 127.0.0.1:4000, plus the Vite UI
+halo serve        # Studio at http://127.0.0.1:8080/ (also: bun run studio)
 ```
 
-Studio reads `HALO_TELEMETRY` if it is set. Otherwise it reads `.halo/telemetry.db` at the repository root, so either run the CLI from the repository root or point `HALO_TELEMETRY` at your project's file.
+Studio lists recent runs (pipeline, status, duration, cost), draws each one as a chart of its stages, model calls, and tool calls, and shows any step's prompt, answer, tokens, and cost. It can also start pipelines and approve paused runs. Start it from the folder whose `.halo/` you want to see (or set `stateDir` in `halo.json`). See [Serving pipelines](../production/serving.md).
 
 In the library, telemetry is **opt-in**. Use `SqliteTelemetry` as the event handler:
 
 ```ts
-// Not re-exported from "halo" yet: import it from the source file.
-import { SqliteTelemetry } from "/path/to/halo/src/runtime/telemetry.ts";
+import { SqliteTelemetry } from "halo";
 
 const telemetry = new SqliteTelemetry(".halo/telemetry.db");
 const runtime = new HaloRuntime({ onEvent: telemetry.handler });

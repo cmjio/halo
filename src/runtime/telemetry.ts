@@ -26,6 +26,17 @@ export interface TelemetryRow {
   tokens?: number;
 }
 
+export interface RunSummary {
+  run_id: string;
+  start_time: number;
+  end_time: number;
+  event_count: number;
+  pipeline: string | null;
+  /** completed, halted, paused, or error; null while running. */
+  status: string | null;
+  cost: number | null;
+}
+
 /** Map a runtime event to a Studio row (undefined for events Studio doesn't show). */
 export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow | undefined {
   switch (e.type) {
@@ -96,6 +107,21 @@ export class SqliteTelemetry {
        )`,
       [this.keepRuns - 1],
     );
+  }
+
+  /** Recent runs, newest first: pipeline, final status (null while running), duration, and cost. */
+  listRuns(limit = 50): RunSummary[] {
+    return this.db
+      .query(
+        `SELECT t.run_id, MIN(t.timestamp) AS start_time, MAX(t.timestamp) AS end_time, COUNT(*) AS event_count,
+           (SELECT stage FROM telemetry s WHERE s.run_id = t.run_id AND s.type = 'stream_start' ORDER BY s.id LIMIT 1) AS pipeline,
+           (SELECT CASE WHEN e.type = 'error' THEN 'error' ELSE json_extract(e.payload, '$.status') END
+              FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS status,
+           (SELECT json_extract(e.payload, '$.cost')
+              FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS cost
+         FROM telemetry t GROUP BY t.run_id ORDER BY start_time DESC LIMIT ?`,
+      )
+      .all(limit) as RunSummary[];
   }
 
   /** Rows for one run, oldest first. */

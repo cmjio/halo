@@ -506,10 +506,17 @@ export class HaloRuntime {
   }
 
   /** Execute a named pipeline and return its output, status, and full context. */
-  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal } = {}): Promise<RunResult> {
+  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string } = {}): Promise<RunResult> {
     const pipeline = this.pipelines.get(pipelineName);
     if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
-    return this.runTop(this.newContext(pipeline, args, 0, options.signal), 0);
+    const ctx = this.newContext(pipeline, args, 0, options.signal);
+    if (options.runId) ctx.meta.runId = options.runId;
+    return this.runTop(ctx, 0);
+  }
+
+  /** The pipelines this runtime has loaded. */
+  listPipelines(): PipelineDeclaration[] {
+    return [...this.pipelines.values()];
   }
 
   /**
@@ -574,6 +581,8 @@ export class HaloRuntime {
     ctx.stageIndex = snap.nextStage;
     this.deliver(stage, ctx, payload, snap.waitingFor);
     this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
+    // The paused stage is done now that it has its response.
+    this.emit({ type: "stage", pipeline: ctx.pipeline.name, runId, index: snap.nextStage, kind: stage.kind, label: stageLabel(stage), status: "end", value: ctx.current, durationMs: 0 });
     return this.runTop(ctx, snap.nextStage + 1);
   }
 

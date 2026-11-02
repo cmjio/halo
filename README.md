@@ -89,11 +89,32 @@ halo resume <file.halo> <runId> --payload approve   # continue a paused run
 halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
 halo init [name]                      # a new project
+halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 ```
 
 `validate` catches undefined agents, tools, and policies; tools an agent uses without `equips`; unknown `System.*` methods; `context.data.x` values nothing writes; bad schema types and loop targets; and policy rules the runtime can't enforce.
 
 In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a server), the run pauses and prints the `halo resume` command; paused runs are kept in `.halo/runs`. Every CLI run is recorded to `.halo/telemetry.db` for Halo Studio unless you pass `--no-telemetry`.
+
+## 🌐 Serving pipelines
+
+`halo serve` turns a folder of pipelines into a service, in one Bun process:
+
+- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), and cron schedules
+- **Approvals**: when a run pauses at `|! yield`, it gets a signed approve/reject link, logged and optionally posted to Slack. Paused runs survive restarts
+- **Halo Studio** at `/`: start runs, watch them, and approve paused ones
+
+```json
+// halo.json (optional)
+{
+  "schedules": [{ "pipeline": "TriageIssues", "cron": "0 9 * * 1-5", "args": { "repo": "acme/api", "limit": 10 } }],
+  "webhooks": [{ "path": "github", "pipeline": "TriageIssues", "secret": "Env.GITHUB_WEBHOOK_SECRET" }],
+  "notify": { "slack": "Env.SLACK_WEBHOOK_URL" },
+  "publicUrl": "https://halo.example.com"
+}
+```
+
+It listens on localhost unless you set `HALO_SERVE_TOKEN`. See [Serving pipelines](docs/guide/production/serving.md).
 
 ## 🧩 Library
 
@@ -166,7 +187,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 ## 🧰 Tooling
 
 - **Editors**: VS Code (`editors/vscode`, with a language server for errors, hover, and completion), Zed (`editors/zed`, tree-sitter), Sublime Text (`editors/sublime`).
-- **Halo Studio** (`studio/`): browse recorded runs. `bun run studio` serves the API on `localhost:4000` and the UI.
+- **Halo Studio** (`studio/`): browse runs, start them, and approve paused ones. It's served by `halo serve` at `/` (`bun run studio` does the same).
 - **Docs site**: `bun run docs:dev`.
 
 ## 📚 Examples

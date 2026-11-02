@@ -13,8 +13,25 @@ import {
 import '@xyflow/react/dist/style.css';
 import './App.css';
 
-// The Studio API (studio/server.ts). Set VITE_HALO_API to point at another port.
-const API: string = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_HALO_API ?? "http://localhost:4000";
+// Halo Studio is served by `halo serve`, so the API is on the same origin.
+// If the server needs a token, open Studio once with ?token=<HALO_SERVE_TOKEN>.
+const TOKEN_KEY = "halo-token";
+const urlToken = new URLSearchParams(location.search).get("token");
+if (urlToken) {
+  try { sessionStorage.setItem(TOKEN_KEY, urlToken); } catch {}
+  history.replaceState(null, "", location.pathname);
+}
+
+async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let token: string | null = null;
+  try { token = sessionStorage.getItem(TOKEN_KEY); } catch {}
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { ...init, headers: { ...headers, ...(init.headers as Record<string, string> | undefined) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((body as { error?: string }).error ?? `${res.status} ${res.statusText}`);
+  return body as T;
+}
 
 // ── Types ──
 interface TelemetryEvent {
@@ -26,6 +43,70 @@ interface TelemetryEvent {
   payload: string | null;
   duration_ms: number | null;
   tokens: number | null;
+}
+
+interface PipelineInfo {
+  name: string;
+  file: string;
+  params: Array<{ name: string; type: string }>;
+  schedules: Array<{ cron: string; next?: string }>;
+  webhooks: string[];
+}
+
+interface RunDetail {
+  runId: string;
+  running: boolean;
+  paused?: { waitingFor: string; message?: string; stage: number; approveUrl: string };
+  events: TelemetryEvent[];
+}
+
+/** A typed value: JSON when it parses (numbers, lists, objects), otherwise the text. */
+function parseInput(text: string): unknown {
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+/** One pipeline in the sidebar, with a form for its arguments. */
+function PipelineItem({ p, onStarted }: { p: PipelineInfo; onStarted: (runId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setError(null);
+    try {
+      const args = Object.fromEntries(p.params.map((param) => [param.name, parseInput(values[param.name] ?? "")]));
+      const { runId } = await api<{ runId: string }>(`/api/pipelines/${p.name}/runs`, { method: "POST", body: JSON.stringify({ args }) });
+      setOpen(false);
+      onStarted(runId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <div className="pipeline-item">
+      <div className="pipeline-row" onClick={() => setOpen(!open)}>
+        <span className="run-pipeline">{p.name}</span>
+        <span className="pipeline-file">{p.file}</span>
+      </div>
+      {(p.schedules.length > 0 || p.webhooks.length > 0) && (
+        <div className="pipeline-triggers">
+          {p.schedules.map((s) => <span key={s.cron}>⏱ {s.cron}</span>)}
+          {p.webhooks.map((w) => <span key={w}>↪ {w}</span>)}
+        </div>
+      )}
+      {open && (
+        <div className="pipeline-form">
+          {p.params.map((param) => (
+            <label key={param.name}>
+              {param.name} <span className="param-type">{param.type}</span>
+              <input value={values[param.name] ?? ""} onChange={(e) => setValues({ ...values, [param.name]: e.target.value })} />
+            </label>
+          ))}
+          <button className="run-button" onClick={run}>Run {p.name}</button>
+          {error && <div className="form-error">{error}</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface RunSummary {
@@ -78,7 +159,7 @@ const StageNode = ({ data }: any) => {
         <span className="node-icon">{data.type === 'tool_call' ? '🔧' : '🧠'}</span>
         <span className="node-title">{data.label}</span>
       </div>
-      {data.duration && <div className="node-metrics">{data.duration}ms</div>}
+      {data.duration != null && <div className="node-metrics">{data.duration}ms</div>}
       <Handle type="source" position={Position.Bottom} />
     </div>
   );
@@ -113,24 +194,54 @@ function App() {
     return () => clearTimeout(timer);
   }, [flow, selectedRun, nodes.length]);
 
-  // Fetch runs on load
+  const [pipelines, setPipelines] = useState<PipelineInfo[]>([]);
+  const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Runs started by schedules, webhooks, or approvals appear on their own.
   useEffect(() => {
-    fetch(`${API}/api/runs`)
-      .then(res => res.json())
-      .then(setRuns)
-      .catch(console.error);
+    const load = () =>
+      api<RunSummary[]>("/api/runs")
+        .then((r) => { setRuns(r); setError(null); })
+        .catch((e) => setError(e.message));
+    load();
+    api<PipelineInfo[]>("/api/pipelines").then(setPipelines).catch((e) => setError(e.message));
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
   }, []);
 
-  // Fetch events when run is selected
+  // The selected run's events, refreshed while it is running or paused.
   useEffect(() => {
     if (!selectedRun) return;
-    fetch(`${API}/api/runs/${selectedRun}`)
-      .then(res => res.json())
-      .then(data => {
-        buildGraph(data);
-      })
-      .catch(console.error);
+    let count = -1;
+    let stop = false;
+    const load = async () => {
+      try {
+        const d = await api<RunDetail>(`/api/runs/${selectedRun}`);
+        if (stop) return;
+        setDetail(d);
+        if (d.events.length !== count) {
+          count = d.events.length;
+          buildGraph(d.events);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    };
+    load();
+    const timer = setInterval(load, 2000);
+    return () => { stop = true; clearInterval(timer); };
   }, [selectedRun]);
+
+  const respond = async (answer: string) => {
+    if (!selectedRun) return;
+    try {
+      await api(`/api/runs/${selectedRun}/signal`, { method: "POST", body: JSON.stringify({ answer }) });
+      setDetail((d) => (d ? { ...d, paused: undefined, running: true } : d));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   // Transform telemetry events into a DAG
   const buildGraph = (runEvents: TelemetryEvent[]) => {
@@ -147,14 +258,16 @@ function App() {
       // Create nodes for starts/calls
       if (ev.type === "node_start" || ev.type === "tool_call" || ev.type === "llm_call" || ev.type === "stream_start") {
         const id = `${ev.stage}-${ev.id}`;
+        // A second stream_start for the same pipeline is the run resuming after a pause.
+        const resumed = ev.type === "stream_start" && stageMap.has(ev.stage);
         stageMap.set(ev.stage, id);
-        
+
         newNodes.push({
           id,
           type: 'stageNode',
           position: { x: xOffset, y: yOffset },
           data: {
-            label: ev.stage,
+            label: resumed ? `${ev.stage} resumed` : ev.stage,
             type: ev.type,
             // Model and tool calls are recorded when they finish.
             status: ev.type === "llm_call" || ev.type === "tool_call" ? "success" : "running",
@@ -209,13 +322,20 @@ function App() {
     <div className="app-container">
       {/* Sidebar: Run List */}
       <div className="sidebar">
+        {error && <div className="banner error">{error}</div>}
+        <h2>Pipelines</h2>
+        <div className="pipeline-list">
+          {pipelines.map((p) => (
+            <PipelineItem key={p.name} p={p} onStarted={(id) => { setSelectedRun(id); setSelectedEvent(null); }} />
+          ))}
+        </div>
         <h2>Runs</h2>
         <div className="run-list">
           {runs.map(r => (
             <div 
               key={r.run_id} 
               className={`run-item ${selectedRun === r.run_id ? 'active' : ''}`}
-              onClick={() => setSelectedRun(r.run_id)}
+              onClick={() => { setSelectedRun(r.run_id); setSelectedEvent(null); }}
             >
               <div className="run-title">
                 <span className="run-pipeline">{r.pipeline ?? "Unknown pipeline"}</span>
@@ -233,6 +353,19 @@ function App() {
 
       {/* Main Canvas: React Flow DAG */}
       <div className="canvas">
+        {detail?.paused && detail.runId === selectedRun && (
+          <div className="banner paused">
+            <div>
+              <strong>Waiting for {detail.paused.waitingFor === "yield" ? "you" : detail.paused.waitingFor}</strong>
+              {detail.paused.message && <span>: {detail.paused.message}</span>}
+            </div>
+            <div className="banner-actions">
+              <button className="approve" onClick={() => respond("approve")}>Approve</button>
+              <button onClick={() => respond("reject")}>Reject</button>
+              <a href={detail.paused.approveUrl} target="_blank" rel="noreferrer">Approval link</a>
+            </div>
+          </div>
+        )}
         {selectedRun ? (
           <ReactFlow
             onInit={setFlow}
