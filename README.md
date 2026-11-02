@@ -208,6 +208,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 | 71 | Dependency security watch | Installed versions checked against OSV.dev (free), sorted by severity, alerts only on new advisories |
 | 72 | FDA recall monitor | openFDA (free) recalls explained in plain language; publishing waits for approval |
 | 73 | **Code writer** | An agent writes code, the real tests run, and failing output goes back until they pass (run it in a sandbox) |
+| 74 | **Software team** | An architect plans modules, coders build them in parallel, an integrator wires them up, and a fixer patches until the acceptance tests pass. Built the spreadsheet engine in `examples/projects/spreadsheet` (1,400 lines, 29/29 tests, 16/16 hidden) in 4 minutes for $0.68 |
 
 Every example validates, and `test/examples.test.ts` runs them.
 

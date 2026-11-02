@@ -122,7 +122,7 @@ Halo does not subscribe to Slack. Your server receives the event (for example, f
 
 ## Loop `|<> loop(Agent, "cond", max: n)`
 
-While the condition holds, the run jumps back to that agent's most recent earlier stage and continues from there with the current value. That value is usually a failing result the agent should fix. While looping, `context.data.loop` holds `{ target, iteration, condition }`. After `max` tries (default 3), the run fails with a `LoopLimitError`. When the loop exits, the `as` binding is the number of times it went back.
+While the condition holds, the run jumps back to that agent's most recent earlier stage and continues from there with the current value. That value is usually a failing result the agent should fix. On each retry the agent is shown what the check saw and its own previous answer, so it can try something different instead of repeating itself. While looping, `context.data.loop` holds `{ target, iteration, condition }`. After `max` tries (default 3), the run fails with a `LoopLimitError`. When the loop exits, the `as` binding is the number of times it went back.
 
 ```halo
 tool Shell : Bash()

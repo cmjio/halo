@@ -21,7 +21,7 @@ agent Refunder [openai/gpt-4o-mini]
 | `MaxWords(n)`, `MaxChars(n)` | answer | Fails above the limit |
 | `MaxTokens(n)` | answer | Fails if the provider reports more than `n` completion tokens |
 | `MaxSpend(usd)` | before and after each call | Fails once the **run's** cost reaches the limit. Each call's reply is capped (`max_tokens`, sent even to providers with no default) so the call fits in what is left, and calls in flight count at their most, so parallel calls (`|*`, `each`) can't overshoot it: a call that doesn't fit waits for those in flight to finish, and near the limit replies get shorter. If a run fails, calls already sent still count in its cost |
-| `Require(JSON)`, `Enforce(JSON)` | answer | Fails unless the answer parsed as JSON |
+| `Require(JSON)`, `Enforce(JSON)` | answer | Fails unless the answer is JSON. An answer that wraps its JSON in prose or a ```` ```json ```` fence counts, and the JSON is what the agent returns |
 | `Require(XML)` | answer | Fails unless the answer is well-formed XML |
 | `Require(Citation)` | answer | Fails unless the answer cites like `[1]` or `[doc_id]` |
 | `MatchRegex("pattern")` | answer | Fails unless the pattern matches |

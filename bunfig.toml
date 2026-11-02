@@ -1,0 +1,3 @@
+[test]
+# Only the repo's own tests: examples/projects holds fixtures that agents build against.
+root = "./test"

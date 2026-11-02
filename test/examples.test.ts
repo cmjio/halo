@@ -851,3 +851,37 @@ test("73 code writer: failing test output goes back to the coder until the real 
   expect(String(result.output)).toContain("1 pass");
   expect(await Bun.file(join(work, "add.ts")).text()).toBe("export const add = (a: number, b: number) => a + b;\n");
 }, 30_000);
+
+test("74 software team: modules are checked for their exports, and the fixer patches until the acceptance tests pass", async () => {
+  const work = join(tmp, "team");
+  await Bun.write(join(work, "package.json"), '{"name":"t","type":"module"}');
+  await Bun.write(join(work, "spec.md"), "index.ts exports add(a, b) and double(x).");
+  await Bun.write(
+    join(work, "acceptance.test.ts"),
+    `import { test, expect } from "bun:test";\nimport { add, double } from "./index";\ntest("math", () => { expect(add(2, 3)).toBe(5); expect(double(4)).toBe(8); });\n`,
+  );
+  const prompts: Record<string, string[]> = { coder: [], fixer: [] };
+  const ast = parse(await Bun.file(`${dir}/74-software-team.halo`).text());
+  const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
+    "Architect.plan": JSON.stringify({ types: "export type N = number;", modules: [{ file: "math.ts", exports: ["add", "double"], purpose: "math", interface: "add(a, b), double(x)" }] }),
+    "Coder.implement": (r: MockRequest) => {
+      prompts.coder!.push(r.prompt!);
+      // The first try forgets an export; the check sends it back.
+      return prompts.coder!.length === 1
+        ? "export const add = (a: number, b: number) => a + b;"
+        : "```ts\nexport const add = (a: number, b: number) => a + b;\nexport const double = (x: number) => x * 3;\n```";
+    },
+    "Integrator.wire": 'export { add, double } from "./math";',
+    "Fixer.fix": (r: MockRequest) => {
+      prompts.fixer!.push(r.prompt!);
+      return `Looking at the failure, double multiplies by 3.\n\n${JSON.stringify({ files: [{ path: "math.ts", content: "export const add = (a: number, b: number) => a + b;\nexport const double = (x: number) => x * 2;\n" }] })}`;
+    },
+  });
+  const result = await rt.run("BuildProject", { workdir: work });
+  expect(result.status).toBe("completed");
+  expect(prompts.coder![1]).toContain("missing exports: double");
+  expect(prompts.fixer).toHaveLength(1);
+  expect(prompts.fixer![0]).toContain("Expected: 8");
+  expect(prompts.fixer![0]).toContain("--- math.ts");
+  expect(String(result.output)).toContain("1 pass");
+}, 60_000);

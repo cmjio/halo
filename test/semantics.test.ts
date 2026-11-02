@@ -435,6 +435,14 @@ describe("policies", () => {
     expect(logged).toContain("[withheld: blocked by policy G]");
   });
 
+  test("an agent held to JSON can wrap it in prose or a code fence", async () => {
+    expect(await guarded("Enforce(JSON)", 'Looking at this, the fix is:\n\n{"files": [{"path": "a.ts", "content": "x {y}"}]}').execute("S", { x: "" })).toEqual({ files: [{ path: "a.ts", content: "x {y}" }] });
+    expect(await guarded("Require(JSON)", 'Here:\n```json\n[1, 2]\n```\nDone {not json}').execute("S", { x: "" })).toEqual([1, 2]);
+    await expect(guarded("Enforce(JSON)", "no json {here}").execute("S", { x: "" })).rejects.toThrow("not valid JSON");
+    // Without a JSON policy, prose stays prose.
+    expect(await guarded("MaxWords(100)", 'It is {"a": 1}').execute("S", { x: "" })).toBe('It is {"a": 1}');
+  });
+
   test("Enforce(JSON) requires structured output; LogViolation logs and records violations", async () => {
     const warnings: string[] = [];
     const r = rt(

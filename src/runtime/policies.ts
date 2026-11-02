@@ -257,6 +257,9 @@ export class PolicyEngine {
   checkOutput(agent: Agent, value: unknown, hooks: PolicyHooks, usage: { completionTokens?: number } = {}): unknown {
     const rules = this.rulesFor(agent);
     let out = value;
+    // An agent held to JSON that wraps its answer in prose or a code fence still gave JSON.
+    const wantsJson = rules.some((b) => (b.rule.name === "Enforce" || b.rule.name === "Require") && b.rule.args.some((a) => a.toUpperCase() === "JSON"));
+    if (wantsJson && typeof out === "string") out = extractJson(out) ?? out;
     for (const b of rules) if (b.rule.name === "Redact") out = mapStrings(out, (s) => redact(s, b.rule.args));
 
     const text = typeof out === "string" ? out : JSON.stringify(out) ?? "";
@@ -377,4 +380,36 @@ function mapStrings(value: unknown, fn: (s: string) => string): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), mapStrings(v, fn)]));
   }
   return value;
+}
+
+/**
+ * The JSON object or list inside a reply like "Here is the fix: ```json {...} ```" or
+ * "Looking at this... {...}": the last ```json fence that parses, else the longest
+ * span from an opening { or [ to the reply's last matching bracket that parses.
+ */
+export function extractJson(text: string): object | undefined {
+  const fences = [...text.matchAll(/```(?:json)?[ \t]*\n([\s\S]*?)\n[ \t]*```/g)].reverse();
+  for (const f of fences) {
+    const parsed = tryJson(f[1]!.trim());
+    if (parsed) return parsed;
+  }
+  const ends = { "{": text.lastIndexOf("}"), "[": text.lastIndexOf("]") };
+  let tries = 0;
+  for (let i = 0; i < text.length && tries < 50; i++) {
+    const c = text[i];
+    if ((c !== "{" && c !== "[") || ends[c] < i) continue;
+    tries++;
+    const parsed = tryJson(text.slice(i, ends[c] + 1));
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+function tryJson(text: string): object | undefined {
+  try {
+    const v: unknown = JSON.parse(text);
+    return v && typeof v === "object" ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }

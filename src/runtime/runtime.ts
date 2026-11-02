@@ -312,7 +312,9 @@ interface ExecutionContext {
   /** How many times each loop stage (by index) has jumped back. */
   loops: Record<number, number>;
   /** Set while a loop sends the run back: the stage being retried and what the check saw. */
-  loopFeedback?: { stage: number; condition: string; value: unknown; iteration: number };
+  loopFeedback?: { stage: number; condition: string; value: unknown; iteration: number; previous?: unknown };
+  /** The last answer of each agent stage (by index), so a loop retry can show the agent what it tried. */
+  answers?: Record<number, unknown>;
   /** The calling pipeline's context, for a called pipeline. */
   parent?: ExecutionContext;
 }
@@ -345,6 +347,11 @@ function safeJson(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/** The start of a long text, marked where it was cut. */
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n[... ${text.length - max} more characters]`;
 }
 
 /** The reply length assumed for a call that sets none (Anthropic's adapter sends this by default). */
@@ -870,7 +877,7 @@ export class HaloRuntime {
     const to = ctx.pipeline.pipeline.findLastIndex((s, j) => j < index && s.kind === "call" && s.callee === stage.target);
     if (to < 0) throw new HaloError(`loop(${stage.target}, ...) needs an earlier ${stage.target} stage to go back to`, { code: "LOOP_TARGET_NOT_FOUND" });
     ctx.loops[index] = done + 1;
-    ctx.loopFeedback = { stage: to, condition: stage.condition, value: ctx.current, iteration: done + 1 };
+    ctx.loopFeedback = { stage: to, condition: stage.condition, value: ctx.current, iteration: done + 1, previous: ctx.answers?.[to] };
     ctx.data.loop = { target: stage.target, iteration: done + 1, condition: stage.condition };
     this.emit({ type: "loop", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index, to, iteration: done + 1, condition: stage.condition });
     return to;
@@ -1194,8 +1201,12 @@ export class HaloRuntime {
     // On a loop retry, always show the agent what the check found, even if its
     // instructions are templated (which otherwise leaves the pipeline value out).
     const retry = ctx.loopFeedback?.stage === ctx.stageIndex ? ctx.loopFeedback : undefined;
+    // It also sees its own last answer, so it knows what didn't work instead of repeating it.
     const feedback = retry
-      ? [{ source: "the check", label: `Attempt ${retry.iteration} was sent back because "${retry.condition}" held`, text: formatValue(retry.value) }]
+      ? [
+          ...(retry.previous === undefined ? [] : [{ source: "your previous attempt", label: `Your answer on attempt ${retry.iteration}, which didn't pass the check (it may be cut short)`, text: clip(formatValue(retry.previous), 6000) }]),
+          { source: "the check", label: `Attempt ${retry.iteration} was sent back because "${retry.condition}" held`, text: formatValue(retry.value) },
+        ]
       : [];
     const prompt = buildPrompt({ ...parts, context: [...feedback, ...memory.context] });
     if (!prompt.trim()) throw new HaloError(`${target} has an empty prompt (its arguments and the pipeline value are all empty)`);
@@ -1214,6 +1225,7 @@ export class HaloRuntime {
       try {
         const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
         await memory.remember?.(checked);
+        (ctx.answers ??= {})[ctx.stageIndex] = checked;
         return checked;
       } catch (err) {
         // @correct(n): show the model what the policy rejected and let it try again.

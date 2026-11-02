@@ -204,6 +204,8 @@ describe("|<> loop", () => {
     expect(prompts[0]).not.toContain("sent back");
     expect(prompts[1]).toContain(`Attempt 1 was sent back because "context.data.Check.run.exitCode == 0" held (from the check):`);
     expect(prompts[1]).toContain(`"stdout": "peanut"`);
+    // It also sees what it answered last time, so it doesn't just repeat it.
+    expect(prompts[1]).toContain("Your answer on attempt 1, which didn't pass the check (it may be cut short) (from your previous attempt):\nplan 1");
   });
 
   test("gives up after max tries", async () => {
