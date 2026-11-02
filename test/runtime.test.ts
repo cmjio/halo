@@ -172,21 +172,26 @@ pipeline Chain2(x: String) -> Result:
   });
 
   test("real LLM call with API key", async () => {
-    const apiKey = Bun.env.LANGLY_API_KEY;
-    if (!apiKey || apiKey === "test_key") {
-      console.log(
-        "[SKIP] No valid LANGLY_API_KEY set — skipping real LLM call test",
-      );
+    // Use whichever real key is available, with a cheap model from that provider.
+    const env = Bun.env;
+    const fallback = env.HALO_API_KEY || env.LANGLY_API_KEY;
+    const pick = env.ANTHROPIC_API_KEY || fallback?.startsWith("sk-ant-")
+      ? { model: "anthropic/claude-haiku-4-5", key: env.ANTHROPIC_API_KEY || fallback }
+      : env.OPENAI_API_KEY || (fallback && fallback !== "test_key")
+        ? { model: "openai/gpt-4o-mini", key: env.OPENAI_API_KEY || fallback }
+        : undefined;
+    if (!pick) {
+      console.log("[SKIP] No ANTHROPIC_API_KEY, OPENAI_API_KEY, or HALO_API_KEY set — skipping real LLM call test");
       return;
     }
 
     const src = `
-agent Test [openai/gpt-4o-mini, temp: 0.0]
+agent Test [${pick.model}, temp: 0.0]
 pipeline Ping(msg: String) -> Result:
-  msg |> Test.prompt("echo this back verbatim") |> System.Print()
+  msg |> Test.prompt("Echo this back verbatim, with nothing else:")
 `;
     const ast = parse(src);
-    const rt = new HaloRuntime({ apiKey });
+    const rt = new HaloRuntime({ apiKey: pick.key });
     rt.load(ast);
 
     const output = await rt.execute("Ping", { msg: "hello world" });
