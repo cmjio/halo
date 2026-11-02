@@ -388,6 +388,11 @@ describe("untrusted values", () => {
     expect(existsSync(join(tmp, "escaped.json"))).toBe(false);
     await r.execute("P", { user: "ana" });
     expect(existsSync(join(dir, "history-ana.json"))).toBe(true);
+    // Staying in the folder isn't enough: one user's value can't name another user's file.
+    for (const user of ["x/../history-ana", "x\\..\\history-ana"]) {
+      await expect(r.execute("P", { user })).rejects.toThrow("can't contain / or \\ or be . or ..");
+    }
+    expect(await Bun.file(join(dir, "history-ana.json")).json()).toEqual(["hi"]);
   });
 });
 

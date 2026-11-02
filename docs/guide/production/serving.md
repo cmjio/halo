@@ -40,7 +40,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 |---|---|
 | `files` | `.halo` files or folders to load (command-line paths take precedence). Default: the current folder |
 | `port`, `host` | Where to listen. Default `127.0.0.1:8080` |
-| `token` | API token; the same as setting `HALO_SERVE_TOKEN` |
+| `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one |
 | `publicUrl` | The address people reach the server at, used in approval links |
 | `schedules` | Start `pipeline` with `args` on a cron schedule |
 | `webhooks` | `POST /hooks/<path>` starts `pipeline` |
@@ -61,7 +61,7 @@ Standard 5-field cron in the server's local time: minute, hour, day of month, mo
 
 The JSON body becomes the pipeline's arguments: fields that match parameter names are passed by name, and a pipeline with a single parameter that isn't in the body gets the whole body (handy for GitHub or Stripe events).
 
-With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup.
+With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup. It still refuses requests a web page sends through someone's browser: an `Origin` other than localhost or `publicUrl`, and, when listening on localhost, a `Host` that isn't (DNS rebinding).
 
 ## Human approval
 

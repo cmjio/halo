@@ -141,12 +141,17 @@ export const fileStore: ToolProvider = async (call) => {
   const path = call.config(0);
   if (typeof path !== "string" || !path) throw new HaloError(`Tool "${call.tool.name}" needs a file path, e.g. File(".halo/history.json")`, { code: "TOOL_CONFIG" });
   // When the path is filled from data (File(".halo/history-{{user}}.json")), it must stay in the
-  // folder its fixed part names, so a value like "../../x" can't reach other files.
+  // folder its fixed part names, so a value like "../../x" can't reach other files, and each value
+  // must stay one name, so "x/../history-alice" can't reach another user's file in that folder.
   if (call.template0?.includes("{{")) {
     const fixed = call.template0.split("{{")[0]!;
     const folder = resolve(fixed.endsWith("/") ? fixed : dirname(`${fixed}x`));
     if (!resolve(path).startsWith(`${folder}${sep}`)) {
       throw new HaloError(`Tool "${call.tool.name}": "${path}" is outside ${relative(process.cwd(), folder) || "."}/`, { code: "TOOL_ARGUMENT" });
+    }
+    const shape = new RegExp(`^${call.template0.split(/\{\{\s*[\w.]+\s*\}\}/).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("(?!\\.\\.?(?:[/\\\\]|$))[^/\\\\]*")}$`);
+    if (!shape.test(path)) {
+      throw new HaloError(`Tool "${call.tool.name}": "${path}" doesn't fit ${call.template0}; a {{value}} in a file path can't contain / or \\ or be . or ..`, { code: "TOOL_ARGUMENT" });
     }
   }
   const keep = Number(call.named.keep ?? call.config("keep") ?? 10);

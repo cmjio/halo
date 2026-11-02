@@ -45,9 +45,12 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-const SSN = pattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/, "SSN");
-const CREDIT_CARD = pattern(/\b(?:\d[ -]?){12,18}\d\b/, "CreditCard", luhn);
-const EMAIL = pattern(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/, "Email");
+// Digit runs are bounded by non-digits, not \b, so "SSN123-45-6789" and "card4111..." still match.
+const SSN = pattern(/(?<!\d)\d{3}[- .]\d{2}[- .]\d{4}(?!\d)/, "SSN");
+const CREDIT_CARD = pattern(/(?<!\d)(?:\d[ .-]?){12,18}\d(?!\d)/, "CreditCard", luhn);
+// Starts only where a local part can start, and reads the domain label by label: a scan stays linear
+// on long runs like "a.a.a…@----…" (the old pattern took seconds on 100 KB).
+const EMAIL = pattern(/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9-])/, "Email");
 const PHONE = pattern(/(?<![\w-])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/, "Phone");
 const API_KEY = pattern(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})\b/, "APIKey");
 const IP_ADDRESS = pattern(/\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/, "IPAddress");
@@ -97,17 +100,68 @@ const DESCRIPTIONS: Record<string, string> = {
   Markdown: "Markdown formatting not allowed",
 };
 
+/** Cyrillic and Greek letters that look like Latin ones. */
+const LOOKALIKES: Record<string, string> = Object.fromEntries(
+  [..."аaеeоoрpсcуyхxіiјjѕsԁdһhӏlАAВBЕEКKМMНHОOРPСCТTХXІIЈJЅSαaοoιiκkνvρpτtυuχxΑAΒBΕEΖZΗHΙIΚKΜMΝNΟOΡPΤTΥYΧX"].flatMap((c, i, all) => (i % 2 ? [] : [[c, all[i + 1]!]])),
+);
+
+/** A digit in any script (Arabic-Indic, Devanagari, ...) as its ASCII digit. */
+function asciiDigit(d: string): string {
+  let zero = d.codePointAt(0)!;
+  while (/\p{Nd}/u.test(String.fromCodePoint(zero - 1)) && d.codePointAt(0)! - zero < 9) zero--;
+  return String((d.codePointAt(0)! - zero) % 10);
+}
+
 /**
  * Text as the detectors read it: compatibility forms folded (fullwidth digits, ligatures),
- * invisible characters removed, and dash and space look-alikes made plain, so they can't
- * be used to slip past Block or Redact.
+ * accents and invisible characters (zero-width, bidi, tag, variation selectors, fillers)
+ * removed, digits in any script made ASCII, Cyrillic and Greek look-alikes made Latin,
+ * dash and space look-alikes made plain, and HTML and %-escapes decoded, so none of them
+ * can be used to slip past Block or Redact.
  */
 export function normalizeForScan(text: string): string {
-  return text
+  return decodeEscapes(text)
+    .normalize("NFKD")
+    .replace(/[\p{M}\p{Cf}\u115F\u1160\u3164\uFFA0]/gu, "")
     .normalize("NFKC")
-    .replace(/[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "")
     .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-")
-    .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+    .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")
+    .replace(/[^\x00-\x7F]/g, (c) => LOOKALIKES[c] ?? (/\p{Nd}/u.test(c) ? asciiDigit(c) : c));
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+
+/** HTML entities (&#49; &#x41; &amp;) and %-escapes of printable ASCII, decoded. */
+function decodeEscapes(text: string): string {
+  return text
+    .replace(/&#(\d{1,7});|&#x([0-9a-f]{1,6});|&(amp|lt|gt|quot|apos|nbsp);/gi, (m, dec, hex, name) => {
+      const cp = dec ? Number(dec) : hex ? parseInt(hex, 16) : undefined;
+      if (cp === undefined) return ENTITIES[name.toLowerCase()] ?? m;
+      return cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    })
+    .replace(/%([2-7][0-9a-f])/gi, (m, h) => (parseInt(h, 16) < 0x7f ? String.fromCharCode(parseInt(h, 16)) : m));
+}
+
+const JSON_ESCAPE = /(\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt]))/;
+
+/** A JSON-escaped string's text: an object in a prompt reads "ssn:\n123…", where the n would hide what follows. */
+function unescapeJson(text: string): string {
+  return text.replace(new RegExp(JSON_ESCAPE.source, "g"), (e) =>
+    e[1] === "u" ? String.fromCharCode(parseInt(e.slice(2), 16)) : ({ b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" } as Record<string, string>)[e[1]!] ?? e[1]!,
+  );
+}
+
+/** All the text in a value, for Block: strings, numbers and keys, each on its own line. */
+function scanText(value: unknown): string {
+  const parts: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") parts.push(v);
+    else if (typeof v === "number" || typeof v === "bigint") parts.push(String(v));
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) (parts.push(k), walk(x));
+  };
+  walk(value);
+  return parts.join("\n");
 }
 
 const unquote = (s: string | undefined) => (s ?? "").replace(/^(["'])(.*)\1$/, "$2");
@@ -208,7 +262,7 @@ export class PolicyEngine {
     const text = typeof out === "string" ? out : JSON.stringify(out) ?? "";
     for (const b of rules) {
       const { name, args } = b.rule;
-      if (name === "Block") this.block(b, text, "output", hooks);
+      if (name === "Block") this.block(b, scanText(out), "output", hooks);
       if (name === "MaxWords") {
         const limit = Number(args[0]);
         const words = text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -258,17 +312,51 @@ export class PolicyEngine {
     }
   }
 
-  private block(b: BoundRule, text: string, phase: Violation["phase"], hooks: PolicyHooks) {
-    for (const category of b.rule.args) {
+  /**
+   * What an agent's output may show in logs and telemetry: redacted like the output itself,
+   * or withheld when a Block rule would stop it.
+   */
+  forLog(agent: Agent, value: unknown): unknown {
+    const rules = this.rulesFor(agent);
+    let out = value;
+    for (const b of rules) if (b.rule.name === "Redact") out = mapStrings(out, (s) => redact(s, b.rule.args));
+    const blocked = rules.find((b) => b.rule.name === "Block" && this.blocks(b, scanText(out)));
+    return blocked ? `[withheld: blocked by policy ${blocked.policy}]` : out;
+  }
+
+  /** The lowest MaxSpend limit on an agent, if it has one. */
+  spendLimit(agent: Agent): number | undefined {
+    const limits = this.rulesFor(agent).filter((b) => b.rule.name === "MaxSpend").map((b) => Number(b.rule.args[0]));
+    return limits.length ? Math.min(...limits) : undefined;
+  }
+
+  /** Fail a call that can't fit in what is left of the agent's budget. */
+  refuseOverBudget(agent: Agent, hooks: PolicyHooks): never {
+    const b = this.rulesFor(agent).find((x) => x.rule.name === "MaxSpend")!;
+    const limit = Number(b.rule.args[0]);
+    this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}, with no room left for another call`, "budget", hooks);
+  }
+
+  private blocks(b: BoundRule, text: string): string | undefined {
+    const plain = unescapeJson(text);
+    return b.rule.args.find((category) => {
       const detector = DETECTORS[category];
-      if (detector && (detector.test(text) || detector.test(normalizeForScan(text)))) {
-        this.violate(b, `Content blocked: ${DESCRIPTIONS[category] ?? category + " detected"}`, phase, hooks);
-      }
-    }
+      return detector && [text, normalizeForScan(text), plain, normalizeForScan(plain)].some((t) => detector.test(t));
+    });
+  }
+
+  private block(b: BoundRule, text: string, phase: Violation["phase"], hooks: PolicyHooks) {
+    const category = this.blocks(b, text);
+    if (category) this.violate(b, `Content blocked: ${DESCRIPTIONS[category] ?? category + " detected"}`, phase, hooks);
   }
 }
 
 function redact(text: string, categories: string[]): string {
+  // Redact between JSON escapes, so "\n123-45-6789" in a prompt is read as a new line, not "n123…".
+  return text.split(JSON_ESCAPE).map((part, i) => (i % 2 ? part : redactText(part, categories))).join("");
+}
+
+function redactText(text: string, categories: string[]): string {
   const pass = (t: string) => categories.reduce((acc, c) => DETECTORS[c]?.redact?.(acc) ?? acc, t);
   const out = pass(text);
   // Something hidden with look-alike characters: redact the normalized text instead.
@@ -278,6 +366,12 @@ function redact(text: string, categories: string[]): string {
 
 function mapStrings(value: unknown, fn: (s: string) => string): unknown {
   if (typeof value === "string") return fn(value);
+  // A card number sent as a number is still a card number.
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const text = String(value);
+    const out = fn(text);
+    return out === text ? value : out;
+  }
   if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), mapStrings(v, fn)]));

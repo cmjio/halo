@@ -333,8 +333,23 @@ describe("halo serve", () => {
     }
   });
 
+  test("a webhook with no secret still keeps other sites' pages out", async () => {
+    const s = await serve({ webhooks: [{ path: "open", pipeline: "Quick" }] });
+    try {
+      const hook = `${s.url}/hooks/open`;
+      expect((await fetch(hook, { method: "POST", headers: { Origin: "https://evil.example", "Content-Type": "text/plain" }, body: '{"n":1}' })).status).toBe(403);
+      expect((await fetch(hook, { method: "POST", headers: { Host: "evil.example" }, body: '{"n":1}' })).status).toBe(403);
+      expect((await fetch(hook, { method: "POST", body: '{"n":2}' })).status).toBe(202);
+      // A form post to an approval link with the wrong body is refused, not a server error.
+      expect((await post(`${s.url}/approve/nope?sig=x`, {})).status).toBe(403);
+    } finally {
+      await s.stop();
+    }
+  });
+
   test("bad config fails at startup with a clear message", async () => {
     await expect(serve({ webhooks: [{ path: "gh", pipeline: "Echo", secret: "Env.UNSET_SECRET" }] })).rejects.toThrow(`has secret "Env.UNSET_SECRET", but it is empty or not set`);
+    await expect(serve({ token: "Env.HALO_TOKEN_TYPO" })).rejects.toThrow(`The API token "Env.HALO_TOKEN_TYPO" is empty or not set`);
     await expect(serve({ schedules: [{ pipeline: "Nope", cron: "* * * * *" }] })).rejects.toThrow(`Unknown pipeline "Nope"`);
     await expect(serve({ schedules: [{ pipeline: "Quick", cron: "every day" }] })).rejects.toThrow("needs 5 fields");
     const dir = mkdtempSync(join(tmp, "bad-"));

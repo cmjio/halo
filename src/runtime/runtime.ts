@@ -347,6 +347,27 @@ function safeJson(v: unknown): string {
   }
 }
 
+/** The reply length assumed for a call that sets none (Anthropic's adapter sends this by default). */
+const DEFAULT_MAX_TOKENS = 4096;
+
+/** A high estimate of a text's tokens: about 3 characters each for ASCII, one each for anything else (CJK and the like). */
+function estimateTokens(text: string): number {
+  let ascii = 0;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) < 128) ascii++;
+  return Math.ceil(ascii / 3) + (text.length - ascii);
+}
+
+/**
+ * Like Promise.all, but on a failure it waits for the other branches to finish first,
+ * so the calls they already sent are counted in the run's cost before it reports.
+ */
+async function settleAll<T>(work: Promise<T>[]): Promise<T[]> {
+  const settled = await Promise.allSettled(work);
+  const failure = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failure) throw failure.reason;
+  return settled.map((r) => (r as PromiseFulfilledResult<T>).value);
+}
+
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   work.catch(() => {}); // the loser of the race must not surface as an unhandled rejection
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -422,6 +443,8 @@ export class HaloRuntime {
    * costs in sub-pipelines not yet added to the top, so MaxSpend holds across parallel calls.
    */
   private unsettled = new WeakMap<RunMeta, number>();
+  /** Model calls in flight per run, and calls waiting under MaxSpend for one of them to settle. */
+  private inflight = new WeakMap<RunMeta, { calls: number; waiting: Array<() => void> }>();
   private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
   private systems = new Map<string, SystemHandler>();
   private vectorStore?: LocalVectorStore;
@@ -1059,7 +1082,54 @@ export class HaloRuntime {
   /** The most a call can cost: its prompt plus a full reply. */
   private estimateCall(model: string, prompt: string, system: string | undefined, options: LLMOptions): number {
     const adapter = this.adapterRegistry.findAdapter(model);
-    return adapter?.estimateCost?.(model, Math.ceil((prompt.length + (system?.length ?? 0)) / 4), options.maxTokens ?? 1024) ?? 0;
+    return adapter?.estimateCost?.(model, estimateTokens(prompt + (system ?? "")), options.maxTokens ?? DEFAULT_MAX_TOKENS) ?? 0;
+  }
+
+  /**
+   * Reserve a call's estimate. Under MaxSpend, its reply is capped so the whole call fits in
+   * what is left of the budget (counting calls in flight), and that cap is always sent: a
+   * provider with no default limit could otherwise bill a long reply past it. The check and
+   * the reservation happen in one step, so parallel calls see each other.
+   */
+  private reserveCall(agent: Agent, model: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext): Promise<{ options: LLMOptions; reserve: number }> {
+    const take = (fitted: LLMOptions) => {
+      const reserve = this.estimateCall(model, prompt, system, fitted);
+      this.unsettle(ctx, reserve);
+      this.flight(ctx).calls++;
+      return { options: fitted, reserve };
+    };
+    const attempt = (): { options: LLMOptions; reserve: number } | Promise<{ options: LLMOptions; reserve: number }> => {
+      const fitted = this.fitBudget(agent, model, prompt, system, options, ctx);
+      return fitted instanceof Promise ? fitted.then(attempt) : take(fitted);
+    };
+    return Promise.resolve(attempt());
+  }
+
+  /** The options a call fits the budget with, or a promise to wait on (for a call in flight) before trying again. */
+  private fitBudget(agent: Agent, model: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext): LLMOptions | Promise<void> {
+    const limit = this.guard.spendLimit(agent);
+    const adapter = this.adapterRegistry.findAdapter(model);
+    if (limit === undefined || !adapter?.estimateCost) return options;
+    const input = adapter.estimateCost(model, estimateTokens(prompt + (system ?? "")), 0);
+    const perToken = adapter.estimateCost(model, 0, 1_000_000) / 1_000_000;
+    const wanted = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const flight = this.flight(ctx);
+    const room = limit - this.spent(ctx) - input;
+    const cap = perToken > 0 ? Math.min(wanted, Math.floor(room / perToken)) : wanted;
+    if (room > 0 && cap >= wanted) return { ...options, maxTokens: wanted };
+    // Calls in flight hold their full estimate; most settle for less, so wait for one before shrinking or refusing.
+    if (flight.calls > 0) {
+      return raceAbort(new Promise<void>((done) => flight.waiting.push(done)), ctx.signal);
+    }
+    if (room <= 0 || cap < 1) this.guard.refuseOverBudget(agent, this.guardHooks(ctx));
+    return { ...options, maxTokens: cap };
+  }
+
+  private flight(ctx: ExecutionContext) {
+    const top = this.topMeta(ctx);
+    let f = this.inflight.get(top);
+    if (!f) this.inflight.set(top, (f = { calls: 0, waiting: [] }));
+    return f;
   }
 
   private guardHooks(ctx: ExecutionContext): PolicyHooks {
@@ -1210,9 +1280,10 @@ export class HaloRuntime {
   ): Promise<{ value: unknown; tokens?: { prompt: number; completion: number } }> {
     const t0 = performance.now();
     const mock = this.mockFor(...mockKeys);
-    // Reserve the call's estimate before the first await, so parallel calls see each other under MaxSpend.
-    const reserve = mock ? 0 : this.estimateCall(model, prompt, system, options);
-    this.unsettle(ctx, reserve);
+    const flight = this.flight(ctx);
+    let reserve = 0;
+    if (mock) flight.calls++;
+    else ({ options, reserve } = await this.reserveCall(agent, model, prompt, system, options, ctx));
     let outcome;
     try {
       outcome = await this.withPolicies(ctx, target, agent, async (signal) => {
@@ -1223,8 +1294,18 @@ export class HaloRuntime {
         const r = await this.callLLM(model, prompt, system, options, signal);
         return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false };
       });
+    } catch (err) {
+      // A call cut off mid-flight (another branch failed, or a timeout) may still be billed:
+      // count it at its estimate, so the run's cost doesn't leave it out.
+      if (reserve && ctx.signal.aborted) {
+        ctx.meta.cost += reserve;
+        if (ctx.parent) this.unsettle(ctx, reserve);
+      }
+      throw err;
     } finally {
       this.unsettle(ctx, -reserve);
+      flight.calls--;
+      for (const wake of flight.waiting.splice(0)) wake();
     }
     const { result, attempts } = outcome;
 
@@ -1238,8 +1319,11 @@ export class HaloRuntime {
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
     if (kind !== "shadow") {
-      if (typeof result.value === "string") this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: result.value });
-      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt, output: value, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
+      // Telemetry keeps what the agent's policies let out: redacted, or withheld if blocked.
+      const shown = this.guard.forLog(agent, value);
+      const text = shown === value ? result.value : formatValue(shown);
+      if (typeof result.value === "string") this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: typeof text === "string" ? text : formatValue(text) });
+      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt, output: shown, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
     }
     return { value, tokens: result.tokens };
   }
@@ -1253,7 +1337,7 @@ export class HaloRuntime {
       const t0 = performance.now();
       const label = `${run.shadow}.${method}`;
       const task = this.complete(run.agent, run.model, label, run.mockKeys, prompt, system, { ...llmOptions(run.agent.params, {}), ...options }, undefined, ctx, "shadow").then(
-        ({ value: output }) => ({ primary: primary.name, shadow: run.shadow, output, latencyMs: Math.round(performance.now() - t0) }),
+        ({ value }) => ({ primary: primary.name, shadow: run.shadow, output: this.guard.forLog(primary, this.guard.forLog(run.agent, value)), latencyMs: Math.round(performance.now() - t0) }),
         (err: unknown) => ({ primary: primary.name, shadow: run.shadow, error: err instanceof Error ? err.message : String(err), latencyMs: Math.round(performance.now() - t0) }),
       );
       ctx.shadowTasks.push(
@@ -1448,7 +1532,7 @@ export class HaloRuntime {
   }
 
   private async fanout(stage: FanOutStage, ctx: ExecutionContext): Promise<unknown[]> {
-    const results = await Promise.all(stage.stages.map((sub) => this.callStage(sub, ctx)));
+    const results = await settleAll(stage.stages.map((sub) => this.callStage(sub, ctx)));
     if (stage.bind) ctx.data[stage.bind] = results;
     return results;
   }
@@ -1480,16 +1564,22 @@ export class HaloRuntime {
 
     const results: unknown[] = new Array(list.length);
     let next = 0;
+    let failed = false;
     const worker = async () => {
-      while (next < list.length) {
+      while (next < list.length && !failed) {
         const i = next++;
         // Each iteration sees the item under its own name and as the flowing value.
         const data: Record<string, unknown> = { ...ctx.data, [stage.item]: list[i], index: i };
         if (isPlainObject(data[callee])) data[callee] = { ...(data[callee] as object) };
-        results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i] });
+        try {
+          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i] });
+        } catch (err) {
+          failed = true;
+          throw err;
+        }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+    await settleAll(Array.from({ length: Math.min(concurrency, list.length) }, worker));
 
     if (callee !== "System") this.store(ctx, callee, method, results);
     if (stage.bind) ctx.data[stage.bind] = results;

@@ -129,6 +129,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const fromEnv = (v: string | undefined) => (v && /^Env\.\w+$/.test(v) ? env[v.slice(4)] : v);
   const host = options.host ?? "127.0.0.1";
   const token = fromEnv(options.token) ?? env.HALO_SERVE_TOKEN;
+  // A token that names an unset variable must not silently turn into "no token".
+  if (options.token !== undefined && !token) throw new ServeError(`The API token "${options.token}" is empty or not set`);
   if (!LOOPBACK.has(host) && !token) {
     throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)`);
   }
@@ -311,16 +313,22 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   // name to 127.0.0.1 to read the API from the user's browser).
   const allowedHosts = new Set(["localhost", "127.0.0.1", "[::1]", host.includes(":") ? `[${host}]` : host]);
   if (options.publicUrl) allowedHosts.add(new URL(options.publicUrl).hostname);
-  /** Why an /api request looks cross-site, or undefined if it's fine. */
-  const crossSite = (req: Request, url: URL): string | undefined => {
+  /** Why a request looks like it came from another site's page, or undefined if it's fine. */
+  const foreign = (req: Request, url: URL, checkHost = true): string | undefined => {
     const hostname = (req.headers.get("host") ?? url.host).replace(/:\d+$/, "");
-    if (!allowedHosts.has(hostname)) return `Host "${hostname}" is not allowed`;
-    // A web page can send "simple" cross-site requests without asking; requiring JSON
-    // (and a same-site Origin when the browser sends one) means only Studio and API clients get in.
+    if (checkHost && !allowedHosts.has(hostname)) return `Host "${hostname}" is not allowed`;
     const origin = req.headers.get("origin");
     if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin) && !(options.publicUrl && origin === new URL(options.publicUrl).origin)) {
       return `Requests from ${origin} are not allowed`;
     }
+    return undefined;
+  };
+  /** Why an /api request looks cross-site, or undefined if it's fine. */
+  const crossSite = (req: Request, url: URL): string | undefined => {
+    // A web page can send "simple" cross-site requests without asking; requiring JSON
+    // (and a same-site Origin when the browser sends one) means only Studio and API clients get in.
+    const refused = foreign(req, url);
+    if (refused) return refused;
     if (req.method === "POST" && !(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
       return "POST requests to /api must be Content-Type: application/json";
     }
@@ -386,7 +394,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           if (req.method === "POST") {
             const linked = await linkedPause(runId, url);
             if (!linked) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
-            const form = await req.formData();
+            const form = await req.formData().catch(() => new FormData());
             const choice = String(form.get("answer") ?? "approve");
             const answer = choice === "custom" ? String(form.get("custom") ?? "") : choice;
             const outcome = await resume(runId, answer ? answerToEvent(answer) : APPROVED, undefined, linked.pauseId);
@@ -405,6 +413,12 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
               ? safeEqual(ghSig, `sha256=${createHmac("sha256", target.secret).update(raw).digest("hex")}`)
               : safeEqual(req.headers.get("x-halo-secret") ?? url.searchParams.get("secret") ?? "", target.secret);
             if (!ok) return json({ error: "Bad webhook secret or signature" }, 401);
+          } else {
+            // With no secret, at least keep other sites' pages (through the user's browser) out:
+            // browsers send their Origin, and on loopback a foreign Host means DNS rebinding.
+            // Senders reaching a public address use its name, which may not be publicUrl's.
+            const refused = foreign(req, url, LOOPBACK.has(host));
+            if (refused) return json({ error: refused }, 403);
           }
           let body: unknown;
           try {

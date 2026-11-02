@@ -49,7 +49,7 @@ pipeline Chat(msg: String) -> Result:
 
 Methods: `read` (the last `keep` entries, joined), `append` (`content:` or the input), and `clear`. The file keeps the last `keep × 5` entries.
 
-The path can hold placeholders, for one file per user: `File(".halo/history-{{user}}.json")`. The filled-in path must stay in the folder before the first placeholder (`.halo/` here), so a value like `../../x` is refused.
+The path can hold placeholders, for one file per user: `File(".halo/history-{{user}}.json")`. The filled-in path must stay in the folder before the first placeholder (`.halo/` here), so a value like `../../x` is refused, and each value must stay one name (no `/` or `\`), so `x/../history-alice` can't reach another user's file in that folder.
 
 **When equipped:** each call to the agent adds the history to the prompt as "Conversation so far". After the answer, `User: <input>` and `Assistant: <answer>` are appended to the file, so the next run remembers the conversation.
 

@@ -20,7 +20,7 @@ agent Refunder [openai/gpt-4o-mini]
 | `Redact(cat, ...)` | prompt and answer | Replaces matches with `[REDACTED:<cat>]` |
 | `MaxWords(n)`, `MaxChars(n)` | answer | Fails above the limit |
 | `MaxTokens(n)` | answer | Fails if the provider reports more than `n` completion tokens |
-| `MaxSpend(usd)` | before and after each call | Fails once the **run's** cost reaches the limit. Calls in flight count at their most (prompt plus `maxTokens`), so parallel calls (`|*`, `each`) can't all start under the limit and overshoot it |
+| `MaxSpend(usd)` | before and after each call | Fails once the **run's** cost reaches the limit. Each call's reply is capped (`max_tokens`, sent even to providers with no default) so the call fits in what is left, and calls in flight count at their most, so parallel calls (`|*`, `each`) can't overshoot it: a call that doesn't fit waits for those in flight to finish, and near the limit replies get shorter. If a run fails, calls already sent still count in its cost |
 | `Require(JSON)`, `Enforce(JSON)` | answer | Fails unless the answer parsed as JSON |
 | `Require(XML)` | answer | Fails unless the answer is well-formed XML |
 | `Require(Citation)` | answer | Fails unless the answer cites like `[1]` or `[doc_id]` |
@@ -28,7 +28,7 @@ agent Refunder [openai/gpt-4o-mini]
 | `Validate("field", "op", value)` | answer | Compares a field of the JSON answer with a literal or a `"context.…"` path. `op` is one of `== != < <= > >=`. Numbers compare as numbers (`"4"` counts as 4); `true`, `[]`, and `""` are not numbers, so `<` and `>` fail on them. |
 | `LogViolation()` | — | Also logs this policy's violations with `logger.warn` |
 
-Redaction runs before blocking, so `Redact(Email) & Block(Email)` never blocks. Both also check the text with look-alikes folded (fullwidth digits, zero-width characters, non-breaking hyphens), so `１２３‑45‑6789` is still an SSN, and they read JSON keys as well as values.
+Redaction runs before blocking, so `Redact(Email) & Block(Email)` never blocks. Both also check the text with look-alikes folded, so `１２３‑45‑6789` is still an SSN: fullwidth and other-script digits, accents, invisible characters (zero-width, bidi, tag characters, variation selectors), Cyrillic and Greek letters that look Latin, dash and space look-alikes, and HTML and `%` escapes. They read objects field by field (keys and numbers too), so a line break before a value doesn't hide it, and an output's redacted or blocked text is what telemetry and Studio keep. They don't decode base64, and can't see a value split across several fields.
 
 ### Categories
 
