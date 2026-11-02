@@ -79,7 +79,7 @@ export function pruneRecordings(dir: string, keep = 50): void {
  * Mocks that answer each call with what the recording says it got, in order, per target.
  * A call the recording has no answer for means the pipeline (or its input) changed.
  */
-export function replayMocks(rec: Recording, options: { liveModels?: boolean; liveTools?: boolean } = {}): Record<string, unknown> {
+export function replayMocks(rec: Recording, options: { liveModels?: boolean; liveTools?: boolean; tools?: string[] } = {}): Record<string, unknown> {
   const queues = new Map<string, RecordedCall[]>();
   for (const c of rec.calls) {
     const key = `${c.kind}:${c.target}`;
@@ -88,7 +88,8 @@ export function replayMocks(rec: Recording, options: { liveModels?: boolean; liv
   }
   const next = (kind: RecordedCall["kind"], target: string) => {
     const c = queues.get(`${kind}:${target}`)?.shift();
-    if (!c) throw new HaloError(`The recording has no more ${kind === "agent" ? "model answers" : kind === "tool" ? "results" : "approvals"} for ${target}: the pipeline or its input changed since run ${rec.runId}`, { code: "REPLAY_MISMATCH" });
+    const what = { agent: "model answers", tool: "results", approval: "approvals", yield: "answers", listen: "events" }[kind];
+    if (!c) throw new HaloError(`The recording has no more ${what} for ${target}: the pipeline or its input changed since run ${rec.runId}`, { code: "REPLAY_MISMATCH" });
     return c;
   };
   const mocks: Record<string, unknown> = {};
@@ -102,6 +103,18 @@ export function replayMocks(rec: Recording, options: { liveModels?: boolean; liv
       mocks[c.target] = (req: MockRequest) => next("tool", req.target).value;
     } else if (c.kind === "approval") {
       mocks.approval = (req: MockRequest) => next("approval", req.target).value;
+    } else if (c.kind === "yield") {
+      mocks.yield = () => next("yield", "yield").value;
+    } else if (c.kind === "listen") {
+      mocks[c.target] = (req: MockRequest) => next("listen", req.target).value;
+    }
+  }
+  // A tool the recording never called would run for real: refuse instead (by tool name, after the recorded "Tool.method" keys).
+  if (!options.liveTools) {
+    for (const name of options.tools ?? []) {
+      mocks[name] ??= (req: MockRequest) => {
+        throw new HaloError(`The recording has no results for ${req.target}: the pipeline changed since run ${rec.runId} (pass --live-tools to call tools for real)`, { code: "REPLAY_MISMATCH" });
+      };
     }
   }
   // Anything else that would call a model (a shadow, or a new agent stage) isn't in the recording.

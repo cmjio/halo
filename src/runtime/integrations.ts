@@ -211,10 +211,10 @@ export const slack: ToolProvider = async (call, { fetch }) => {
       const blocks = buttons.length
         ? [
             { type: "section", text: { type: "mrkdwn", text } },
-            // Each button names the run, so halo serve (/slack/actions) can answer what the run then waits for.
+            // Each button names the run, so halo serve (/slack/actions) can answer the run's next pause (only that one).
             {
               type: "actions",
-              elements: buttons.map((b, i) => ({ type: "button", text: { type: "plain_text", text: b }, value: call.runId ? JSON.stringify({ runId: call.runId, answer: b }) : b, action_id: `halo_${i}` })),
+              elements: buttons.map((b, i) => ({ type: "button", text: { type: "plain_text", text: b }, value: call.runId ? JSON.stringify({ runId: call.runId, after: call.pauses ?? 0, answer: b }) : b, action_id: `halo_${i}` })),
             },
           ]
         : undefined;

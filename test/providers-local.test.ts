@@ -437,7 +437,7 @@ test("every provider has info, with an effect for each method", () => {
     "KV.delete": "write",
     "KV.list": "read",
     "KV.incr": "write",
-    "Code.run": "write",
+    "Code.run": "external",
     "Documents.extract": "read",
   });
 });

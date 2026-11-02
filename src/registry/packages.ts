@@ -11,6 +11,10 @@
  * package's versions, where to download them, and their sha256. Downloads are
  * checked against it, and installed packages are checked against halo.lock
  * every time they load.
+ *
+ * Trust (letting a package run its own code) is never read from halo.lock, which
+ * is shared and can be edited in a pull request: it is recorded on this machine,
+ * in .halo/trust.json, for the exact checksum that was trusted.
  */
 
 import { createHash } from "node:crypto";
@@ -24,6 +28,7 @@ export const PACKAGE_FORMAT = "halo-tool/1";
 export const REGISTRY_FORMAT = "halo-registry/1";
 export const LOCK_FILE = "halo.lock";
 export const TOOLS_DIR = ".halo/tools";
+export const TRUST_FILE = ".halo/trust.json";
 /** The registry that ships with Halo (its first-party packages). */
 export const DEFAULT_REGISTRY = resolve(import.meta.dir, "../../registry/index.json");
 const MAX_PACKAGE_BYTES = 5 * 1024 * 1024;
@@ -53,13 +58,12 @@ export interface RegistryIndex {
 
 export interface LockEntry {
   version: string;
-  /** Where it came from: "registry:<index>", a .halotool URL or path, or a folder. */
+  /** Where it came from: "registry:<index or default>#name@version", a .halotool URL or path, or a folder (paths relative to the project). */
   source: string;
   sha256: string;
   providers: string[];
+  /** What it can do; `permissions.code` means installing it needs --trust. */
   permissions: Permissions;
-  /** Installed with --trust: allowed to run its own code. */
-  trusted: boolean;
 }
 
 export interface Lockfile {
@@ -186,6 +190,21 @@ export function readLock(root: string): Lockfile {
   return { tools: lock.tools ?? {} };
 }
 
+/** Checksums this machine trusts to run their code, by package name. */
+function readTrust(root: string): Record<string, string> {
+  const path = join(root, TRUST_FILE);
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+}
+
+function writeTrust(root: string, trust: Record<string, string>) {
+  mkdirSync(join(root, ".halo"), { recursive: true });
+  writeFileSync(join(root, TRUST_FILE), JSON.stringify(trust, null, 2) + "\n");
+}
+
+/** A registry as halo.lock names it: "default" for the one that ships with Halo, so the lock works on any machine. */
+const registryName = (index: string) => (resolve(index) === DEFAULT_REGISTRY ? "default" : index);
+const registryPath = (name: string) => (name === "default" ? DEFAULT_REGISTRY : name);
+
 function writeLock(root: string, lock: Lockfile) {
   const sorted = Object.fromEntries(Object.entries(lock.tools).sort(([a], [b]) => a.localeCompare(b)));
   writeFileSync(join(root, LOCK_FILE), JSON.stringify({ tools: sorted }, null, 2) + "\n");
@@ -204,7 +223,10 @@ export interface InstallResult {
  * https URL, or a package folder. A package that runs its own code needs `trust`.
  */
 export async function install(project: Project, spec: string, options: { registry?: string; trust?: boolean; expectSha?: string } = {}): Promise<InstallResult> {
-  const { bytes, source, expected } = await locate(spec, options.registry ?? DEFAULT_REGISTRY, project.fetch);
+  const located = await locate(spec, options.registry ?? DEFAULT_REGISTRY, project.fetch);
+  const { bytes, expected } = located;
+  // A local file or folder inside the project is recorded relative to it.
+  const source = !/^(registry:|https?:)/.test(located.source) && !relative(project.root, located.source).startsWith("..") ? relative(project.root, located.source) || "." : located.source;
   const digest = sha256(bytes);
   const want = options.expectSha ?? expected;
   if (want && want !== digest) throw new PackageError(`${spec}: checksum mismatch (expected ${want.slice(0, 12)}…, got ${digest.slice(0, 12)}…). The download changed; not installing.`);
@@ -227,8 +249,12 @@ export async function install(project: Project, spec: string, options: { registr
     writeFileSync(target, Buffer.from(data, "base64"));
   }
   writeFileSync(join(dir, "package.halotool"), bytes);
-  lock.tools[m.name] = { version: m.version, source, sha256: digest, providers: Object.keys(m.providers), permissions, trusted: !!options.trust };
+  lock.tools[m.name] = { version: m.version, source, sha256: digest, providers: Object.keys(m.providers), permissions };
   writeLock(project.root, lock);
+  const trust = readTrust(project.root);
+  if (permissions.code) trust[m.name] = digest;
+  else delete trust[m.name];
+  writeTrust(project.root, trust);
   return { name: m.name, version: m.version, providers: Object.keys(m.providers), permissions, source };
 }
 
@@ -249,7 +275,7 @@ async function locate(spec: string, registry: string, fetchFn?: typeof fetch): P
   const v = version ?? entry.latest;
   const release = entry.versions[v];
   if (!release) throw new PackageError(`${name} has no version ${v} (versions: ${Object.keys(entry.versions).join(", ")})`);
-  return { bytes: await readSource(resolveFrom(registry, release.file), fetchFn), source: `registry:${registry}#${name}@${v}`, expected: release.sha256 };
+  return { bytes: await readSource(resolveFrom(registry, release.file), fetchFn), source: `registry:${registryName(registry)}#${name}@${v}`, expected: release.sha256 };
 }
 
 export function uninstall(root: string, name: string): boolean {
@@ -258,17 +284,29 @@ export function uninstall(root: string, name: string): boolean {
   delete lock.tools[name];
   writeLock(root, lock);
   rmSync(join(root, TOOLS_DIR, name), { recursive: true, force: true });
+  const trust = readTrust(root);
+  if (trust[name]) {
+    delete trust[name];
+    writeTrust(root, trust);
+  }
   return true;
 }
 
-/** Reinstall everything halo.lock pins, at the pinned checksums. */
-export async function installFromLock(project: Project): Promise<InstallResult[]> {
+/**
+ * Reinstall everything halo.lock pins, at the pinned checksums. Packages that run their
+ * own code need `trust` (halo install --trust), whatever the lock says.
+ */
+export async function installFromLock(project: Project, options: { trust?: boolean } = {}): Promise<InstallResult[]> {
   const lock = readLock(project.root);
+  const needTrust = Object.entries(lock.tools).filter(([, e]) => e.permissions?.code).map(([n]) => n);
+  if (needTrust.length && !options.trust) {
+    throw new PackageError(`${needTrust.join(", ")} ${needTrust.length === 1 ? "runs its" : "run their"} own code; check ${LOCK_FILE}, then run \`halo install --trust\``);
+  }
   const done: InstallResult[] = [];
   for (const [name, entry] of Object.entries(lock.tools)) {
     const reg = entry.source.match(/^registry:(.*)#([^#@]+)@(.+)$/);
-    const spec = reg ? `${reg[2]}@${reg[3]}` : entry.source;
-    done.push(await install(project, spec, { registry: reg?.[1], trust: entry.trusted, expectSha: entry.sha256 }));
+    const spec = reg ? `${reg[2]}@${reg[3]}` : /^https?:/.test(entry.source) ? entry.source : resolve(project.root, entry.source);
+    done.push(await install(project, spec, { registry: reg ? registryPath(reg[1]!) : undefined, trust: options.trust, expectSha: entry.sha256 }));
     if (done.at(-1)!.name !== name) throw new PackageError(`${entry.source} is now "${done.at(-1)!.name}", not "${name}"`);
   }
   return done;
@@ -287,6 +325,7 @@ export interface LoadedProvider extends BuiltProvider {
  */
 export async function loadInstalled(root: string): Promise<LoadedProvider[]> {
   const lock = readLock(root);
+  const trust = readTrust(root);
   const out: LoadedProvider[] = [];
   for (const [name, entry] of Object.entries(lock.tools)) {
     const dir = join(root, TOOLS_DIR, name);
@@ -308,10 +347,10 @@ export async function loadInstalled(root: string): Promise<LoadedProvider[]> {
       let built: BuiltProvider;
       if (spec.kind === "http") built = httpProvider(providerName, spec);
       else if (spec.kind === "mcp") {
-        if (spec.command && !entry.trusted) throw new PackageError(`Tool package "${name}" starts a command but wasn't installed with --trust`);
+        if (spec.command && trust[name] !== entry.sha256) throw new PackageError(`Tool package "${name}" starts a command, and this machine hasn't trusted this version; run \`halo add ${name} --trust\` (or halo install --trust)`);
         built = mcpPackageProvider(spec);
       } else {
-        if (!entry.trusted) throw new PackageError(`Tool package "${name}" runs its own code but wasn't installed with --trust`);
+        if (trust[name] !== entry.sha256) throw new PackageError(`Tool package "${name}" runs its own code, and this machine hasn't trusted this version; run \`halo add ${name} --trust\` (or halo install --trust)`);
         built = await moduleProvider(join(dir, spec.entry), providerName, spec);
       }
       out.push({ name: providerName, packageName: name, ...built });

@@ -30,6 +30,8 @@ export interface ToolCall {
   signal: AbortSignal;
   /** The run making the call (for providers that keep per-run state, or link back to a run). */
   runId?: string;
+  /** How many times that run has paused so far (so a link back can answer only its next pause). */
+  pauses?: number;
 }
 
 /** JSON Schema for a method's named arguments (the subset providers need). */

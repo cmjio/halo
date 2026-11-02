@@ -297,3 +297,44 @@ describe("recording and replay", () => {
     await expect(rt(changed, replayMocks(rec)).run("P", { x: "copy" })).rejects.toThrow(/no model answers for A.check/);
   });
 });
+
+describe("fixes from review", () => {
+  test("replay refuses a tool the recording never called, and replays a person's answers", async () => {
+    const { replayMocks } = await import("../src/runtime/replay");
+    const rec = { runId: "r", pipeline: "P", args: {}, startedAt: "", calls: [{ kind: "yield" as const, target: "yield", value: { approved: false } }] };
+    const ran: string[] = [];
+    const r = rt(
+      `tool Files : Workspace("${workspace()}", write: true)
+       pipeline P(x: String) -> Result:
+         x |! yield(msg: "ok?") as review |? (context.data.review.approved == true) |> Files.write(path: "a", content: "b")`,
+      replayMocks(rec, { tools: ["Files"] }),
+    );
+    // The recorded "no" is replayed: the gate stops, and the write never runs.
+    expect((await r.run("P", { x: "" })).status).toBe("halted");
+    const yes = { ...rec, calls: [{ kind: "yield" as const, target: "yield", value: { approved: true } }] };
+    const r2 = rt(`tool Files : Workspace("${workspace()}", write: true)\npipeline P(x: String) -> Result:\n  x |! yield(msg: "ok?") as review |? (context.data.review.approved == true) |> Files.write(path: "a", content: "b")`, replayMocks(yes, { tools: ["Files"] }));
+    await expect(r2.run("P", { x: "" })).rejects.toThrow(/no results for Files.write/);
+    expect(ran).toEqual([]);
+  });
+
+  test("what a person says when declining reaches the model", async () => {
+    const { mock, seen } = script([useTool("Files.write", { path: "a.md", content: "x" })], "ok");
+    const r = rt(
+      `policy G : ApproveTools("Files.write")\ntool Files : Workspace("${workspace()}", write: true)\nagent A [openai/gpt-4o] equips Files requires G\npipeline P(x: String) -> Result:\n  x |> A.go(tools: [Files])`,
+      { "A.go": mock, approval: { action: "use b.md instead", text: "use b.md instead", approved: false } },
+    );
+    await r.run("P", { x: "" });
+    expect(seen[1]!.messages!.at(-1)!.content).toContain("declined this call: use b.md instead");
+  });
+
+  test("tool events show an agent's results as its policies let them out", async () => {
+    const dir = workspace();
+    writeFileSync(join(dir, "c.md"), "mail ana@example.com");
+    const events: RuntimeEvent[] = [];
+    const { mock } = script([useTool("Files.read", { path: "c.md" })], "ok");
+    const r = rt(`policy P1 : Redact(Email)\ntool Files : Workspace("${dir}")\nagent A [openai/gpt-4o] equips Files requires P1\npipeline P(x: String) -> Result:\n  x |> A.go(tools: [Files])`, { "A.go": mock }, { onEvent: (e) => events.push(e) });
+    await r.run("P", { x: "" });
+    const tool = events.find((e) => e.type === "tool");
+    expect(JSON.stringify(tool)).not.toContain("ana@example.com");
+  });
+});

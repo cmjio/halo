@@ -83,10 +83,13 @@ describe("registries and installs", () => {
     const r = await install({ root, builtins }, "acme", { registry: reg });
     expect(r).toMatchObject({ name: "acme", version: "1.0.0", providers: ["Acme"] });
     expect(readLock(root).tools.acme!.source).toBe(`registry:${reg}#acme@1.0.0`);
+    // The registry that ships with Halo is named, not pathed, so the lock works anywhere.
+    await install({ root, builtins }, "stripe");
+    expect(readLock(root).tools.stripe!.source).toBe("registry:default#stripe@1.0.0");
     const loaded = await loadInstalled(root);
-    expect(loaded.map((p) => p.name)).toEqual(["Acme"]);
+    expect(loaded.map((p) => p.name)).toEqual(["Acme", "Stripe"]);
     expect(uninstall(root, "acme")).toBe(true);
-    expect(readLock(root).tools).toEqual({});
+    expect(Object.keys(readLock(root).tools)).toEqual(["stripe"]);
   });
 
   test("a download that doesn't match the registry's checksum is refused", async () => {
@@ -121,11 +124,15 @@ describe("registries and installs", () => {
     const rt = new HaloRuntime({ env: {}, logger: { log() {}, warn() {} } }).load(parse(`tool C : Clock()\npipeline P(x: String) -> Result:\n  x |> C.now(zone: "UTC")`));
     rt.registerToolProvider(p!.name, p!.provider, p!.info);
     expect(await rt.execute("P", { x: "" })).toEqual({ method: "now", zone: "UTC" });
-    // A lock edited to point at code it never trusted doesn't load it.
-    const lock = readLock(root);
-    lock.tools.clock!.trusted = false;
-    writeFileSync(join(root, "halo.lock"), JSON.stringify(lock));
-    await expect(loadInstalled(root)).rejects.toThrow(/wasn't installed with --trust/);
+    // Trust belongs to this machine and that exact checksum: a lock can't grant it.
+    expect(JSON.stringify(readLock(root))).not.toContain("trust");
+    const other = fresh();
+    writeFileSync(join(other, "halo.lock"), readFileSync(join(root, "halo.lock")));
+    await expect(installFromLock({ root: other, builtins })).rejects.toThrow(/halo install --trust/);
+    await installFromLock({ root: other, builtins }, { trust: true });
+    expect((await loadInstalled(other)).map((p) => p.name)).toEqual(["Clock"]);
+    rmSync(join(other, ".halo/trust.json"));
+    await expect(loadInstalled(other)).rejects.toThrow(/hasn't trusted this version/);
   });
 
   test("two packages can't provide the same name", async () => {

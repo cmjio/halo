@@ -475,7 +475,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     } catch {
       return json({ error: "No Slack payload" }, 400);
     }
-    let action: { runId?: string; pauseId?: string; answer?: string; sig?: string };
+    let action: { runId?: string; pauseId?: string; answer?: string; sig?: string; after?: number };
     try {
       action = JSON.parse(payload.actions?.[0]?.value ?? "");
     } catch {
@@ -484,6 +484,14 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     if (!action.runId || !/^[\w-]+$/.test(action.runId)) return new Response("", { status: 200 });
     // A pause notice's button answers only that pause.
     if (action.pauseId !== undefined && !(action.sig && safeEqual(action.sig, sign(action.runId, action.pauseId)))) return json({ error: "Bad button signature" }, 403);
+    // A Slack tool's button answers only the run's next pause after the post, and never a tool-call approval.
+    if (action.pauseId === undefined) {
+      const snap = await runStore.load(action.runId);
+      if (!snap || snap.waitingFor === "approval" || typeof action.after !== "number" || (snap.meta.pauses ?? 0) !== action.after + 1 || !snap.meta.paused?.id) {
+        return new Response("", { status: 200 });
+      }
+      action.pauseId = snap.meta.paused.id;
+    }
     const who = payload.user?.username ?? payload.user?.name ?? payload.user?.id ?? "someone";
     const answer = String(action.answer ?? "approve");
     const event = answerToEvent(answer);
@@ -574,6 +582,9 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         // Pipelines as MCP tools, for Claude, Cursor, and other agents. Same token as the API.
         if (path === "/mcp" && options.mcp !== false) {
+          // The same checks as /api: no other site's pages (DNS rebinding, cross-site posts), then the token.
+          const refusedMcp = crossSite(req, url);
+          if (refusedMcp) return json({ error: refusedMcp }, 403);
           if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
           return mcp.handleHttp(req);
         }

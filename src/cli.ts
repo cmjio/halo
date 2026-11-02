@@ -58,7 +58,8 @@ TOOL PACKAGES:
   halo search [query]                   Find tool packages in the registry
   halo add <name[@version]|file|url|dir> Install a tool package (--trust if it runs code)
   halo remove <name>                    Uninstall a tool package
-  halo install                          Install everything halo.lock pins
+  halo install [--trust]                Install everything halo.lock pins (--trust: also the
+                                        packages that run code; trust is never read from the lock)
   halo tools [--json]                   List every tool provider and its methods
   halo pack <dir>                       Bundle a package folder into a .halotool file
   halo publish <file.halotool> --registry <index.json>   Add it to a registry index
@@ -216,7 +217,8 @@ async function installed(): Promise<LoadedProvider[]> {
   }
 }
 
-const validateOptions = async () => ({ canHandleModel, toolProviders: (await installed()).map((p) => p.name) });
+// Checking a file only needs the names of installed providers: no package code is loaded for it.
+const validateOptions = async () => ({ canHandleModel, toolProviders: Object.values(readLock(process.cwd()).tools).flatMap((t) => t.providers) });
 
 function registerInstalled(rt: HaloRuntime, providers: LoadedProvider[]) {
   for (const p of providers) rt.registerToolProvider(p.name, p.provider, p.info);
@@ -316,6 +318,11 @@ async function promptInterrupt(req: InterruptRequest): Promise<unknown> {
   const lines = [bold(`\n⏸  ${req.pipeline} needs a human${req.channel ? ` (${req.channel})` : ""}`), req.message ?? formatValue(req.current)];
   for (const a of req.attachments) lines.push(dim(`  • ${formatValue(a)}`));
   console.error(lines.join("\n"));
+  // Letting an agent act needs a typed yes: Enter alone declines it.
+  if (req.channel === "approval") {
+    const answer = await ask(`Allow? [y/N, or say why not]: `);
+    return answer ? toEvent(answer) : "no";
+  }
   const answer = await ask(`Response [approve/reject/...]: `);
   return answer ? toEvent(answer) : AUTO_EVENT;
 }
@@ -397,7 +404,11 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   }).load(ast);
   registerInstalled(rt, await installed());
   if (mock) mockRuntime(rt, ast);
-  if (replaying) rt.mockAll({ yield: AUTO_EVENT, ...replayMocks(replaying, { liveModels: flags.bools.has("live-models"), liveTools: flags.bools.has("live-tools") }) });
+  if (replaying) {
+    const tools = [...ast.tools, ...ast.stores].map((t) => t.name);
+    // Recordings from before yields were recorded approve them, as halo test does.
+    rt.mockAll({ yield: AUTO_EVENT, ...replayMocks(replaying, { liveModels: flags.bools.has("live-models"), liveTools: flags.bools.has("live-tools"), tools }) });
+  }
 
   let result: RunResult;
   const checkpoint = last(flags, "checkpoint");
@@ -460,6 +471,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   if (meta.cost > 0) parts.push(`$${meta.cost.toFixed(4)}`);
   if (meta.tokens.prompt + meta.tokens.completion > 0) parts.push(`${meta.tokens.prompt}+${meta.tokens.completion} tokens`);
   if (meta.checkpoint) parts.push(`checkpoint ${meta.checkpoint}`);
+  if (recorder) parts.push(`run ${result.runId} (halo replay ${rel} ${result.runId})`);
   console.error(dim(parts.join(" · ")));
   return 0;
 }
@@ -697,7 +709,7 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case "install": {
-        const done = await installFromLock(project());
+        const done = await installFromLock(project(), { trust: flags.bools.has("trust") });
         console.log(done.length ? done.map((r) => `${green("✓")} ${r.name}@${r.version}`).join("\n") : "Nothing to install (halo.lock lists no tools).");
         return 0;
       }

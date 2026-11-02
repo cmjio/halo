@@ -124,9 +124,9 @@ export class ToolUse {
 
 export const useTool = (target: string, args: Record<string, unknown> = {}) => new ToolUse(target, args);
 
-/** One answer a run got from outside: a model, a tool, or a person approving a tool call. */
+/** One answer a run got from outside: a model, a tool, a person (approving a tool call, or at a yield), or an event. */
 export interface RecordedCall {
-  kind: "agent" | "tool" | "approval";
+  kind: "agent" | "tool" | "approval" | "yield" | "listen";
   target: string;
   value: unknown;
   /** For a model turn that called tools: the calls. */
@@ -174,6 +174,8 @@ export interface RunMeta {
   /** Set while the run waits at `|! yield` (`waitingFor: "yield"`) or `~> listen(T)` (`waitingFor: T`). */
   /** `id` is new for every pause, so an approval for one pause can't answer a later one. */
   paused?: { stage: number; waitingFor: string; message?: string; id?: string };
+  /** How many times the run has paused. */
+  pauses?: number;
   checkpoint?: string;
 }
 
@@ -432,6 +434,14 @@ interface ToolKit {
 const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system", "tools", "max_steps", "tool_result_chars"]);
 const DEFAULT_MAX_STEPS = 10;
 const DEFAULT_TOOL_RESULT_CHARS = 16_000;
+
+/** Why a person declined, when they said: `{ reason }`, or what they typed beyond a plain "no". */
+function declineReason(answer: unknown): string {
+  const said = isPlainObject(answer) ? (answer.reason ?? answer.comment ?? answer.text) : answer;
+  if (typeof said !== "string") return "";
+  const text = said.trim();
+  return text && !/^(?:n|no|nope|reject|rejected|deny|denied|decline|declined)$/i.test(text) ? `: ${text.slice(0, 500)}` : "";
+}
 
 /** A person's answer that approves something: "approve", "yes", `{ approved: true }`, ... */
 function isApproval(answer: unknown): boolean {
@@ -839,6 +849,7 @@ export class HaloRuntime {
       }
       if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
       ctx.stageIndex = snap.nextStage;
+      this.config.recorder?.({ kind: stage.kind === "interrupt" ? "yield" : "listen", target: snap.waitingFor, value: payload });
       this.deliver(stage, ctx, payload, snap.waitingFor);
       this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
       // The paused stage is done now that it has its response.
@@ -940,6 +951,7 @@ export class HaloRuntime {
       // No handler for this yield/listen: save the run so signal() can continue it.
       const i = ctx.stageIndex;
       ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message, id: crypto.randomUUID() };
+      ctx.meta.pauses = (ctx.meta.pauses ?? 0) + 1;
       await this.runStore.save(ctx.meta.runId, this.toSnapshot(ctx, i, err.waitingFor));
       this.emit({ type: "paused", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index: i, waitingFor: err.waitingFor });
       return "paused";
@@ -1539,6 +1551,7 @@ export class HaloRuntime {
     callOptions: Record<string, unknown>,
   ): Promise<{ value: unknown; tokens?: { prompt: number; completion: number } }> {
     const maxSteps = Number(callOptions.max_steps ?? agent.params.max_steps ?? DEFAULT_MAX_STEPS);
+    const resultChars = Number(callOptions.tool_result_chars ?? agent.params.tool_result_chars ?? DEFAULT_TOOL_RESULT_CHARS);
     const hooks = this.guardHooks(ctx);
     const tokens = { prompt: 0, completion: 0 };
     let shownFrom = messages.length - 1;
@@ -1547,7 +1560,7 @@ export class HaloRuntime {
       if (steps.pending?.length) {
         const calls = steps.pending;
         steps.pending = undefined;
-        await this.runToolCalls(agent, kit, calls, messages, steps, ctx, hooks);
+        await this.runToolCalls(agent, kit, calls, messages, steps, ctx, hooks, resultChars);
       }
       const last = steps.done >= maxSteps;
       if (last) messages.push({ role: "user", content: `You have used all ${maxSteps} tool steps. Answer now, without calling tools.` });
@@ -1564,17 +1577,17 @@ export class HaloRuntime {
       }
       messages.push({ role: "assistant", content: r.text ?? "", toolCalls: r.toolCalls, raw: r.rawMessage });
       steps.done++;
-      await this.runToolCalls(agent, kit, r.toolCalls, messages, steps, ctx, hooks);
+      await this.runToolCalls(agent, kit, r.toolCalls, messages, steps, ctx, hooks, resultChars);
     }
   }
 
   /** Run a turn's tool calls in order, adding each result to the conversation. */
-  private async runToolCalls(agent: Agent, kit: ToolKit, calls: LLMToolCall[], messages: LLMMessage[], steps: { done: number }, ctx: ExecutionContext, hooks: PolicyHooks): Promise<void> {
+  private async runToolCalls(agent: Agent, kit: ToolKit, calls: LLMToolCall[], messages: LLMMessage[], steps: { done: number }, ctx: ExecutionContext, hooks: PolicyHooks, resultChars: number): Promise<void> {
     for (let i = 0; i < calls.length; i++) {
       const call = calls[i]!;
       let content: string;
       try {
-        content = await this.agentTool(agent, kit, call, ctx, hooks);
+        content = await this.agentTool(agent, kit, call, ctx, hooks, resultChars);
       } catch (err) {
         if (err instanceof Pause && err.waitingFor === "approval") {
           // Keep the conversation and the calls still to run, so approving picks up right here.
@@ -1587,7 +1600,7 @@ export class HaloRuntime {
   }
 
   /** Run one tool call an agent asked for, and say what happened in words the model can act on. */
-  private async agentTool(agent: Agent, kit: ToolKit, call: LLMToolCall, ctx: ExecutionContext, hooks: PolicyHooks): Promise<string> {
+  private async agentTool(agent: Agent, kit: ToolKit, call: LLMToolCall, ctx: ExecutionContext, hooks: PolicyHooks, resultChars: number): Promise<string> {
     const entry = kit.byName.get(call.name);
     const report = (decision: Extract<RuntimeEvent, { type: "agent_tool" }>["decision"], detail?: string) =>
       this.emit({ type: "agent_tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, target: entry?.target ?? call.name, args: this.guard.forLog(agent, call.args), decision, detail });
@@ -1607,7 +1620,7 @@ export class HaloRuntime {
     if (check !== "allow") {
       const answer = await this.approval(agent, entry.target, call.args, check.approve, ctx);
       if (!isApproval(answer)) {
-        const reason = isPlainObject(answer) && typeof answer.reason === "string" ? `: ${answer.reason}` : typeof answer === "string" && answer.trim().length > 3 && !/^\s*(?:n|no|reject|rejected|deny)\s*$/i.test(answer) ? `: ${answer.trim()}` : "";
+        const reason = declineReason(answer);
         report("declined", reason.slice(2) || undefined);
         return `A person declined this call${reason}. Don't try it again; finish without it, or say what you need.`;
       }
@@ -1623,8 +1636,7 @@ export class HaloRuntime {
       return `Error: ${message}`;
     }
     report(decision);
-    const limit = Number(agent.params.tool_result_chars ?? DEFAULT_TOOL_RESULT_CHARS);
-    const text = clip(typeof result === "string" ? result : (JSON.stringify(result) ?? "null"), limit);
+    const text = clip(typeof result === "string" ? result : (JSON.stringify(result) ?? "null"), resultChars);
     // A tool result is input to the model: the agent's input policies redact or withhold it.
     try {
       return this.guard.checkInput(agent, text, hooks);
@@ -1647,7 +1659,7 @@ export class HaloRuntime {
       this.config.recorder?.({ kind: "approval", target, value: answer });
       return answer;
     }
-    const mock = this.mockFor("approval", target + "?");
+    const mock = this.mockFor(target + "?", "approval");
     const req: InterruptRequest = { pipeline: ctx.pipeline.name, message, channel: "approval", attachments: [args], args: [], named: { target, args, policy, agent: agent.name }, current: ctx.current, context: this.snapshot(ctx) };
     const recorded = (answer: unknown) => (this.config.recorder?.({ kind: "approval", target, value: answer }), answer);
     if (mock) return recorded(await mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current }));
@@ -1900,13 +1912,16 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId, pauses: this.topMeta(ctx).pauses ?? 0 }, this.toolServices()), mocked: false },
     );
 
     const latencyMs = Math.round(performance.now() - t0);
     this.config.recorder?.({ kind: "tool", target, value: result.value });
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: chosenBy } : {}) });
-    this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output: result.value, latencyMs, mocked: result.mocked });
+    // A result an agent chose to fetch is logged as its policies let it out (as the agent itself sees it).
+    const chooser = chosenBy ? this.agents.get(chosenBy) : undefined;
+    const output = chooser ? this.guard.forLog(chooser, result.value) : result.value;
+    this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output, latencyMs, mocked: result.mocked });
     return result.value;
   }
 
@@ -2091,7 +2106,9 @@ export class HaloRuntime {
       const timer = setTimeout(() => controller.abort(new TimeoutError(`No response to |! yield(...) within ${req.timeoutMs}ms`)), req.timeoutMs);
       work = raceAbort(work, controller.signal).finally(() => (clearTimeout(timer), controller.abort(DONE)));
     }
-    this.deliver(stage, ctx, await work, "yield");
+    const answer = await work;
+    this.config.recorder?.({ kind: "yield", target: "yield", value: answer });
+    this.deliver(stage, ctx, answer, "yield");
   }
 
   /** Store a human's (or event source's) response for a yield or listen stage. */
@@ -2124,6 +2141,7 @@ export class HaloRuntime {
       throw new Pause(target);
     }
     const event = await raceAbort(Promise.resolve(handler({ pipeline: ctx.pipeline.name, target, current: ctx.current, context: this.snapshot(ctx) })), ctx.signal);
+    this.config.recorder?.({ kind: "listen", target, value: event });
     this.deliver(stage, ctx, event, target);
   }
 }

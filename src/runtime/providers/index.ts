@@ -169,7 +169,8 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
         description:
           "Run a snippet. It is the body of a function with `input` available; `return` a JSON-serializable value to get it back as `result` (printed output goes to stdout). In JS/TS, await works and modules load with await import(). Returns { stdout, stderr, exitCode, result, timedOut }.",
         params: object({ code: { type: "string", description: "The snippet: a function body that returns its answer." }, input: { ...anyValue, description: "Passed to the snippet as `input`." } }, ["code"]),
-        effect: "write",
+        // Arbitrary code can reach the network and start programs: as much as Bash.run can.
+        effect: "external",
       },
     ],
   },

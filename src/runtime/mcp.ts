@@ -472,7 +472,7 @@ const clients = new Map<string, McpClient>();
 type Config = (name: string | number) => unknown;
 
 /** Where a declaration's server lives: a URL (positional or `url:`) or a command. */
-export function mcpTarget(label: string, config: Config): McpTarget {
+export function mcpTarget(label: string, config: Config, environ: Record<string, string | undefined> = process.env): McpTarget {
   const first = config(0);
   const url = config("url") ?? (typeof first === "string" && /^https?:\/\//i.test(first.trim()) ? first.trim() : undefined);
   if (url !== undefined) {
@@ -492,11 +492,12 @@ export function mcpTarget(label: string, config: Config): McpTarget {
   // The child sees only PATH and HOME, plus what the declaration passes on.
   const env: Record<string, string> = {};
   for (const name of ["PATH", "HOME"]) if (process.env[name] !== undefined) env[name] = process.env[name]!;
+  // Passed-on variables come from the runtime's environment (RuntimeConfig.env), like Env.NAME does.
   const pass = config("env");
   if (Array.isArray(pass)) {
     for (const name of pass) {
       if (typeof name !== "string") throw new HaloError(`Tool "${label}": env: lists variable names, e.g. env: ["GITHUB_TOKEN"]`, { code: "TOOL_CONFIG" });
-      if (process.env[name] !== undefined) env[name] = process.env[name]!;
+      if (environ[name] !== undefined) env[name] = environ[name]!;
     }
   } else if (pass && typeof pass === "object") {
     for (const [k, v] of Object.entries(pass)) if (v !== undefined && v !== null) env[k] = typeof v === "string" ? v : JSON.stringify(v);
@@ -508,8 +509,8 @@ export function mcpTarget(label: string, config: Config): McpTarget {
 }
 
 /** The shared client for a declaration's config (a new one when the config differs). */
-export function mcpClient(label: string, config: Config, fetchFn: typeof fetch = fetch): McpClient {
-  const target = mcpTarget(label, config);
+export function mcpClient(label: string, config: Config, fetchFn: typeof fetch = fetch, environ?: Record<string, string | undefined>): McpClient {
+  const target = mcpTarget(label, config, environ);
   const timeoutMs = Number(config("timeout_ms") ?? DEFAULT_TIMEOUT_MS);
   // Hash the config, so keys and tokens don't sit in the map's keys as plain text.
   const key = String(Bun.hash(JSON.stringify([target, timeoutMs])));
@@ -606,7 +607,7 @@ function toolArguments(call: ToolCall, tool: McpToolInfo | undefined): Record<st
 }
 
 export const mcpProvider: ToolProvider = async (call, services) => {
-  const client = mcpClient(call.tool.name, call.config, services.fetch);
+  const client = mcpClient(call.tool.name, call.config, services.fetch, services.env);
   const signal = call.signal;
   switch (call.method) {
     case "list_tools":
@@ -636,10 +637,11 @@ export const mcpProvider: ToolProvider = async (call, services) => {
 export const MCP_INFO: ProviderInfo = {
   description: "A Model Context Protocol server's tools, over stdio (a command) or Streamable HTTP (url:).",
   methods: async (ctx: ToolInfoContext, services: ToolServices): Promise<ToolMethod[]> => {
-    const client = mcpClient(ctx.tool.name, ctx.config, services.fetch);
-    const methods = (await client.listTools(ctx.signal)).map(mcpToolMethod);
+    const client = mcpClient(ctx.tool.name, ctx.config, services.fetch, services.env);
+    // A server tool named like one of Halo's own methods can't be called (Halo's wins), so it isn't offered.
+    const methods = (await client.listTools(ctx.signal)).filter((t) => !BUILTIN_METHODS.has(t.name)).map(mcpToolMethod);
     // Resources are offered to agents only when the server has some.
-    if (client.server?.capabilities.resources && !methods.some((m) => m.name === "read_resource")) {
+    if (client.server?.capabilities.resources) {
       methods.push(
         { name: "list_resources", description: "List the resources this server offers (uri, name, description).", params: { type: "object", properties: {} }, effect: "read" },
         { name: "read_resource", description: "Read one resource by its uri.", params: { type: "object", properties: { uri: { type: "string", description: "The resource's uri" } }, required: ["uri"] }, effect: "read" },

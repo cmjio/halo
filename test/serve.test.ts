@@ -447,6 +447,44 @@ describe("watches, Slack buttons, and MCP", () => {
     }
   });
 
+  test("/mcp refuses other sites' pages, like /api does", async () => {
+    const s = await serve();
+    try {
+      const res = await fetch(`${s.url}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Host: "evil.example:80" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect(res.status).toBe(403);
+      const form = await fetch(`${s.url}/mcp`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect(form.status).toBe(403);
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test("a Slack tool's button answers only the run's next pause, never an approval", async () => {
+    const secret = "shh";
+    const s = await serve({ slack: { signingSecret: secret } });
+    try {
+      const runId = s.start("Draft", { topic: "t" }, "test");
+      await s.settled(runId);
+      const click = (value: object) => {
+        const ts = Math.floor(Date.now() / 1000);
+        const body = new URLSearchParams({ payload: JSON.stringify({ actions: [{ value: JSON.stringify(value) }], user: { username: "ana" } }) }).toString();
+        const sig = `v0=${createHmac("sha256", secret).update(`v0:${ts}:${body}`).digest("hex")}`;
+        return fetch(`${s.url}/slack/actions`, { method: "POST", headers: { "X-Slack-Request-Timestamp": String(ts), "X-Slack-Signature": sig }, body });
+      };
+      // Posted after an earlier pause: stale, so ignored.
+      await click({ runId, after: 1, answer: "approve" });
+      await Bun.sleep(30);
+      expect(s.calls).not.toContain("publish");
+      // Posted before this pause (the run had paused 0 times): answers it.
+      await click({ runId, after: 0, answer: "approve" });
+      await s.settled(runId);
+      await Bun.sleep(30);
+      expect(s.calls).toContain("publish");
+    } finally {
+      await s.stop();
+    }
+  });
+
   test("pipelines are MCP tools at /mcp, behind the token", async () => {
     const s = await serve({ token: "Env.T", env: { T: "tok" } });
     const rpc = (body: unknown, token = "tok") =>
