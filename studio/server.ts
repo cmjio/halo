@@ -1,38 +1,29 @@
 import { Database } from "bun:sqlite";
 import { serve } from "bun";
-
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { mkdirSync } from "node:fs";
 
-// The Studio UI expects the API on this port.
-const PORT = 4000;
+// The UI looks for the API here (set VITE_HALO_API for the UI if you change it).
+const PORT = Number(Bun.env.HALO_STUDIO_PORT ?? 4000);
 // The CLI records runs to .halo/telemetry.db in the directory it runs in; start Studio from there
 // (or set HALO_TELEMETRY to that file).
 const DB_PATH = Bun.env.HALO_TELEMETRY ?? path.resolve(".halo/telemetry.db");
 
-// Ensure DB exists
-let db: Database;
-try {
-  mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  db = new Database(DB_PATH, { create: true });
-} catch (e) {
-  console.error("Failed to open DB", e);
-  process.exit(1);
+/**
+ * Read from the telemetry database. It is opened per request (read-only), so
+ * Studio sees runs recorded after it started, and keeps working if the file
+ * is deleted and recreated. No database yet means no runs.
+ */
+function query<T>(sql: string, params: Record<string, string> = {}): T[] {
+  if (!existsSync(DB_PATH)) return [];
+  const db = new Database(DB_PATH, { readonly: true });
+  try {
+    const hasTable = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'telemetry'").get();
+    return hasTable ? (db.query(sql).all(params) as T[]) : [];
+  } finally {
+    db.close();
+  }
 }
-
-// Ensure table exists in case the runtime hasn't created it yet
-db.run(`
-  CREATE TABLE IF NOT EXISTS telemetry (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT,
-    timestamp INTEGER,
-    type TEXT,
-    stage TEXT,
-    payload TEXT,
-    duration_ms INTEGER,
-    tokens INTEGER
-  )
-`);
 
 serve({
   port: PORT,
@@ -53,29 +44,29 @@ serve({
       return new Response(null, { headers });
     }
 
-    // Get all runs (grouped by run_id, sorted by start time)
+    // Recent runs, newest first
     if (url.pathname === "/api/runs") {
-      const runs = db.query(`
-        SELECT run_id, MIN(timestamp) as start_time, MAX(timestamp) as end_time, COUNT(*) as event_count
-        FROM telemetry
-        GROUP BY run_id
+      // Pipeline name (from stream_start), final status and cost (from the last stream_end or error).
+      const runs = query(`
+        SELECT t.run_id, MIN(t.timestamp) AS start_time, MAX(t.timestamp) AS end_time, COUNT(*) AS event_count,
+          (SELECT stage FROM telemetry s WHERE s.run_id = t.run_id AND s.type = 'stream_start' ORDER BY s.id LIMIT 1) AS pipeline,
+          (SELECT CASE WHEN e.type = 'error' THEN 'error' ELSE json_extract(e.payload, '$.status') END
+             FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS status,
+          (SELECT json_extract(e.payload, '$.cost')
+             FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS cost
+        FROM telemetry t
+        GROUP BY t.run_id
         ORDER BY start_time DESC
         LIMIT 50
-      `).all();
+      `);
       return new Response(JSON.stringify(runs), { headers });
     }
 
-    // Get specific run events
+    // One run's events, in order
     if (url.pathname.startsWith("/api/runs/")) {
       const runId = url.pathname.split("/").pop();
       if (!runId) return new Response("Missing run_id", { status: 400 });
-      
-      const events = db.query(`
-        SELECT * FROM telemetry 
-        WHERE run_id = $runId 
-        ORDER BY timestamp ASC, id ASC
-      `).all({ $runId: runId });
-      
+      const events = query(`SELECT * FROM telemetry WHERE run_id = $runId ORDER BY timestamp ASC, id ASC`, { $runId: runId });
       return new Response(JSON.stringify(events), { headers });
     }
 

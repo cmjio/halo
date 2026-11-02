@@ -31,7 +31,7 @@ export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow 
   switch (e.type) {
     case "run":
       if (e.status === "start") return { runId: e.runId, timestamp: now, type: "stream_start", stage: e.pipeline, payload: null };
-      if (e.status === "error") return { runId: e.runId, timestamp: now, type: "error", stage: e.pipeline, payload: { error: e.error } };
+      if (e.status === "error") return { runId: e.runId, timestamp: now, type: "error", stage: e.pipeline, payload: { error: e.error, cost: e.cost } };
       return { runId: e.runId, timestamp: now, type: "stream_end", stage: e.pipeline, payload: { status: e.status, output: e.output, cost: e.cost }, durationMs: e.durationMs };
     case "stage":
       return e.status === "start"

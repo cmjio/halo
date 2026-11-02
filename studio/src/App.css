@@ -71,11 +71,48 @@ body {
   border-left: 3px solid var(--accent);
 }
 
+.run-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.run-pipeline {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.run-status.completed { color: var(--success); border-color: var(--success); }
+.run-status.error { color: var(--error); border-color: var(--error); }
+.run-status.halted,
+.run-status.paused { color: #f59e0b; border-color: #f59e0b; }
+
 .run-id {
   font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.payload-field h4 {
+  margin: 12px 0 4px;
+}
+
+.payload-empty {
+  color: var(--text-muted);
 }
 
 .run-meta {
