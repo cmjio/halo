@@ -19,13 +19,26 @@ for (const el of $$("code[data-highlight-json]")) {
   el.innerHTML = escapeHtml(el.textContent ?? "").replace(/"([^"]*)"(\s*:)?/g, (_, s: string, colon?: string) => (colon ? `<span class="t-type">"${s}"</span>${colon}` : `<span class="t-string">"${s}"</span>`));
 }
 $("[data-facts]")!.innerHTML = [
-  [data.counts.providers, "built-in tool providers"],
-  [data.counts.packages, "installable packages"],
-  [data.counts.examples, "working examples"],
-  [data.counts.tests, "passing tests"],
-].filter(([n]) => n)
-  .map(([n, label]) => `<li><b>${n}</b><span>${label}</span></li>`)
+  [data.counts.providers, "Built-in tool providers"],
+  [data.counts.packages, "Installable packages"],
+  [data.counts.examples, "Working examples"],
+  [data.counts.tests, "Passing tests"],
+]
+  .filter(([n]) => n)
+  .map(([n, label]) => `<div><dt>${label}</dt><dd>${n}</dd></div>`)
   .join("");
+
+// The hero listing: numbered lines, with pins on the lines its margin notes explain.
+for (const code of $$("code[data-annotated]")) {
+  const notes = $$("li[data-line]", code.closest(".listing")!).map((li) => Number(li.dataset.line));
+  const lines = highlight(code.textContent ?? "").split("\n");
+  code.innerHTML = lines
+    .map((line, i) => {
+      const pin = notes.indexOf(i + 1);
+      return `<span class="ln${pin >= 0 ? " noted" : ""}" data-n="${i + 1}">${line || " "}${pin >= 0 ? `<span class="pin" aria-label="note ${pin + 1}">${pin + 1}</span>` : ""}</span>`;
+    })
+    .join("");
+}
 
 // ── The recorded run ──
 
@@ -122,19 +135,22 @@ $("[data-plan]")!.innerHTML = `<span class="muted">$ halo plan examples/75-resea
 // ── Registry ──
 
 $("[data-packages]")!.innerHTML = data.packages
-  .map(
-    (p) => `<article class="pkg">
-      <div class="pkg-top"><h3>${p.name}</h3><span class="ver">${p.version}</span></div>
-      <p>${escapeHtml(p.description)}</p>
-      ${p.providers
-        .map(
-          (pr) => `<span class="kind ${pr.kind}">${pr.kind} · tool X : ${pr.name}()</span>
-          ${pr.methods.length ? `<div class="methods">${pr.methods.map((m) => `<span class="m ${m.effect}" title="${escapeHtml(m.description)} (${m.effect})">${m.name}</span>`).join("")}</div>` : `<div class="methods"><span class="m">methods listed by its server at run time</span></div>`}`,
-        )
-        .join("")}
-      <div class="perms">${p.permissionLines.map((l) => (l.includes("YES") ? `<span class="code-yes">${escapeHtml(l)}</span>` : escapeHtml(l))).join("<br>")}</div>
-    </article>`,
-  )
+  .map((p) => {
+    const kinds = [...new Set(p.providers.map((pr) => pr.kind))].join(" · ");
+    const methods = p.providers
+      .map((pr) =>
+        pr.methods.length
+          ? `<div class="methods">${pr.methods.map((m) => `<span class="m ${m.effect}" title="${escapeHtml(m.description)} (${m.effect})">${m.name}</span>`).join("")}</div>`
+          : `<div class="methods"><span class="m">listed by its server at run time</span></div>`,
+      )
+      .join("");
+    return `<div class="row" role="row">
+      <div role="cell"><h3>${p.name}</h3><span class="ver">${p.version} · tool X : ${p.providers.map((pr) => `${pr.name}()`).join(", ")}</span></div>
+      <div role="cell" class="kind ${p.providers[0]!.kind}">${kinds}</div>
+      <div role="cell"><p>${escapeHtml(p.description)}</p>${methods}</div>
+      <div role="cell" class="perms">${p.permissionLines.map((l) => (l.includes("YES") ? `<span class="code-yes">${escapeHtml(l)}</span>` : escapeHtml(l))).join("<br>")}</div>
+    </div>`;
+  })
   .join("");
 $("[data-builtins]")!.textContent = Object.keys(data.providers)
   .filter((n) => !["GET", "SQL"].includes(n))
@@ -149,10 +165,10 @@ examplesEl.innerHTML = data.examples
       .filter(([, on]) => on)
       .map(([k]) => k)
       .join(" ")}">
-      <span class="num">${String(e.number).padStart(2, "0")} · ${e.file.replace(/^\d+-|\.halo$/g, "")}</span>
-      <h3>${escapeHtml(e.title || e.file)}</h3>
+      <span class="num">${String(e.number).padStart(2, "0")}</span>
+      <h3>${escapeHtml(e.title || e.file)}<small>${e.file}</small></h3>
       <p>${escapeHtml(e.about)}</p>
-      <button data-open="${e.file}">Open in the playground →</button>
+      <button data-open="${e.file}">Open →</button>
     </article>`,
   )
   .join("");
@@ -188,7 +204,7 @@ function load(file: string, scroll = false) {
   src.value = ex.source;
   src.scrollTop = 0;
   update();
-  if (scroll) $("#playground")!.scrollIntoView();
+  if (scroll) $("#c06")!.scrollIntoView();
 }
 examplesEl.addEventListener("click", (ev) => {
   const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-open]");
@@ -282,7 +298,7 @@ function renderPlan(p: Plan): string {
     .map((s) => {
       const meta = [s.model, s.times, s.maxCost !== undefined ? `≤ $${s.maxCost.toFixed(4)}` : ""].filter(Boolean).join(" · ");
       const eff = s.effects.length
-        ? `<div class="eff">${s.effects.map((e) => `<span class="${e.effect}${e.approval ? " approve" : ""}" title="${e.effect}${e.approval ? `, needs approval (${e.approval})` : ""}">${e.via ? "" : "→ "}${e.target}${e.approval ? " ✋" : ""}</span>`).join("")}</div>`
+        ? `<div class="eff">${s.effects.map((e) => `<span class="${e.effect}${e.approval ? " approve" : ""}" title="${e.effect}${e.approval ? `, needs approval (${e.approval})` : ""}">${e.via ? "" : "→ "}${e.target}${e.approval ? " · approval" : ""}</span>`).join("")}</div>`
         : "";
       const notes = s.notes.length ? `<div class="meta">${s.notes.map(escapeHtml).join(" · ")}</div>` : "";
       return `<li class="${s.kind}"><div class="lbl">${escapeHtml(s.label)}</div>${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ""}${notes}${eff}</li>`;
