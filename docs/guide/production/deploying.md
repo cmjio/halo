@@ -64,7 +64,7 @@ Multi-agent pipelines can take minutes. If your HTTP host has a request time lim
 | Variable | Used for |
 |---|---|
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `REPLICATE_API_TOKEN` | Model providers |
-| `HALO_API_KEY` (legacy `LANGLY_API_KEY`) | Fallback for any provider without its own key |
+| `HALO_API_KEY` | Fallback for any provider without its own key |
 | `OLLAMA_HOST` | Ollama server (default `http://localhost:11434`) |
 | Whatever your tools read with `Env.X` | e.g. `GITHUB_TOKEN`, `SLACK_BOT_TOKEN`, `RESEND_API_KEY`, `DATABASE_URL` |
 

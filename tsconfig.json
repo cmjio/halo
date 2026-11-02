@@ -25,7 +25,6 @@
   "include": [
     "test/**/*.ts",
     "src/**/*.ts",
-    "langly.ts",
     "index.ts"
   ],
   "exclude": [

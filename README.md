@@ -129,7 +129,7 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 | Replicate | `replicate/*`, `rep/*` | `REPLICATE_API_TOKEN` |
 | Ollama (local) | `ollama/*`, `local/*` | none (`OLLAMA_HOST` to change the host) |
 
-`HALO_API_KEY` (or `--api-key`) is used for any provider without its own key; `LANGLY_API_KEY` is still read for compatibility.
+`HALO_API_KEY` (or `--api-key`) is used for any provider without its own key.
 
 ## 🛠 Tools
 

@@ -44,7 +44,7 @@ Each provider reads its own variable. Set the ones for the models you use:
 | `replicate/`, `rep/` | `REPLICATE_API_TOKEN` or `REPLICATE_API_KEY` |
 | `ollama/`, `local/` | none (uses `OLLAMA_HOST`, default `http://localhost:11434`) |
 
-If a provider has no key of its own, Halo uses the `--api-key` flag, then `HALO_API_KEY`, then the legacy `LANGLY_API_KEY`. Bun loads `.env` automatically.
+If a provider has no key of its own, Halo uses the `--api-key` flag, then `HALO_API_KEY`. Bun loads `.env` automatically.
 
 ```bash
 cp .env.example .env   # then fill in ANTHROPIC_API_KEY

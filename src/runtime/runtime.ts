@@ -1150,7 +1150,7 @@ export class HaloRuntime {
 
   private apiKeyFor(adapter: ProviderAdapter): string | undefined {
     const fromEnv = adapter.envKeys?.map((k) => this.env[k]).find(Boolean);
-    return this.config.apiKeys?.[adapter.id] ?? fromEnv ?? this.config.apiKey ?? this.env.HALO_API_KEY ?? this.env.LANGLY_API_KEY ?? undefined;
+    return this.config.apiKeys?.[adapter.id] ?? fromEnv ?? this.config.apiKey ?? this.env.HALO_API_KEY ?? undefined;
   }
 
   private isModelAvailable(modelId: string): boolean {

@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { parse } from "../src/parser/index";
 import type { CallStage, ExpressionStage } from "../src/parser/types";
 
-describe("Langly Parser", () => {
+describe("Halo Parser", () => {
   // ── Helper ────
 
   async function readExample(name: string): Promise<string> {

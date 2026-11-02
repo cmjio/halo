@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { parse } from "../src/parser/index";
 import { HaloRuntime } from "../src/runtime/runtime";
 
-describe("Langly Runtime", () => {
+describe("Halo Runtime", () => {
   // ── Helper ────//
 
   async function readExample(name: string): Promise<string> {
@@ -12,15 +12,15 @@ describe("Langly Runtime", () => {
   // ── Basic Tests ────//
 
   test("loads 01-hello.halo AST", async () => {
-    const savedKey = Bun.env.LANGLY_API_KEY;
-    delete Bun.env.LANGLY_API_KEY;
+    const savedKey = Bun.env.HALO_API_KEY;
+    delete Bun.env.HALO_API_KEY;
     const ast = parse(await readExample("01-hello.halo"));
     const rt = new HaloRuntime({ env: {} });
     rt.load(ast);
     await expect(
       rt.execute("HelloWorld", { name: "Alice" }),
     ).rejects.toThrow("No API key");
-    if (savedKey) Bun.env.LANGLY_API_KEY = savedKey;
+    if (savedKey) Bun.env.HALO_API_KEY = savedKey;
   });
 
   test("executes HelloWorld pipeline (mocked)", async () => {
@@ -74,15 +74,15 @@ pipeline Test(x: String) -> Result:
   });
 
   test("throws when no API key and no mock", async () => {
-    const savedKey = Bun.env.LANGLY_API_KEY;
-    delete Bun.env.LANGLY_API_KEY;
+    const savedKey = Bun.env.HALO_API_KEY;
+    delete Bun.env.HALO_API_KEY;
     const ast = parse(await readExample("01-hello.halo"));
     const rt = new HaloRuntime({ env: {} });
     rt.load(ast);
     await expect(rt.execute("HelloWorld", { name: "Alice" })).rejects.toThrow(
       "No API key set",
     );
-    if (savedKey) Bun.env.LANGLY_API_KEY = savedKey;
+    if (savedKey) Bun.env.HALO_API_KEY = savedKey;
   });
 
   test("end-to-end: parse + load + execute with mock", async () => {
@@ -174,7 +174,7 @@ pipeline Chain2(x: String) -> Result:
   test("real LLM call with API key", async () => {
     // Use whichever real key is available, with a cheap model from that provider.
     const env = Bun.env;
-    const fallback = env.HALO_API_KEY || env.LANGLY_API_KEY;
+    const fallback = env.HALO_API_KEY;
     const pick = env.ANTHROPIC_API_KEY || fallback?.startsWith("sk-ant-")
       ? { model: "anthropic/claude-haiku-4-5", key: env.ANTHROPIC_API_KEY || fallback }
       : env.OPENAI_API_KEY || (fallback && fallback !== "test_key")

@@ -41,3 +41,7 @@ editors/zed/grammars/halo/parser.o
 
 # Halo local state (vector store, checkpoints, paused runs, telemetry)
 .halo/
+
+# VitePress build cache
+docs/.vitepress/cache/
+docs/.vitepress/dist/

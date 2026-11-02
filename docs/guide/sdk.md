@@ -40,7 +40,7 @@ result.context.trace;        // hash-chained stage trace (check it with verifyTr
 | `onEvent` | Every [runtime event](./integrations/telemetry-and-tracing.md) |
 | `logger` | Replaces `console` for logs and policy warnings |
 
-Key lookup order for each provider: `apiKeys[id]`, then the provider's env var (`ANTHROPIC_API_KEY`, …), then `apiKey`, then `HALO_API_KEY`, then `LANGLY_API_KEY`.
+Key lookup order for each provider: `apiKeys[id]`, then the provider's env var (`ANTHROPIC_API_KEY`, …), then `apiKey`, then `HALO_API_KEY`.
 
 ## Runtime methods
 

@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { parse } from "../src/parser/index";
 import { HaloRuntime } from "../src/runtime/runtime";
 
-describe("Langly Features - Runtime", () => {
+describe("Halo Features - Runtime", () => {
   // ── Gate Conditions ─────
 
   test("gate: skips stages when condition is false", async () => {

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "langly",
+      "name": "halo",
       "dependencies": {
         "antlr4ng": "^3.0.16",
         "vscode-languageserver": "^9.0.1",

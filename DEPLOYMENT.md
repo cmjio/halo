@@ -63,7 +63,7 @@ Bun.serve({
 | `OPENAI_API_KEY` | `openai/…`, `gpt-…` models |
 | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `google/…`, `gemini-…` models |
 | `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `REPLICATE_API_TOKEN` | those providers |
-| `HALO_API_KEY` (legacy `LANGLY_API_KEY`) | fallback for any provider without its own key |
+| `HALO_API_KEY` | fallback for any provider without its own key |
 | `OLLAMA_HOST` | Ollama server |
 | anything read with `Env.X` in a tool | e.g. `GITHUB_TOKEN`, `SLACK_BOT_TOKEN`, `RESEND_API_KEY`, `DATABASE_URL` |
 

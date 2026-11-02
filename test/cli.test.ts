@@ -11,7 +11,7 @@ afterAll(() => rmSync(work, { recursive: true, force: true }));
 
 function cliIn(cwd: string, ...args: string[]) {
   const argv = args.map((a) => (a.startsWith("examples/") || a === "examples" ? join(root, a) : a));
-  const p = Bun.spawnSync(["bun", join(root, "index.ts"), ...argv], { cwd, env: { ...Bun.env, NO_COLOR: "1", HALO_API_KEY: "", LANGLY_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "" } });
+  const p = Bun.spawnSync(["bun", join(root, "index.ts"), ...argv], { cwd, env: { ...Bun.env, NO_COLOR: "1", HALO_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "" } });
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
 }
 
