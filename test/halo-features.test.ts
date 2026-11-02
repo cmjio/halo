@@ -509,3 +509,51 @@ pipeline P(x: String) -> Result:
     expect(all).toEqual(expect.arrayContaining(["pipeline", "agent", "loop", "A", "P"]));
   });
 });
+
+describe("paths, System.Value, memory filters, and corrected violations", () => {
+  test("a path on a list maps over its items; numbers pick an item; length counts", async () => {
+    const r = rt(
+      `agent A [openai/gpt-4o]
+       pipeline P(items: List) -> Result:
+         items
+           |? (items.length > 1 && context.data.items.0.title == "a" && items.1.tags.0 == "y")
+           |> A.say("titles {{items.title}} / first {{items.0.title}} / count {{items.length}}", context.data.items.title)`,
+      { "A.say": (r: MockRequest) => `${r.args[0]} | ${JSON.stringify(r.args[1])}` },
+    );
+    const out = await r.execute("P", { items: [{ title: "a", tags: ["x"] }, { title: "b", tags: ["y"] }] });
+    expect(out).toBe('titles [\n  "a",\n  "b"\n] / first a / count 2 | ["a","b"]');
+  });
+
+  test("System.Value makes a value the flowing value", async () => {
+    const r = rt(`agent A [openai/gpt-4o]\npipeline P(x: String) -> Result:\n  x |> A.draft() as draft |> A.save() |> System.Value(context.data.draft)`, { "A.draft": "the draft", "A.save": { saved: true } });
+    expect(await r.execute("P", { x: "a" })).toBe("the draft");
+    expect(messages(`pipeline P(x: String) -> Result:\n  x |> System.Value(x)`)).toEqual([]);
+    await expect(rt(`pipeline P(x: String) -> Result:\n  x |> System.Value(x, x)`).execute("P", { x: "a" })).rejects.toThrow("System.Value takes exactly one value");
+  });
+
+  test("memory search can leave out tags and return the newest first", async () => {
+    const r = rt(
+      `store M : VectorStore(namespace: "m")
+       pipeline Add(text: String, tag: String) -> Result:
+         text |> M.log(content: text, tags: ["review", tag])
+       pipeline Find(skip: String) -> Result:
+         skip |> M.search(query: "zzz", tags: ["review"], exclude_tags: [skip], order: "recent", limit: 5)`,
+    );
+    for (const [text, tag] of [["first", "m1"], ["second", "m2"], ["third", "m1"]]) await r.execute("Add", { text, tag });
+    const hits = (await r.execute("Find", { skip: "m2" })) as Array<{ content: string }>;
+    expect(hits.map((h) => h.content)).toEqual(["third", "first"]);
+    await expect(rt(`store M : VectorStore()\npipeline F(x: String) -> Result:\n  x |> M.search(query: x, order: "oldest")`).execute("F", { x: "a" })).rejects.toThrow(`order must be "score" or "recent"`);
+    await r.close();
+  });
+
+  test("a violation fixed by @correct stays in the audit trail, marked corrected", async () => {
+    let n = 0;
+    const r = rt(`policy Short : MaxWords(3)\n@correct(1)\nagent W [openai/gpt-4o]\n  requires Short\npipeline P(x: String) -> Result:\n  x |> W.write()`, {
+      "W.write": () => (++n === 1 ? "one two three four" : "short"),
+    });
+    const result = await r.run("P", { x: "a" });
+    expect(result.output).toBe("short");
+    expect(result.context.meta.violations).toEqual([{ policy: "Short", rule: "MaxWords", message: "Content exceeds max words: 4 > 3", phase: "output", corrected: true }]);
+  });
+});
+

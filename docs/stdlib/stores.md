@@ -25,7 +25,7 @@ pipeline Ask(question: String) -> Result:
 | Method | Arguments | Returns |
 |---|---|---|
 | `log` / `insert` / `add` / `upsert` / `save` / `store` | `content:` (or the input), `tags:`, any other named args as metadata | the saved entry: `{ stored, namespace, id, content, tags, metadata, createdAt }` |
-| `search` / `query` / `find` / `recall` / `similar` | `query:` (or the input), `limit` (5), `min_score` (0), `tags:` | a list of `{ id, content, tags, metadata, createdAt, score }` |
+| `search` / `query` / `find` / `recall` / `similar` | `query:` (or the input), `limit` (5), `min_score` (0), `tags:` (must have all), `exclude_tags:` (must have none), `order:` (`"score"`, or `"recent"` for newest first) | a list of `{ id, content, tags, metadata, createdAt, score }` |
 | `delete` / `forget` | `id:` or `tags:` | `{ deleted }` |
 | `count` | — | a number |
 

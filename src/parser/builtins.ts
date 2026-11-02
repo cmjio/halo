@@ -6,7 +6,7 @@ export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct"
 export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any"] as const;
 
 /** System methods with built-in behavior. */
-export const SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick"] as const;
+export const SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick", "Value"] as const;
 
 /** System methods that emit an event to `onSystemEvent` (logged when no handler is set). */
 export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "TriggerWebhook", "Notify"] as const;

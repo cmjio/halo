@@ -73,6 +73,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint`, `@shadow(Primary)` (
 ### How a pipeline runs
 
 - The flowing value is `context.current`. Each call's result is also stored at `context.data.<Callee>.<method>`, at `context.data.<method>`, and at any `as` binding. Pipeline arguments are bare names (`lang`) and `context.input.lang`.
+- Paths reach into lists: `issues.0.title` is the first title, `issues.length` the count, and `issues.title` every title. `System.Value(x)` makes `x` the flowing value.
 - `{{name}}` and `{{context.data.x.y}}` in strings are filled in at runtime. `Env.*` is only readable in tool declarations, so secrets can't leak into prompts.
 - An agent's prompt is built from the method name (as the task), its string arguments, the input, any `tool:` result, its named arguments, and context from what it `equips`: the closest entries of an equipped `VectorStore` and the recent conversation in an equipped `File` store. JSON answers are parsed, so gates can read `context.data.review.approved`.
 - A pipeline whose return type is a declared `schema` must produce matching output, or the run fails with a `SchemaValidationError`.
@@ -158,7 +159,7 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 |---|---|
 | `REST(url)` / `GET` | `Tool.method(...)` sends a GET to `url/method` (or `path:`), named args as query params |
 | `POST(url)` | Named args as a JSON body (`sendInput: false` to send only those) |
-| `VectorStore(namespace: "x")` | Local vector store in `.halo/vectors.sqlite`: `log`, `search`, `delete`, `count`. Lexical (hashed) embeddings, no network |
+| `VectorStore(namespace: "x")` | Local vector store in `.halo/vectors.sqlite`: `log`, `search` (filter with `tags:` and `exclude_tags:`, `order: "recent"` for newest first), `delete`, `count`. Lexical (hashed) embeddings, no network |
 | `File(path, keep: 10)` | Text entries in a JSON file: `read`, `append`, `clear`. Equipped by an agent, it's that agent's chat history |
 | `PostgreSQL(url)` / `SQL` | `query(sql: "...", params: [...])` via `Bun.SQL`; read-only unless `readOnly: false` |
 | `Bash()` | `run(command: "...")` → `{stdout, stderr, exitCode}`. Values inserted with `{{...}}` are shell-quoted |
@@ -201,7 +202,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 | 62 | Shopping restock | The budget enforced in code with `Validate`, approval before ordering |
 | 63 | Weekly team report | GitHub issues trimmed with `System.Pick`, reviewed, then posted to Slack |
 | 64 | Sports scouting | Two analysts in parallel, output checked against a `schema` |
-| 65 | Esports match review | OpenDota's free API (runs for real), memory of past reviews |
+| 65 | Esports match review | OpenDota's free API (runs for real); reuses a saved review; compares a player only with their own past matches |
 | 66 | Meal planner | Allergens checked by `grep`, `\|<> loop` replans until the plan is clean |
 
 Every example validates, and `test/examples.test.ts` runs them.

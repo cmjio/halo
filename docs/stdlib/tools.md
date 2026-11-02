@@ -133,6 +133,7 @@ pipeline Sync(note: String) -> Result:
 | `System.Sleep(2s)` | Waits. |
 | `System.Fail("msg")` | Fails the run with a `HaloError`. |
 | `System.Pick(value?, fields: [...], maxChars: n)` | Keeps only these dotted fields of an object or of each list item, and clips long strings. |
+| `System.Value(x)` | Makes `x` the flowing value, e.g. to end a pipeline with a result bound earlier: `\|> System.Value(context.data.review)`. |
 | `System.Publish/Distribute/ResolveIncident/TriggerWebhook/Notify(...)` | Sends the call to `onSystemEvent`, or logs it when no handler is set. |
 
 `runtime.registerSystem("Name", fn)` adds more methods. Unknown `System` methods are a validator error.

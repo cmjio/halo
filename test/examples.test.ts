@@ -663,24 +663,43 @@ describe("domain examples", () => {
     await expect(bad.execute("ScoutOpponent", { team_id: "t-9", last_matches: 5 })).rejects.toThrow(`Schema validation failed for "ScoutingReport": missing field "threats"`);
   });
 
-  test("65 esports: reviews a match from OpenDota and remembers past reviews", async () => {
+  test("65 esports: reviews a player, reuses a saved review, and compares only with that player's other matches", async () => {
     const urls: string[] = [];
+    const row = (account_id: number, deaths: number) => ({ account_id, name: `p${account_id}`, player_slot: 0, hero_id: 1, kills: 3, deaths, assists: 1, last_hits: 560, denies: 4, gold_per_min: 641, xp_per_min: 700, net_worth: 24288, win: 0, ability_upgrades_arr: [1, 2, 3] });
     const fakeFetch = (async (input: string | URL) => {
-      urls.push(String(input));
-      return Response.json({ duration: 2400, radiant_win: true, players: [{ player_slot: 0, hero_id: 14, kills: 3, deaths: 9, assists: 5, last_hits: 120, denies: 4, gold_per_min: 380, xp_per_min: 450, net_worth: 12000, win: 1, ability_upgrades_arr: [1, 2, 3] }] });
+      const path = new URL(String(input)).pathname;
+      urls.push(path);
+      if (path === "/api/heroes") return Response.json([{ id: 1, name: "npc_dota_hero_antimage", localized_name: "Anti-Mage", roles: ["Carry"], legs: 2 }]);
+      return Response.json({ duration: 2400, radiant_win: true, players: [row(11, 9), row(22, 2)] });
     }) as typeof fetch;
     const prompts: string[] = [];
     const { rt } = await load("65-esports-review.halo", { fetch: fakeFetch }, {
-      "Coach.review": (r: MockRequest) => (prompts.push(r.prompt!), "Pudge died 9 times: practice hook angles."),
+      "Coach.review": (r: MockRequest) => (prompts.push(r.prompt!), `Review #${prompts.length}`),
     });
-    await silent(() => rt.execute("ReviewMatch", { match_id: 8000000001, player: 0 }));
-    await silent(() => rt.execute("ReviewMatch", { match_id: 8000000002, player: 0 }));
-    expect(new URL(urls[0]!).pathname).toBe("/api/matches/8000000001");
-    expect(prompts[0]).toContain("duration 2400s, radiant_win true");
-    expect(prompts[0]).toContain('"deaths": 9');
+    const review = (match_id: number, account_id: number) => silent(() => rt.execute("ReviewMatch", { match_id, account_id }));
+
+    expect(await review(101, 11)).toBe("Review #1");
+    expect(prompts[0]).toContain("Review the player with account_id 11 in match 101");
+    expect(prompts[0]).toContain("- earlier_reviews: []");
+    expect(prompts[0]).toContain('"account_id": 22');
     expect(prompts[0]).not.toContain("ability_upgrades_arr");
-    expect(prompts[0]).toContain("- past_reviews: []");
-    expect(prompts[1]).toContain('"content": "Pudge died 9 times: practice hook angles."');
+    expect(prompts[0]).toContain('"localized_name": "Anti-Mage"');
+    expect(prompts[0]).not.toContain("npc_dota_hero_antimage");
+
+    // Same player, same match: the saved review, with no fetch and no model call
+    expect(await review(101, 11)).toBe("Review #1");
+    expect(prompts).toHaveLength(1);
+    expect(urls.sort()).toEqual(["/api/heroes", "/api/matches/101"]);
+
+    // Another player in the same match: their own first review
+    expect(await review(101, 22)).toBe("Review #2");
+    expect(prompts[1]).toContain("- earlier_reviews: []");
+
+    // Player 11's next match: compared with player 11's review only, newest first
+    expect(await review(202, 11)).toBe("Review #3");
+    expect(prompts[2]).toContain('- earlier_reviews: [\n  "Review #1"\n]');
+    expect(await review(303, 11)).toBe("Review #4");
+    expect(prompts[3]).toContain('- earlier_reviews: [\n  "Review #3",\n  "Review #1"\n]');
     await rt.close();
   });
 

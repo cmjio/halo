@@ -1,13 +1,15 @@
 // ============================================================
 // Esports: Dota 2 match review
 // ============================================================
-// Fetches a match from OpenDota's free public API (no key needed),
-// keeps the stats that matter, recalls the latest reviews kept in
-// local memory, and writes a coaching review. Each review is saved,
-// so later reviews can spot recurring habits.
+// Reviews one player (by OpenDota account id) in one match from
+// OpenDota's free public API (no key needed). It recalls that player's
+// latest reviews of *other* matches from local memory, so it can say
+// whether a habit is recurring. Asking about the same player and match
+// again returns the saved review (free) instead of comparing the match
+// with itself.
 //
 // RUN: ANTHROPIC_API_KEY=... halo run examples/65-esports-review.halo \
-//        --arg match_id=8000000000 --arg player=0
+//        --arg match_id=9072857576 --arg account_id=96183976
 // ============================================================
 
 policy Budget : MaxSpend(0.10) & MaxWords(350)
@@ -21,32 +23,50 @@ agent Coach [anthropic/claude-haiku-4-5, temp: 0.3]
   system """
     You are a Dota 2 coach. Be concrete: name the moments and numbers
     (deaths, last hits, net worth, item timings). Give the player three
-    things to practice. If past reviews show the same habit, say so.
+    things to practice. Name heroes only from the heroes list (match
+    hero_id to id); never guess a hero. Earlier reviews are of the same player in other
+    matches: if one shows the same habit, say so; if there are none, say
+    this is the first review. If the account isn't in the match, say so.
   """
   requires Budget
 
-@retry(2, 3s)
-pipeline ReviewMatch(match_id: Number, player: Number) -> Result:
+pipeline ReviewMatch(match_id: Number, account_id: Number) -> Result:
   match_id
-    // 1. The match from OpenDota
-    |> OpenDota.match(path: "/matches/{{match_id}}") as match
+    // Already reviewed this player in this match? Reuse that review instead of paying again.
+    |> PastReviews.search(query: "review", tags: ["match-{{match_id}}", "player-{{account_id}}"], order: "recent", limit: 1) as existing
+    |? {
+         (context.data.existing.length > 0) => System.Value(context.data.existing.0.content),
+         else => NewReview(match_id, account_id),
+       } as review
+    |> System.Print(context.data.review)
+
+@retry(2, 3s)
+pipeline NewReview(match_id: Number, account_id: Number) -> Result:
+  match_id
+    // 1. The match, and the hero list to turn hero_id into names (both free)
+    |* {
+         OpenDota.match(path: "/matches/{{match_id}}") as match,
+         OpenDota.heroes(path: "/heroes") as heroes
+       }
 
     // 2. Keep the per-player stats (the full payload is large)
     |> System.Pick(
          context.data.match.players,
-         fields: ["player_slot", "hero_id", "kills", "deaths", "assists", "last_hits", "denies", "gold_per_min", "xp_per_min", "net_worth", "win"]
+         fields: ["account_id", "name", "player_slot", "hero_id", "kills", "deaths", "assists", "last_hits", "denies", "gold_per_min", "xp_per_min", "net_worth", "win"]
        ) as players
+    |> System.Pick(context.data.heroes, fields: ["id", "localized_name"]) as hero_names
 
-    // 3. The latest earlier reviews (by tag: review text shares few words with raw stats)
-    |> PastReviews.search(query: "coaching review", tags: ["review"], limit: 3) as history
+    // 3. This player's newest reviews of *other* matches
+    |> PastReviews.search(query: "review", tags: ["player-{{account_id}}"], exclude_tags: ["match-{{match_id}}"], order: "recent", limit: 3) as history
 
     // 4. The review
     |> Coach.review(
-         "Review player index {{player}} in match {{match_id}} (duration {{match.duration}}s, radiant_win {{match.radiant_win}}). Earlier reviews, if any, are in past_reviews.",
+         "Review the player with account_id {{account_id}} in match {{match_id}} (duration {{match.duration}}s, radiant_win {{match.radiant_win}}). The other rows are teammates and opponents, for comparison.",
          context.data.players,
-         past_reviews: context.data.history
+         earlier_reviews: context.data.history.content,
+         heroes: context.data.hero_names
        ) as review
 
-    // 5. Remember it
-    |> PastReviews.log(content: context.data.review, tags: ["review"])
-    |> System.Print(context.data.review)
+    // 5. Remember it, tagged with its match and player, and return the review
+    |> PastReviews.log(content: context.data.review, tags: ["review", "match-{{match_id}}", "player-{{account_id}}"])
+    |> System.Value(context.data.review)

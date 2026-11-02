@@ -1062,6 +1062,9 @@ export class HaloRuntime {
       } catch (err) {
         // @correct(n): show the model what the policy rejected and let it try again.
         if (!(err instanceof PolicyViolation) || attempt >= corrections) throw err;
+        // The audit trail keeps the violation, marked as one the agent was asked to fix.
+        const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected);
+        if (v) v.corrected = true;
         this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
         ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
       }
@@ -1286,6 +1289,11 @@ export class HaloRuntime {
       }
       case "Fail":
         throw new HaloError(String(positional[0] ?? named.message ?? `Pipeline "${ctx.pipeline.name}" failed`));
+      case "Value":
+        // Make a value the flowing value, e.g. to end a pipeline with a result
+        // computed earlier: |> System.Value(context.data.review)
+        if (stage.argList.length !== 1) throw new HaloError(`System.Value takes exactly one value, e.g. System.Value(context.data.review)`);
+        return positional.length ? positional[0] : named[Object.keys(named)[0]!];
       case "Pick": {
         const fields = named.fields ?? positional.slice(1);
         if (!Array.isArray(fields) || !fields.length) throw new HaloError(`System.Pick needs fields, e.g. System.Pick(context.data.x, fields: ["id", "user.login"])`);

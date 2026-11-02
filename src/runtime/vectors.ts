@@ -87,7 +87,17 @@ export class LocalVectorStore {
     return { id: row.id, content, tags, metadata, createdAt };
   }
 
-  search(namespace: string, query: unknown, limit = 5, minScore = 0, tags?: string[]): SearchHit[] {
+  /**
+   * Entries closest to `query`. Options: `tags` (an entry must have all of them),
+   * `excludeTags` (an entry with any of them is left out), `minScore`, and
+   * `order: "recent"` to return the newest matches first instead of the closest.
+   */
+  search(
+    namespace: string,
+    query: unknown,
+    options: { limit?: number; minScore?: number; tags?: string[]; excludeTags?: string[]; order?: "score" | "recent" } = {},
+  ): SearchHit[] {
+    const { limit = 5, minScore = 0, tags, excludeTags, order = "score" } = options;
     const q = embed(asText(query));
     const rows = this.db.query("SELECT * FROM entries WHERE namespace = ?").all(namespace) as any[];
     return rows
@@ -95,8 +105,13 @@ export class LocalVectorStore {
         const emb = new Float32Array(new Uint8Array(r.embedding).buffer);
         return { ...this.toRecord(r), score: Math.round(cosine(q, emb) * 1e4) / 1e4 };
       })
-      .filter((h) => h.score >= minScore && (!tags?.length || tags.every((t) => h.tags.includes(t))))
-      .sort((a, b) => b.score - a.score)
+      .filter(
+        (h) =>
+          h.score >= minScore &&
+          (!tags?.length || tags.every((t) => h.tags.includes(t))) &&
+          !excludeTags?.some((t) => h.tags.includes(t)),
+      )
+      .sort((a, b) => (order === "recent" ? b.id - a.id : b.score - a.score))
       .slice(0, limit);
   }
 

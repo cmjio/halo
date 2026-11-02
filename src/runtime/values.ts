@@ -4,25 +4,24 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Walk `path` into `root`, returning undefined when any segment is missing. */
+/**
+ * Walk `path` into `root`, returning undefined when any segment is missing.
+ * On a list, a number picks an item (`items.0`), `length` counts them, and
+ * any other name maps over the items (`issues.title` → every title).
+ * A string's `length` is its length.
+ */
 export function getPath(root: unknown, path: string[]): unknown {
-  let cur = root;
-  for (const part of path) {
-    if (cur === null || cur === undefined) return undefined;
-    if (Array.isArray(cur) && /^\d+$/.test(part)) cur = cur[Number(part)];
-    else if (typeof cur === "object") cur = (cur as Record<string, unknown>)[part];
-    else return undefined;
-  }
-  return cur;
-}
-
-/** Like getPath, but a non-numeric part applied to a list maps over its items (`labels.name`). */
-function pluck(root: unknown, path: string[]): unknown {
   let cur = root;
   for (const [i, part] of path.entries()) {
     if (cur === null || cur === undefined) return undefined;
-    if (Array.isArray(cur) && !/^\d+$/.test(part)) return cur.map((item) => pluck(item, path.slice(i)));
-    cur = getPath(cur, [part]);
+    if (Array.isArray(cur)) {
+      if (/^\d+$/.test(part)) cur = cur[Number(part)];
+      else if (part === "length") cur = cur.length;
+      else return cur.map((item) => getPath(item, path.slice(i)));
+    } else if (typeof cur === "string") {
+      return part === "length" && i === path.length - 1 ? cur.length : undefined;
+    } else if (typeof cur === "object") cur = (cur as Record<string, unknown>)[part];
+    else return undefined;
   }
   return cur;
 }
@@ -38,7 +37,7 @@ export function pick(value: unknown, fields: string[], maxChars = Infinity): unk
     typeof v === "string" ? (v.length > maxChars ? `${v.slice(0, maxChars)}…` : v) : Array.isArray(v) ? v.map(clip) : v;
   const out: Record<string, unknown> = {};
   for (const f of fields) {
-    const v = pluck(value, f.split("."));
+    const v = getPath(value, f.split("."));
     if (v !== undefined) out[f] = clip(v);
   }
   return out;

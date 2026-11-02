@@ -17,7 +17,10 @@ name
     | 'each' | 'in' | 'else'
     ;
 
-dottedId: IDENTIFIER ('.' name)*;
+dottedId: IDENTIFIER ('.' pathPart)*;
+
+// A path segment: a name, or a list index (`items.0.title`).
+pathPart: name | NUMBER;
 
 // ── Policies ──
 policyDecl: 'policy' IDENTIFIER ':' policyRule ('&' policyRule)*;
@@ -115,7 +118,7 @@ literal: STRING | TRIPLE_STRING | NUMBER | DURATION | BOOL | NULL;
 
 expression: literal | contextRef | dottedId;
 
-contextRef: 'context' ('.' name)*;
+contextRef: 'context' ('.' pathPart)*;
 
 // ── Gate conditions ──
 condExpr: orExpr;

@@ -117,6 +117,21 @@ pipeline Approve(doc: String) -> Result:
     }
   });
 
+  test("a violation that @correct fixes is shown as a correction; one it can't fix as a failure", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "halo-correct-"));
+    try {
+      await Bun.write(join(dir, "flow.halo"), `policy Tiny : MaxWords(2)\n@correct(1)\nagent W [openai/gpt-4o]\n  requires Tiny\npipeline P(x: String) -> Result:\n  x |> W.write()`);
+      const r = cliIn(dir, "test", "flow.halo", "--arg", "x=hi", "--no-telemetry");
+      // The mock always answers with more than 2 words: corrected once, then it fails
+      expect(r.err).toContain("✎ W.write: Content exceeds max words");
+      expect(r.err).toContain("asked to fix it (attempt 2)");
+      expect(r.err.match(/⛔ Tiny\/MaxWords/g)).toHaveLength(1);
+      expect(r.code).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("runs are recorded for Halo Studio unless --no-telemetry", () => {
     const dir = mkdtempSync(join(tmpdir(), "halo-telemetry-"));
     try {

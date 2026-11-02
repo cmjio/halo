@@ -298,9 +298,15 @@ function mockRuntime(rt: HaloRuntime, ast: ParseResult): void {
 }
 
 function tracer(debug: boolean): (e: RuntimeEvent) => void {
+  // A violation that @correct sends back is shown as a correction, not as a failure,
+  // so hold each violation until the next event says which it was.
+  let pending: Extract<RuntimeEvent, { type: "violation" }> | undefined;
   return (e) => {
+    if (pending && e.type !== "correction") console.error(red(`  ⛔ ${pending.policy}/${pending.rule}: ${pending.message}`));
+    if (e.type !== "violation") pending = undefined;
+    if (e.type === "violation") pending = e;
+    if (e.type === "correction") console.error(yellow(`  ✎ ${e.target}: ${e.error}; asked to fix it (attempt ${e.attempt + 1})`));
     if (e.type === "retry") console.error(yellow(`  ↻ retry ${e.target} (attempt ${e.attempt}): ${e.error}`));
-    if (e.type === "violation") console.error(red(`  ⛔ ${e.policy}/${e.rule}: ${e.message}`));
     if (!debug) return;
     if (e.type === "stage" && e.status === "start") console.error(dim(`▶ [${e.index}] ${e.label}`));
     if (e.type === "stage" && e.status === "end") console.error(dim(`  ✓ ${e.durationMs}ms → ${formatValue(e.value).replace(/\s+/g, " ").slice(0, 120)}`));
@@ -313,7 +319,6 @@ function tracer(debug: boolean): (e: RuntimeEvent) => void {
     if (e.type === "halt") console.error(yellow(`  ⏹ gate closed: ${e.condition}`));
     if (e.type === "branch") console.error(dim(`  ⑂ ${e.arm < 0 ? "no arm matched; value passes through" : e.condition === undefined ? "else" : `(${e.condition})`}`));
     if (e.type === "loop") console.error(yellow(`  ↺ loop ${e.iteration}: ${e.condition} → back to stage ${e.to}`));
-    if (e.type === "correction") console.error(yellow(`  ✎ ${e.target} correction ${e.attempt}: ${e.error}`));
     if (e.type === "checkpoint") console.error(dim(`  💾 ${e.path}`));
   };
 }

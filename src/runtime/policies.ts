@@ -14,6 +14,8 @@ export interface Violation {
   rule: string;
   message: string;
   phase: "input" | "output" | "budget";
+  /** True when `@correct` sent the answer back and the agent fixed it (set after the fact). */
+  corrected?: boolean;
 }
 
 interface Detector {

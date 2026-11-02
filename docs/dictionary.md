@@ -227,7 +227,7 @@ Reserved functions for state mechanics.
 | Field | Value |
 |---|---|
 | **Definition** | Built-in callee for runtime utilities and events |
-| **Methods** | `Print`, `Log` (output, pass the value through), `Sleep(duration)`, `Fail(msg)`, `Pick(value, fields: [...], maxChars: n)` (keep only dotted fields of an object or of each list item; `labels.name` maps over a list), and the events `ResolveIncident`, `Publish`, `Distribute`, `TriggerWebhook`, `Notify` (sent to `onSystemEvent`) |
+| **Methods** | `Print`, `Log` (output, pass the value through), `Sleep(duration)`, `Fail(msg)`, `Value(x)` (make `x` the flowing value), `Pick(value, fields: [...], maxChars: n)` (keep only dotted fields of an object or of each list item; `labels.name` maps over a list), and the events `ResolveIncident`, `Publish`, `Distribute`, `TriggerWebhook`, `Notify` (sent to `onSystemEvent`) |
 | **Example** | `\|> System.Pick(context.data.issues.items, fields: ["number", "title", "labels.name"], maxChars: 1500) as items` |
 
 ## 6. Lexical Tokens

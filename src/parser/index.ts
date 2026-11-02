@@ -20,6 +20,7 @@ import {
   type CondExprContext,
   type DirectiveContext,
   type DottedIdContext,
+  type PathPartContext,
   type ExpressionContext,
   type PolicyDeclContext,
   type LiteralContext,
@@ -368,11 +369,11 @@ class Walker {
   }
 
   private dotted(ctx: DottedIdContext): Value {
-    return { kind: "ref", path: [ctx.IDENTIFIER().getText(), ...ctx.name().map((n) => n.getText())] };
+    return { kind: "ref", path: [ctx.IDENTIFIER().getText(), ...pathParts(ctx.pathPart())] };
   }
 
   private contextRef(ctx: ContextRefContext): Value {
-    return { kind: "context", path: ctx.name().map((n) => n.getText()) };
+    return { kind: "context", path: pathParts(ctx.pathPart()) };
   }
 
   // ── Conditions ──
@@ -460,4 +461,9 @@ function typeText(ctx: TypeRefContext): string {
   const base = ctx.dottedId().getText();
   const args = ctx.typeRef();
   return args.length ? `${base}<${args.map(typeText).join(", ")}>` : base;
+}
+
+/** Path segments as text. The lexer reads `items.0.1` as `items` `.` `0.1`, so split numbers on dots. */
+function pathParts(parts: PathPartContext[]): string[] {
+  return parts.flatMap((p) => (p.NUMBER() ? p.getText().split(".") : [p.getText()]));
 }

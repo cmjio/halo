@@ -23,7 +23,7 @@ module.exports = grammar({
     // Identifiers plus keywords usable as names (named-arg keys, methods, context paths).
     _name: ($) => choice($.identifier, ...SOFT_KEYWORDS.map((k) => alias(k, $.identifier))),
 
-    dotted_ident: ($) => prec.right(seq($.identifier, repeat(seq(".", $._name)))),
+    dotted_ident: ($) => prec.right(seq($.identifier, repeat(seq(".", choice($._name, $.number))))),
 
     // === Policy ===
     policy_decl: ($) => seq("policy", field("name", $.identifier), ":", $.policy_rule, repeat(seq("&", $.policy_rule))),
@@ -130,7 +130,7 @@ module.exports = grammar({
 
     _expression: ($) => choice($._literal, $.context_ref, $.dotted_ident),
 
-    context_ref: ($) => prec.right(seq("context", repeat(seq(".", $._name)))),
+    context_ref: ($) => prec.right(seq("context", repeat(seq(".", choice($._name, $.number))))),
 
     // === Gate conditions ===
     condition: ($) => seq("(", $._cond, ")", optional("=>")),

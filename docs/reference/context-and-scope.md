@@ -42,6 +42,19 @@ Inside a pipeline, a bare name such as `email` or `summary.title` resolves in th
 
 `{{name}}` placeholders check `context.data` first, then inputs. They also accept `{{context.…}}` and `{{current}}`.
 
+### Paths into lists
+
+On a list, a number picks an item, `length` counts the items, and any other name reaches into every item:
+
+| Path | Gives |
+|---|---|
+| `context.data.issues.0.title` | the first issue's title |
+| `context.data.issues.length` | how many issues |
+| `context.data.issues.title` | every title, as a list |
+| `context.data.name.length` | a string's length |
+
+So `|? (context.data.matches.length > 0)` tests for an empty list, and `{{issues.title}}` puts all titles in a prompt.
+
 ## Scope
 
 - **Fan-out** stages all see the same context and write into it. Each call's result goes to its own `Callee.method` slot.

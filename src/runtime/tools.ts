@@ -133,7 +133,15 @@ const vectorStore: ToolProvider = async (call, services) => {
     case "similar": {
       const query = named.query ?? first ?? (Object.keys(named).length ? named : undefined);
       if (query === undefined) throw new HaloError(`${call.tool.name}.${call.method} needs a query`);
-      return store.search(ns, query, Number(named.limit ?? 5), Number(named.min_score ?? named.minScore ?? 0), named.tags ? tags(named.tags) : undefined);
+      const order = named.order === undefined ? undefined : String(named.order);
+      if (order !== undefined && order !== "score" && order !== "recent") throw new HaloError(`${call.tool.name}.${call.method}: order must be "score" or "recent"`);
+      return store.search(ns, query, {
+        limit: Number(named.limit ?? 5),
+        minScore: Number(named.min_score ?? named.minScore ?? 0),
+        tags: named.tags ? tags(named.tags) : undefined,
+        excludeTags: named.exclude_tags ?? named.excludeTags ? tags(named.exclude_tags ?? named.excludeTags) : undefined,
+        order,
+      });
     }
     case "delete":
     case "forget":
