@@ -6,7 +6,7 @@
  * and flags constructs the runtime cannot enforce.
  */
 
-import type { Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, Value } from "./types.js";
+import type { Agent, Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, Value } from "./types.js";
 import {
   BLOCK_CATEGORIES,
   CONTEXT_NAMESPACES,
@@ -19,6 +19,8 @@ import {
   SYSTEM_METHODS,
   TOOL_PROVIDERS,
   UNENFORCED_RULES,
+  TOOL_RULES,
+  TOOL_EFFECTS,
   includes,
   parseDuration,
 } from "./builtins.js";
@@ -120,9 +122,30 @@ class Validator {
         this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
       } else if (rule.name === "MatchRegex" && !validRegex(unquoteArg(rule.args[0] ?? ""))) {
         this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
+      } else if (includes(TOOL_RULES, rule.name)) {
+        this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
         this.add("error", `Policy "${g.name}": ${rule.name} needs a numeric limit`, g.loc);
       }
+    }
+  }
+
+  /** Tool rules name tools by pattern ("Repo", "Repo.create_pr", "Repo.*") or effects (read, write, external). */
+  private checkToolRule(g: ParseResult["policies"][number], rule: { name: string; args: string[] }) {
+    const args = rule.args.map(unquoteArg);
+    if (!args.length) return this.add("error", `Policy "${g.name}": ${rule.name}(...) needs at least one ${rule.name.endsWith("Effects") ? "effect" : "tool"}`, g.loc);
+    if (rule.name === "AllowEffects" || rule.name === "ApproveEffects") {
+      for (const e of args) if (!includes(TOOL_EFFECTS, e)) this.add("error", `Policy "${g.name}": ${rule.name}(${e}): effects are ${TOOL_EFFECTS.join(", ")}`, g.loc);
+      return;
+    }
+    if (rule.name === "DenyArgs") {
+      if (args.length !== 2) this.add("error", `Policy "${g.name}": DenyArgs needs a tool pattern and a regular expression, e.g. DenyArgs("Shell.run", "rm\\s+-rf")`, g.loc);
+      else if (!validRegex(args[1]!)) this.add("error", `Policy "${g.name}": DenyArgs(${rule.args[1]}) is not a valid regular expression`, g.loc);
+    }
+    const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
+    for (const pattern of patterns) {
+      const tool = pattern.split(".")[0]!;
+      if (tool !== "*" && !this.tools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
     }
   }
 
@@ -265,7 +288,9 @@ class Validator {
   private checkCall(call: CallStage, s: PipelineDeclaration, params: Set<string>, data: Set<string>) {
     const where = `Pipeline "${s.name}"`;
     const target = `${call.callee}${call.method ? "." + call.method : ""}`;
-    this.checkArgs(call.argList, s, params, data, call.loc);
+    // An agent's `tools: [A, B]` names tools, not values.
+    const isAgent = this.agents.has(call.callee);
+    this.checkArgs(isAgent ? call.argList.filter((a) => a.name !== "tools") : call.argList, s, params, data, call.loc);
 
     if (call.callee === "System") {
       const known = includes(SYSTEM_METHODS, call.method) || includes(SYSTEM_EVENTS, call.method) || this.options.systemMethods?.includes(call.method);
@@ -288,6 +313,7 @@ class Validator {
 
     const agent = this.agents.get(call.callee);
     if (agent) {
+      this.checkToolset(agent, call, where);
       const toolArg = call.argList.find((a) => a.name === "tool");
       if (toolArg) {
         const toolName = toolArg.value.kind === "ref" ? toolArg.value.path.join(".") : undefined;
@@ -306,6 +332,21 @@ class Validator {
     }
     if (call.implicit && this.pipelines.has(call.callee)) return;
     this.add("error", `${where}: unknown callee "${call.callee}" in ${target}(...)`, call.loc);
+  }
+
+  /** `tools: [A, B]` on an agent call (or `tools: auto` on the agent): each must be a declared tool the agent equips. */
+  private checkToolset(agent: Agent, call: CallStage, where: string) {
+    const arg = call.argList.find((a) => a.name === "tools");
+    if (!arg) return;
+    const items = arg.value.kind === "list" ? arg.value.items : [arg.value];
+    for (const v of items) {
+      const name = v.kind === "ref" ? v.path.join(".") : v.kind === "string" ? v.value : undefined;
+      if (name === "auto" || name === "all" || name === "none") continue;
+      if (!name || !this.tools.has(name)) this.add("error", `${where}: ${agent.name}.${call.method} has tools: naming "${name ?? "?"}", which is not a declared tool`, call.loc);
+      else if (!agent.equips?.includes(name)) this.add("error", `${where}: agent "${agent.name}" is not equipped with tool "${name}" (add \`equips ${name}\`)`, call.loc);
+    }
+    const steps = call.argList.find((a) => a.name === "max_steps");
+    if (steps && !(steps.value.kind === "number" && steps.value.value >= 0)) this.add("error", `${where}: max_steps needs a number`, call.loc);
   }
 
   /**

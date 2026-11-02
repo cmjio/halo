@@ -12,6 +12,9 @@
  *      SHA-256 hash chain of every stage touched.
  *   5. `|! yield` and `~> listen` ask a registered handler. With no handler,
  *      the run pauses (status "paused") and `signal(runId, ...)` resumes it.
+ *   6. An agent given `tools:` chooses its own tool calls (native tool calling),
+ *      each checked against its policies before it runs; a call a policy wants
+ *      approved asks onInterrupt, or pauses the run (waiting for "approval").
  */
 
 import { mkdirSync, renameSync, statSync } from "node:fs";
@@ -38,12 +41,16 @@ import type {
 import { SYSTEM_EVENTS, includes, parseDuration } from "../parser/builtins.js";
 import { render } from "../parser/index.js";
 import { producedKeys } from "../parser/validate.js";
-import { AdapterRegistry, type LLMRequest, type ProviderAdapter } from "./adapter.js";
+import { AdapterRegistry, type LLMMessage, type LLMRequest, type LLMToolCall, type LLMToolSpec, type ProviderAdapter } from "./adapter.js";
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
+import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
+import { closeMcpClients } from "./mcp.js";
+import { closeChromeSessions } from "./providers/chrome.js";
+import { closeKvDatabases } from "./providers/index.js";
 import { LocalVectorStore } from "./vectors.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
-import { BUILTIN_PROVIDERS, declArgs, type ToolProvider, type ToolServices } from "./tools.js";
+import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateSchema } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
@@ -51,7 +58,7 @@ import { asNumber, asText, formatValue, getPath, hasOwnKey, humanize, interpolat
 
 export * from "./errors.js";
 export type { Violation } from "./policies.js";
-export type { ToolProvider, ToolCall, ToolServices } from "./tools.js";
+export type { ToolProvider, ToolCall, ToolServices, ProviderInfo, ToolMethod, ToolEffect, JsonSchema } from "./tools.js";
 
 // ── Public types ─────
 
@@ -98,13 +105,24 @@ export type SystemHandler = (call: SystemCall) => unknown | Promise<unknown>;
 
 export interface MockRequest {
   target: string;
-  kind: "agent" | "tool" | "yield" | "listen";
+  kind: "agent" | "tool" | "yield" | "listen" | "approval";
   prompt?: string;
   system?: string;
   args: unknown[];
   named: Record<string, unknown>;
   input: unknown;
+  /** For an agent with tools: the "Tool.method" names it may call, the conversation so far, and the step (1, 2, ...). */
+  tools?: string[];
+  messages?: LLMMessage[];
+  step?: number;
 }
+
+/** A mocked model turn that calls a tool: `useTool("Files.read", { path: "a.ts" })`. Return one, or a list, from a mock. */
+export class ToolUse {
+  constructor(readonly target: string, readonly args: Record<string, unknown> = {}) {}
+}
+
+export const useTool = (target: string, args: Record<string, unknown> = {}) => new ToolUse(target, args);
 
 /** A canned value, or a function computing one. */
 export type MockValue = unknown | ((req: MockRequest) => unknown | Promise<unknown>);
@@ -120,6 +138,8 @@ export interface CallRecord {
   tokens?: { prompt: number; completion: number };
   attempts: number;
   mocked: boolean;
+  /** For a tool call an agent chose: that agent. */
+  agent?: string;
 }
 
 export interface ShadowRecord {
@@ -183,6 +203,15 @@ export interface RunSnapshot {
   /** Loop iteration counts, so a pause can't reset a loop's `max`. */
   loops?: Record<number, number>;
   loopFeedback?: ExecutionContext["loopFeedback"];
+  /** An agent's tool conversation, kept while the run waits for a person to approve one of its calls. */
+  sessions?: Record<number, AgentSession>;
+}
+
+/** Where an agent's tool conversation stopped to wait for approval: its turns so far and the calls still to run (the first is the one waiting). */
+export interface AgentSession {
+  messages: LLMMessage[];
+  pending: LLMToolCall[];
+  step: number;
 }
 
 /** Where paused runs are kept until `signal()` resumes them. */
@@ -284,6 +313,8 @@ export type RuntimeEvent =
   | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
   | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean }
   | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean }
+  /** A tool call an agent chose, and what happened to it: run, approved and run, declined by a person, refused by a policy, or failed. */
+  | { type: "agent_tool"; pipeline: string; runId: string; agent: string; target: string; args: unknown; decision: "allowed" | "approved" | "declined" | "refused" | "error"; detail?: string }
   | { type: "retry"; runId: string; target: string; attempt: number; error: string; delayMs: number }
   | { type: "shadow"; runId: string; record: ShadowRecord }
   | { type: "halt"; runId: string; pipeline: string; index: number; condition: string }
@@ -344,6 +375,10 @@ interface ExecutionContext {
   loopFeedback?: { stage: number; condition: string; value: unknown; iteration: number; previous?: unknown };
   /** The last answer of each agent stage (by index), so a loop retry can show the agent what it tried. */
   answers?: Record<number, unknown>;
+  /** Agent tool conversations waiting for approval, by stage index (see AgentSession). */
+  sessions?: Record<number, AgentSession>;
+  /** A person's answer to the approval a stage paused for, by stage index. */
+  approvals?: Record<number, unknown>;
   /** The calling pipeline's context, for a called pipeline. */
   parent?: ExecutionContext;
   /** When this pipeline's @timeout runs out (ms since epoch). */
@@ -361,8 +396,39 @@ interface LLMOptions {
   topP?: number;
 }
 
+/** One request in an agent's tool conversation. */
+interface Turn {
+  messages: LLMMessage[];
+  tools: LLMToolSpec[];
+  /** "none" asks for an answer without more tool calls (the last step). */
+  toolChoice?: "auto" | "none";
+  /** The "Tool.method" names offered, for mocks. */
+  targets: string[];
+  step: number;
+  /** What this turn adds to the conversation, for telemetry (not the whole conversation every step). */
+  shown: string;
+}
+
+/** The tools an agent may choose from on one call, by the function name the model uses and by "Tool.method". */
+interface ToolKit {
+  specs: LLMToolSpec[];
+  /** The "Tool.method" names offered (methods its policies hide aren't). */
+  offered: string[];
+  byName: Map<string, { tool: ToolDeclaration; method: ToolMethod; target: string }>;
+}
+
 /** Named args on an agent call that configure the request rather than the prompt. */
-const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system"]);
+const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system", "tools", "max_steps", "tool_result_chars"]);
+const DEFAULT_MAX_STEPS = 10;
+const DEFAULT_TOOL_RESULT_CHARS = 16_000;
+
+/** A person's answer that approves something: "approve", "yes", `{ approved: true }`, ... */
+function isApproval(answer: unknown): boolean {
+  if (answer === true) return true;
+  if (typeof answer === "string") return /^\s*(?:y|yes|approve|approved|allow|ok|okay)\s*$/i.test(answer);
+  if (isPlainObject(answer)) return answer.approved === true || answer.action === "approve" || answer.status === "approved";
+  return false;
+}
 const MAX_STREAM_DEPTH = 16;
 const MAX_PIPELINE_CALLS = 100_000;
 const GENESIS = "0".repeat(64);
@@ -513,6 +579,7 @@ export class HaloRuntime {
   /** Model calls in flight per run, and calls waiting under MaxSpend for one of them to settle. */
   private inflight = new WeakMap<RunMeta, { calls: number; waiting: Array<() => void> }>();
   private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
+  private providerInfo = new Map<string, ProviderInfo>(Object.entries(BUILTIN_PROVIDER_INFO));
   private systems = new Map<string, SystemHandler>();
   private vectorStore?: LocalVectorStore;
   private sqlPool = new Map<string, InstanceType<typeof Bun.SQL>>();
@@ -579,9 +646,21 @@ export class HaloRuntime {
   }
 
   /** Register a tool provider, usable as `tool Name : <name>(...)`. */
-  registerToolProvider(name: string, provider: ToolProvider): this {
+  /** Register a tool provider. With `info` (its methods, their arguments and effects), agents can choose to call its tools. */
+  registerToolProvider(name: string, provider: ToolProvider, info?: ProviderInfo): this {
     this.providers.set(name, provider);
+    if (info) this.providerInfo.set(name, info);
     return this;
+  }
+
+  /** What a provider's methods do, if it says (for `halo plan` and agents' tool lists). */
+  toolProviderInfo(name: string): ProviderInfo | undefined {
+    return this.providerInfo.get(name);
+  }
+
+  /** Names of every registered tool provider. */
+  toolProviderNames(): string[] {
+    return [...this.providers.keys()];
   }
 
   /** Register a `System.<name>(...)` method. A non-undefined return value replaces the pipeline value. */
@@ -625,7 +704,10 @@ export class HaloRuntime {
   }
 
   /** Release database handles. */
+  /** Release databases, and stop MCP servers this process started (they are shared by every runtime in it). */
   async close(): Promise<void> {
+    await Promise.all([closeMcpClients(), closeChromeSessions()]);
+    closeKvDatabases();
     this.vectorStore?.close();
     this.vectorStore = undefined;
     await Promise.all([...this.sqlPool.values()].map((db) => db.close()));
@@ -733,6 +815,17 @@ export class HaloRuntime {
       if (!this.runStore.take) await this.runStore.delete(runId);
       const ctx = this.restore(snap);
       const stage = ctx.pipeline.pipeline[snap.nextStage];
+      const done = async (r: RunResult) => (r.status !== "paused" && (await this.runStore.finished?.(runId)), r);
+      const failed = async (err: unknown) => {
+        await this.runStore.finished?.(runId);
+        throw err;
+      };
+      // An agent waiting for approval of a tool call: its stage runs again, picking up its conversation with the answer.
+      if (snap.waitingFor === "approval") {
+        if (stage?.kind !== "call" || !snap.sessions?.[snap.nextStage]) throw new SignalError(`Run ${runId} is not waiting for an approval`, "RUN_NOT_FOUND");
+        ctx.approvals = { [snap.nextStage]: payload };
+        return { pipeline: snap.pipeline, result: this.runTop(ctx, snap.nextStage).then(done, failed) };
+      }
       if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
       ctx.stageIndex = snap.nextStage;
       this.deliver(stage, ctx, payload, snap.waitingFor);
@@ -740,13 +833,7 @@ export class HaloRuntime {
       // The paused stage is done now that it has its response.
       this.emit({ type: "stage", pipeline: ctx.pipeline.name, runId, index: snap.nextStage, kind: stage.kind, label: stageLabel(stage), status: "end", value: ctx.current, durationMs: 0 });
       // Once it ends without pausing again, the store can drop what it kept for the next pause.
-      const result = this.runTop(ctx, snap.nextStage + 1).then(
-        async (r) => (r.status !== "paused" && (await this.runStore.finished?.(runId)), r),
-        async (err: unknown) => {
-          await this.runStore.finished?.(runId);
-          throw err;
-        },
-      );
+      const result = this.runTop(ctx, snap.nextStage + 1).then(done, failed);
       return { pipeline: snap.pipeline, result };
     } finally {
       this.resuming.delete(runId);
@@ -757,7 +844,7 @@ export class HaloRuntime {
     const pipeline = this.pipelines.get(snap.pipeline);
     if (!pipeline) throw new HaloError(`Saved run is for pipeline "${snap.pipeline}", which is not loaded`);
     const ctx = this.newContext(pipeline, snap.input, 0);
-    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback });
+    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback, sessions: snap.sessions });
     ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
     return ctx;
   }
@@ -846,8 +933,21 @@ export class HaloRuntime {
   }
 
   private toSnapshot(ctx: ExecutionContext, nextStage: number, waitingFor?: string): RunSnapshot {
-    const { input, data, meta, trace, current, loops, loopFeedback } = ctx;
-    return { version: 1, pipeline: ctx.pipeline.name, nextStage, ...(waitingFor !== undefined ? { waitingFor } : {}), input, data, meta, trace, current, loops, loopFeedback };
+    const { input, data, meta, trace, current, loops, loopFeedback, sessions } = ctx;
+    return {
+      version: 1,
+      pipeline: ctx.pipeline.name,
+      nextStage,
+      ...(waitingFor !== undefined ? { waitingFor } : {}),
+      input,
+      data,
+      meta,
+      trace,
+      current,
+      loops,
+      loopFeedback,
+      ...(sessions && Object.keys(sessions).length ? { sessions } : {}),
+    };
   }
 
   private async executeStages(ctx: ExecutionContext, start: number): Promise<RunResult["status"]> {
@@ -1050,10 +1150,11 @@ export class HaloRuntime {
     return this.tools.has(name) || this.agents.has(name) || this.pipelines.has(name) || this.policies.has(name);
   }
 
-  private resolveArgs(stage: { argList: CallStage["argList"] }, ctx: ExecutionContext, opts: { shell?: boolean } = {}) {
+  private resolveArgs(stage: { argList: CallStage["argList"] }, ctx: ExecutionContext, opts: { shell?: boolean; skip?: Set<string> } = {}) {
     const positional: unknown[] = [];
     const named: Record<string, unknown> = {};
     for (const a of stage.argList) {
+      if (a.name && opts.skip?.has(a.name)) continue;
       const value = this.resolveValue(a.value, ctx, opts);
       if (a.name) named[a.name] = value;
       else positional.push(value);
@@ -1313,11 +1414,22 @@ export class HaloRuntime {
     this.guard.checkBudget(agent, hooks);
     const user = this.guard.checkInput(agent, prompt, hooks);
 
-    this.startShadows(agent, stage.method, user, system, options, ctx);
+    // An agent with tools holds a conversation: it calls tools until it answers. A run paused
+    // for approval of one of its calls picks that conversation up where it stopped.
+    const toolNames = this.toolset(agent, stage, callOptions);
+    const session = ctx.sessions?.[ctx.stageIndex];
+    if (session) delete ctx.sessions![ctx.stageIndex];
+    const kit = toolNames.length ? await this.toolKit(agent, toolNames, ctx) : undefined;
+    const conversation: LLMMessage[] | undefined = kit ? (session?.messages ?? [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user", content: user }]) : undefined;
+    const steps = { done: session?.step ?? 0, pending: session?.pending };
+
+    if (!session) this.startShadows(agent, stage.method, user, system, options, ctx);
     const corrections = this.correctLimit(ctx, agent);
     let ask = user;
     for (let attempt = 0; ; attempt++) {
-      const { value, tokens } = await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], ask, system, options, stage, ctx);
+      const { value, tokens } = kit
+        ? await this.converse(agent, target, stage, ctx, kit, conversation!, steps, system, options, callOptions)
+        : await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], ask, system, options, stage, ctx);
       try {
         const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
         await memory.remember?.(checked);
@@ -1331,8 +1443,206 @@ export class HaloRuntime {
         if (v) v.corrected = true;
         this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
         ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
+        // A conversation with tools continues: the agent keeps what its tools told it.
+        conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
       }
     }
+  }
+
+  /**
+   * The tools an agent may choose to call on this call: `tools: [Shell, Files]` on the call, or
+   * `tools: auto` on the agent or the call (everything it equips, except stores it reads as context).
+   * `tools: none` turns them off for one call. Each must be equipped.
+   */
+  private toolset(agent: Agent, stage: CallStage, callOptions: Record<string, unknown>): string[] {
+    const arg = stage.argList.find((a) => a.name === "tools");
+    const value = arg ? (arg.value.kind === "list" ? arg.value.items : [arg.value]) : undefined;
+    const named = value?.map((v) => (v.kind === "ref" ? v.path.join(".") : v.kind === "string" ? v.value : formatValue(callOptions.tools)));
+    const choice = named ?? (agent.params.tools ? [agent.params.tools] : []);
+    if (choice.length === 1 && (choice[0] === "none" || choice[0] === "false")) return [];
+    const names =
+      choice.length === 1 && (choice[0] === "auto" || choice[0] === "all")
+        ? (agent.equips ?? []).filter((n) => {
+            const t = this.tools.get(n);
+            return t && t.provider !== "VectorStore" && t.provider !== "File";
+          })
+        : choice;
+    for (const n of names) {
+      if (!this.tools.has(n)) throw new HaloError(`${agent.name}.${stage.method}: tools: names "${n}", which is not a declared tool`);
+      if (!agent.equips?.includes(n)) throw new HaloError(`Agent "${agent.name}" is not equipped with tool "${n}" (add \`equips ${n}\`)`);
+    }
+    return names;
+  }
+
+  /** The methods of these tools the agent's policies let it see, described for the model. */
+  private async toolKit(agent: Agent, names: string[], ctx: ExecutionContext): Promise<ToolKit> {
+    const kit: ToolKit = { specs: [], offered: [], byName: new Map() };
+    for (const name of names) {
+      const tool = this.tools.get(name)!;
+      const info = this.providerInfo.get(tool.provider);
+      const methods = Array.isArray(info?.methods)
+        ? info.methods
+        : info?.methods
+          ? await info.methods({ tool, config: this.toolConfig(tool, ctx).config, signal: ctx.signal }, this.toolServices())
+          : undefined;
+      if (!methods?.length) {
+        throw new HaloError(`Tool "${name}" (${tool.provider}) doesn't describe its methods, so an agent can't choose to call it; register the provider with its info (registerToolProvider(name, provider, info))`, { code: "TOOL_CONFIG" });
+      }
+      for (const method of methods) {
+        const target = `${name}.${method.name}`;
+        // Function names allow letters, digits, _ and - (64 at most), so "Repo.create_pr" becomes "Repo__create_pr".
+        let fn = `${name}__${method.name}`.replace(/[^\w-]/g, "_").slice(0, 64);
+        for (let i = 2; kit.byName.has(fn); i++) fn = `${fn.slice(0, 60)}_${i}`;
+        const entry = { tool, method, target };
+        kit.byName.set(fn, entry);
+        kit.byName.set(target, entry);
+        // A method its policies hide isn't offered; a model that calls it anyway is refused by checkToolCall.
+        if (!this.guard.toolVisible(agent, target, method.effect)) continue;
+        kit.offered.push(target);
+        const about = info?.description ? `${name} (${info.description}): ${method.description}` : `${name}: ${method.description}`;
+        kit.specs.push({ name: fn, description: about.slice(0, 1024), parameters: method.params ?? { type: "object", properties: {} } });
+      }
+    }
+    if (!kit.specs.length) throw new HaloError(`Agent "${agent.name}" has tools, but its policies allow none of their methods`, { code: "TOOL_CONFIG" });
+    return kit;
+  }
+
+  /**
+   * Hold an agent's tool conversation: ask the model, run the tools it calls (each checked
+   * against its policies), give it the results, and repeat until it answers. After
+   * `max_steps` requests that called tools, the next one asks for an answer without tools.
+   */
+  private async converse(
+    agent: Agent,
+    target: string,
+    stage: CallStage,
+    ctx: ExecutionContext,
+    kit: ToolKit,
+    messages: LLMMessage[],
+    steps: { done: number; pending?: LLMToolCall[] },
+    system: string | undefined,
+    options: LLMOptions,
+    callOptions: Record<string, unknown>,
+  ): Promise<{ value: unknown; tokens?: { prompt: number; completion: number } }> {
+    const maxSteps = Number(callOptions.max_steps ?? agent.params.max_steps ?? DEFAULT_MAX_STEPS);
+    const hooks = this.guardHooks(ctx);
+    const tokens = { prompt: 0, completion: 0 };
+    let shownFrom = messages.length - 1;
+    for (;;) {
+      // Calls left over from a turn that stopped for approval run first.
+      if (steps.pending?.length) {
+        const calls = steps.pending;
+        steps.pending = undefined;
+        await this.runToolCalls(agent, kit, calls, messages, steps, ctx, hooks);
+      }
+      const last = steps.done >= maxSteps;
+      if (last) messages.push({ role: "user", content: `You have used all ${maxSteps} tool steps. Answer now, without calling tools.` });
+      const shown = messages.slice(Math.max(0, shownFrom)).map((m) => (m.role === "tool" ? `[${m.name} result]\n${m.content}` : m.content)).join("\n\n");
+      const turn: Turn = { messages, tools: kit.specs, toolChoice: last ? "none" : "auto", targets: kit.offered, step: steps.done + 1, shown };
+      const estimate = messages.map((m) => m.content).join("\n") + JSON.stringify(kit.specs);
+      const r = await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], estimate, system, options, stage, ctx, "agent", turn);
+      if (r.tokens) (tokens.prompt += r.tokens.prompt), (tokens.completion += r.tokens.completion);
+      shownFrom = messages.length;
+      if (!r.toolCalls?.length || last) {
+        messages.push({ role: "assistant", content: typeof r.text === "string" ? r.text : formatValue(r.value) });
+        // MaxTokens is about one answer: the last one.
+        return { value: r.value, tokens: r.tokens };
+      }
+      messages.push({ role: "assistant", content: r.text ?? "", toolCalls: r.toolCalls, raw: r.rawMessage });
+      steps.done++;
+      await this.runToolCalls(agent, kit, r.toolCalls, messages, steps, ctx, hooks);
+    }
+  }
+
+  /** Run a turn's tool calls in order, adding each result to the conversation. */
+  private async runToolCalls(agent: Agent, kit: ToolKit, calls: LLMToolCall[], messages: LLMMessage[], steps: { done: number }, ctx: ExecutionContext, hooks: PolicyHooks): Promise<void> {
+    for (let i = 0; i < calls.length; i++) {
+      const call = calls[i]!;
+      let content: string;
+      try {
+        content = await this.agentTool(agent, kit, call, ctx, hooks);
+      } catch (err) {
+        if (err instanceof Pause && err.waitingFor === "approval") {
+          // Keep the conversation and the calls still to run, so approving picks up right here.
+          (ctx.sessions ??= {})[ctx.stageIndex] = { messages: copy(messages), pending: calls.slice(i), step: steps.done };
+        }
+        throw err;
+      }
+      messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
+    }
+  }
+
+  /** Run one tool call an agent asked for, and say what happened in words the model can act on. */
+  private async agentTool(agent: Agent, kit: ToolKit, call: LLMToolCall, ctx: ExecutionContext, hooks: PolicyHooks): Promise<string> {
+    const entry = kit.byName.get(call.name);
+    const report = (decision: Extract<RuntimeEvent, { type: "agent_tool" }>["decision"], detail?: string) =>
+      this.emit({ type: "agent_tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, target: entry?.target ?? call.name, args: this.guard.forLog(agent, call.args), decision, detail });
+    if (!entry) {
+      report("error", "no such tool");
+      return `Error: there is no tool named "${call.name}". You can call: ${kit.specs.map((spec) => spec.name).join(", ")}.`;
+    }
+    let check: ReturnType<PolicyEngine["checkToolCall"]>;
+    try {
+      check = this.guard.checkToolCall(agent, entry.target, entry.method.effect, call.args, hooks);
+    } catch (err) {
+      if (!(err instanceof PolicyViolation)) throw err;
+      report("refused", err.message);
+      return `Refused by policy "${err.policy}": ${err.message}. Don't try this call again.`;
+    }
+    let decision: "allowed" | "approved" = "allowed";
+    if (check !== "allow") {
+      const answer = await this.approval(agent, entry.target, call.args, check.approve, ctx);
+      if (!isApproval(answer)) {
+        const reason = isPlainObject(answer) && typeof answer.reason === "string" ? `: ${answer.reason}` : typeof answer === "string" && answer.trim().length > 3 && !/^\s*(?:n|no|reject|rejected|deny)\s*$/i.test(answer) ? `: ${answer.trim()}` : "";
+        report("declined", reason.slice(2) || undefined);
+        return `A person declined this call${reason}. Don't try it again; finish without it, or say what you need.`;
+      }
+      decision = "approved";
+    }
+    let result: unknown;
+    try {
+      result = await this.toolCall(entry.tool, entry.method.name, [], call.args, ctx, true, agent.name);
+    } catch (err) {
+      if (ctx.signal.aborted || err instanceof Pause) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      report("error", message);
+      return `Error: ${message}`;
+    }
+    report(decision);
+    const limit = Number(agent.params.tool_result_chars ?? DEFAULT_TOOL_RESULT_CHARS);
+    const text = clip(typeof result === "string" ? result : (JSON.stringify(result) ?? "null"), limit);
+    // A tool result is input to the model: the agent's input policies redact or withhold it.
+    try {
+      return this.guard.checkInput(agent, text, hooks);
+    } catch (err) {
+      if (!(err instanceof PolicyViolation)) throw err;
+      return `[withheld: this result was blocked by policy "${err.policy}": ${err.message}]`;
+    }
+  }
+
+  /**
+   * Ask a person whether an agent may make a tool call: onInterrupt (the CLI asks in the
+   * terminal), else pause the run until `signal(runId, "approval", answer)`. The answer to
+   * a paused run is waiting in ctx.approvals when the stage runs again.
+   */
+  private async approval(agent: Agent, target: string, args: unknown, policy: string, ctx: ExecutionContext): Promise<unknown> {
+    const message = `Allow ${agent.name} to call ${target} with ${clip(formatValue(this.guard.forLog(agent, args)), 2000)}? (policy ${policy})`;
+    if (ctx.approvals && Object.hasOwn(ctx.approvals, ctx.stageIndex)) {
+      const answer = ctx.approvals[ctx.stageIndex];
+      delete ctx.approvals[ctx.stageIndex];
+      return answer;
+    }
+    const mock = this.mockFor("approval", target + "?");
+    const req: InterruptRequest = { pipeline: ctx.pipeline.name, message, channel: "approval", attachments: [args], args: [], named: { target, args, policy, agent: agent.name }, current: ctx.current, context: this.snapshot(ctx) };
+    if (mock) return mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current });
+    if (this.config.onInterrupt) return raceAbort(Promise.resolve(this.config.onInterrupt(req)), ctx.signal);
+    // Only a top-level stage that is itself the agent call can stop and pick up again.
+    const stage = ctx.pipeline.pipeline[ctx.stageIndex];
+    const own = stage?.kind === "call" && stage.callee === agent.name;
+    if (ctx.depth > 0 || !own) {
+      throw new HaloError(`${agent.name} needs approval to call ${target} (policy ${policy}), but this stage can't pause (it's inside a called pipeline, fan-out, each, or branch); register runtime.onInterrupt(...)`, { code: "APPROVAL_NEEDED" });
+    }
+    throw new Pause("approval", message);
   }
 
   /** `@correct(n)` on the agent, else on the pipeline: how many times a policy-rejected answer may be retried. */
@@ -1385,7 +1695,8 @@ export class HaloRuntime {
     stage: CallStage | undefined,
     ctx: ExecutionContext,
     kind: CallRecord["kind"] = "agent",
-  ): Promise<{ value: unknown; tokens?: { prompt: number; completion: number } }> {
+    turn?: Turn,
+  ): Promise<{ value: unknown; text?: string; tokens?: { prompt: number; completion: number }; toolCalls?: LLMToolCall[]; rawMessage?: unknown }> {
     const t0 = performance.now();
     const mock = this.mockFor(...mockKeys);
     const flight = this.flight(ctx);
@@ -1396,11 +1707,20 @@ export class HaloRuntime {
     try {
       outcome = await this.withPolicies(ctx, target, agent, async (signal) => {
         if (mock) {
-          const { positional, named } = stage ? this.resolveArgs(stage, ctx) : { positional: [], named: {} };
-          return { value: await mock({ target, kind: "agent", prompt, system, args: positional, named, input: ctx.current }), model, cost: 0, tokens: undefined, mocked: true };
+          const { positional, named } = stage ? this.resolveArgs(stage, ctx, { skip: LLM_OPTION_KEYS }) : { positional: [], named: {} };
+          const req: MockRequest = { target, kind: "agent", prompt: turn ? turn.shown : prompt, system, args: positional, named, input: ctx.current };
+          if (turn) Object.assign(req, { tools: turn.targets, messages: turn.messages, step: turn.step });
+          const value = await mock(req);
+          // A mock that calls tools returns useTool(...) (or a list of them).
+          const uses = (Array.isArray(value) ? value : [value]).filter((v): v is ToolUse => v instanceof ToolUse);
+          if (turn && uses.length) {
+            const toolCalls = uses.map((u, i) => ({ id: `mock_${turn.step}_${i}`, name: u.target, args: u.args }));
+            return { value: "" as unknown, model, cost: 0, tokens: undefined, mocked: true, toolCalls, rawMessage: undefined };
+          }
+          return { value, model, cost: 0, tokens: undefined, mocked: true, toolCalls: undefined, rawMessage: undefined };
         }
-        const r = await this.callLLM(model, prompt, system, options, signal);
-        return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false };
+        const r = await this.callLLM(model, prompt, system, options, signal, turn);
+        return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false, toolCalls: r.toolCalls, rawMessage: r.rawMessage };
       });
     } catch (err) {
       // A call cut off mid-flight (another branch failed, or a timeout) may still be billed:
@@ -1426,14 +1746,16 @@ export class HaloRuntime {
     }
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
+    const toolCalls = result.toolCalls;
     if (kind !== "shadow") {
       // Telemetry keeps what the agent's policies let out: redacted, or withheld if blocked.
       const shown = this.guard.forLog(agent, value);
       const text = shown === value ? result.value : formatValue(shown);
-      if (typeof result.value === "string") this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: typeof text === "string" ? text : formatValue(text) });
-      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt, output: shown, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
+      if (typeof result.value === "string" && result.value) this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: typeof text === "string" ? text : formatValue(text) });
+      const output = toolCalls?.length ? { ...(result.value ? { text: shown } : {}), toolCalls: toolCalls.map((c) => ({ name: c.name, args: this.guard.forLog(agent, c.args) })) } : shown;
+      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt: turn ? turn.shown : prompt, output, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
     }
-    return { value, tokens: result.tokens };
+    return { value, text: typeof result.value === "string" ? result.value : undefined, tokens: result.tokens, toolCalls, rawMessage: result.rawMessage };
   }
 
   private startShadows(primary: Agent, method: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext): void {
@@ -1469,7 +1791,7 @@ export class HaloRuntime {
   }
 
   /** Call an LLM through its adapter (and the router, when configured). */
-  private async callLLM(requestedModel: string, prompt: string, system: string | undefined, options: LLMOptions, signal: AbortSignal) {
+  private async callLLM(requestedModel: string, prompt: string, system: string | undefined, options: LLMOptions, signal: AbortSignal, turn?: Turn) {
     let model = requestedModel;
     if (this.routerEnabled) {
       try {
@@ -1489,9 +1811,14 @@ export class HaloRuntime {
       throw new HaloError(`No API key set for ${adapter.id} (model "${model}"). Set ${vars}, or pass apiKey in RuntimeConfig.`);
     }
 
+    if (turn?.tools.length && adapter.supportsTools === false) {
+      throw new HaloError(`${adapter.id} models can't call tools (model "${model}"); give this agent a model that can, or remove its tools`, { code: "TOOL_CONFIG" });
+    }
     const request: LLMRequest = {
       model,
-      messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }],
+      messages: turn ? turn.messages : [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user" as const, content: prompt }],
+      tools: turn?.tools,
+      toolChoice: turn?.toolChoice,
       temperature: options.temperature,
       maxTokens: options.maxTokens,
       topP: options.topP,
@@ -1511,12 +1838,13 @@ export class HaloRuntime {
     const tokens = { prompt: parsed.usage?.promptTokens ?? 0, completion: parsed.usage?.completionTokens ?? 0 };
     const cost = adapter.estimateCost?.(model, tokens.prompt, tokens.completion) ?? 0;
     this.costTracker.recordUsage(model, cost);
-    return { text: parsed.text, model, cost, tokens };
+    return { text: parsed.text, model, cost, tokens, toolCalls: parsed.toolCalls, rawMessage: parsed.rawMessage };
   }
 
   private toolServices(): ToolServices {
     return {
       fetch: this.fetch,
+      env: this.env,
       vectors: () => (this.vectorStore ??= new LocalVectorStore(this.config.vectorPath ?? ".halo/vectors.sqlite")),
       sql: (url) => {
         let db = this.sqlPool.get(url);
@@ -1526,10 +1854,8 @@ export class HaloRuntime {
     };
   }
 
-  private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean): Promise<unknown> {
-    const target = `${tool.name}.${method}`;
-    const implicitInput = !positional.length && ctx.current !== undefined;
-    const args = implicitInput ? [ctx.current] : positional;
+  /** A tool declaration's own args, resolved when read (so an unused key is never needed). */
+  private toolConfig(tool: ToolDeclaration, ctx: ExecutionContext) {
     const decl = declArgs(tool);
     // HTTP tools' URLs get their {{...}} values URL-encoded, so a value can't add path or query parts.
     const isHttp = tool.provider === "REST" || tool.provider === "GET" || tool.provider === "POST";
@@ -1539,7 +1865,15 @@ export class HaloRuntime {
       return v === undefined ? undefined : this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name, encode });
     };
     const first = decl.positional[0];
-    const template0 = first?.kind === "string" ? first.value : undefined;
+    return { config, template0: first?.kind === "string" ? first.value : undefined };
+  }
+
+  /** Call a tool. `chosenBy` names the agent that chose the call: its arguments are all it gets (never the pipeline value). */
+  private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean, chosenBy?: string): Promise<unknown> {
+    const target = `${tool.name}.${method}`;
+    const implicitInput = chosenBy === undefined && !positional.length && ctx.current !== undefined;
+    const args = implicitInput ? [ctx.current] : positional;
+    const { config, template0 } = this.toolConfig(tool, ctx);
 
     const t0 = performance.now();
     const mock = this.mockFor(target, tool.name);
@@ -1549,11 +1883,11 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId }, this.toolServices()), mocked: false },
     );
 
     const latencyMs = Math.round(performance.now() - t0);
-    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked });
+    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: chosenBy } : {}) });
     this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output: result.value, latencyMs, mocked: result.mocked });
     return result.value;
   }

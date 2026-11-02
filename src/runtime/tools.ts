@@ -9,6 +9,9 @@ import type { ToolDeclaration, Value } from "../parser/types.js";
 import { HttpError, HaloError } from "./errors.js";
 import type { LocalVectorStore } from "./vectors.js";
 import { INTEGRATIONS } from "./integrations.js";
+import { mcpProvider } from "./mcp.js";
+import { LOCAL_PROVIDERS } from "./providers/index.js";
+import { chromeProvider } from "./providers/chrome.js";
 
 export interface ToolCall {
   tool: ToolDeclaration;
@@ -22,15 +25,60 @@ export interface ToolCall {
   config(name: string | number): unknown;
   /** The declaration's first argument as written, before {{...}} are filled (e.g. a URL or file template). */
   template0?: string;
-  /** True when an agent invoked the tool via `Agent.method(tool: Name, ...)`. */
+  /** True when an agent invoked the tool via `Agent.method(tool: Name, ...)`, or chose to call it. */
   viaAgent: boolean;
   signal: AbortSignal;
+  /** The run making the call (for providers that keep per-run state, or link back to a run). */
+  runId?: string;
+}
+
+/** JSON Schema for a method's named arguments (the subset providers need). */
+export interface JsonSchema {
+  type?: string | string[];
+  description?: string;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  items?: JsonSchema;
+  enum?: unknown[];
+  [key: string]: unknown;
+}
+
+/**
+ * What calling a method can do:
+ *   - read: looks things up, changes nothing
+ *   - write: changes local state (files, a local database)
+ *   - external: acts on the world outside (sends, posts, pays, deploys)
+ */
+export type ToolEffect = "read" | "write" | "external";
+
+/** A method an agent can call, described for the model and for `halo plan`. */
+export interface ToolMethod {
+  name: string;
+  description: string;
+  /** Its named arguments. */
+  params?: JsonSchema;
+  effect: ToolEffect;
+}
+
+/** Context for listing a tool's methods: its declaration args, and services. */
+export interface ToolInfoContext {
+  tool: ToolDeclaration;
+  config(name: string | number): unknown;
+  signal: AbortSignal;
+}
+
+export interface ProviderInfo {
+  description?: string;
+  /** The methods a tool of this provider has. A function for providers that ask a server (MCP). */
+  methods?: ToolMethod[] | ((ctx: ToolInfoContext, services: ToolServices) => Promise<ToolMethod[]>);
 }
 
 export interface ToolServices {
   fetch: typeof fetch;
   vectors(): LocalVectorStore;
   sql(url: string): InstanceType<typeof Bun.SQL>;
+  /** Environment for provider defaults (e.g. VectorStore's OPENAI_API_KEY). Defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 export type ToolProvider = (call: ToolCall, services: ToolServices) => Promise<unknown>;
@@ -133,7 +181,9 @@ const post: ToolProvider = async (call, { fetch }) => {
 const VECTOR_METHODS = new Set(["log", "insert", "add", "upsert", "save", "store", "search", "query", "find", "recall", "similar", "delete", "forget", "count"]);
 
 const vectorStore: ToolProvider = async (call, services) => {
-  const store = services.vectors();
+  // Local SQLite or Postgres (url:), hashed or model embeddings (embeddings:); see vector-backend.ts.
+  const { resolveVectorStore } = await import("./vector-backend.js");
+  const { store, vector, hashed } = resolveVectorStore(call, services);
   const ns = String(call.config("namespace") ?? call.tool.name);
   const [first] = call.positional;
   const named = call.named;
@@ -150,7 +200,10 @@ const vectorStore: ToolProvider = async (call, services) => {
     case "store": {
       const { content = first, tags: t, ...metadata } = named;
       if (content === undefined) throw new HaloError(`${call.tool.name}.${call.method} needs content`);
-      return { stored: true, namespace: ns, ...store.insert(ns, content, tags(t), metadata) };
+      const tagList = tags(t);
+      const text = typeof content === "string" ? content : JSON.stringify(content);
+      const embedding = await vector(hashed ? `${text} ${tagList.join(" ")}` : text, "document");
+      return { stored: true, namespace: ns, ...(await store.insert(ns, content, tagList, metadata, embedding)) };
     }
     case "search":
     case "query":
@@ -161,19 +214,20 @@ const vectorStore: ToolProvider = async (call, services) => {
       if (query === undefined) throw new HaloError(`${call.tool.name}.${call.method} needs a query`);
       const order = named.order === undefined ? undefined : String(named.order);
       if (order !== undefined && order !== "score" && order !== "recent") throw new HaloError(`${call.tool.name}.${call.method}: order must be "score" or "recent"`);
-      return store.search(ns, query, {
+      const embedding = await vector(query, "query");
+      return await store.search(ns, query, {
         limit: Number(named.limit ?? 5),
         minScore: Number(named.min_score ?? named.minScore ?? 0),
         tags: named.tags ? tags(named.tags) : undefined,
         excludeTags: named.exclude_tags ?? named.excludeTags ? tags(named.exclude_tags ?? named.excludeTags) : undefined,
         order,
-      });
+      }, embedding);
     }
     case "delete":
     case "forget":
-      return { deleted: store.delete(ns, { id: named.id !== undefined ? Number(named.id) : undefined, tags: tags(named.tags) }) };
+      return { deleted: await store.delete(ns, { id: named.id !== undefined ? Number(named.id) : undefined, tags: tags(named.tags) }) };
     case "count":
-      return store.count(ns);
+      return await store.count(ns);
     default:
       throw new HaloError(`VectorStore tool "${call.tool.name}" has no method "${call.method}" (use log, search, delete, count)`);
   }
@@ -202,6 +256,9 @@ export const BUILTIN_PROVIDERS: Record<string, ToolProvider> = {
   VectorStore: vectorStore,
   PostgreSQL: postgres,
   SQL: postgres,
+  MCP: mcpProvider,
+  Chrome: chromeProvider,
+  ...LOCAL_PROVIDERS,
   ...INTEGRATIONS,
 };
 

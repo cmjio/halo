@@ -11,7 +11,10 @@ export const SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick", "Value"]
 /** System methods that emit an event to `onSystemEvent` (logged when no handler is set). */
 export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "TriggerWebhook", "Notify"] as const;
 
-export const TOOL_PROVIDERS = ["REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "GitHub", "Linear", "Figma"] as const;
+export const TOOL_PROVIDERS = [
+  "REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "GitHub", "Linear", "Figma",
+  "MCP", "Chrome", "Workspace", "KV", "Code", "Documents",
+] as const;
 
 /** Content categories detectable by `Block(...)`. */
 export const BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection", "PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "Markdown"] as const;
@@ -19,8 +22,14 @@ export const BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection
 /** Content categories removable by `Redact(...)`. */
 export const REDACT_CATEGORIES = ["PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress"] as const;
 
+/** Policy rules on the tool calls an agent chooses. */
+export const TOOL_RULES = ["AllowTools", "DenyTools", "AllowEffects", "ApproveTools", "ApproveEffects", "DenyArgs"] as const;
+
+/** What a tool method can do (see ToolEffect). */
+export const TOOL_EFFECTS = ["read", "write", "external"] as const;
+
 /** Policy rules the runtime enforces deterministically. */
-export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate"] as const;
+export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", ...TOOL_RULES] as const;
 
 /** What `Require(...)` can check. Anything else (e.g. Require(Approver)) needs a judge and is not enforced. */
 export const REQUIRE_CHECKS = ["JSON", "XML", "Citation"] as const;

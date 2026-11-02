@@ -4,6 +4,9 @@
  * Rules run on the prompt before an agent is called (input) and on its result
  * after (output). Only deterministic rules are enforced; AI-judged rules such
  * as Tone(...) are reported by the validator and skipped here.
+ *
+ * Tool rules (AllowTools, DenyTools, AllowEffects, ApproveTools, ApproveEffects,
+ * DenyArgs) run on the tool calls an agent chooses, before they run.
  */
 
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
@@ -13,9 +16,19 @@ export interface Violation {
   policy: string;
   rule: string;
   message: string;
-  phase: "input" | "output" | "budget";
+  phase: "input" | "output" | "budget" | "tool";
   /** True when `@correct` sent the answer back and the agent fixed it (set after the fact). */
   corrected?: boolean;
+}
+
+export type ToolEffectName = "read" | "write" | "external";
+
+/** `Repo`, `Repo.create_pr`, `Repo.*`, `*.delete`, `*`: a tool pattern, matched against "Tool.method". */
+export function toolMatches(pattern: string, target: string): boolean {
+  if (pattern === "*") return true;
+  if (!pattern.includes(".")) return target.split(".")[0] === pattern;
+  const re = new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^.]*")}$`);
+  return re.test(target);
 }
 
 interface Detector {
@@ -344,6 +357,52 @@ export class PolicyEngine {
     const b = this.rulesFor(agent).find((x) => x.rule.name === "MaxSpend")!;
     const limit = Number(b.rule.args[0]);
     this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}, with no room left for another call`, "budget", hooks);
+  }
+
+  /**
+   * Whether an agent may see a tool method at all: AllowTools / AllowEffects (each rule must
+   * allow it, so several policies narrow what's allowed) and DenyTools. Hidden methods are
+   * never offered to the model; a call to one anyway is refused by checkToolCall.
+   */
+  toolVisible(agent: Agent, target: string, effect: ToolEffectName): boolean {
+    return this.toolRefusal(this.rulesFor(agent), target, effect) === undefined;
+  }
+
+  /**
+   * Check a tool call an agent asked for, before it runs. Returns "allow", or the policy that
+   * wants a human to approve it first; a refused call records a violation and throws.
+   */
+  checkToolCall(agent: Agent, target: string, effect: ToolEffectName, args: unknown, hooks: PolicyHooks): "allow" | { approve: string } {
+    const rules = this.rulesFor(agent);
+    const refusal = this.toolRefusal(rules, target, effect);
+    if (refusal) this.violate(refusal.rule, refusal.message, "tool", hooks);
+    const text = scanText(args);
+    for (const b of rules) {
+      if (b.rule.name !== "DenyArgs") continue;
+      const [pattern = "*", regex = ""] = b.rule.args.map(unquote);
+      if (!toolMatches(pattern, target)) continue;
+      let re: RegExp;
+      try {
+        re = new RegExp(regex, "i");
+      } catch {
+        throw new PolicyViolation(`Policy "${b.policy}": DenyArgs(${b.rule.args.join(", ")}) is not a valid regular expression`, b.policy, "DenyArgs");
+      }
+      if ([text, normalizeForScan(text), unescapeJson(text)].some((t) => re.test(t))) this.violate(b, `${target} was refused: its arguments match /${regex}/`, "tool", hooks);
+    }
+    const approver = rules.find(
+      (b) => (b.rule.name === "ApproveTools" && b.rule.args.some((p) => toolMatches(unquote(p), target))) || (b.rule.name === "ApproveEffects" && b.rule.args.map(unquote).includes(effect)),
+    );
+    return approver ? { approve: approver.policy } : "allow";
+  }
+
+  private toolRefusal(rules: BoundRule[], target: string, effect: ToolEffectName): { rule: BoundRule; message: string } | undefined {
+    for (const b of rules) {
+      const args = b.rule.args.map(unquote);
+      if (b.rule.name === "AllowTools" && !args.some((p) => toolMatches(p, target))) return { rule: b, message: `${target} is not in the tools policy "${b.policy}" allows` };
+      if (b.rule.name === "DenyTools" && args.some((p) => toolMatches(p, target))) return { rule: b, message: `${target} is denied by policy "${b.policy}"` };
+      if (b.rule.name === "AllowEffects" && !args.includes(effect)) return { rule: b, message: `${target} has effect "${effect}", which policy "${b.policy}" doesn't allow` };
+    }
+    return undefined;
   }
 
   private blocks(b: BoundRule, text: string): string | undefined {
