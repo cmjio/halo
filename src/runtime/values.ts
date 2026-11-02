@@ -4,6 +4,18 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
+/** Names that would reach or replace an object's prototype. Never used as data keys. */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+export function isSafeKey(key: string): boolean {
+  return !UNSAFE_KEYS.has(key);
+}
+
+/** Own (not inherited) property check, safe for any object. */
+export function hasOwnKey(obj: unknown, key: string): boolean {
+  return obj !== null && typeof obj === "object" && isSafeKey(key) && Object.hasOwn(obj, key);
+}
+
 /**
  * Walk `path` into `root`, returning undefined when any segment is missing.
  * On a list, a number picks an item (`items.0`), `length` counts them, and
@@ -20,7 +32,7 @@ export function getPath(root: unknown, path: string[]): unknown {
       else return cur.map((item) => getPath(item, path.slice(i)));
     } else if (typeof cur === "string") {
       return part === "length" && i === path.length - 1 ? cur.length : undefined;
-    } else if (typeof cur === "object") cur = (cur as Record<string, unknown>)[part];
+    } else if (typeof cur === "object") cur = hasOwnKey(cur, part) ? (cur as Record<string, unknown>)[part] : undefined;
     else return undefined;
   }
   return cur;
@@ -38,7 +50,7 @@ export function pick(value: unknown, fields: string[], maxChars = Infinity): unk
   const out: Record<string, unknown> = {};
   for (const f of fields) {
     const v = getPath(value, f.split("."));
-    if (v !== undefined) out[f] = clip(v);
+    if (v !== undefined && isSafeKey(f)) out[f] = clip(v);
   }
   return out;
 }
@@ -51,12 +63,12 @@ export function formatValue(v: unknown): string {
 }
 
 /** Replace `{{path}}` placeholders. Unresolved placeholders are left as written. */
-export function interpolate(template: string, resolve: (path: string[]) => unknown, format: (v: unknown) => string = formatValue): { text: string; used: boolean } {
+export function interpolate(template: string, resolve: (path: string[]) => unknown, format: (v: unknown, offset: number) => string = formatValue): { text: string; used: boolean } {
   let used = false;
-  const text = template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, expr: string) => {
+  const text = template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, expr: string, offset: number) => {
     used = true;
     const value = resolve(expr.split("."));
-    return value === undefined ? match : format(value);
+    return value === undefined ? match : format(value, offset);
   });
   return { text, used };
 }

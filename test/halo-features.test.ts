@@ -212,6 +212,18 @@ describe("|<> loop", () => {
     expect(err).toBeInstanceOf(LoopLimitError);
     expect((err as Error).message).toBe(`loop(SWE) gave up after 3 tries: "context.data.Shell.run.exitCode != 0" is still true`);
   });
+
+  test("a max that isn't a whole number of at least 1 is an error, not an endless loop", async () => {
+    for (const max of ["n", "0"]) {
+      const r = rt(
+        `agent A [openai/gpt-4o]
+         pipeline P(n: String) -> Result:
+           n |> A.go() |<> loop(A, "context.data.A.go != null", max: ${max})`,
+        { "A.go": "again" },
+      );
+      await expect(r.execute("P", { n: "lots" })).rejects.toThrow("max must be a whole number of at least 1");
+    }
+  });
 });
 
 describe("@correct", () => {
@@ -313,6 +325,14 @@ describe("policies", () => {
     await expect(run(rule, JSON.stringify({ payout: 1 }))).rejects.toThrow(`"context.data.coverage.max_payout" is not set`);
   });
 
+  test("Validate compares numbers only with numbers: true, [], and \"\" aren't 1 or 0", async () => {
+    const rule = `Validate("approved", "==", "1")`;
+    await expect(run(rule, JSON.stringify({ approved: true }))).rejects.toThrow("Validate failed");
+    await expect(run(`Validate("payout", "<=", "5")`, JSON.stringify({ payout: [] }))).rejects.toThrow("Validate failed");
+    await expect(run(`Validate("payout", "<=", "5")`, JSON.stringify({ payout: "" }))).rejects.toThrow("Validate failed");
+    expect(await run(`Validate("payout", "<=", "5")`, JSON.stringify({ payout: "4" }))).toEqual({ payout: "4" });
+  });
+
   test("Require(XML), Require(Citation), MatchRegex, and Block(Markdown)", async () => {
     expect(await run("Require(XML)", "<a><b>x</b></a>")).toBe("<a><b>x</b></a>");
     await expect(run("Require(XML)", "<a><b>x</a>")).rejects.toThrow("Output is not valid XML");
@@ -327,6 +347,47 @@ describe("policies", () => {
     const { fetch } = fakeFetch(() => ({ choices: [{ message: { content: "a long answer" } }], usage: { prompt_tokens: 5, completion_tokens: 900 } }));
     const r = rt(`policy P : MaxTokens(500)\nagent A [openai/gpt-4o]\n  requires P\npipeline Go(x: String) -> Result:\n  x |> A.answer()`, {}, { env: { OPENAI_API_KEY: "k" }, fetch });
     await expect(r.execute("Go", { x: "q" })).rejects.toThrow("Output used 900 tokens, more than the limit of 500");
+  });
+});
+
+describe("untrusted values", () => {
+  test("can't reach Object.prototype through listen targets, stores, or paths", async () => {
+    const r = rt(`pipeline P(ev: String) -> Result:\n  ev ~> listen(context.input.ev) |> System.Value(context.data.x)`);
+    await expect(r.run("P", { ev: "__proto__.polluted" })).rejects.toThrow("not a valid event name");
+    await expect(r.run("P", { ev: "" })).rejects.toThrow("not a valid event name");
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+    const looked = rt(`pipeline P(x: JSON) -> Result:\n  x |> System.Value(context.input.x.constructor)`);
+    expect((await looked.run("P", { x: {} })).output).toBeUndefined();
+  });
+
+  test("a REST call stays under the tool's URL, and placeholder values are encoded", async () => {
+    const { fetch, calls } = fakeFetch(() => ({ ok: true }));
+    const r = rt(
+      `tool U : REST("api.example.com/users/{{id}}/profile")
+       tool Api : REST("api.example.com/v1/repos")
+       pipeline ById(id: String) -> Result:
+         id |> U.get(id: id)
+       pipeline ByPath(p: String) -> Result:
+         p |> Api.get(path: p)`,
+      {},
+      { fetch },
+    );
+    await r.execute("ById", { id: "../../admin?all=1#" });
+    expect(String(calls[0]!.url)).toBe("https://api.example.com/users/..%2F..%2Fadmin%3Fall%3D1%23/profile");
+    await expect(r.execute("ByPath", { p: "/../../admin" })).rejects.toThrow("is outside the tool's URL https://api.example.com/v1/repos");
+    await expect(r.execute("ByPath", { p: "/x?admin=1" })).rejects.toThrow("can't contain ? or #");
+    await r.execute("ByPath", { p: "/halo/issues" });
+    expect(String(calls.at(-1)!.url)).toBe("https://api.example.com/v1/repos/halo/issues");
+  });
+
+  test("a File path filled from data stays in its folder", async () => {
+    const dir = join(tmp, "files");
+    const r = rt(`tool H : File("${dir}/history-{{user}}.json")\npipeline P(user: String) -> Result:\n  user |> H.append(content: "hi", user: user)`);
+    await expect(r.execute("P", { user: "/../../escaped" })).rejects.toThrow("is outside");
+    expect(existsSync(join(tmp, "escaped.json"))).toBe(false);
+    await r.execute("P", { user: "ana" });
+    expect(existsSync(join(dir, "history-ana.json"))).toBe(true);
   });
 });
 
@@ -420,6 +481,35 @@ pipeline P(x: String) -> Result:
     const done = await rt(src, mocks, { runStore: store }).signal(paused.runId, "yield", { note: "ok" });
     expect(done.output).toBe("finished with ok");
     expect(existsSync(join(tmp, "runs", `${paused.runId}.json`))).toBe(false);
+  });
+
+  test("signals sent at the same moment resume a paused run once", async () => {
+    for (const store of [undefined, new FileRunStore(join(tmp, "race"))]) {
+      let finished = 0;
+      const r = rt(src, { "A.draft": "draft", "A.finish": () => `finished ${++finished}` }, { runStore: store });
+      const paused = await r.run("P", { x: "a" });
+      const results = await Promise.allSettled([1, 2, 3].map(() => r.signal(paused.runId, "yield", { note: "ok" })));
+      expect(results.map((x) => x.status).sort()).toEqual(["fulfilled", "rejected", "rejected"]);
+      expect(finished).toBe(1);
+    }
+  });
+
+  test("a loop's count survives a pause, so pausing can't reset max", async () => {
+    let tries = 0;
+    const r = rt(
+      `agent A [openai/gpt-4o]
+       pipeline P(x: String) -> Result:
+         x |> A.go() as r |! yield("ok?") |<> loop(A, "context.data.r.bad == true", max: 2)`,
+      { "A.go": () => (tries++, { bad: true }) },
+    );
+    let run = await r.run("P", { x: "a" });
+    let resumes = 0;
+    const err = await (async () => {
+      while (run.status === "paused") (run = await r.signal(run.runId, "yield", {}), resumes++);
+    })().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LoopLimitError);
+    expect(tries).toBe(3);
+    expect(resumes).toBe(2); // the third answer is the one that hits the limit
   });
 
   test("stream() yields events as they happen and ends with done", async () => {

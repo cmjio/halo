@@ -110,6 +110,16 @@ function makeParser(source: string) {
 const empty = (errors: string[]): ParseResult => ({ policies: [], tools: [], stores: [], schemas: [], agents: [], pipelines: [], errors });
 
 export function parse(source: string): ParseResult {
+  try {
+    return parseProgram(source);
+  } catch (err) {
+    // Deeply nested input overflows the recursive-descent parser's stack.
+    if (err instanceof RangeError) return empty(["The program is nested too deeply to parse (too many brackets inside one another)"]);
+    throw err;
+  }
+}
+
+function parseProgram(source: string): ParseResult {
   const { input, parser, listener } = makeParser(source);
   const program = parser.program();
   if (listener.errors.length > 0) return empty(listener.errors);
@@ -135,6 +145,15 @@ export function parse(source: string): ParseResult {
 
 /** Parse a condition written as a string, e.g. a loop's `"context.data.x.exitCode != 0"`. */
 export function parseCondition(text: string): { expr?: CondExpr; errors: string[] } {
+  try {
+    return parseConditionText(text);
+  } catch (err) {
+    if (err instanceof RangeError) return { errors: ["the condition is nested too deeply"] };
+    throw err;
+  }
+}
+
+function parseConditionText(text: string): { expr?: CondExpr; errors: string[] } {
   const { input, parser, listener } = makeParser(text);
   const ctx = parser.condExpr();
   if (!listener.errors.length && parser.getCurrentToken().type !== HaloParser.EOF) listener.errors.push(`unexpected "${parser.getCurrentToken().text}"`);

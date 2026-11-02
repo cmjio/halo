@@ -61,7 +61,7 @@ Standard 5-field cron in the server's local time: minute, hour, day of month, mo
 
 The JSON body becomes the pipeline's arguments: fields that match parameter names are passed by name, and a pipeline with a single parameter that isn't in the body gets the whole body (handy for GitHub or Stripe events).
 
-With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`.
+With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup.
 
 ## Human approval
 
@@ -72,13 +72,13 @@ A run that reaches `|! yield` or `~> listen` pauses and is saved under `.halo/ru
 Respond: https://halo.example.com/approve/6f9696ef-…?sig=94cea2…
 ```
 
-The link opens a page with the question, the current value, and Approve / Reject buttons (or any other answer, as a word or JSON). It works without the API token, because the signature only allows answering that one run, once. The answer becomes the response (`context.data.yield`), the same as answering in the terminal: `approve` gives `{ approved: true, action: "approve", ... }`.
+The link opens a page with the question, the current value, and Approve / Reject buttons (or any other answer, as a word or JSON). It works without the API token, because the signature only allows answering that one question of that one run: once it's answered, the link stops working (`403`), and a run that pauses again gets a new link. If several people answer at once, only the first answer counts. The answer becomes the response (`context.data.yield`), the same as answering in the terminal: `approve` gives `{ approved: true, action: "approve", ... }`.
 
 Studio shows the same buttons on a paused run.
 
 ## HTTP API
 
-Every `/api` request needs `Authorization: Bearer <token>` when a token is set.
+Every `/api` request needs `Authorization: Bearer <token>` when a token is set. `POST` requests must be `Content-Type: application/json`.
 
 | Request | Does |
 |---|---|
@@ -97,6 +97,7 @@ curl -X POST localhost:8080/api/pipelines/TriageIssues/runs \
 ## Security
 
 - It listens on `127.0.0.1` by default. To listen on any other interface you must set `HALO_SERVE_TOKEN` (or `token`); it refuses to start otherwise, because the API starts runs that spend money and run data includes prompts and answers.
+- Web pages can't drive the API from a browser. A request with an `Origin` other than localhost or `publicUrl` is refused, and so is a `POST` that isn't JSON (the kind a page can send without asking). The `Host` header must be localhost, the address it listens on, or `publicUrl`'s host, which stops DNS rebinding (a site pointing its own name at `127.0.0.1`).
 - Approval links are signed with the token, or with a random secret kept in `.halo/serve-secret`. Deleting that file invalidates outstanding links.
 - Put it behind HTTPS (a reverse proxy such as Caddy) when it's reachable from the internet, and set `publicUrl` to that address.
 

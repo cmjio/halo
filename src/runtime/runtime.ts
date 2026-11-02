@@ -14,7 +14,7 @@
  *      the run pauses (status "paused") and `signal(runId, ...)` resumes it.
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
   BranchStage,
@@ -44,8 +44,8 @@ import { LocalVectorStore } from "./vectors.js";
 import { BUILTIN_PROVIDERS, declArgs, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateSchema } from "./schema.js";
-import { shellQuote } from "./integrations.js";
-import { formatValue, getPath, humanize, interpolate, isPlainObject, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
+import { placeholderSpots, quoteFor } from "./shell.js";
+import { formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
 
 export * from "./errors.js";
 export type { Violation } from "./policies.js";
@@ -141,7 +141,8 @@ export interface RunMeta {
   shadows: ShadowRecord[];
   halted?: { stage: number; condition: string };
   /** Set while the run waits at `|! yield` (`waitingFor: "yield"`) or `~> listen(T)` (`waitingFor: T`). */
-  paused?: { stage: number; waitingFor: string; message?: string };
+  /** `id` is new for every pause, so an approval for one pause can't answer a later one. */
+  paused?: { stage: number; waitingFor: string; message?: string; id?: string };
   checkpoint?: string;
 }
 
@@ -177,6 +178,9 @@ export interface RunSnapshot {
   meta: RunMeta;
   trace: TraceEntry[];
   current: unknown;
+  /** Loop iteration counts, so a pause can't reset a loop's `max`. */
+  loops?: Record<number, number>;
+  loopFeedback?: ExecutionContext["loopFeedback"];
 }
 
 /** Where paused runs are kept until `signal()` resumes them. */
@@ -184,6 +188,12 @@ export interface RunStore {
   save(runId: string, snapshot: RunSnapshot): void | Promise<void>;
   load(runId: string): RunSnapshot | undefined | Promise<RunSnapshot | undefined>;
   delete(runId: string): void | Promise<void>;
+  /**
+   * Remove and return a run in one step, so only one of several concurrent
+   * resumes can claim it. Stores without it fall back to load + delete, which
+   * is only safe within one process.
+   */
+  take?(runId: string): RunSnapshot | undefined | Promise<RunSnapshot | undefined>;
 }
 
 /** Keeps paused runs in this process (the default). */
@@ -198,6 +208,11 @@ export class MemoryRunStore implements RunStore {
   }
   delete(runId: string) {
     this.runs.delete(runId);
+  }
+  take(runId: string) {
+    const snap = this.load(runId);
+    this.runs.delete(runId);
+    return snap;
   }
 }
 
@@ -218,6 +233,20 @@ export class FileRunStore implements RunStore {
   }
   async delete(runId: string) {
     await Bun.file(this.path(runId)).delete().catch(() => {});
+  }
+  /** Atomic across processes: renaming the file claims it; a second claimer finds it gone. */
+  async take(runId: string) {
+    const claimed = `${this.path(runId)}.taken-${crypto.randomUUID()}`;
+    try {
+      renameSync(this.path(runId), claimed);
+    } catch {
+      return undefined;
+    }
+    try {
+      return (await Bun.file(claimed).json()) as RunSnapshot;
+    } finally {
+      await Bun.file(claimed).delete().catch(() => {});
+    }
   }
 }
 
@@ -376,6 +405,8 @@ export class HaloRuntime {
   private tools = new Map<string, ToolDeclaration>();
   private schemas = new Map<string, SchemaDeclaration>();
   private listeners = new Set<(event: RuntimeEvent) => void>();
+  /** Runs being claimed right now (guards stores without an atomic take). */
+  private resuming = new Set<string>();
   private guard = new PolicyEngine(this.policies);
   private shadowMinds = new Map<string, Agent[]>();
   private shadowModels = new Map<string, string[]>();
@@ -386,6 +417,11 @@ export class HaloRuntime {
   private router: LLMRouter;
   private routerEnabled: boolean;
   private costTracker = new CostTracker();
+  /**
+   * Per run (keyed by the top pipeline's meta): estimates of model calls in flight, plus
+   * costs in sub-pipelines not yet added to the top, so MaxSpend holds across parallel calls.
+   */
+  private unsettled = new WeakMap<RunMeta, number>();
   private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
   private systems = new Map<string, SystemHandler>();
   private vectorStore?: LocalVectorStore;
@@ -570,29 +606,53 @@ export class HaloRuntime {
    * or the listen target (e.g. "Slack.Reaction") for `~> listen(...)`; `payload`
    * becomes the response (`context.data.yield`, the listen target, and any `as` binding).
    */
-  async signal(runId: string, event: string, payload: unknown): Promise<RunResult> {
-    const snap = await this.runStore.load(runId);
-    if (!snap?.waitingFor) throw new SignalError(`No paused run "${runId}"`, "RUN_NOT_FOUND");
-    if (snap.waitingFor !== event) {
-      throw new SignalError(`Run ${runId} is waiting for "${snap.waitingFor}", not "${event}"`, "SIGNAL_MISMATCH");
+  async signal(runId: string, event: string, payload: unknown, options: { pauseId?: string } = {}): Promise<RunResult> {
+    return (await this.resumePaused(runId, event, payload, options)).result;
+  }
+
+  /**
+   * Claim a paused run and start it again. Resolves as soon as the run is
+   * claimed (`result` settles when it next completes, halts, or pauses), and
+   * throws SignalError if it isn't paused, is waiting for something else, or
+   * was already claimed by a concurrent resume. Exactly one resume wins.
+   * With `pauseId`, only that particular pause can be answered.
+   */
+  async resumePaused(runId: string, event: string, payload: unknown, options: { pauseId?: string } = {}): Promise<{ pipeline: string; result: Promise<RunResult> }> {
+    if (this.resuming.has(runId)) throw new SignalError(`No paused run "${runId}"`, "RUN_NOT_FOUND");
+    this.resuming.add(runId);
+    try {
+      const snap = this.runStore.take ? await this.runStore.take(runId) : await this.runStore.load(runId);
+      if (!snap || snap.waitingFor === undefined) throw new SignalError(`No paused run "${runId}"`, "RUN_NOT_FOUND");
+      const problem =
+        snap.waitingFor !== event
+          ? new SignalError(`Run ${runId} is waiting for "${snap.waitingFor}", not "${event}"`, "SIGNAL_MISMATCH")
+          : options.pauseId !== undefined && options.pauseId !== snap.meta.paused?.id
+            ? new SignalError(`Run ${runId} is no longer waiting for that response`, "RUN_NOT_FOUND")
+            : undefined;
+      if (problem) {
+        if (this.runStore.take) await this.runStore.save(runId, snap); // put it back untouched
+        throw problem;
+      }
+      if (!this.runStore.take) await this.runStore.delete(runId);
+      const ctx = this.restore(snap);
+      const stage = ctx.pipeline.pipeline[snap.nextStage];
+      if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
+      ctx.stageIndex = snap.nextStage;
+      this.deliver(stage, ctx, payload, snap.waitingFor);
+      this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
+      // The paused stage is done now that it has its response.
+      this.emit({ type: "stage", pipeline: ctx.pipeline.name, runId, index: snap.nextStage, kind: stage.kind, label: stageLabel(stage), status: "end", value: ctx.current, durationMs: 0 });
+      return { pipeline: snap.pipeline, result: this.runTop(ctx, snap.nextStage + 1) };
+    } finally {
+      this.resuming.delete(runId);
     }
-    const ctx = this.restore(snap);
-    const stage = ctx.pipeline.pipeline[snap.nextStage];
-    if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
-    await this.runStore.delete(runId);
-    ctx.stageIndex = snap.nextStage;
-    this.deliver(stage, ctx, payload, snap.waitingFor);
-    this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
-    // The paused stage is done now that it has its response.
-    this.emit({ type: "stage", pipeline: ctx.pipeline.name, runId, index: snap.nextStage, kind: stage.kind, label: stageLabel(stage), status: "end", value: ctx.current, durationMs: 0 });
-    return this.runTop(ctx, snap.nextStage + 1);
   }
 
   private restore(snap: RunSnapshot): ExecutionContext {
     const pipeline = this.pipelines.get(snap.pipeline);
     if (!pipeline) throw new HaloError(`Saved run is for pipeline "${snap.pipeline}", which is not loaded`);
     const ctx = this.newContext(pipeline, snap.input, 0);
-    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current });
+    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback });
     ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
     return ctx;
   }
@@ -629,7 +689,7 @@ export class HaloRuntime {
         shadows: [],
       },
       trace: [],
-      current: first && first.name in args ? args[first.name] : Object.values(args)[0],
+      current: first && Object.hasOwn(args, first.name) ? args[first.name] : Object.values(args)[0],
       stageIndex: 0,
       depth,
       signal: signal ?? new AbortController().signal,
@@ -672,7 +732,7 @@ export class HaloRuntime {
       if (!(err instanceof Pause)) throw err;
       // No handler for this yield/listen: save the run so signal() can continue it.
       const i = ctx.stageIndex;
-      ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message };
+      ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message, id: crypto.randomUUID() };
       await this.runStore.save(ctx.meta.runId, this.toSnapshot(ctx, i, err.waitingFor));
       this.emit({ type: "paused", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index: i, waitingFor: err.waitingFor });
       return "paused";
@@ -680,8 +740,8 @@ export class HaloRuntime {
   }
 
   private toSnapshot(ctx: ExecutionContext, nextStage: number, waitingFor?: string): RunSnapshot {
-    const { input, data, meta, trace, current } = ctx;
-    return { version: 1, pipeline: ctx.pipeline.name, nextStage, ...(waitingFor ? { waitingFor } : {}), input, data, meta, trace, current };
+    const { input, data, meta, trace, current, loops, loopFeedback } = ctx;
+    return { version: 1, pipeline: ctx.pipeline.name, nextStage, ...(waitingFor !== undefined ? { waitingFor } : {}), input, data, meta, trace, current, loops, loopFeedback };
   }
 
   private async executeStages(ctx: ExecutionContext, start: number): Promise<RunResult["status"]> {
@@ -780,6 +840,7 @@ export class HaloRuntime {
       return undefined;
     }
     const max = Number(this.resolveArgs({ argList: stage.options }, ctx).named.max ?? 3);
+    if (!Number.isInteger(max) || max < 1) throw new HaloError(`loop(${stage.target}): max must be a whole number of at least 1`, { code: "LOOP_MAX" });
     if (done >= max) {
       throw new LoopLimitError(`loop(${stage.target}) gave up after ${max} ${max === 1 ? "try" : "tries"}: "${stage.condition}" is still true`);
     }
@@ -804,8 +865,8 @@ export class HaloRuntime {
   private evalHead(expr: Value, ctx: ExecutionContext): unknown {
     if (expr.kind === "ref") {
       const [root, ...rest] = expr.path as [string, ...string[]];
-      if (root in ctx.input) return getPath(ctx.input[root], rest);
-      if (root in ctx.data) return getPath(ctx.data[root], rest);
+      if (hasOwnKey(ctx.input, root)) return getPath(ctx.input[root], rest);
+      if (hasOwnKey(ctx.data, root)) return getPath(ctx.data[root], rest);
       throw new HaloError(`Undefined variable "${root}"`);
     }
     return this.resolveValue(expr, ctx);
@@ -823,22 +884,27 @@ export class HaloRuntime {
     const [root, ...rest] = path as [string, ...string[]];
     if (root === "context") return this.contextPath(rest, ctx);
     if (root === "current") return getPath(ctx.current, rest);
-    if (root in ctx.data) return getPath(ctx.data[root], rest);
-    if (root in ctx.input) return getPath(ctx.input[root], rest);
+    if (hasOwnKey(ctx.data, root)) return getPath(ctx.data[root], rest);
+    if (hasOwnKey(ctx.input, root)) return getPath(ctx.input[root], rest);
     return undefined;
   }
 
-  private template(text: string, ctx: ExecutionContext, format?: (v: unknown) => string) {
+  private template(text: string, ctx: ExecutionContext, format?: (v: unknown, offset: number) => string) {
     // Env.* is deliberately not resolvable here, so secrets never reach prompts.
     return interpolate(text, (path) => (path[0] === "Env" ? undefined : this.lookup(path, ctx)), format);
   }
 
-  private resolveValue(v: Value, ctx: ExecutionContext, opts: { allowEnv?: boolean; owner?: string; shell?: boolean } = {}): unknown {
+  private resolveValue(v: Value, ctx: ExecutionContext, opts: { allowEnv?: boolean; owner?: string; shell?: boolean; encode?: (v: unknown) => string } = {}): unknown {
     switch (v.kind) {
       case "string": {
         // In a tool declaration, "Env.NAME" (as a string) reads that environment variable.
         if (opts.allowEnv && /^Env\.\w+$/.test(v.value)) return this.resolveValue({ kind: "ref", path: v.value.split(".") }, ctx, opts);
-        return this.template(v.value, ctx, opts.shell ? (x) => shellQuote(formatValue(x)) : undefined).text;
+        if (opts.shell) {
+          // Each placeholder is escaped for where it sits in the command (a bare word, "...", '...', a heredoc).
+          const spots = placeholderSpots(v.value);
+          return this.template(v.value, ctx, (x, at) => quoteFor(spots.get(at), formatValue(x))).text;
+        }
+        return this.template(v.value, ctx, opts.encode).text;
       }
       case "number": return v.value;
       case "bool": return v.value;
@@ -856,11 +922,11 @@ export class HaloRuntime {
           if (value === undefined) throw new HaloError(`Environment variable ${name} is not set (needed by "${opts.owner}")`);
           return value;
         }
-        if (root in ctx.input) return getPath(ctx.input[root], rest);
+        if (hasOwnKey(ctx.input, root)) return getPath(ctx.input[root], rest);
         // A declared name refers to the declaration itself (e.g. `history: PastCases`);
         // its results are read explicitly via context.data.<Name>.
         if (this.isDeclared(root)) return v.path.join(".");
-        if (root in ctx.data) return getPath(ctx.data[root], rest);
+        if (hasOwnKey(ctx.data, root)) return getPath(ctx.data[root], rest);
         // Anything else is a symbol, e.g. `channel: Slack`.
         return v.path.join(".");
       }
@@ -911,6 +977,9 @@ export class HaloRuntime {
 
   /** Store a result at context.data.<callee>.<method> (or context.data.<callee> for pipeline calls). */
   private store(ctx: ExecutionContext, callee: string, method: string, value: unknown): void {
+    for (const key of [callee, ...method.split(".")]) {
+      if (!isSafeKey(key)) throw new HaloError(`"${key}" can't be used as a name in context.data`, { code: "UNSAFE_NAME" });
+    }
     if (!method) {
       ctx.data[callee] = value;
       return;
@@ -919,7 +988,7 @@ export class HaloRuntime {
     if (isPlainObject(slot)) slot[method] = value;
     else ctx.data[callee] = { [method]: value };
     // Also by method name alone (`context.data.triage`), unless that would hide an input.
-    if (!(method in ctx.input) && !this.isDeclared(method)) ctx.data[method] = value;
+    if (!Object.hasOwn(ctx.input, method) && !this.isDeclared(method)) ctx.data[method] = value;
   }
 
   private dispatchCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
@@ -938,7 +1007,7 @@ export class HaloRuntime {
 
   private mockFor(...keys: string[]): ((req: MockRequest) => Promise<unknown>) | undefined {
     if (!this.mocks) return undefined;
-    const key = keys.find((k) => k in this.mocks!);
+    const key = keys.find((k) => Object.hasOwn(this.mocks!, k));
     if (key === undefined) return undefined;
     const mock = this.mocks[key];
     return async (req) => (typeof mock === "function" ? await (mock as (r: MockRequest) => unknown)(req) : mock);
@@ -971,9 +1040,26 @@ export class HaloRuntime {
     }
   }
 
-  /** Spend of the whole run: this pipeline plus the callers waiting on it. */
+  /** Spend of the whole run so far, counting calls in flight at their estimate. */
   private spent(ctx: ExecutionContext): number {
-    return ctx.meta.cost + (ctx.parent ? this.spent(ctx.parent) : 0);
+    const top = this.topMeta(ctx);
+    return top.cost + (this.unsettled.get(top) ?? 0);
+  }
+
+  private topMeta(ctx: ExecutionContext): RunMeta {
+    while (ctx.parent) ctx = ctx.parent;
+    return ctx.meta;
+  }
+
+  private unsettle(ctx: ExecutionContext, amount: number): void {
+    const top = this.topMeta(ctx);
+    this.unsettled.set(top, (this.unsettled.get(top) ?? 0) + amount);
+  }
+
+  /** The most a call can cost: its prompt plus a full reply. */
+  private estimateCall(model: string, prompt: string, system: string | undefined, options: LLMOptions): number {
+    const adapter = this.adapterRegistry.findAdapter(model);
+    return adapter?.estimateCost?.(model, Math.ceil((prompt.length + (system?.length ?? 0)) / 4), options.maxTokens ?? 1024) ?? 0;
   }
 
   private guardHooks(ctx: ExecutionContext): PolicyHooks {
@@ -1124,17 +1210,27 @@ export class HaloRuntime {
   ): Promise<{ value: unknown; tokens?: { prompt: number; completion: number } }> {
     const t0 = performance.now();
     const mock = this.mockFor(...mockKeys);
-    const { result, attempts } = await this.withPolicies(ctx, target, agent, async (signal) => {
-      if (mock) {
-        const { positional, named } = stage ? this.resolveArgs(stage, ctx) : { positional: [], named: {} };
-        return { value: await mock({ target, kind: "agent", prompt, system, args: positional, named, input: ctx.current }), model, cost: 0, tokens: undefined, mocked: true };
-      }
-      const r = await this.callLLM(model, prompt, system, options, signal);
-      return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false };
-    });
+    // Reserve the call's estimate before the first await, so parallel calls see each other under MaxSpend.
+    const reserve = mock ? 0 : this.estimateCall(model, prompt, system, options);
+    this.unsettle(ctx, reserve);
+    let outcome;
+    try {
+      outcome = await this.withPolicies(ctx, target, agent, async (signal) => {
+        if (mock) {
+          const { positional, named } = stage ? this.resolveArgs(stage, ctx) : { positional: [], named: {} };
+          return { value: await mock({ target, kind: "agent", prompt, system, args: positional, named, input: ctx.current }), model, cost: 0, tokens: undefined, mocked: true };
+        }
+        const r = await this.callLLM(model, prompt, system, options, signal);
+        return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false };
+      });
+    } finally {
+      this.unsettle(ctx, -reserve);
+    }
+    const { result, attempts } = outcome;
 
     const latencyMs = Math.round(performance.now() - t0);
     ctx.meta.cost += result.cost;
+    if (ctx.parent) this.unsettle(ctx, result.cost);
     if (result.tokens) {
       ctx.meta.tokens.prompt += result.tokens.prompt;
       ctx.meta.tokens.completion += result.tokens.completion;
@@ -1243,10 +1339,15 @@ export class HaloRuntime {
     const implicitInput = !positional.length && ctx.current !== undefined;
     const args = implicitInput ? [ctx.current] : positional;
     const decl = declArgs(tool);
+    // HTTP tools' URLs get their {{...}} values URL-encoded, so a value can't add path or query parts.
+    const isHttp = tool.provider === "REST" || tool.provider === "GET" || tool.provider === "POST";
     const config = (key: string | number) => {
       const v = typeof key === "number" ? decl.positional[key] : decl.named[key];
-      return v === undefined ? undefined : this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name });
+      const encode = key === 0 && isHttp ? (x: unknown) => encodeURIComponent(formatValue(x)) : undefined;
+      return v === undefined ? undefined : this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name, encode });
     };
+    const first = decl.positional[0];
+    const template0 = first?.kind === "string" ? first.value : undefined;
 
     const t0 = performance.now();
     const mock = this.mockFor(target, tool.name);
@@ -1256,7 +1357,7 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, viaAgent, signal }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal }, this.toolServices()), mocked: false },
     );
 
     const latencyMs = Math.round(performance.now() - t0);
@@ -1327,7 +1428,7 @@ export class HaloRuntime {
     const { positional, named } = this.resolveArgs(stage, ctx);
     const args: Record<string, unknown> = {};
     target.params.forEach((p, i) => {
-      if (p.name in named) args[p.name] = named[p.name];
+      if (Object.hasOwn(named, p.name)) args[p.name] = named[p.name];
       else if (i < positional.length) args[p.name] = positional[i];
     });
     if (stage.argList.length === 0 && target.params[0]) args[target.params[0].name] = ctx.current;
@@ -1337,6 +1438,7 @@ export class HaloRuntime {
     child.parent = ctx;
     const result = await this.runFrom(child, 0);
     ctx.meta.cost += child.meta.cost;
+    if (!ctx.parent) this.unsettle(ctx, -child.meta.cost);
     ctx.meta.tokens.prompt += child.meta.tokens.prompt;
     ctx.meta.tokens.completion += child.meta.tokens.completion;
     ctx.meta.calls.push(...child.meta.calls);
@@ -1442,14 +1544,19 @@ export class HaloRuntime {
       ctx.data.yield = response;
     } else {
       const [root, ...rest] = target.split(".");
-      if (rest.length) this.store(ctx, root!, rest.join("."), response);
-      else ctx.data[root!] = response;
+      if (!root || !isSafeKey(root)) throw new HaloError(`"${target}" can't be used as a listen target`, { code: "UNSAFE_NAME" });
+      if (rest.length) this.store(ctx, root, rest.join("."), response);
+      else ctx.data[root] = response;
     }
     if (stage.bind) ctx.data[stage.bind] = response;
   }
 
   private async listen(stage: ListenStage, ctx: ExecutionContext): Promise<void> {
     const target = stage.targetValue.kind === "context" ? formatValue(this.resolveValue(stage.targetValue, ctx)) : stage.target;
+    // A target computed from data must name something listenable: not empty, no prototype keys.
+    if (!target || target.split(".").some((part) => !part || !isSafeKey(part))) {
+      throw new HaloError(`~> listen(${stage.target}) resolved to "${target}", which is not a valid event name`, { code: "UNSAFE_NAME" });
+    }
     const mock = this.mockFor(target);
     const handler: ListenHandler | undefined = mock
       ? () => mock({ target, kind: "listen", args: [], named: {}, input: ctx.current })

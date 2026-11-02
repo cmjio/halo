@@ -186,5 +186,24 @@ describe("parser: syntax added for the runtime", () => {
     // An `as` inside an arm is a syntax error: bind the whole branch instead
     expect(parse(`pipeline S(x: String) -> R:\n  x |? { else => System.Log() as nope }`).errors).not.toEqual([]);
   });
-});
 
+  test("Bash commands warn where a {{placeholder}}'s value would run as code", () => {
+    const warns = (command: string) => messages(`tool Sh : Bash()\npipeline P(x: String) -> Result:\n  x |> Sh.run(command: ${command})`, "warning");
+    expect(warns(`"echo {{x}} '{{x}}' && mkdir \\"$(dirname {{x}})\\""`)).toEqual([]);
+    expect(warns(`"""\ncat <<EOF\n{{x}}\nEOF\n"""`)).toEqual([]);
+    expect(warns(`"bash -c {{x}}"`)[0]).toContain("as shell code");
+    expect(warns(`"echo {{x}} | sh"`)[0]).toContain("as shell code");
+    expect(warns(`x`)[0]).toContain("isn't written in the pipeline");
+  });
+
+  test("loop max must be a whole number of at least 1", () => {
+    const errs = (max: string) => messages(`agent A [openai/gpt-4o]\npipeline P(x: String) -> Result:\n  x |> A.go() |<> loop(A, "x != null", max: ${max})`, "error");
+    expect(errs("3")).toEqual([]);
+    for (const bad of ["0", "2.5", '"x"']) expect(errs(bad)).toEqual(['Pipeline "P": loop(A, ...) max must be a whole number of at least 1']);
+  });
+
+  test("deeply nested input is a parse error, not a crash", () => {
+    const deep = "(".repeat(5000) + "x == 1" + ")".repeat(5000);
+    expect(parse(`pipeline P(x: String) -> Result:\n  x |? (${deep})`).errors).toEqual(["The program is nested too deeply to parse (too many brackets inside one another)"]);
+  });
+});

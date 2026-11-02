@@ -20,6 +20,8 @@ export interface ToolCall {
   named: Record<string, unknown>;
   /** Resolve one of the tool declaration's own args (e.g. `apiKey: Env.KEY`). */
   config(name: string | number): unknown;
+  /** The declaration's first argument as written, before {{...}} are filled (e.g. a URL or file template). */
+  template0?: string;
   /** True when an agent invoked the tool via `Agent.method(tool: Name, ...)`. */
   viaAgent: boolean;
   signal: AbortSignal;
@@ -58,7 +60,7 @@ function params(call: ToolCall): Record<string, unknown> {
     if (input !== undefined) out.input = input;
     if (rest.length) out.args = rest;
   }
-  const inUrl = new Set([...String(call.config(0) ?? "").matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]!));
+  const inUrl = new Set([...(call.template0 ?? "").matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]!));
   for (const [k, v] of Object.entries(call.named)) if (!RESERVED.has(k) && !inUrl.has(k)) out[k] = v;
   return out;
 }
@@ -66,12 +68,26 @@ function params(call: ToolCall): Record<string, unknown> {
 /** Methods named after the request itself call the URL as declared, with no extra path segment. */
 const PLAIN_METHODS = new Set(["get", "fetch", "request", "call", "execute", "send"]);
 
+/** The fixed part of a URL template: everything before its first {{placeholder}}. */
+function fixedPrefix(template: string): URL {
+  const literal = template.split("{{")[0]!;
+  return new URL(/^https?:\/\//.test(literal) ? literal : `https://${literal}`);
+}
+
 function buildUrl(call: ToolCall, defaultPath: string): URL {
   let base = baseUrl(call);
   // {{key}} placeholders in the base URL are filled from named args.
   base = base.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k: string) => encodeURIComponent(str(call.named[k] ?? "")));
   const path = typeof call.named.path === "string" ? call.named.path : defaultPath;
+  // Query parameters go in named args or `query:`; a path that carries its own would bypass that.
+  if (/[?#]/.test(path)) throw new HaloError(`${call.tool.name}: path "${path}" can't contain ? or #; pass query parameters as named args or query:`, { code: "TOOL_ARGUMENT" });
   const url = new URL(base.replace(/\/+$/, "") + (path && !path.startsWith("/") ? "/" : "") + path);
+  // The request must stay under the tool's declared URL (no ../ out of it, no other host).
+  const root = fixedPrefix(call.template0 ?? base);
+  const rootPath = root.pathname.endsWith("/") ? root.pathname : `${root.pathname}/`;
+  if (url.origin !== root.origin || !(url.pathname === root.pathname || url.pathname.startsWith(rootPath) || (root.pathname.endsWith("/") && url.pathname.startsWith(root.pathname)))) {
+    throw new HaloError(`${call.tool.name}: ${url.origin}${url.pathname} is outside the tool's URL ${root.origin}${root.pathname}`, { code: "TOOL_ARGUMENT" });
+  }
   if (typeof call.named.query === "string") {
     for (const [k, v] of new URLSearchParams(call.named.query)) url.searchParams.append(k, v);
   }

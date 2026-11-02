@@ -27,7 +27,8 @@ pipeline Issues(repo: String) -> Result:
 
 - The first argument is the base URL. `https://` is added if it's missing.
 - `apiKey:` adds `Authorization: Bearer …`.
-- **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`; a method named `get`, `fetch`, `request`, `call`, `execute`, or `send` (or a call by an agent) requests just `base`. Named arguments become query parameters. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments, which are then not sent again as parameters.
+- **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`; a method named `get`, `fetch`, `request`, `call`, `execute`, or `send` (or a call by an agent) requests just `base`. Named arguments become query parameters. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments (URL-encoded, so a value can't add path segments or a query), which are then not sent again as parameters.
+- A request must stay under the declared URL: a `path:` that climbs out with `../` or names another host is refused, and so is one with `?` or `#` (pass query parameters as named arguments or `query:`).
 - **POST** sends the named arguments as a JSON body to `base + path`. The method name is ignored.
 - Only what you pass is sent: the flowing value is never added implicitly. An explicit first positional argument is sent as `input` (`sendInput: false` on the declaration turns that off too).
 - 408, 429, and 5xx responses are retryable under `@retry`.
@@ -53,7 +54,7 @@ pipeline Check(file: String) -> Result:
   file |> Shell.run(command: "wc -l {{file}}") as count
 ```
 
-`command:` is required. Any method name works. Values inserted with `{{…}}` are **shell-quoted**, so model output and user input can't add commands. Don't wrap placeholders in your own quotes, because that undoes the quoting. The result is `{ command, stdout, stderr, exitCode }`, plus `json` (stdout, parsed) when the command prints JSON, so `context.data.x.json.length` and `each(item in x.json)` work. A non-zero exit code is not an error, so you can check it with a gate or `|<> loop`. The default timeout is 120 seconds.
+`command:` is required. Any method name works. Values inserted with `{{…}}` are **escaped for where they sit**: a bare word, `'single'` or `"double"` quotes, `$(...)`, or a heredoc. So model output and user input are always read as data and can't add commands. Two things can't be made safe, and `halo validate` warns about both: a command that runs a value as code (`eval {{x}}`, `bash -c {{x}}`, `... | sh`), and a `command:` that isn't written out (`command: context.data.cmd` runs whatever that value is). A placeholder right after a backslash (`\{{x}}`) is refused. The result is `{ command, stdout, stderr, exitCode }`, plus `json` (stdout, parsed) when the command prints JSON, so `context.data.x.json.length` and `each(item in x.json)` work. A non-zero exit code is not an error, so you can check it with a gate or `|<> loop`. The default timeout is 120 seconds.
 
 ## `Browser`
 

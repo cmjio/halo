@@ -19,7 +19,7 @@ import { parse } from "../parser/index.js";
 import { validate } from "../parser/validate.js";
 import type { PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
-import { FileRunStore, HaloRuntime, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
+import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
 import { answerToEvent, APPROVED, formatValue } from "../runtime/values.js";
 import { cronMatches, nextRun, parseCron, type CronSchedule } from "./cron.js";
@@ -76,7 +76,8 @@ export interface HaloServer {
   start(pipeline: string, args: Record<string, unknown>, source: string): string;
   /** Wait for a started run to finish its current stretch (complete, halt, pause, or fail). */
   settled(runId: string): Promise<RunResult | undefined>;
-  approvalUrl(runId: string): string;
+  /** The signed link answering a paused run's current pause (undefined if it isn't paused). */
+  approvalUrl(runId: string): Promise<string | undefined>;
   stop(): Promise<void>;
 }
 
@@ -116,7 +117,7 @@ function argsFromBody(decl: PipelineDeclaration, body: unknown): Record<string, 
   const params = decl.params.map((p) => p.name);
   if (body && typeof body === "object" && !Array.isArray(body)) {
     const obj = body as Record<string, unknown>;
-    const args = Object.fromEntries(params.filter((p) => p in obj).map((p) => [p, obj[p]]));
+    const args = Object.fromEntries(params.filter((p) => Object.hasOwn(obj, p)).map((p) => [p, obj[p]]));
     if (Object.keys(args).length || params.length !== 1) return args;
   }
   return params.length === 1 && body !== undefined ? { [params[0]!]: body } : {};
@@ -144,7 +145,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (!existsSync(secretFile)) await Bun.write(secretFile, randomBytes(32).toString("hex"));
     signingKey = (await Bun.file(secretFile).text()).trim();
   }
-  const sign = (runId: string) => createHmac("sha256", signingKey!).update(`approve:${runId}`).digest("hex").slice(0, 32);
+  // A link answers one particular pause of one run, so it can't be replayed on a later pause.
+  const sign = (runId: string, pauseId: string) => createHmac("sha256", signingKey!).update(`approve:${runId}:${pauseId}`).digest("hex").slice(0, 32);
 
   // ── Load pipelines ──
   const registry = new AdapterRegistry();
@@ -191,7 +193,11 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     entry(w.pipeline);
     const path = w.path.replace(/^\/+|\/+$/g, "");
     if (!/^[\w./-]+$/.test(path)) throw new ServeError(`Webhook path "${w.path}" may only use letters, digits, _ . / -`);
-    webhooks.set(path, { pipeline: w.pipeline, secret: fromEnv(w.secret) });
+    const secret = fromEnv(w.secret);
+    // A secret that names an unset variable must not silently turn into "no secret".
+    if (w.secret !== undefined && !secret) throw new ServeError(`Webhook /hooks/${path} has secret "${w.secret}", but it is empty or not set`);
+    if (secret === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
+    webhooks.set(path, { pipeline: w.pipeline, secret });
   }
   const slackUrl = fromEnv(options.notify?.slack);
 
@@ -226,7 +232,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   const start = (pipeline: string, args: Record<string, unknown>, source: string) => {
     const e = entry(pipeline);
-    const missing = e.decl.params.filter((p) => !(p.name in args)).map((p) => p.name);
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new ServeError(`${pipeline} needs its arguments as a JSON object`);
+    const missing = e.decl.params.filter((p) => !Object.hasOwn(args, p.name)).map((p) => p.name);
     if (missing.length) throw new ServeError(`${pipeline} needs ${missing.join(", ")}`);
     const runId = crypto.randomUUID();
     logger.log(`[halo] ${pipeline} started by ${source} (run ${runId.slice(0, 8)})`);
@@ -236,22 +243,38 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   const settled = (runId: string) => inflight.get(runId) ?? Promise.resolve(recent.get(runId));
 
-  const resume = async (runId: string, payload: unknown, event?: string) => {
+  /**
+   * Claim a paused run and continue it. Resolves once the claim succeeds (the
+   * run continues in the background) or with an error message: not paused,
+   * a different event expected, or already answered by someone else.
+   */
+  const resume = async (runId: string, payload: unknown, event?: string, pauseId?: string): Promise<{ work: Promise<RunResult | undefined> } | { error: string; status: number }> => {
     const snap = await runStore.load(runId);
-    if (!snap?.waitingFor) return undefined;
-    const e = entry(snap.pipeline);
-    logger.log(`[halo] ${snap.pipeline} resumed (run ${runId.slice(0, 8)})`);
-    return track(runId, snap.pipeline, e.runtime.signal(runId, event ?? snap.waitingFor, payload));
+    if (snap?.waitingFor === undefined) return { error: "That run is not paused", status: 409 };
+    try {
+      const claimed = await entry(snap.pipeline).runtime.resumePaused(runId, event ?? snap.waitingFor, payload, { pauseId });
+      logger.log(`[halo] ${claimed.pipeline} resumed (run ${runId.slice(0, 8)})`);
+      return { work: track(runId, claimed.pipeline, claimed.result) };
+    } catch (err) {
+      if (err instanceof SignalError) return { error: err.message, status: 409 };
+      throw err;
+    }
   };
 
   let baseUrl = "";
-  const approvalUrl = (runId: string) => `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/approve/${runId}?sig=${sign(runId)}`;
+  const linkFor = (runId: string, pauseId: string) => `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/approve/${runId}?sig=${sign(runId, pauseId)}`;
+  const approvalUrl = async (runId: string) => {
+    const snap = await runStore.load(runId);
+    const pauseId = snap?.waitingFor !== undefined ? snap.meta.paused?.id : undefined;
+    return pauseId ? linkFor(runId, pauseId) : undefined;
+  };
 
   async function announcePause(runId: string) {
     const snap = await runStore.load(runId);
     if (!snap?.waitingFor) return;
     const what = snap.waitingFor === "yield" ? "a human" : snap.waitingFor;
-    const text = `⏸ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${approvalUrl(runId)}`;
+    const link = snap.meta.paused?.id ? linkFor(runId, snap.meta.paused.id) : "(no link: resume it with the API)";
+    const text = `⏸ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}`;
     logger.log(`[halo] ${text.replace("\n", " · ")}`);
     if (!slackUrl) return;
     try {
@@ -284,6 +307,26 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     return safeEqual(header, token);
   };
 
+  // Hosts this server answers to: blocks DNS rebinding (a site resolving its own
+  // name to 127.0.0.1 to read the API from the user's browser).
+  const allowedHosts = new Set(["localhost", "127.0.0.1", "[::1]", host.includes(":") ? `[${host}]` : host]);
+  if (options.publicUrl) allowedHosts.add(new URL(options.publicUrl).hostname);
+  /** Why an /api request looks cross-site, or undefined if it's fine. */
+  const crossSite = (req: Request, url: URL): string | undefined => {
+    const hostname = (req.headers.get("host") ?? url.host).replace(/:\d+$/, "");
+    if (!allowedHosts.has(hostname)) return `Host "${hostname}" is not allowed`;
+    // A web page can send "simple" cross-site requests without asking; requiring JSON
+    // (and a same-site Origin when the browser sends one) means only Studio and API clients get in.
+    const origin = req.headers.get("origin");
+    if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin) && !(options.publicUrl && origin === new URL(options.publicUrl).origin)) {
+      return `Requests from ${origin} are not allowed`;
+    }
+    if (req.method === "POST" && !(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+      return "POST requests to /api must be Content-Type: application/json";
+    }
+    return undefined;
+  };
+
   const readJson = async (req: Request): Promise<unknown> => {
     const text = await req.text();
     if (!text.trim()) return undefined;
@@ -294,9 +337,17 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     }
   };
 
-  const approvalPage = async (runId: string, url: URL, done?: string): Promise<Response> => {
-    if (!safeEqual(url.searchParams.get("sig") ?? "", sign(runId))) return new Response("Invalid or expired link", { status: 403 });
+  /** The paused run a signed link answers, or undefined if the link is wrong or that pause is over. */
+  const linkedPause = async (runId: string, url: URL) => {
     const snap = await runStore.load(runId);
+    const pauseId = snap?.waitingFor !== undefined ? snap.meta.paused?.id : undefined;
+    return snap && pauseId && safeEqual(url.searchParams.get("sig") ?? "", sign(runId, pauseId)) ? { snap, pauseId } : undefined;
+  };
+
+  const approvalPage = async (runId: string, url: URL, done?: string): Promise<Response> => {
+    const linked = done ? undefined : await linkedPause(runId, url);
+    if (!done && !linked) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
+    const snap = linked?.snap;
     const head = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Halo approval</title>
 <style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#1f2937}
 pre{background:#f3f4f6;padding:12px;border-radius:8px;white-space:pre-wrap;max-height:50vh;overflow:auto}
@@ -305,7 +356,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     if (done) return new Response(`${head}<h2>${escapeHtml(done)}</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (!snap?.waitingFor) return new Response(`${head}<h2>This run is no longer waiting.</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     const message = snap.meta.paused?.message ?? (snap.waitingFor === "yield" ? "Approve this run?" : `Waiting for ${snap.waitingFor}`);
-    const action = `/approve/${runId}?sig=${sign(runId)}`;
+    const action = `/approve/${runId}?sig=${sign(runId, linked!.pauseId)}`;
     return new Response(
       `${head}<h2>${escapeHtml(snap.pipeline)} is waiting for you</h2>
 <p>${escapeHtml(message)}</p>
@@ -333,12 +384,13 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           const runId = approve[1]!;
           if (req.method === "GET") return approvalPage(runId, url);
           if (req.method === "POST") {
-            if (!safeEqual(url.searchParams.get("sig") ?? "", sign(runId))) return new Response("Invalid or expired link", { status: 403 });
+            const linked = await linkedPause(runId, url);
+            if (!linked) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
             const form = await req.formData();
             const choice = String(form.get("answer") ?? "approve");
             const answer = choice === "custom" ? String(form.get("custom") ?? "") : choice;
-            const started = await resume(runId, answer ? answerToEvent(answer) : APPROVED);
-            return approvalPage(runId, url, started ? `Thanks. The run continues with “${answer}”.` : "This run is no longer waiting.");
+            const outcome = await resume(runId, answer ? answerToEvent(answer) : APPROVED, undefined, linked.pauseId);
+            return approvalPage(runId, url, "work" in outcome ? `Thanks. The run continues with “${answer}”.` : "This step was already answered.");
           }
         }
 
@@ -365,6 +417,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         }
 
         if (!path.startsWith("/api/")) return new Response("Not found", { status: 404 });
+        const refused = crossSite(req, url);
+        if (refused) return json({ error: refused }, 403);
         if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
 
         if (path === "/api/health") return json({ ok: true, pipelines: entries.size });
@@ -398,7 +452,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           const runId = run[1]!;
           const snap = await runStore.load(runId);
           const paused = snap?.waitingFor
-            ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: approvalUrl(runId) }
+            ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: await approvalUrl(runId) }
             : undefined;
           return json({ runId, running: inflight.has(runId), paused, events: telemetry.run(runId) });
         }
@@ -407,10 +461,10 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         if (signal && req.method === "POST") {
           const body = ((await readJson(req)) ?? {}) as { event?: string; payload?: unknown; answer?: string; wait?: boolean };
           const payload = body.payload !== undefined ? body.payload : body.answer !== undefined ? answerToEvent(body.answer) : APPROVED;
-          const work = await resume(signal[1]!, payload, body.event);
-          if (!work) return json({ error: "That run is not paused" }, 409);
+          const outcome = await resume(signal[1]!, payload, body.event);
+          if (!("work" in outcome)) return json({ error: outcome.error }, outcome.status);
           if (!body.wait) return json({ runId: signal[1], status: "running" }, 202);
-          const result = await work;
+          const result = await outcome.work;
           return json(result ? { runId: signal[1], status: result.status, output: result.output } : { runId: signal[1], status: "error" });
         }
 

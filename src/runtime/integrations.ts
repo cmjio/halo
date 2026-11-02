@@ -14,7 +14,7 @@
  */
 
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { HaloError, HttpError } from "./errors.js";
 import type { ToolCall, ToolProvider } from "./tools.js";
 
@@ -85,10 +85,7 @@ export const bash: ToolProvider = async (call) => {
   }
 };
 
-/** Quote a value for safe use inside a bash command. */
-export function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
+export { shellQuote } from "./shell.js";
 
 // ── Browser ──
 
@@ -143,6 +140,15 @@ async function readEntries(path: string): Promise<string[]> {
 export const fileStore: ToolProvider = async (call) => {
   const path = call.config(0);
   if (typeof path !== "string" || !path) throw new HaloError(`Tool "${call.tool.name}" needs a file path, e.g. File(".halo/history.json")`, { code: "TOOL_CONFIG" });
+  // When the path is filled from data (File(".halo/history-{{user}}.json")), it must stay in the
+  // folder its fixed part names, so a value like "../../x" can't reach other files.
+  if (call.template0?.includes("{{")) {
+    const fixed = call.template0.split("{{")[0]!;
+    const folder = resolve(fixed.endsWith("/") ? fixed : dirname(`${fixed}x`));
+    if (!resolve(path).startsWith(`${folder}${sep}`)) {
+      throw new HaloError(`Tool "${call.tool.name}": "${path}" is outside ${relative(process.cwd(), folder) || "."}/`, { code: "TOOL_ARGUMENT" });
+    }
+  }
   const keep = Number(call.named.keep ?? call.config("keep") ?? 10);
   switch (call.method) {
     case "read":

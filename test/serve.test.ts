@@ -120,7 +120,7 @@ describe("halo serve", () => {
 
       const detail = (await (await fetch(`${s.url}/api/runs/${runId}`)).json()) as { paused: { waitingFor: string; message: string; approveUrl: string } };
       expect(detail.paused).toMatchObject({ waitingFor: "yield", message: "Publish this draft?" });
-      expect(detail.paused.approveUrl).toBe(s.approvalUrl(runId));
+      expect(detail.paused.approveUrl).toBe((await s.approvalUrl(runId))!);
 
       const page = await (await fetch(detail.paused.approveUrl)).text();
       expect(page).toContain("Draft is waiting for you");
@@ -137,7 +137,9 @@ describe("halo serve", () => {
       expect(s.calls).toEqual(["draft:tides", "publish"]);
 
       // The link can't be used twice
-      expect(await (await fetch(detail.paused.approveUrl, { method: "POST", body: form })).text()).toContain("no longer waiting");
+      const again = await fetch(detail.paused.approveUrl, { method: "POST", body: form });
+      expect(again.status).toBe(403);
+      expect(await again.text()).toContain("already answered");
     } finally {
       await s.stop();
     }
@@ -165,7 +167,7 @@ describe("halo serve", () => {
     const first = await serve({ stateDir: join(dir, ".halo") });
     const runId = first.start("Draft", { topic: "persist" }, "test");
     await first.settled(runId);
-    const link = first.approvalUrl(runId).replace(first.url, "");
+    const link = (await first.approvalUrl(runId))!.replace(first.url, "");
     await first.stop();
 
     const second = await serve({ stateDir: join(dir, ".halo") });
@@ -243,7 +245,7 @@ describe("halo serve", () => {
       const runId = s.start("Draft", { topic: "slack" }, "test");
       await s.settled(runId);
       await Bun.sleep(20);
-      expect(sent).toEqual([{ text: `⏸ Draft is waiting for a human: Publish this draft?\nRespond: https://halo.example.com/approve/${runId}?sig=${s.approvalUrl(runId).split("sig=")[1]}` }]);
+      expect(sent).toEqual([{ text: `⏸ Draft is waiting for a human: Publish this draft?\nRespond: https://halo.example.com/approve/${runId}?sig=${(await s.approvalUrl(runId))!.split("sig=")[1]}` }]);
     } finally {
       await s.stop();
     }
@@ -260,13 +262,79 @@ describe("halo serve", () => {
       // Approval links are signed, so they work without the token
       const runId = s.start("Draft", { topic: "t" }, "test");
       await s.settled(runId);
-      expect((await fetch(s.approvalUrl(runId))).status).toBe(200);
+      expect((await fetch((await s.approvalUrl(runId))!)).status).toBe(200);
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test("approving the same link three times at once resumes the run once", async () => {
+    const s = await serve();
+    try {
+      const runId = s.start("Draft", { topic: "tides" }, "test");
+      await s.settled(runId);
+      const link = (await s.approvalUrl(runId))!;
+      const pages = await Promise.all([1, 2, 3].map(() => fetch(link, { method: "POST", body: new URLSearchParams({ answer: "approve" }) }).then((r) => r.text())));
+      expect((await s.settled(runId))?.output).toBe("Published: Draft about tides");
+      expect(s.calls.filter((c) => c === "publish")).toHaveLength(1);
+      expect(pages.filter((p) => p.includes("The run continues")).length).toBe(1);
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test("an approval link answers only the pause it was made for", async () => {
+    const dir = mkdtempSync(join(tmp, "two-"));
+    await Bun.write(
+      join(dir, "two.halo"),
+      `agent W [openai/gpt-4o]
+       pipeline Two(x: String) -> Result:
+         x
+           |! yield(msg: "first?") as one
+           |! yield(msg: "second?") as two
+           |? (context.data.two.approved == true)
+           |> W.go()`,
+    );
+    const s = await startServer({ files: [dir], port: 0, stateDir: join(dir, ".halo"), scheduler: false, logger: quiet, env: {}, onRuntime: (rt) => rt.mockAll({ "W.go": "went" }) });
+    try {
+      const runId = s.start("Two", { x: "a" }, "test");
+      await s.settled(runId);
+      const first = (await s.approvalUrl(runId))!;
+      await fetch(first, { method: "POST", body: new URLSearchParams({ answer: "approve" }) });
+      expect((await s.settled(runId))?.status).toBe("paused");
+      // Replaying the first link must not answer the second question
+      expect((await fetch(first, { method: "POST", body: new URLSearchParams({ answer: "approve" }) })).status).toBe(403);
+      const second = (await s.approvalUrl(runId))!;
+      expect(second).not.toBe(first);
+      await fetch(second, { method: "POST", body: new URLSearchParams({ answer: "approve" }) });
+      expect((await s.settled(runId))?.output).toBe("went");
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test("the API refuses cross-site requests, foreign Host headers, and non-object args", async () => {
+    const s = await serve();
+    try {
+      const url = `${s.url}/api/pipelines/Quick/runs`;
+      const body = JSON.stringify({ args: { n: 1 } });
+      // A page on another site can send a "simple" text/plain POST without a preflight
+      const plain = await fetch(url, { method: "POST", headers: { "Content-Type": "text/plain" }, body });
+      expect(plain.status).toBe(403);
+      expect(await plain.json()).toEqual({ error: "POST requests to /api must be Content-Type: application/json" });
+      expect((await post(url, { args: { n: 1 } }, { Origin: "https://evil.example" })).status).toBe(403);
+      // DNS rebinding: an attacker's name pointed at 127.0.0.1
+      expect((await fetch(`${s.url}/api/runs`, { headers: { Host: "attacker.example" } })).status).toBe(403);
+      expect((await post(url, { args: "n=1" })).status).toBe(400);
+      expect((await post(url, { args: { n: 1 } }, { Origin: s.url })).status).toBe(202);
+      expect(s.calls).toEqual(["count:1"]);
     } finally {
       await s.stop();
     }
   });
 
   test("bad config fails at startup with a clear message", async () => {
+    await expect(serve({ webhooks: [{ path: "gh", pipeline: "Echo", secret: "Env.UNSET_SECRET" }] })).rejects.toThrow(`has secret "Env.UNSET_SECRET", but it is empty or not set`);
     await expect(serve({ schedules: [{ pipeline: "Nope", cron: "* * * * *" }] })).rejects.toThrow(`Unknown pipeline "Nope"`);
     await expect(serve({ schedules: [{ pipeline: "Quick", cron: "every day" }] })).rejects.toThrow("needs 5 fields");
     const dir = mkdtempSync(join(tmp, "bad-"));

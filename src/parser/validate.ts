@@ -239,6 +239,9 @@ class Validator {
         if (stage.expr) this.checkCond(stage.expr, s, params, data, stage.loc);
         for (const o of stage.options) {
           if (o.name !== "max") this.add("warning", `Pipeline "${s.name}": loop(...) has no option "${o.name ?? "(positional)"}" (only max: n)`, stage.loc);
+          else if (o.value.kind !== "number" ? ["string", "bool", "null", "list"].includes(o.value.kind) : !Number.isInteger(o.value.value) || o.value.value < 1) {
+            this.add("error", `Pipeline "${s.name}": loop(${stage.target}, ...) max must be a whole number of at least 1`, stage.loc);
+          }
         }
         break;
       case "interrupt":
@@ -279,9 +282,31 @@ class Validator {
       }
       return;
     }
-    if (this.tools.has(call.callee)) return;
+    const tool = this.tools.get(call.callee);
+    if (tool) {
+      if (tool.provider === "Bash") this.checkShell(call, where);
+      return;
+    }
     if (call.implicit && this.pipelines.has(call.callee)) return;
     this.add("error", `${where}: unknown callee "${call.callee}" in ${target}(...)`, call.loc);
+  }
+
+  /**
+   * The runtime escapes each {{placeholder}} in a Bash command for where it sits,
+   * so the shell reads the value as data. Warn where nothing can: a command that
+   * isn't written out, or one that runs a value as code.
+   */
+  private checkShell(call: CallStage, where: string) {
+    const arg = call.argList.find((a) => a.name === "command");
+    if (!arg) return;
+    const target = `${call.callee}.${call.method}`;
+    const warn = (why: string) => this.add("warning", `${where}: ${target} ${why}`, call.loc);
+    if (arg.value.kind !== "string") {
+      warn("runs a command that isn't written in the pipeline, so nothing in it is quoted; write the command as a string with {{placeholders}}");
+      return;
+    }
+    const cmd = arg.value.value;
+    if (/\b(?:eval|(?:ba|z|da)?sh\s+-c)\s+\{\{/.test(cmd) || /\{\{[^}]*\}\}[^\n;&]*\|\s*(?:ba|z|da)?sh\b/.test(cmd)) warn("runs a {{placeholder}}'s value as shell code (eval, sh -c, or | sh); pass it as data instead");
   }
 
   private checkArgs(args: Arg[], s: PipelineDeclaration, params: Set<string>, data: Set<string>, loc?: Loc) {
@@ -295,7 +320,7 @@ class Validator {
   }
 
   private checkTemplate(text: string, s: PipelineDeclaration, params: Set<string>, data: Set<string>, loc?: Loc) {
-    for (const [, expr] of text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) {
+    for (const [, expr] of text.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
       const path = expr!.split(".");
       if (path[0] === "context") {
         this.checkContextRef(path.slice(1), s, data, loc);

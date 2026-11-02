@@ -45,7 +45,7 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-const SSN = pattern(/\b\d{3}-\d{2}-\d{4}\b/, "SSN");
+const SSN = pattern(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/, "SSN");
 const CREDIT_CARD = pattern(/\b(?:\d[ -]?){12,18}\d\b/, "CreditCard", luhn);
 const EMAIL = pattern(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/, "Email");
 const PHONE = pattern(/(?<![\w-])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/, "Phone");
@@ -70,9 +70,9 @@ const DETECTORS: Record<string, Detector> = {
   },
   PromptInjection: {
     test: (t) =>
-      /\b(?:ignore|disregard|forget)\b.{0,40}\b(?:previous|prior|above|earlier|all)\b.{0,20}\b(?:instructions?|prompts?|rules)\b/i.test(t) ||
-      /\b(?:reveal|print|show|repeat)\b.{0,30}\bsystem prompt\b/i.test(t) ||
-      /\byou are now\b.{0,30}\b(?:DAN|jailbroken|developer mode|unfiltered)\b/i.test(t),
+      /\b(?:ignore|disregard|forget)\b[\s\S]{0,40}\b(?:previous|prior|above|earlier|all)\b[\s\S]{0,20}\b(?:instructions?|prompts?|rules)\b/i.test(t) ||
+      /\b(?:reveal|print|show|repeat)\b[\s\S]{0,30}\bsystem\s+prompt\b/i.test(t) ||
+      /\byou\s+are\s+now\b[\s\S]{0,30}\b(?:DAN|jailbroken|developer\s+mode|unfiltered)\b/i.test(t),
   },
   PII,
   SSN,
@@ -97,6 +97,19 @@ const DESCRIPTIONS: Record<string, string> = {
   Markdown: "Markdown formatting not allowed",
 };
 
+/**
+ * Text as the detectors read it: compatibility forms folded (fullwidth digits, ligatures),
+ * invisible characters removed, and dash and space look-alikes made plain, so they can't
+ * be used to slip past Block or Redact.
+ */
+export function normalizeForScan(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, "")
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-")
+    .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
 const unquote = (s: string | undefined) => (s ?? "").replace(/^(["'])(.*)\1$/, "$2");
 
 /** Rough XML well-formedness: one root element and balanced tags. */
@@ -113,16 +126,24 @@ function isXml(text: string): boolean {
   return stack.length === 0;
 }
 
+/** A number, or a string that is one ("42", " 3.5 "); not booleans, lists, or blanks, which Number() would also accept. */
+function asNumber(v: unknown): number | undefined {
+  if (typeof v === "number") return Number.isNaN(v) ? undefined : v;
+  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
+  return undefined;
+}
+
 function compare(a: unknown, op: string, b: unknown): boolean {
-  const [x, y] = [Number(a), Number(b)];
-  const numeric = !Number.isNaN(x) && !Number.isNaN(y) && a !== null && b !== null && a !== "" && b !== "";
+  const [x, y] = [asNumber(a), asNumber(b)];
+  const numeric = x !== undefined && y !== undefined;
+  const same = numeric ? x === y : typeof a === "string" && typeof b === "string" ? a === b : JSON.stringify(a) === JSON.stringify(b);
   switch (op) {
-    case "==": return numeric ? x === y : String(a) === String(b);
-    case "!=": return numeric ? x !== y : String(a) !== String(b);
-    case "<": return numeric && x < y;
-    case "<=": return numeric && x <= y;
-    case ">": return numeric && x > y;
-    case ">=": return numeric && x >= y;
+    case "==": return same;
+    case "!=": return !same;
+    case "<": return numeric && x! < y!;
+    case "<=": return numeric && x! <= y!;
+    case ">": return numeric && x! > y!;
+    case ">=": return numeric && x! >= y!;
     default: return false;
   }
 }
@@ -240,7 +261,7 @@ export class PolicyEngine {
   private block(b: BoundRule, text: string, phase: Violation["phase"], hooks: PolicyHooks) {
     for (const category of b.rule.args) {
       const detector = DETECTORS[category];
-      if (detector?.test(text)) {
+      if (detector && (detector.test(text) || detector.test(normalizeForScan(text)))) {
         this.violate(b, `Content blocked: ${DESCRIPTIONS[category] ?? category + " detected"}`, phase, hooks);
       }
     }
@@ -248,14 +269,18 @@ export class PolicyEngine {
 }
 
 function redact(text: string, categories: string[]): string {
-  return categories.reduce((acc, c) => DETECTORS[c]?.redact?.(acc) ?? acc, text);
+  const pass = (t: string) => categories.reduce((acc, c) => DETECTORS[c]?.redact?.(acc) ?? acc, t);
+  const out = pass(text);
+  // Something hidden with look-alike characters: redact the normalized text instead.
+  const plain = normalizeForScan(out);
+  return categories.some((c) => DETECTORS[c]?.redact && DETECTORS[c]!.test(plain)) ? pass(plain) : out;
 }
 
 function mapStrings(value: unknown, fn: (s: string) => string): unknown {
   if (typeof value === "string") return fn(value);
   if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, fn)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), mapStrings(v, fn)]));
   }
   return value;
 }
