@@ -1,340 +1,259 @@
-import type { ExecutionContext } from "./runtime.js";
-import { PolicyViolation } from "../errors.js";
-
 /**
- * Policy execution phase.
- * - "input"  — runs on the prompt BEFORE it reaches the LLM
- * - "output" — runs on the response AFTER the LLM returns
- * - "both"   — runs on both input and output
+ * Policy enforcement.
+ *
+ * Rules run on the prompt before an agent is called (input) and on its result
+ * after (output). Only deterministic rules are enforced; AI-judged rules such
+ * as Tone(...) are reported by the validator and skipped here.
  */
-export type PolicyPhase = "input" | "output" | "both";
 
-/** Interface for pluggable policy connectors. */
-export interface PolicyPlugin {
-  /** The rule name used in DSL (e.g., "Redact") */
-  name: string;
+import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
+import { PolicyViolation } from "./errors.js";
 
-  /**
-   * Phase this policy runs in. Defaults to "output" for backward compat.
-   * - "input": scrub/block the prompt before it reaches the LLM
-   * - "output": validate/transform the LLM response
-   * - "both": run on both input and output
-   */
-  phase?: PolicyPhase;
-  
-  /** Execute the policy logic. Returns the modified text or throws an error. */
-  apply(
-    text: string,
-    args: string[],
-    ctx: ExecutionContext,
-    metrics?: { duration: number; completionTokens: number }
-  ): Promise<string> | string;
+export interface Violation {
+  policy: string;
+  rule: string;
+  message: string;
+  phase: "input" | "output" | "budget";
 }
 
-export class PolicyRegistry {
-  private plugins = new Map<string, PolicyPlugin>();
-
-  register(plugin: PolicyPlugin): this {
-    this.plugins.set(plugin.name, plugin);
-    return this;
-  }
-
-  get(name: string): PolicyPlugin | undefined {
-    return this.plugins.get(name);
-  }
+interface Detector {
+  test(text: string): boolean;
+  redact?(text: string): string;
 }
 
-// ── Built-in Standard Library Policies ─────
+const PROFANITY = ["damn", "shit", "fuck", "fucking", "bitch", "bastard", "asshole", "crap", "dick", "piss"];
 
-export class BlockPlugin implements PolicyPlugin {
-  name = "Block";
-  phase: PolicyPhase = "both"; // Block harmful content in BOTH directions
-
-  apply(text: string, args: string[]): string {
-    const lowerText = text.toLowerCase();
-    
-    if (args.includes("Profanity") && /\b(damn|shit|fuck)\b/i.test(text)) {
-      throw new PolicyViolation("Block", "Content blocked: Profanity detected");
-    }
-    if (args.includes("DestructiveOps") && ["DROP", "DELETE", "TRUNCATE", "rm -rf"].some(op => text.includes(op))) {
-      throw new PolicyViolation("Block", "Content blocked: Destructive operations not allowed");
-    }
-    if (args.includes("HarmfulContent") && (lowerText.includes("bomb") || lowerText.includes("weapon"))) {
-      throw new PolicyViolation("Block", "Content blocked: Harmful content detected");
-    }
-    if (args.includes("HateSpeech") && lowerText.includes("slur")) {
-      throw new PolicyViolation("Block", "Content blocked: Hate speech detected");
-    }
-    if (args.includes("SexualContent") && lowerText.includes("nsfw")) {
-      throw new PolicyViolation("Block", "Content blocked: Sexual content detected");
-    }
-    if (args.includes("PromptInjection") && ["ignore previous", "system override", "you are now", "bypass"].some(inj => lowerText.includes(inj))) {
-      throw new PolicyViolation("Block", "Content blocked: Prompt injection / jailbreak override detected");
-    }
-    if (args.includes("Markdown") && /\*\*|__|###|```/.test(text)) {
-      throw new PolicyViolation("Block", "Content blocked: Markdown formatting not allowed");
-    }
-    if (args.includes("Competitors") && ["competitor_a", "competitor_b"].some(c => lowerText.includes(c))) {
-      throw new PolicyViolation("Block", "Content blocked: Competitor mention detected");
-    }
-    if (args.includes("DiscriminatoryLanguage") && ["whites only", "no blacks", "no mexicans"].some(d => lowerText.includes(d))) {
-      throw new PolicyViolation("Block", "Content blocked: Discriminatory language detected");
-    }
-    if (args.includes("SteeringLanguage") && ["bad neighborhood", "ethnic area", "undesirable area"].some(s => lowerText.includes(s))) {
-      throw new PolicyViolation("Block", "Content blocked: Steering language detected");
-    }
-    
-    return text;
-  }
-}
-
-export class MaxWordsPlugin implements PolicyPlugin {
-  name = "MaxWords";
-  phase: PolicyPhase = "output"; // Only check output length
-  apply(text: string, args: string[]): string {
-    const maxWords = parseInt(args[0] ?? "0");
-    const wordCount = text.split(/\s+/).length;
-    if (wordCount > maxWords) {
-      throw new PolicyViolation("MaxWords", `Content exceeds max words: ${wordCount} > ${maxWords}`);
-    }
-    return text;
-  }
-}
-
-export class MaxTokensPlugin implements PolicyPlugin {
-  name = "MaxTokens";
-  phase: PolicyPhase = "output"; // Needs completion metrics
-  apply(text: string, args: string[], _ctx: ExecutionContext, metrics?: { completionTokens: number }): string {
-    const maxTokens = parseInt(args[0] ?? "0");
-    if (metrics && metrics.completionTokens > maxTokens) {
-      throw new PolicyViolation("MaxTokens", `Content exceeds max tokens: ${metrics.completionTokens} > ${maxTokens}`);
-    }
-    return text;
-  }
-}
-
-export class MaxLatencyPlugin implements PolicyPlugin {
-  name = "MaxLatency";
-  phase: PolicyPhase = "output"; // Needs duration metrics
-  
-  private parseDuration(d: string): number {
-    const match = d.match(/^(\d+)([smhd])$/);
-    if (!match || match.length < 3) return 0;
-    const n = parseInt(match[1] || "0");
-    const unit = match[2];
-    switch (unit) {
-      case "s": return n * 1000;
-      case "m": return n * 60 * 1000;
-      case "h": return n * 60 * 60 * 1000;
-      case "d": return n * 24 * 60 * 60 * 1000;
-      default: return 0;
-    }
-  }
-
-  apply(text: string, args: string[], _ctx: ExecutionContext, metrics?: { duration: number }): string {
-    const maxLatencyMs = this.parseDuration(args[0] ?? "0s");
-    if (metrics && metrics.duration > maxLatencyMs) {
-      throw new PolicyViolation("MaxLatency", `Execution exceeded max latency: ${metrics.duration}ms > ${maxLatencyMs}ms`);
-    }
-    return text;
-  }
-}
-
-export class RedactPlugin implements PolicyPlugin {
-  name = "Redact";
-  phase: PolicyPhase = "both"; // Scrub PII from BOTH input and output
-  apply(text: string, args: string[]): string {
-    let redacted = text;
-    if (args.includes("SSN")) {
-      redacted = redacted.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED_SSN]");
-    }
-    if (args.includes("CreditCard")) {
-      redacted = redacted.replace(/\b(?:\d[ -]*?){13,16}\b/g, "[REDACTED_CC]");
-    }
-    if (args.includes("HealthData")) {
-      redacted = redacted.replace(/\b(diagnosis|patient|treatment)\b/gi, "[REDACTED_HEALTH]");
-    }
-    if (args.includes("APIKeys") || args.includes("Secrets") || args.includes("APIKey")) {
-      redacted = redacted.replace(/AKIA[0-9A-Z]{16}/g, "[REDACTED_AWS_KEY]");
-      redacted = redacted.replace(/Bearer\s+[a-zA-Z0-9\-_.]+/gi, "[REDACTED_BEARER_TOKEN]");
-    }
-    if (args.includes("Location")) {
-      redacted = redacted.replace(/\b(New York|London|Paris|Tokyo|San Francisco|Seattle|Austin)\b/gi, "[REDACTED_LOCATION]");
-    }
-    return redacted;
-  }
-}
-
-export class LogViolationPlugin implements PolicyPlugin {
-  name = "LogViolation";
-  phase: PolicyPhase = "output";
-  apply(text: string): string {
-    console.log(`[Policy] Violation logged`);
-    return text;
-  }
-}
-
-export class RequirePlugin implements PolicyPlugin {
-  name = "Require";
-  phase: PolicyPhase = "output"; // Validates LLM output format
-
-  apply(text: string, args: string[], ctx: ExecutionContext): string {
-    if (args.includes("JSON")) {
-      try { JSON.parse(text); } catch (e) { throw new PolicyViolation("Require", "Require JSON failed: Output is not valid JSON"); }
-    }
-    if (args.includes("XML")) {
-      if (!/\<\w+\>.*\<\/\w+\>/s.test(text)) throw new PolicyViolation("Require", "Require XML failed: Output is not valid XML");
-    }
-    if (args.includes("Citation")) {
-      if (!/\[\w+\]/.test(text)) throw new PolicyViolation("Require", "Require Citation failed: Output missing citation marks like [1] or [doc_id]");
-    }
-    if (args.includes("Grounded")) {
-      // Stub: in a real implementation this would check ctx.input 
-      // against the output using NLP or NLI model.
-    }
-    if (args.includes("BrandVoice")) {
-      const casualWords = ["gonna", "wanna", "dude", "bro"];
-      if (casualWords.some(w => text.toLowerCase().includes(w))) {
-        throw new PolicyViolation("Require", "Require BrandVoice failed: Output contains unauthorized casual language");
-      }
-    }
-    return text;
-  }
-}
-
-export class MatchRegexPlugin implements PolicyPlugin {
-  name = "MatchRegex";
-  phase: PolicyPhase = "output";
-  apply(text: string, args: string[]): string {
-    const pattern = args[0];
-    if (pattern && !new RegExp(pattern).test(text)) {
-      throw new PolicyViolation("MatchRegex", `MatchRegex failed: Output does not match pattern ${pattern}`);
-    }
-    return text;
-  }
-}
-
-/**
- * Cross-reference validation policy.
- * Checks a field in the LLM output against a value from context.data.
- * 
- * DSL usage:
- *   policy PayoutLimit : Validate(payout_amount, "<=", context.data.verify_coverage.max_payout)
- * 
- * Args: [fieldName, operator, contextPath]
- */
-export class ValidatePlugin implements PolicyPlugin {
-  name = "Validate";
-  phase: PolicyPhase = "output";
-
-  apply(text: string, args: string[], ctx: ExecutionContext): string {
-    if (args.length < 3) return text;
-
-    const fieldName = args[0]!;
-    const operator = args[1]!.replace(/^["']|["']$/g, "");
-    const contextPath = args[2]!;
-
-    // Parse the LLM output as JSON to extract the field
-    let outputData: Record<string, unknown>;
-    try {
-      outputData = typeof text === "string" ? JSON.parse(text) : text as any;
-    } catch {
-      throw new PolicyViolation(
-        "Validate",
-        `Validate failed: Cannot parse LLM output as JSON to check field '${fieldName}'`
-      );
-    }
-
-    // Extract field value from output
-    const outputValue = outputData[fieldName];
-    if (outputValue === undefined) {
-      throw new PolicyViolation(
-        "Validate",
-        `Validate failed: Field '${fieldName}' not found in LLM output`
-      );
-    }
-
-    // Resolve the reference value from context.data
-    let refValue: unknown;
-    if (contextPath.startsWith("context.data.")) {
-      const path = contextPath.replace("context.data.", "");
-      refValue = this.resolveNestedPath(ctx.data, path);
-    } else if (contextPath.startsWith("context.input.")) {
-      const path = contextPath.replace("context.input.", "");
-      refValue = this.resolveNestedPath(ctx.input, path);
-    } else {
-      // Try as a literal number
-      refValue = parseFloat(contextPath);
-      if (isNaN(refValue as number)) refValue = contextPath;
-    }
-
-    if (refValue === undefined) {
-      throw new PolicyViolation(
-        "Validate",
-        `Validate failed: Reference '${contextPath}' not found in context`
-      );
-    }
-
-    // Compare
-    const numOut = Number(outputValue);
-    const numRef = Number(refValue);
-    let passed = false;
-
-    switch (operator) {
-      case "<=": passed = numOut <= numRef; break;
-      case ">=": passed = numOut >= numRef; break;
-      case "<":  passed = numOut < numRef; break;
-      case ">":  passed = numOut > numRef; break;
-      case "==": passed = outputValue == refValue; break;
-      case "!=": passed = outputValue != refValue; break;
-      default:   passed = true; // Unknown operator, pass through
-    }
-
-    if (!passed) {
-      throw new PolicyViolation(
-        "Validate",
-        `Validate failed: '${fieldName}' (${outputValue}) ${operator} '${contextPath}' (${refValue}) is false`
-      );
-    }
-
-    return text;
-  }
-
-  private resolveNestedPath(obj: Record<string, unknown>, path: string): unknown {
-    const parts = path.split(".");
-    let current: unknown = obj;
-    for (const part of parts) {
-      if (current && typeof current === "object") {
-        current = (current as Record<string, unknown>)[part];
-      } else if (typeof current === "string") {
-        try {
-          const parsed = JSON.parse(current);
-          current = parsed?.[part];
-        } catch {
-          return undefined;
-        }
-      } else {
-        return undefined;
-      }
-    }
-    return current;
-  }
-}
-
-// MaxSpend requires access to the cost tracker, so we will handle it in the runtime 
-// or pass a callback via a higher-order plugin. 
-// For now, let's create a factory function that takes a cost tracker.
-export function createMaxSpendPlugin(getTotalCost: () => number): PolicyPlugin {
+function pattern(re: RegExp, label: string, validate?: (match: string) => boolean): Detector {
+  const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
   return {
-    name: "MaxSpend",
-    phase: "output" as PolicyPhase,
-    apply(text: string, args: string[]): string {
-      const maxSpend = parseFloat(args[0] ?? "0");
-      const currentSpend = getTotalCost();
-      if (currentSpend > maxSpend) {
-        throw new PolicyViolation("MaxSpend", `Policy MaxSpend exceeded: $${currentSpend.toFixed(4)} > $${maxSpend.toFixed(2)}`);
-      }
-      return text;
-    }
+    test: (text) => [...text.matchAll(global)].some((m) => !validate || validate(m[0])),
+    redact: (text) => text.replace(global, (m) => (!validate || validate(m) ? `[REDACTED:${label}]` : m)),
   };
+}
+
+function luhn(digits: string): boolean {
+  const d = digits.replace(/\D/g, "");
+  if (d.length < 13 || d.length > 19) return false;
+  let sum = 0;
+  for (let i = 0; i < d.length; i++) {
+    let n = Number(d[d.length - 1 - i]);
+    if (i % 2 === 1) n = n * 2 > 9 ? n * 2 - 9 : n * 2;
+    sum += n;
+  }
+  return sum % 10 === 0;
+}
+
+const SSN = pattern(/\b\d{3}-\d{2}-\d{4}\b/, "SSN");
+const CREDIT_CARD = pattern(/\b(?:\d[ -]?){12,18}\d\b/, "CreditCard", luhn);
+const EMAIL = pattern(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/, "Email");
+const PHONE = pattern(/(?<![\w-])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/, "Phone");
+const API_KEY = pattern(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})\b/, "APIKey");
+const IP_ADDRESS = pattern(/\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/, "IPAddress");
+
+function combine(...ds: Detector[]): Detector {
+  return {
+    test: (t) => ds.some((d) => d.test(t)),
+    redact: (t) => ds.reduce((acc, d) => d.redact!(acc), t),
+  };
+}
+
+const PII = combine(SSN, CREDIT_CARD, EMAIL, PHONE);
+
+const DETECTORS: Record<string, Detector> = {
+  Profanity: { test: (t) => new RegExp(`\\b(?:${PROFANITY.join("|")})\\b`, "i").test(t) },
+  DestructiveOps: {
+    test: (t) =>
+      /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX)|TRUNCATE(?:\s+TABLE)?\s+\w|DELETE\s+FROM)\b/i.test(t) ||
+      /\brm\s+-[a-z]*r[a-z]*f?\b|\bgit\s+push\s+(?:-f|--force)\b|\bmkfs\b|:\(\)\s*\{\s*:\|:&\s*\};:/i.test(t),
+  },
+  PromptInjection: {
+    test: (t) =>
+      /\b(?:ignore|disregard|forget)\b.{0,40}\b(?:previous|prior|above|earlier|all)\b.{0,20}\b(?:instructions?|prompts?|rules)\b/i.test(t) ||
+      /\b(?:reveal|print|show|repeat)\b.{0,30}\bsystem prompt\b/i.test(t) ||
+      /\byou are now\b.{0,30}\b(?:DAN|jailbroken|developer mode|unfiltered)\b/i.test(t),
+  },
+  PII,
+  SSN,
+  CreditCard: CREDIT_CARD,
+  Email: EMAIL,
+  Phone: PHONE,
+  APIKey: API_KEY,
+  IPAddress: IP_ADDRESS,
+  Markdown: { test: (t) => /\*\*[^*\n]+\*\*|__[^_\n]+__|^#{1,6}\s|```/m.test(t) },
+};
+
+const DESCRIPTIONS: Record<string, string> = {
+  Profanity: "Profanity detected",
+  DestructiveOps: "Destructive operations not allowed",
+  PromptInjection: "Prompt injection attempt detected",
+  PII: "Personal data (PII) detected",
+  SSN: "Social security number detected",
+  CreditCard: "Credit card number detected",
+  Email: "Email address detected",
+  Phone: "Phone number detected",
+  APIKey: "API key or secret detected",
+  Markdown: "Markdown formatting not allowed",
+};
+
+const unquote = (s: string | undefined) => (s ?? "").replace(/^(["'])(.*)\1$/, "$2");
+
+/** Rough XML well-formedness: one root element and balanced tags. */
+function isXml(text: string): boolean {
+  const t = text.trim().replace(/^<\?xml[^>]*\?>/, "").trim();
+  if (!t.startsWith("<")) return false;
+  const stack: string[] = [];
+  for (const m of t.matchAll(/<(\/?)([A-Za-z_][\w.:-]*)[^>]*?(\/?)>/g)) {
+    if (m[3]) continue;
+    if (m[1]) {
+      if (stack.pop() !== m[2]) return false;
+    } else stack.push(m[2]!);
+  }
+  return stack.length === 0;
+}
+
+function compare(a: unknown, op: string, b: unknown): boolean {
+  const [x, y] = [Number(a), Number(b)];
+  const numeric = !Number.isNaN(x) && !Number.isNaN(y) && a !== null && b !== null && a !== "" && b !== "";
+  switch (op) {
+    case "==": return numeric ? x === y : String(a) === String(b);
+    case "!=": return numeric ? x !== y : String(a) !== String(b);
+    case "<": return numeric && x < y;
+    case "<=": return numeric && x <= y;
+    case ">": return numeric && x > y;
+    case ">=": return numeric && x >= y;
+    default: return false;
+  }
+}
+
+interface BoundRule {
+  policy: string;
+  rule: PolicyRule;
+  logViolations: boolean;
+}
+
+export interface PolicyHooks {
+  /** Total spend (USD) of the current run so far. */
+  spent(): number;
+  onViolation(v: Violation, log: boolean): void;
+  /** Resolve `context.data.x.y` (and similar) for `Validate(...)`. */
+  lookup?(path: string): unknown;
+}
+
+export class PolicyEngine {
+  constructor(private policies: Map<string, PolicyDeclaration>) {}
+
+  private rulesFor(agent: Agent): BoundRule[] {
+    const bound: BoundRule[] = [];
+    for (const name of agent.requires ?? []) {
+      const g = this.policies.get(name);
+      if (!g) throw new PolicyViolation(`Agent "${agent.name}" requires undefined policy "${name}"`, name, "requires");
+      const logViolations = g.rules.some((r) => r.name === "LogViolation");
+      for (const rule of g.rules) bound.push({ policy: g.name, rule, logViolations });
+    }
+    return bound;
+  }
+
+  private violate(b: BoundRule, message: string, phase: Violation["phase"], hooks: PolicyHooks): never {
+    hooks.onViolation({ policy: b.policy, rule: b.rule.name, message, phase }, b.logViolations);
+    throw new PolicyViolation(message, b.policy, b.rule.name);
+  }
+
+  /** Fail before calling an agent whose budget is already spent. */
+  checkBudget(agent: Agent, hooks: PolicyHooks): void {
+    for (const b of this.rulesFor(agent)) {
+      if (b.rule.name !== "MaxSpend") continue;
+      const limit = Number(b.rule.args[0]);
+      if (hooks.spent() >= limit) this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}`, "budget", hooks);
+    }
+  }
+
+  /** Redact and screen a prompt before it is sent. Returns the (possibly redacted) text. */
+  checkInput(agent: Agent, text: string, hooks: PolicyHooks): string {
+    let out = text;
+    const rules = this.rulesFor(agent);
+    for (const b of rules) if (b.rule.name === "Redact") out = redact(out, b.rule.args);
+    for (const b of rules) if (b.rule.name === "Block") this.block(b, out, "input", hooks);
+    return out;
+  }
+
+  /** Redact and screen an agent's result. Returns the (possibly redacted) value. */
+  checkOutput(agent: Agent, value: unknown, hooks: PolicyHooks, usage: { completionTokens?: number } = {}): unknown {
+    const rules = this.rulesFor(agent);
+    let out = value;
+    for (const b of rules) if (b.rule.name === "Redact") out = mapStrings(out, (s) => redact(s, b.rule.args));
+
+    const text = typeof out === "string" ? out : JSON.stringify(out) ?? "";
+    for (const b of rules) {
+      const { name, args } = b.rule;
+      if (name === "Block") this.block(b, text, "output", hooks);
+      if (name === "MaxWords") {
+        const limit = Number(args[0]);
+        const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+        if (words > limit) this.violate(b, `Content exceeds max words: ${words} > ${limit}`, "output", hooks);
+      }
+      if (name === "MaxChars") {
+        const limit = Number(args[0]);
+        if (text.length > limit) this.violate(b, `Content exceeds max characters: ${text.length} > ${limit}`, "output", hooks);
+      }
+      if ((name === "Enforce" || name === "Require") && args.some((a) => a.toUpperCase() === "JSON") && typeof out === "string") {
+        this.violate(b, `Output is not valid JSON`, "output", hooks);
+      }
+      if (name === "Require" && args.some((a) => a.toUpperCase() === "XML") && !isXml(text)) {
+        this.violate(b, `Output is not valid XML`, "output", hooks);
+      }
+      if (name === "Require" && args.includes("Citation") && !/\[(?:\d+|[\w.-]+)\]/.test(text)) {
+        this.violate(b, `Output has no citations like [1] or [doc_id]`, "output", hooks);
+      }
+      if (name === "MatchRegex") {
+        const pattern = unquote(args[0]);
+        if (!new RegExp(pattern).test(text)) this.violate(b, `Output does not match the pattern /${pattern}/`, "output", hooks);
+      }
+      if (name === "MaxTokens" && usage.completionTokens !== undefined) {
+        const limit = Number(args[0]);
+        if (usage.completionTokens > limit) this.violate(b, `Output used ${usage.completionTokens} tokens, more than the limit of ${limit}`, "output", hooks);
+      }
+      if (name === "Validate") this.validateField(b, out, hooks);
+      if (name === "MaxSpend") {
+        const limit = Number(args[0]);
+        if (hooks.spent() > limit) this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}`, "budget", hooks);
+      }
+    }
+    return out;
+  }
+
+  /** `Validate("field", "<=", context.data.x.limit)`: compare a field of the (JSON) output with a context value or literal. */
+  private validateField(b: BoundRule, out: unknown, hooks: PolicyHooks) {
+    const [field = "", op = "", ref = ""] = b.rule.args.map(unquote);
+    const obj = typeof out === "string" ? undefined : out;
+    if (!obj || typeof obj !== "object") this.violate(b, `Validate: output is not JSON, so field "${field}" can't be checked`, "output", hooks);
+    const actual = field.split(".").reduce<unknown>((v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), obj);
+    if (actual === undefined) this.violate(b, `Validate: output has no field "${field}"`, "output", hooks);
+    const expected = /^context\./.test(ref) ? hooks.lookup?.(ref) : ref;
+    if (expected === undefined) this.violate(b, `Validate: "${ref}" is not set, so "${field}" can't be checked`, "output", hooks);
+    if (!compare(actual, op, expected)) {
+      this.violate(b, `Validate failed: ${field} (${JSON.stringify(actual)}) ${op} ${ref} (${JSON.stringify(expected)}) is false`, "output", hooks);
+    }
+  }
+
+  private block(b: BoundRule, text: string, phase: Violation["phase"], hooks: PolicyHooks) {
+    for (const category of b.rule.args) {
+      const detector = DETECTORS[category];
+      if (detector?.test(text)) {
+        this.violate(b, `Content blocked: ${DESCRIPTIONS[category] ?? category + " detected"}`, phase, hooks);
+      }
+    }
+  }
+}
+
+function redact(text: string, categories: string[]): string {
+  return categories.reduce((acc, c) => DETECTORS[c]?.redact?.(acc) ?? acc, text);
+}
+
+function mapStrings(value: unknown, fn: (s: string) => string): unknown {
+  if (typeof value === "string") return fn(value);
+  if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, fn)]));
+  }
+  return value;
 }

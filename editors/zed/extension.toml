@@ -1,13 +1,13 @@
-id = "langly"
-name = "Langly DSL"
+id = "halo"
+name = "Halo DSL"
 version = "0.1.0"
 schema_version = 2
-description = "Syntax highlighting for the Langly DSL (.ly files)"
+description = "Syntax highlighting for the Halo DSL (.halo files)"
 repository = ""
 authors = []
 themes = []
 icon_themes = []
-languages = ["languages/langly"]
+languages = ["languages/halo"]
 
 [language_servers]
 

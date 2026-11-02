@@ -4,7 +4,7 @@
 //          standard terms, flag deviations, and produce redline
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy Confidential   : Redact(ClientName) & Redact(DealValue) & Redact(SSN)
 policy LegalDisclaimer : Require(NotLegalAdvice)
 policy CostGuard      : MaxSpend(3.00)
@@ -14,7 +14,7 @@ tool DocParser     : REST("api.textract.aws.com/v1", apiKey: Env.AWS_KEY)
 tool CLM           : REST("api.ironclad.com/v1/contracts", apiKey: Env.IRONCLAD_KEY)
 tool LegalSlack    : POST("hooks.slack.com/services/legal-review")
 
-// --- Memory ---
+// --- Store ---
 tool ClauseLibrary  : VectorStore(Env.PINECONE_KEY, namespace: "standard-clauses")
 tool PrecedentDB    : VectorStore(Env.PINECONE_KEY, namespace: "past-negotiations")
 
@@ -26,15 +26,16 @@ schema ContractReview {
   recommendation   : String
 }
 
-// --- Minds ---
+// --- Agents ---
 agent Extractor [openai/gpt-4o-mini, temp: 0.0]
+  equips DocParser
   requires CostGuard
 
 agent LegalAnalyst [anthropic/claude-sonnet-4, temp: 0.1]
   equips ClauseLibrary, PrecedentDB
   requires Confidential, LegalDisclaimer, CostGuard
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(10m)
 @retry(2, 15s)
 pipeline ReviewContract(document: ContractUpload) -> ContractReview:

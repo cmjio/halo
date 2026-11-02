@@ -5,7 +5,7 @@
 //          Replaces 6-week manual review with 3-minute automation.
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy KYCPrivacy     : Redact(SSN) & Redact(DateOfBirth) & Redact(PassportNumber)
 policy BSACompliance  : Require(RegulatoryHold) & Block(SanctionedEntity)
 policy CostGuard      : MaxSpend(2.00)
@@ -17,7 +17,7 @@ tool CreditAPI     : REST("api.experian.com/credit/v1", apiKey: Env.EXPERIAN_KEY
 tool ComplianceLog : POST("api.example.com/compliance-audit")
 tool CompSlack     : POST("hooks.slack.com/services/compliance-team")
 
-// --- Memory ---
+// --- Store ---
 tool RiskProfiles  : VectorStore(Env.PINECONE_KEY, namespace: "customer-risk-profiles")
 tool RegPatterns   : VectorStore(Env.PINECONE_KEY, namespace: "regulatory-patterns")
 
@@ -31,15 +31,16 @@ schema KYCResult {
   approved       : Boolean
 }
 
-// --- Minds ---
+// --- Agents ---
 agent IdentityAgent [openai/gpt-4o-mini, temp: 0.0]
+  equips IdentityAPI, SanctionsAPI, CreditAPI
   requires KYCPrivacy, CostGuard
 
 agent ComplianceAgent [anthropic/claude-sonnet-4, temp: 0.0]
   equips RiskProfiles, RegPatterns
   requires KYCPrivacy, BSACompliance, CostGuard
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(5m)
 @retry(3, 10s)
 pipeline OnboardCustomer(application: CustomerApplication) -> KYCResult:

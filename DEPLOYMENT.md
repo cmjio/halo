@@ -1,268 +1,78 @@
-# Langly Deployment Guide
+# Deploying Halo
 
-## 🏗 Deployment Options
+Halo needs **Bun**. The runtime uses `Bun.file`, `Bun.CryptoHasher`, `bun:sqlite`, `Bun.SQL`, and `Bun.spawn`, so Node-only hosts can't run it. That includes Next.js on Node, AWS Lambda's Node runtimes, and Cloudflare Workers. Any VM, container, or PaaS that runs a Bun process works. The full guide is in `docs/guide/production/deploying.md`.
 
-### 1. Local Development (Ollama - Zero Cost)
-
-**Prerequisites:**
-- Bun installed
-- Ollama installed and running
+## Local models (no API key)
 
 ```bash
-# 1. Install Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 2. Start Ollama server
-ollama serve
-
-# 3. Pull a model
-ollama pull llama3.1
-
-# 4. Create a Langly project with local models
-langly init my-bot --local
-cd my-bot
-
-# 5. Edit .env (no API key needed!)
-cp .env.example .env
-
-# 6. Run
-bun run src/main.ly --mock  # Test first
-bun run src/main.ly             # Uses local Ollama
+ollama serve && ollama pull llama3.2
+# in your .halo file: agent Bot [ollama/llama3.2]
+bun run index.ts run my.halo --arg question="..."
 ```
 
-**Cost:** $0 (uses local models!)
+Set `OLLAMA_HOST` if Ollama isn't at `http://localhost:11434`.
 
----
+## Running the CLI in a container
 
-### 2. Vercel Deployment
-
-**vercel.json:**
-```json
-{
-  "version": 2,
-  "builds": [
-    {
-      "src": "src/main.ly",
-      "use": "@vercel/bun",
-      "config": { "includeFiles": ["langly.json", ".env"] }
-    }
-  ],
-  "env": {
-    "LANGLY_API_KEY": "@langly-api-key"
-  }
-}
-```
-
-**Deploy:**
-```bash
-vercel --prod
-```
-
----
-
-### 3. Railway Deployment
-
-**Dockerfile:**
 ```dockerfile
-FROM oven/bun:latest
-
+FROM oven/bun:1
 WORKDIR /app
 COPY . .
-
-RUN bun install
-
-EXPOSE 3000
-CMD ["bun", "run", "src/main.ly"]
+RUN bun install --production
+ENV ANTHROPIC_API_KEY=""
+CMD ["bun", "run", "index.ts", "run", "workflows/main.halo", "--json", "--no-telemetry"]
 ```
 
-**railway.toml:**
-```toml
-[build]
-builder = "dockerfile"
+- Pass arguments with `--arg key=value` or `--args '<json>'`.
+- Without a terminal, a run that reaches `|! yield` / `~> listen` pauses. It is saved to `.halo/runs/` and continued with `halo resume <file> <runId> --payload ...` (`bun run index.ts resume ...`). Use `--auto-approve` for jobs that must never wait. Mount `.halo/` on a volume if paused runs must survive restarts.
+- The exit code is 1 on validation errors, thrown errors, and policy violations. Halted and paused runs exit with 0, so check `status` in the `--json` output.
 
-[deploy]
-startCommand = "bun run src/main.ly"
+## Embedding in a Bun server
 
-[env]
-LANGLY_API_KEY = "your-key-here"
+```ts
+import { compile, FileRunStore, HaloRuntime } from "halo";
+
+const { ast, ok, diagnostics } = compile(await Bun.file("workflows/support.halo").text());
+if (!ok) throw new Error(JSON.stringify(diagnostics));
+const runtime = new HaloRuntime({ runStore: new FileRunStore(".halo/runs") }).load(ast);
+
+Bun.serve({
+  port: 3000,
+  routes: {
+    "/tickets": {
+      POST: async (req) => {
+        const result = await runtime.run("HandleTicket", await req.json());
+        return Response.json({ status: result.status, runId: result.runId, output: result.output });
+      },
+    },
+    // A human answered a paused |! yield: continue the run.
+    "/runs/:id/answer": {
+      POST: async (req) => Response.json(await runtime.signal(req.params.id, "yield", await req.json())),
+    },
+  },
+});
 ```
 
-**Deploy:**
-```bash
-railway login
-railway link
-railway up
-```
+`signal(runId, event, payload)` takes `"yield"` or a listen target (e.g. `"Slack.Interaction"`). It throws a `SignalError` with code `RUN_NOT_FOUND` or `SIGNAL_MISMATCH`. The default `MemoryRunStore` loses paused runs on restart. Use `FileRunStore` on shared storage or implement `RunStore` over your database.
 
----
+## Environment variables
 
-### 4. Render Deployment
+| Variable | Used for |
+|---|---|
+| `ANTHROPIC_API_KEY` | `anthropic/…`, `claude-…` models |
+| `OPENAI_API_KEY` | `openai/…`, `gpt-…` models |
+| `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `google/…`, `gemini-…` models |
+| `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `REPLICATE_API_TOKEN` | those providers |
+| `HALO_API_KEY` (legacy `LANGLY_API_KEY`) | fallback for any provider without its own key |
+| `OLLAMA_HOST` | Ollama server |
+| anything read with `Env.X` in a tool | e.g. `GITHUB_TOKEN`, `SLACK_BOT_TOKEN`, `RESEND_API_KEY`, `DATABASE_URL` |
 
-**Dockerfile:**
-```dockerfile
-FROM oven/bun:latest
+There is no project config file. Configure model routing with `--router '{"strategy":"cost-optimized"}'` or `RuntimeConfig.router`.
 
-WORKDIR /app
-COPY . .
+## Cost and safety
 
-RUN bun install
-
-EXPOSE 3000
-CMD ["bun", "run", "src/main.ly"]
-```
-
-**render.yaml:**
-```yaml
-services:
-  - type: web
-    name: langly-bot
-    envVars:
-      - key: LANGLY_API_KEY
-        value: your-key-here
-```
-
-**Deploy:**
-```bash
-git push render main
-```
-
----
-
-### 5. AWS Lambda (Serverless)
-
-**handler.ts:**
-```typescript
-import { APIGatewayProxyResult } from "aws-lambda";
-import { parse } from "langly/parser";
-import { LanglyRuntime } from "langly/runtime";
-
-export const handler = async (event: any): Promise<APIGatewayProxyResult> => {
-  const body = JSON.parse(event.body || "{}");
-  
-  const source = `
-mind Bot [openai/gpt-4o-mini, temp: 0.5]
-stream Chat(message: String) -> Result:
-  message
-    |> Bot.prompt("You are a helpful assistant. Reply: {{message}}")
-    |> System.Print()
-`;
-  
-  const ast = parse(source);
-  const runtime = new LanglyRuntime({ apiKey: process.env.LANGLY_API_KEY });
-  runtime.load(ast);
-  
-  const result = await runtime.execute("Chat", { message: body.message });
-  
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ response: result }),
-    headers: { "Content-Type": "application/json" }
-  };
-};
-```
-
-**serverless.yml:**
-```yaml
-service: langly-bot
-
-provider:
-  name: aws
-  runtime: nodejs20.x
-  environment:
-    LANGLY_API_KEY: ${self:custom.langlyKey}
-
-functions:
-  chat:
-    handler: handler.handler
-    events:
-      - http:
-          path: chat
-          method: post
-```
-
-**Deploy:**
-```bash
-npm install -g serverless
-serverless deploy --key your-key
-```
-
----
-
-## 📊 Environment Variables for Production
-
-| Variable | Description | Required |
-|-----------|-------------|----------|
-| `LANGLY_API_KEY` | Fallback API key | No (use per-mind keys) |
-| `OPENAI_API_KEY` | OpenAI API key | For `openai/*` minds |
-| `ANTHROPIC_API_KEY` | Anthropic API key | For `anthropic/*` minds |
-| `GOOGLE_API_KEY` | Google API key | For `google/*` minds |
-| `PINECONE_KEY` | Pinecone (VectorStore) | For memory tools |
-
-**Tip:** Use `langly.json` for per-project configuration:
-```json
-{
-  "runtime": {
-    "apiKey": "Env.OPENAI_API_KEY",
-    "router": {
-      "strategy": "cost-optimized",
-      "maxCostPer1kTokens": 0.01
-    }
-  }
-}
-```
-
----
-
-## 💰 Cost Management in Production
-
-### 1. Set Budget Caps
-```langly
-guardrail Budget: MaxSpend(50.00)  // $50/month max
-
-mind Analyst [openai/gpt-4o, temp: 0.5]
-  requires Budget
-```
-
-### 2. Use Cost-Optimized Routing
-```json
-// langly.json
-{
-  "runtime": {
-    "router": {
-      "strategy": "cost-optimized",
-      "maxCostPer1kTokens": 0.01,
-      "preferredProviders": ["ollama", "together", "openai"]
-    }
-  }
-}
-```
-
-### 3. Monitor Costs
-```bash
-# Runtime tracks costs automatically
-langly run examples/20-role-founder.ly
-# Output: 💰 Total cost: $0.0042
-```
-
----
-
-## 🔐 Security & Compliance
-
-- **Guardrails block harmful content** (no manual filtering)
-- **Audit trails** via `context.trace`
-- **PII redaction** via `Redact(PII)`
-- **Prompt injection protection** via `Block(PromptInjection)`
-- **Model-agnostic** (switch providers without code changes)
-
----
-
-## 📄 Quick Startup Use Cases
-
-| Use Case | Langly Example | Deployment | Cost/Month |
-|-----------|----------------|------------|-------------|
-| Customer Support Bot | `20-role-founder.ly` | Vercel | ~$50 (1k conversations) |
-| Content Moderation | `30-control-moderation.ly` | AWS Lambda | ~$100 (budget-capped) |
-| QA Test Generator | `24-role-qa-engineer.ly` | Railway | ~$30 (1k tests) |
-| UX Design Reviewer | `22-role-ux-designer.ly` | Render | ~$75 (500 reviews) |
-
-**Total cost to launch:** <$300/month for a fully-functional AI bot!
+- `policy Budget : MaxSpend(0.50)` caps the cost of **each run**. There is no monthly or cross-run cap.
+- Costs are estimates from each adapter's price table. The CLI prints them after each run.
+- `Block(PromptInjection)`, `Redact(PII)`, `Redact(APIKey)`, and `Require(JSON)` are enforced in code. Run `halo validate --strict` in CI so that rules the runtime ignores (such as `Tone(...)`) fail the build.
+- `context.trace` is a SHA-256 hash chain of every stage (`verifyTrace`).
+- The CLI records runs to `.halo/telemetry.db` for Halo Studio. Pass `--no-telemetry` in production unless you want that file.

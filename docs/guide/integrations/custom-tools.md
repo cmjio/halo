@@ -1,79 +1,75 @@
 # Custom Tools
 
-Agents are useless without hands. While Halo provides built-in tools for generic HTTP REST calls and File System operations, enterprise workflows almost always require custom business logic.
+When the [built-in providers](../../stdlib/tools.md) don't cover something, register your own in TypeScript. A provider is one async function. Every tool declared with that provider name calls it.
 
-Halo makes it trivial to bind any TypeScript class to an agent as a Tool.
+## 1. Register a provider
 
-## 1. Write the TypeScript Class
+```ts
+import { HaloRuntime, HaloError, parse, type ToolProvider } from "halo";
 
-A Halo Tool is just a TypeScript class that implements a `name`, a `description` (which the LLM reads to understand how to use it), and an `execute` method.
+const jira: ToolProvider = async (call, { fetch }) => {
+  // call.tool        the declaration (name, provider, args)
+  // call.method      e.g. "create_issue"
+  // call.positional  positional args (defaults to [flowing value])
+  // call.named       named args
+  // call.config(k)   a declaration arg by name or index, with Env.* resolved
+  // call.viaAgent    true when called as Agent.task(tool: Jira, ...)
+  // call.signal      abort signal (timeouts, cancellation)
+  if (call.method !== "create_issue") throw new HaloError(`Jira has no method "${call.method}"`);
+  const res = await fetch(`https://${call.config("site")}/rest/api/2/issue`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${call.config(0)}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fields: { project: { key: call.named.project }, summary: call.named.title, issuetype: { name: "Task" } },
+    }),
+    signal: call.signal,
+  });
+  return res.json(); // becomes the stage's value
+};
 
-```typescript
-// my-tools.ts
-export class JiraTicketCreator {
-  // 1. The name used in the .halo file
-  name = "Jira";
-  
-  // 2. The description injected into the LLM's system prompt
-  description = "Creates a new Jira ticket. Requires a title and description.";
-  
-  // 3. The execution logic
-  async execute(args: { title: string, desc: string }): Promise<string> {
-    const res = await fetch("https://api.atlassian.com/ex/jira/.../rest/api/2/issue", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.JIRA_API_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        fields: {
-          project: { key: "ENG" },
-          summary: args.title,
-          description: args.desc,
-          issuetype: { name: "Task" }
-        }
-      })
-    });
-    
-    const data = await res.json();
-    return `Ticket Created: ${data.key}`;
-  }
-}
+const runtime = new HaloRuntime().registerToolProvider("Jira", jira).load(parse(source));
 ```
 
-## 2. Register the Tool in the Runtime
+The second argument gives the provider access to the runtime's `fetch` (useful in tests), the local vector store, and a pooled `Bun.SQL` connection.
 
-Before executing your `.halo` script, you must register the tool with the runtime.
-
-```typescript
-import { HaloRuntime, parse } from '@halo-lang/runtime';
-import { JiraTicketCreator } from './my-tools';
-
-const runtime = new HaloRuntime({ apiKey: process.env.OPENAI_API_KEY });
-
-// Register the tool!
-runtime.toolRegistry.register(new JiraTicketCreator());
-
-// Load and execute...
-const ast = parse(source);
-runtime.load(ast);
-await runtime.execute("MyPipeline", {});
-```
-
-## 3. Equip the Tool in Halo
-
-Now, your custom TypeScript logic is natively available in the DSL.
+## 2. Declare and call it
 
 ```halo
-// Bind the tool
-tool JiraTicket : Jira()
+tool Tickets : Jira(Env.JIRA_TOKEN, site: "acme.atlassian.net")
 
-agent ProductManager [openai/gpt-4o]
-  equips JiraTicket
+agent PM [openai/gpt-4o-mini]
+  equips Tickets
 
-pipeline CreateEpic(spec: String) -> Result:
-  spec 
-    |> ProductManager.prompt("Break this spec down and create Jira tickets.")
+pipeline FileTicket(spec: String) -> Result:
+  spec
+    |> PM.title("Write a one-line ticket title for this spec.") as title
+    |> Tickets.create_issue(project: "ENG", title: context.data.title)
 ```
 
-When the `ProductManager` decides to create a ticket, the Halo Runtime intercepts the LLM's JSON tool-call request, safely executes your TypeScript `execute` method, and feeds the `Ticket Created: ENG-123` string back into the LLM context automatically.
+`halo validate` warns that `Jira` is an unknown provider. Pass `{ toolProviders: ["Jira"] }` to `validate()`/`compile()` to silence the warning in your own tooling.
+
+An agent doesn't decide on its own to call a tool. A tool runs when the pipeline calls it, either directly as above or through an agent with `PM.create_issue(tool: Tickets, ...)`, which calls the tool first and gives the agent its result.
+
+## System methods
+
+For logic that isn't a tool, register a `System` method. If it returns a value other than `undefined`, that value replaces the flowing value.
+
+```ts
+runtime.registerSystem("Slugify", ({ current }) => String(current).toLowerCase().replace(/\W+/g, "-"));
+```
+
+`System.Slugify()` then works in pipelines. Pass `systemMethods: ["Slugify"]` to the validator. `onSystemEvent` receives `System.Publish`, `Distribute`, `ResolveIncident`, `TriggerWebhook`, and `Notify`.
+
+## Model providers
+
+`runtime.registerAdapter(adapter)` adds a model provider. An adapter implements `ProviderAdapter`: `id`, `envKeys`, `canHandle(modelId)`, `getUrl`, `getHeaders`, `transformRequest`, `parseResponse`, and optionally `estimateCost`. For an OpenAI-compatible API, extend the exported `OpenAICompatibleAdapter`:
+
+```ts
+import { OpenAICompatibleAdapter } from "halo";
+
+runtime.registerAdapter(new OpenAICompatibleAdapter({
+  id: "groq", prefixes: ["groq/"], baseUrl: "https://api.groq.com/openai/v1", envKeys: ["GROQ_API_KEY"],
+}));
+```
+
+Adapters registered later take precedence. If your model ids need a new prefix, the CLI's validator flags those agents, because it only knows the built-in adapters.

@@ -12,7 +12,7 @@ tool VectorDB  : VectorStore(Env.PINECONE_KEY, namespace: "production")
 
 policy Privacy : Redact(SalaryData) & Redact(Revenue)
 
-// Mind that uses environment for API key
+// Agent that uses environment for API key
 agent Analyst [openai/gpt-4o, temp: 0.3]
   equips StripeAPI, VectorDB
   requires Privacy

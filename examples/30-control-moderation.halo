@@ -3,7 +3,7 @@
 // ============================================================
 // A hardened moderation pipeline with multiple defense layers,
 // audit trails, escalating human review, and budget-safe
-// AI model selection. Shows how Langly handles compliance.
+// AI model selection. Shows how Halo handles compliance.
 // ============================================================
 
 // --- GUARDRAILS: Hard boundaries ---
@@ -51,52 +51,65 @@ agent PolicyExpert [anthropic/claude-sonnet-4, temp: 0.2]
   """
   equips PolicyRules
 
-// --- The Stream ---
+// --- The Pipelines ---
+// Every submission gets exactly one outcome: the branch (|? { ... })
+// sends it down the first route whose condition holds.
 @timeout(5m)
 @retry(3, 10s)
 pipeline ModerateContent(submission: ContentSubmission) -> Decision:
   submission
-    // Layer 1: Quick triage — 80% of content auto-decisioned
+    // Layer 1: Quick triage scores every submission cheaply
     |> TriageAgent.screen(
         text: context.data.submission.body,
         user_flags: context.data.submission.user_flags
+      ) as screen
+
+    // Layer 2: Route it. Clearly fine content publishes, clearly toxic
+    // content is removed, and everything in between gets a deep review.
+    |? {
+        (context.data.screen.toxicity_score < 0.3) => System.Publish(context.data.submission),
+        (context.data.screen.toxicity_score > 0.9) => System.Notify("removed", reason: context.data.screen.reason),
+        else => DeepReview(context.data.submission),
+      } as outcome
+
+    // Layer 3: Log every decision to the audit trail
+    |> AuditLogger.record(
+        event: "moderation_decision",
+        screen: context.data.screen,
+        outcome: context.data.outcome
       )
+    |> System.Print(context.data.outcome)
 
-    // Layer 2: Gate — skip deep review for obvious cases
-    |? (context.data.TriageAgent.screen.toxicity_score < 0.3)
-
-    // Layer 3: Deep review for ambiguous content
+// Ambiguous content: a careful model reviews it against policy.
+@timeout(2m)
+pipeline DeepReview(submission: ContentSubmission) -> Decision:
+  submission
     |> ReviewAgent.evaluate(
         content: context.data.submission.body,
         policy: PolicyRules,
         history: PastCases
-      )
+      ) as review
 
-    // Layer 4: Log everything to audit trail
-    |> AuditLogger.record(
-        event: "moderation_review",
-        data: context.data
-      )
+    // High risk goes to a human; the rest gets a final policy check
+    |? {
+        (context.data.review.risk_level == "high") => HumanReview(context.data.submission, context.data.review),
+        else => PolicyExpert.final_review(content: context.data.submission.body, review: context.data.review),
+      }
 
-    // Layer 5: Gate — escalate to human if risk is high
-    |? (context.data.ReviewAgent.evaluate.risk_level == "high")
-
-    // Layer 6: Human-in-the-loop for final sign-off
+// High-risk content: a human moderator makes the call.
+pipeline HumanReview(submission: ContentSubmission, review: Review) -> Decision:
+  review
     |! yield(
         queue: EscalationQueue,
-        context: context.data.ReviewAgent.evaluate,
+        context: context.data.review,
         timeout: 1h
       )
-
-    // Layer 7: Wait for human decision
-    ~> listen(EscalationQueue.Reaction)
-
-    // Layer 8: Gate on approval
-    |? (context.data.human.action == "approve")
-
-    // Layer 9: Final policy check before publishing
-    |> PolicyExpert.final_review(
-        content: context.data.submission.body,
-        review: context.data.ReviewAgent.evaluate
-      )
-    |> System.Print()
+    ~> listen(EscalationQueue.Reaction) as human
+    |? {
+        (context.data.human.action == "approve") => PolicyExpert.final_review(
+            content: context.data.submission.body,
+            review: context.data.review,
+            moderator: context.data.human
+          ),
+        else => System.Notify("removed by moderator", review: context.data.review),
+      }

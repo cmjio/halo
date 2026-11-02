@@ -1,155 +1,213 @@
 # Halo DSL
 
-A domain-specific language for orchestrating AI/LLM workflows with declarative infrastructure, safety guardrails, and reactive pipeline composition.
+A language for orchestrating AI workflows with declarative infrastructure, safety policies, and pipe-based composition.
 
 ## Language Design
 
-Halo is a **declarative**, pipeline-oriented DSL designed to express complex AI workflows as readable, auditable data flows. It replaces imperative boilerplate (`try/catch`, `if/else`, memory arrays) with **four pipe operators** and **infrastructure declarations**.
+Halo is a **declarative**, pipeline-oriented language for expressing AI workflows as readable, auditable data flows. Instead of imperative boilerplate (`try/catch`, `if/else`, retry loops, memory arrays), you write **declarations** (agents, tools, policies, schemas) and **pipelines** joined by pipe operators.
 
-### Type System & State Management
+### Types and state
 
-Halo is dynamically typed but strictly validated. The flowing state is immutable at each node transition.
-
-#### Standard Types
-- `String`, `Integer`, `Float`, `Boolean`, `List`, `JSON`
-
-#### Domain Types
-- `Asset` — Multimodal primitive (Image, Video, Audio, UI Component). Stored in memory without base64 bloat.
-- `Embedding` — Native vector array for semantic math.
+Halo is dynamically typed and statically validated (`halo validate`). Parameter and return types are written as `String`, `Number`, `Integer`, `Boolean`, `Array` / `List` (optionally `Array<T>`), `Object` / `JSON`, `Any`, or a declared `schema`. Only a pipeline's return type is checked at runtime, and only when it names a schema.
 
 #### The Global State (`context`)
-The implicit object flowing through the pipes. Three reserved namespaces:
 
 | Namespace | Purpose |
 |---|---|
-| `context.data` | Actual payload (text, assets, JSON) |
-| `context.meta` | System data (token usage, latency, cost) |
-| `context.trace` | Cryptographic history of every node touched |
+| `context.current` | The value flowing through the pipe right now |
+| `context.input` | The pipeline's arguments |
+| `context.data` | Results: the pipeline's arguments, every call at `context.data.<Callee>.<method>` and `context.data.<method>`, and every `as name` binding |
+| `context.meta` | Run data: cost, tokens, every call with latency and attempts, policy violations, shadow results, halted/paused state |
+| `context.trace` | SHA-256 hash chain of every stage touched (tamper-evident) |
 
-## Core Declarations (The Environment)
+## Declarations
 
-These entities are defined once per file to build the infrastructure sandbox.
+### `policy`: the rules
 
-### `policy` — The Bouncers
-
-Evaluated *before* and *after* execution. Can be deterministic or AI-driven.
-
-```halo
-policy Privacy   : Redact(PII) & Block(PromptInjection)
-policy Budget    : MaxSpend(50.00)
-policy Aesthetics: MaxDensity(15) & Enforce(Brand.JSON)
-```
-
-### `tool` — The Hands
-
-Zero-trust outbound network connections.
+Checked on an agent's prompt (input) and answer (output) for every agent that `requires` the policy. All rules are deterministic; rules that would need a model to judge them (e.g. `Tone`) are recognized but not enforced, and `halo validate` warns about them.
 
 ```halo
-tool CoreDB   : PostgreSQL(Env.DB_URI)
-tool Figma    : POST("api.figma.com/v1/render")
-tool Snowflake: SQL(Env.SNOWFLAKE_KEY)
+policy Privacy : Redact(PII) & Block(PromptInjection)
+policy Budget  : MaxSpend(5.00) & MaxTokens(800)
+policy Shape   : Require(JSON) & Validate("payout", "<=", "context.data.coverage.max_payout")
 ```
 
-### `store` — The Hippocampus
+### `tool`: the hands
 
-Persistent, stateful storage for RAG (Retrieval-Augmented Generation).
+Outbound connections. An agent may only use tools it `equips` (zero trust).
 
 ```halo
-store KnowledgeBase : VectorStore(Env.PINECONE_KEY, namespace: "engineering")
+tool CoreDB : PostgreSQL(Env.DB_URI)
+tool GitHub : REST("api.github.com")
+tool Shell  : Bash()
+tool Chat   : Slack(Env.SLACK_BOT_TOKEN)
 ```
 
-### `agent` — The Brains
+### `store`: memory
 
-The LLM/Model binding with optional modifiers.
+`store` declares a store the same way `tool` does. `VectorStore` keeps entries in a local SQLite file; an agent that equips it gets the entries closest to each call's input. A `File` store holds an agent's conversation history.
 
 ```halo
-agent DataAnalyst [gemini-3-1-pro, temp: 0.1]
-  equips Snowflake, PastTests
-  requires BudgetCap
+store KnowledgeBase : VectorStore(namespace: "engineering")
+store History       : File(".halo/history.json", keep: 10)
 ```
 
-#### Agent Modifiers
+### `schema`: output shapes
+
+```halo
+schema Profile {
+  name: String
+  age: Number
+  tags: Array<String>
+}
+```
+
+A pipeline declared `-> Profile` must return matching JSON. A model's text answer is parsed first, and a mismatch fails the run with a `SchemaValidationError` (e.g. `missing field "age"`).
+
+### `agent`: the brains
+
+A model binding with optional modifiers.
+
+```halo
+agent DataAnalyst [gemini-2.5-pro, temp: 0.1]
+  system """
+    You are a careful data analyst. Show your reasoning briefly.
+  """
+  equips CoreDB, KnowledgeBase
+  requires Budget
+```
+
 | Modifier | Purpose |
 |---|---|
-| `equips` | Grants an `agent` permission to use specific `tools` |
-| `requires` | Binds `policy` guardrails — fails at compile-time if missing |
+| `system "..."` | The system prompt sent with every call (`"..."` or `"""..."""`) |
+| `equips` | Grants the agent permission to use specific tools and stores |
+| `requires` | Binds policies. `halo validate` fails if one is missing |
 
-## Reactive Operators (Control Flow)
+### `pipeline`: the flow
 
-Four reactive pipe operators replace imperative `if/else`:
+```
+pipeline Name(arg: Type, other: Type) -> ReturnType:
+  arg
+    |> Agent.method(...) as result
+    |> ...
+```
+
+A pipeline starts with an expression (usually an argument) and continues with stages.
+
+## Operators
 
 | Operator | Name | Purpose |
 |---|---|---|
-| `\|>` | Push | Standard execution. Pipes context into next node |
-| `\|?` | Gate | Conditional branch. Only continues if condition is true |
-| `\|!` | Interrupt | Human-in-the-Loop. Halts pipeline until external action |
-| `\|*` | Fan-Out | Parallel execution. Merges outputs when block closes |
-| `~>` | Listen | Telemetry. Suspends pipeline indefinitely to wait for events |
+| `\|> Call(...)` | Push | Run a call on the current value. The result becomes the current value |
+| `\|? (cond)` | Gate | Continue only if the condition is true; otherwise the run halts (status `halted`) |
+| `\|? { ... }` | Branch | Run the first arm whose condition holds (if/else) |
+| `\|* { A(), B() }` | Fan-out | Run calls in parallel. The result is the list of outputs |
+| `\|* each(x in list) => Call()` | Each | Run one call per list item, in parallel |
+| `\|<> loop(Agent, "cond")` | Loop | While the condition holds, go back to the agent's stage |
+| `\|! yield(...)` | Interrupt | Ask a human |
+| `~> listen(Source.Event)` | Listen | Wait for an external event |
 
-```halo
-// Gate: only continue if risk score exceeds threshold
-|? (context.data.risk_score > 90) =>
+A call is `Agent.method(...)`, `Tool.method(...)`, `System.Method(...)`, or `OtherPipeline(...)`.
 
-// Interrupt: Human approval required
-|! yield(channel: Slack, msg: "Approve deployment?")
-
-// Fan-Out: run multiple prompts in parallel
-|* { AgentA.prompt("task1"), AgentB.prompt("task2") }
-
-// Listen: wait for user interaction
-~> listen(UI.Button_Click)
-```
-
-## Compiler Directives (Infrastructure as Code)
-
-Annotations that control how the cloud runtime handles execution.
+## Directives
 
 | Directive | Purpose | Example |
 |---|---|---|
-| `@checkpoint` | Snapshot state for time-travel resumption | `@checkpoint` |
-| `@shadow(Name)` | Fork pipeline to secondary model for CI/CD comparison | `@shadow(Analyst_v2)` |
-| `@retry(n, duration)` | Auto-recover transient failures | `@retry(3, 2s)` |
-| `@timeout(duration)` | Hard-kill process to prevent infinite loops | `@timeout(5m)` |
+| `@retry(n, duration)` | Retry each model/tool call up to n times on transient failures (network, 429, 5xx, timeouts). Policy violations are never retried | `@retry(3, 2s)` |
+| `@timeout(duration)` | On a pipeline: abort the whole run. On an agent: abort each call | `@timeout(5m)` |
+| `@checkpoint` | Snapshot state after every stage (and at a closed gate); continue with `halo run --checkpoint <file>` | `@checkpoint` |
+| `@shadow(Primary)` | On an agent: run it alongside every call to `Primary` and record its output, which is never used. `@shadow(openai/gpt-4o)` runs the same prompt on that model instead | `@shadow(Baseline)` |
+| `@correct(n)` | On an agent or pipeline: when an output policy rejects an answer, tell the agent what was wrong and ask again, up to n times | `@correct(2)` |
+
+## Bindings, Conditions & Strings
+
+```
+|> Analyst.analyze_trends(metrics: context.data.stripe) as trends   // context.data.trends
+|* { A.fetch() as a, B.fetch() as b } as both                       // per-item and whole-block bindings
+|? (context.data.trends.notable_changes > 0 && !(region == null))   // && || ! == != > < >= <= null
+|> Writer.prompt("""
+     Multi-line prompt for {{company}}.
+     Previous result: {{trends.summary}}
+   """)
+|> Summarize(context.data.trends)                                   // call another pipeline
+```
+
+Keywords (`tool`, `context`, `pipeline`, ...) can be used as named-argument keys, e.g. `Agent.fetch(tool: Stripe)`. `Env.NAME` can only be read in tool declarations, so secrets never reach prompts.
+
+## Branching & Loops
+
+```
+|? {
+     (context.data.screen.score < 0.3) => System.Publish(context.data.post),
+     (context.data.screen.score > 0.9) => System.Notify("removed"),
+     else => DeepReview(context.data.post),
+   } as outcome
+
+|* each(issue in context.data.triage.issues, concurrency: 2) => GitHub.add_labels(
+     path: "/repos/{{repo}}/issues/{{issue.number}}/labels",
+     labels: issue.labels
+   ) as labeled
+
+|> SWE.write_code()
+|> Shell.run(command: "bun test")
+|<> loop(SWE, "context.data.Shell.run.exitCode != 0", max: 3) as retries
+```
+
+**Branch** (`|? { ... }`) checks arms in order and runs the first one whose condition holds; `else` (last) matches anything. Each arm is one call. For several steps, call another pipeline; a gate inside that pipeline ends just that pipeline early, and the branch gets its last value. The arm's result becomes the flowing value and the `as` binding. If nothing matches and there is no `else`, the value passes through unchanged.
+
+**Each** (`|* each(item in list) => Call(...)`) runs the call once per item, up to `concurrency` (default 4) at a time, and keeps the input order. Inside the call, the item is available as `item`, `{{item.field}}`, and the flowing value, and its position as `index`. The loop variable doesn't exist after the loop. The result list is stored at the `as` binding and at `context.data.<Callee>.<method>`. If any item fails, the stage fails.
+
+**Loop** (`|<> loop(Agent, "cond", max: n)`) checks its condition (written as a string) when reached. While it holds, the run jumps back to the agent's most recent stage, so the agent sees the current value (e.g. the failing test output) and tries again. After `max` tries (default 3) the run fails with a `LoopLimitError`. When the condition is false the run continues, and `as` binds the number of retries.
+
+## Human-in-the-Loop
+
+`|! yield(...)` sends a request to the runtime's interrupt handler. The request has `message` (from `msg:`/`message:` or a string arg), `channel` (from `channel:`/`queue:` or a tool name), `attachments` (list args), and `timeoutMs` (from a duration). The response is stored at `context.data.yield` and any binding. `~> listen(Source.Event)` waits for the listen handler and stores the event at `context.data.Source.Event`. Neither changes the flowing value.
+
+With no handler, a top-level run **pauses**: it returns status `paused` with a `runId`, and the run is saved to the runtime's run store. `runtime.signal(runId, "yield", response)` (or the listen target, e.g. `"Slack.Reaction"`) continues it. The CLI asks in a terminal; elsewhere it pauses, saves the run to `.halo/runs`, and prints the `halo resume <file> <runId> --payload ...` command. The CLI turns a typed answer into an event (`{ action, approved, ... }`), so gates and branches can check `context.data.yield.approved` or `context.data.yield.action == "label"`.
 
 ## Full Example
 
 ```halo
-// --- Environment ---
-policy BudgetCap   : MaxSpend(5.00)
-policy BrandSafe   : Tone("Professional") & Enforce(BrandGuide.JSON)
-store  PastTests   : VectorStore(Env.MILVUS_KEY)
-tool   Snowflake   : SQL(Env.SNOWFLAKE_KEY)
-tool   Figma       : POST("api.figma.com/render")
+policy Budget    : MaxSpend(1.00)
+policy Shape     : Require(JSON)
 
-agent DataScientist [gemini-3-1-pro, temp: 0.0]
-  equips Snowflake, PastTests
-  requires BudgetCap
+tool   Warehouse : SQL(Env.WAREHOUSE_URL)
+tool   Deploys   : POST("ci.example.com/deploy", apiKey: Env.CI_TOKEN)
+store  Incidents : VectorStore(namespace: "incidents")
 
-@shadow(Designer_V2)
-agent UXDesigner [gemini-3-1-flash, temp: 0.7]
-  equips Figma
-  requires BrandSafe
+schema Diagnosis {
+  root_cause: String
+  confidence: Number
+}
 
-// --- The Pipeline ---
+agent Analyst [anthropic/claude-sonnet-4-5, temp: 0.0]
+  system "You diagnose sales drops from data. Answer in JSON."
+  equips Warehouse, Incidents
+  requires Budget, Shape
+
 @timeout(5m)
-pipeline ResolveSalesDrop(event: String) -> Result:
+@retry(2, 5s)
+pipeline ResolveSalesDrop(event: String) -> Diagnosis:
   event
-    |* { DataScientist.prompt("query data"), DataScientist.prompt("query memory") }
-    |? (context.data.found_root_cause == true) =>
-    |> UXDesigner.prompt("Design new UI")
-    |! yield(channel: Slack, msg: "Approve?")
-    ~> listen(Slack.Interaction)
-    |? (context.data.slack_response == "approve") =>
-    |> System.TriggerWebhook("CI/CD_Deploy")
+    |> Analyst.query(tool: Warehouse, sql: "SELECT region, revenue FROM daily_sales LIMIT 50") as sales
+    |> Analyst.diagnose(context.data.sales) as diagnosis
+    |? {
+         (context.data.diagnosis.confidence < 0.7) => System.Notify("Low-confidence diagnosis", event: event),
+       }
+    |! yield(msg: "Ship the fix for this diagnosis?", [context.data.diagnosis]) as review
+    |? (context.data.review.approved == true)
+    |> Deploys.trigger(service: "pricing")
+    |> Incidents.log(content: context.data.diagnosis)
+    |> System.Pick(context.data.diagnosis, fields: ["root_cause", "confidence"])
 ```
 
 ## Editor Support
 
 | Editor | Status | Path |
 |---|---|---|
-| VS Code | ✅ Supported | `editors/vscode/` |
-| Sublime Text | ✅ Supported | `editors/sublime/` |
-| **Zed** | ✅ **Supported** | `editors/zed/` |
+| VS Code | ✅ Highlighting + language server (errors, hover, completion) | `editors/vscode/` |
+| Zed | ✅ Tree-sitter highlighting | `editors/zed/` |
+| Sublime Text | ✅ Highlighting | `editors/sublime/` |
 | JetBrains | ⚠️ Planned | — |
 
 ## Dictionary
@@ -159,12 +217,8 @@ See [docs/dictionary.md](dictionary.md) for the full formal lexicon.
 ## Building
 
 ```sh
-# Install dependencies
 bun install
-
-# Run tests
+bun run generate     # rebuild the parser from grammars/Halo.g4 (needs Java)
 bun test
-
-# Run with API key
-HALO_API_KEY=sk-... halo run examples/01-hello.halo
+bunx tsc --noEmit
 ```

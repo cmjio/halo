@@ -1,7 +1,7 @@
 // ============================================================
 // STEP 36: Struct Schema Validation
 // ============================================================
-// LEARN: How to enforce strict data contracts on streams
+// LEARN: How to enforce strict data contracts on pipelines
 // WHY:   Ensure unpredictable agents return structured, 
 //        type-safe JSON that your backend can safely consume.
 // ============================================================
@@ -14,14 +14,14 @@ schema UserProfile {
   tags: Array
 }
 
-// 2. Define a Guardrail to force the model to output JSON
+// 2. Define a Policy to force the model to output JSON
 policy JSONGuard:
   Require(JSON)
 
 agent Extractor [openai/gpt-4o, temp: 0.1]
   requires JSONGuard
 
-// 3. Declare the Stream to return the schema type
+// 3. Declare the Pipeline to return the schema type
 pipeline ParseProfile(bio: String) -> UserProfile:
   bio
     |> Extractor.prompt("Extract the user profile into JSON matching this schema: { name: String, age: Number, isActive: Boolean, tags: Array }. If age is unknown, guess. Return ONLY JSON.")
@@ -36,6 +36,6 @@ pipeline ParseProfile(bio: String) -> UserProfile:
 //    every field against the `UserProfile` schema definition.
 // 5. If `age` is returned as a string "30" instead of a number 30, 
 //    the pipeline throws a SchemaValidationError!
-// 6. The final result returned by Langly is a native JavaScript object,
+// 6. The final result returned by Halo is a native JavaScript object,
 //    ready to be saved directly to your database.
 // ============================================================

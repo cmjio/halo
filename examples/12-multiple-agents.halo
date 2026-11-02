@@ -1,7 +1,7 @@
 // ============================================================
-// STEP 12: Multiple Minds in One Stream
+// STEP 12: Multiple Agents in One Pipeline
 // ============================================================
-// LEARN: How to use different minds (LLMs) in a single pipeline
+// LEARN: How to use different agents (LLMs) in a single pipeline
 // WHY:  Different tasks need different model capabilities/costs
 // ============================================================
 

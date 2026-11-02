@@ -5,7 +5,7 @@
 //          escalate suspicious ones to loss prevention
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy PII           : Redact(CreditCard) & Redact(SSN)
 policy FraudPolicy   : Block(RefundAbuse) & Block(WardrobeReturn)
 policy CostGuard     : MaxSpend(0.50)
@@ -15,7 +15,7 @@ tool OrdersAPI     : REST("api.shopify.com/admin/orders", apiKey: Env.SHOPIFY_KE
 tool PaymentGW     : POST("api.stripe.com/v1/refunds", apiKey: Env.STRIPE_KEY)
 tool CXSlack       : POST("hooks.slack.com/services/cx-team")
 
-// --- Memory ---
+// --- Store ---
 tool ReturnHistory  : VectorStore(Env.PINECONE_KEY, namespace: "return-patterns")
 tool FraudSignals   : VectorStore(Env.PINECONE_KEY, namespace: "fraud-indicators")
 
@@ -27,15 +27,16 @@ schema ReturnDecision {
   action         : String
 }
 
-// --- Minds ---
+// --- Agents ---
 agent ReturnBot [openai/gpt-4o-mini, temp: 0.0]
+  equips OrdersAPI, PaymentGW
   requires PII, CostGuard
 
 agent FraudDetector [anthropic/claude-sonnet-4, temp: 0.0]
   equips ReturnHistory, FraudSignals
   requires PII, FraudPolicy, CostGuard
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(2m)
 @retry(2, 5s)
 pipeline ProcessReturn(request: ReturnRequest) -> ReturnDecision:

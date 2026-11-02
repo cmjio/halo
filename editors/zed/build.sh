@@ -5,13 +5,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GRAMMAR_DIR="$SCRIPT_DIR/grammars"
-LANG_DIR="$GRAMMAR_DIR/langly"
+LANG_DIR="$GRAMMAR_DIR/halo"
 
-echo "=== Building tree-sitter grammar for Langly ==="
+echo "=== Building tree-sitter grammar for Halo ==="
 
 # Generate parser from grammar.js
 echo "Generating parser..."
-tree-sitter generate --abi 14 "$LANG_DIR/grammar.js" --output "$LANG_DIR/src/parser.c"
+(cd "$LANG_DIR" && tree-sitter generate --abi 14)
 
 # Create a temporary build area
 BUILD_DIR=$(mktemp -d)
@@ -130,9 +130,11 @@ zig cc -target wasm32-freestanding \
   -fvisibility=hidden \
   -DTREE_SITTER_HIDE_SYMBOLS \
   -Os \
-  -Wl,--export=tree_sitter_langly \
+  -Wl,--export=tree_sitter_halo \
   -Wl,--no-entry \
   "$BUILD_DIR/stubs.c" "$LANG_DIR/src/parser.c" \
-  -o "$LANG_DIR/langly.wasm"
+  -o "$LANG_DIR/halo.wasm"
 
-echo "=== Built langly.wasm ($(stat -f%z "$LANG_DIR/langly.wasm" | numfmt --to=iec 2>/dev/null || stat -f%z "$LANG_DIR/langly.wasm" | awk '{printf "%.1fK", $1/1024}')) ==="
+echo "=== Built halo.wasm ($(stat -f%z "$LANG_DIR/halo.wasm" | numfmt --to=iec 2>/dev/null || stat -f%z "$LANG_DIR/halo.wasm" | awk '{printf "%.1fK", $1/1024}')) ==="
+cp "$LANG_DIR/halo.wasm" "$GRAMMAR_DIR/halo.wasm"
+echo "Copied to $GRAMMAR_DIR/halo.wasm"

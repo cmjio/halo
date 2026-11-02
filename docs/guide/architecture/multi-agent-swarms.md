@@ -1,73 +1,84 @@
-# Multi-Agent Swarms
+# Multi-Agent Pipelines
 
-A single LLM cannot hold the context of an entire codebase or analyze 10,000 pages of financial documents simultaneously. To solve complex problems, you need a "Swarm" of specialized agents working together.
+Halo coordinates several agents with explicit stages. It doesn't run a free-form conversation between them.
 
-Halo makes orchestrating multi-agent swarms declarative and type-safe.
+## Parallel specialists
 
-## The Fan-Out Operator (`|* { }`)
-
-The simplest form of a swarm is parallel execution. Use the fan-out block to run multiple agents concurrently. The pipeline will automatically wait for all agents to finish, and merge their results into a single object before continuing.
+`|* { … }` runs calls in parallel on the same input and returns their results as a list, in order. Each result is also stored at `context.data.<Agent>.<method>`, so a later agent can read them by name.
 
 ```halo
-agent FrontendReviewer [openai/gpt-4o]
-agent BackendReviewer [anthropic/claude-3-5-sonnet]
-agent SecurityAuditor [google/gemini-1.5-pro]
+agent FrontendReviewer [openai/gpt-4o-mini]
+agent BackendReviewer  [anthropic/claude-haiku-4-5]
+agent SecurityAuditor  [gemini-2.5-flash]
+agent Lead             [anthropic/claude-sonnet-4-5]
 
-pipeline ReviewPullRequest(prUrl: String) -> Result:
-  prUrl 
-    // Run three specialist agents in parallel
-    |* { 
-      FrontendReviewer.analyze(), 
-      BackendReviewer.analyze(), 
-      SecurityAuditor.audit() 
-    }
-    // The results merge into context.data
-    |> MergeTool.combine()
+pipeline ReviewPullRequest(diff: String) -> Result:
+  diff
+    |* {
+         FrontendReviewer.review(),
+         BackendReviewer.review() as backend,
+         SecurityAuditor.audit(),
+       } as reviews
+    |> Lead.summarize("Merge these reviews into one list of required changes.", context.data.reviews)
 ```
 
-## Hierarchical Delegation
+`FrontendReviewer.review` and `BackendReviewer.review` both write `context.data.review`, so the last one to finish wins there. Read results by `Agent.method` or by binding, not by bare method name.
 
-For more advanced swarms, you can treat pipelines as functions and have an "Architect" agent delegate tasks to "Worker" agents.
+## Fan out over a list
 
-In Halo, pipelines can call other pipelines directly.
+`|* each(item in list, concurrency: n) => Call()` runs one call per item, at most `n` at a time:
 
 ```halo
-// 1. Define the Worker pipelines
-pipeline WriteTests(feature: String) -> Code:
-  feature |> QAAgent.write_jest_tests()
+agent Classifier [openai/gpt-4o-mini]
 
-pipeline WriteDocs(feature: String) -> Markdown:
-  feature |> TechWriterAgent.draft_readme()
+pipeline ClassifyAll(tickets: List) -> Result:
+  tickets
+    |* each(ticket in tickets, concurrency: 5) => Classifier.classify("Classify ticket {{index}}: {{ticket}}") as labels
+```
 
-// 2. Define the Master pipeline
-pipeline ArchitectWorkflow(spec: String) -> Result:
+## Pipelines as sub-tasks
+
+A pipeline can call another pipeline like a function. Fan-out items can be pipeline calls too.
+
+```halo
+agent QA        [openai/gpt-4o-mini]
+agent Writer    [openai/gpt-4o-mini]
+agent Architect [anthropic/claude-sonnet-4-5]
+
+pipeline WriteTests(feature: String) -> Result:
+  feature |> QA.write_tests()
+
+pipeline WriteDocs(feature: String) -> Result:
+  feature |> Writer.draft_readme()
+
+pipeline Build(spec: String) -> Result:
   spec
-    // Fan out to multiple sub-pipelines!
-    |* { WriteTests(spec), WriteDocs(spec) }
-    
-    // The Architect agent reviews the output of its workers
-    |> ArchitectAgent.review()
+    |* { WriteTests(spec), WriteDocs(spec) } as parts
+    |> Architect.review(context.data.WriteTests, context.data.WriteDocs)
 ```
 
-## Shared Memory (The Hive Mind)
+A called pipeline runs in its own context and receives only its arguments. Its cost and calls count toward the caller's run. Nesting is limited to 16 levels, counting the top-level pipeline.
 
-If you have a swarm of 50 agents analyzing financial data, they shouldn't all search the web individually. You can use the `store` primitive to create a shared memory bank that all agents can read from and write to.
+## Shared memory
+
+Agents that equip the same `VectorStore` share it. Write to the store explicitly. Equipping a `VectorStore` adds search results to prompts, but it never saves an agent's answers.
 
 ```halo
-// Define a shared vector store
-store ResearchHive : VectorStore("pinecone", namespace: "research")
+store Research : VectorStore(namespace: "research")
 
-agent Analyst [openai/gpt-4o]
-  equips ResearchHive
+agent Analyst [openai/gpt-4o-mini]
+agent Writer  [anthropic/claude-haiku-4-5]
+  equips Research
 
-agent Writer [anthropic/claude-3-5-sonnet]
-  equips ResearchHive
-
-// The Analyst writes to the Hive, the Writer reads from the Hive.
-pipeline ReportGen(topic: String) -> Result:
-  topic 
-    |> Analyst.research()
-    |> Writer.draft()
+pipeline Report(topic: String) -> Result:
+  topic
+    |> Analyst.research("List five findings about {{topic}}.") as findings
+    |> Research.log(content: context.data.findings, tags: [topic])
+    |> Writer.draft("Write a short report on {{topic}}.")
 ```
 
-By combining Fan-Out (`|*`), Sub-Pipelines, and Shared Stores, you can build massive, asynchronous, hierarchical swarms that execute predictably.
+`Writer.draft` automatically gets the closest stored findings, including findings from earlier runs, because the store is a local SQLite file.
+
+## Comparing models
+
+`@shadow` runs a candidate agent or model next to a primary agent without affecting its output. See [Directives](../../reference/compiler-directives.md#shadow). `examples/31-power-analyst-swarm.halo` and `examples/12-multiple-agents.halo` are longer examples.

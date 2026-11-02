@@ -1,20 +1,20 @@
 // ============================================================
-// STEP 37: Persistent Memory Engine
+// STEP 37: Persistent Store Engine
 // ============================================================
 // LEARN: How to give agents cross-run amnesia protection
 // WHY:   Agents naturally forget everything between runs.
-//        Memory blocks automatically inject and save context.
+//        Store blocks automatically inject and save context.
 // ============================================================
 
-// 1. Define a Memory provider (e.g., File, SQLite, PostgreSQL)
+// 1. Define a Store provider (e.g., File, SQLite, PostgreSQL)
 //    Here we use the built-in File provider to save a simple JSON/text log.
 store ChatHistory: File(".chat_history.log")
 
-// 2. Attach the store to the Mind using `equips`
+// 2. Attach the store to the Agent using `equips`
 agent Helper [openai/gpt-4o, temp: 0.7]
   equips ChatHistory
 
-// 3. Define a normal stream
+// 3. Define a normal pipeline
 pipeline HandleMessage(msg: String) -> Result:
   msg
     |> Helper.prompt("You are a helpful assistant. Reply to the user's message.")

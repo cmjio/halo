@@ -11,7 +11,7 @@ haloGrammar.name = 'halo'
 
 export default defineConfig({
   title: "Halo",
-  description: "Infrastructure as Code for AI Agents",
+  description: "A small language for AI workflows",
   markdown: {
     theme: {
       light: 'light-plus',
@@ -34,6 +34,8 @@ export default defineConfig({
         items: [
           { text: 'Quickstart', link: '/guide/quickstart' },
           { text: 'Core Concepts', link: '/guide/concepts' },
+          { text: 'Language Overview', link: '/guide/reference' },
+          { text: 'Using Halo as a Library', link: '/guide/sdk' },
         ]
       },
       {
@@ -42,22 +44,22 @@ export default defineConfig({
           { text: 'Types & Schemas', link: '/reference/types' },
           { text: 'Context & Scope', link: '/reference/context-and-scope' },
           { text: 'Pipe Operators', link: '/reference/operators' },
-          { text: 'Compiler Directives', link: '/reference/compiler-directives' },
+          { text: 'Directives', link: '/reference/compiler-directives' },
         ]
       },
       {
         text: 'Standard Library',
         items: [
           { text: 'Built-in Tools', link: '/stdlib/tools' },
-          { text: 'Policies & Guardrails', link: '/stdlib/policies' },
-          { text: 'Stores (Vector/DB)', link: '/stdlib/stores' },
+          { text: 'Policies', link: '/stdlib/policies' },
+          { text: 'Stores', link: '/stdlib/stores' },
         ]
       },
       {
         text: 'Architecture Patterns',
         items: [
           { text: 'Human-in-the-Loop', link: '/guide/architecture/human-in-the-loop' },
-          { text: 'Multi-Agent Swarms', link: '/guide/architecture/multi-agent-swarms' },
+          { text: 'Multi-Agent Pipelines', link: '/guide/architecture/multi-agent-swarms' },
           { text: 'Guardrails & Safety', link: '/guide/architecture/guardrails-and-safety' },
         ]
       },
@@ -69,17 +71,16 @@ export default defineConfig({
         ]
       },
       {
-        text: 'Production Deployment',
+        text: 'Production',
         items: [
-          { text: 'Deploying to Next.js', link: '/guide/production/deploy-nextjs' },
-          { text: 'Deploying to Serverless', link: '/guide/production/deploy-serverless' },
+          { text: 'Deploying', link: '/guide/production/deploying' },
         ]
       },
       {
         text: 'Developer Experience (DX)',
         items: [
-          { text: 'Testing & TDD', link: '/dx/testing-and-mocks' },
-          { text: 'Editor Support (LSP)', link: '/dx/editor-support' },
+          { text: 'Testing & Mocks', link: '/dx/testing-and-mocks' },
+          { text: 'Editor Support', link: '/dx/editor-support' },
         ]
       },
       {
@@ -91,8 +92,6 @@ export default defineConfig({
       }
     ],
 
-    socialLinks: [
-      { icon: 'github', link: 'https://github.com/halo-lang/halo' }
-    ]
+    socialLinks: []
   }
 })

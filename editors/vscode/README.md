@@ -1,14 +1,12 @@
-# Langly VS Code Extension
+# Halo for VS Code
 
-Official VS Code / Open VSX extension for Langly.
+Language support for Halo (`.halo` files).
 
 ## Features
 
-- Syntax highlighting for `.ly` files
-- Language Server Protocol (LSP) integration
-- Real-time syntax diagnostics
-- Keyword completions
+- Syntax highlighting
+- A language server: syntax errors and the validator's errors and warnings as you type (undefined agents, tools and policies, unequipped tools, unknown `System` methods, unread `context.data` keys, unenforced policy rules), hover for declarations and operators, and completion for keywords, declared names, `System.` methods, directives, tool providers, and policy categories
 
-## Usage
+## Build
 
-Opening any `.ly` file will automatically start the language server.
+From the repository root: `bun run build:vsx` (bundles the server to `server.js` and compiles the extension), then `bun run package:vsx` for a `.vsix`.

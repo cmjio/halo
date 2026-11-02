@@ -1,47 +1,53 @@
 # Context & Scope
 
-In Python, passing data between functions requires explicit variables (`res1 = fn()`, `res2 = fn(res1)`). 
+Every run has a `context` with five namespaces:
 
-In Halo, state flows implicitly through the `context` object. The `context` is an immutable state tree that grows as it moves through the pipeline.
+| Path | Contents |
+|---|---|
+| `context.current` | The flowing value (the last stage's result) |
+| `context.input` | The pipeline's arguments, as passed |
+| `context.data` | Arguments, call results, and `as` bindings |
+| `context.meta` | `runId`, `pipeline`, `startedAt`, `finishedAt`, `durationMs`, `cost`, `tokens`, `calls`, `violations`, `shadows`, `halted`, `paused`, `checkpoint` |
+| `context.trace` | One entry per stage, each with a SHA-256 hash linking it to the previous entry |
 
-## Anatomy of the Context
-
-The `context` object is split into three reserved namespaces:
-
-### `context.data`
-This holds the actual payload. When a pipeline starts, its arguments are placed here. When an agent executes, its return value is appended here.
+## Where results go
 
 ```halo
+agent Summarizer [openai/gpt-4o-mini]
+agent Editor     [openai/gpt-4o-mini]
+
 pipeline Process(email: String) -> Result:
-  // Here, context.data.email exists.
-  
-  email |> Summarizer.run()
-  // Here, context.data.Summarizer exists containing the result.
+  email
+    |> Summarizer.summarize() as summary
+    |> Editor.polish(context.data.Summarizer.summarize, original: email)
 ```
 
-### `context.meta`
-System metadata about the current execution trace.
-- `context.meta.cost`: The running total USD cost of the pipeline.
-- `context.meta.tokens`: The number of tokens consumed so far.
-- `context.meta.latency`: The time elapsed since the pipeline began.
+After the first stage, the result is available as:
 
-### `context.trace`
-A cryptographic history of every node touched in the AST. Useful for auditing and time-travel debugging.
+- `context.data.Summarizer.summarize`: always, unless the callee is `System`
+- `context.data.summarize`: the method name alone. This is skipped if `summarize` is an input or a declared name.
+- `context.data.summary`: from `as summary`
+- `context.current`, until the next stage replaces it
 
-## Scoping Rules
+A pipeline call stores its output at `context.data.<PipelineName>`. A yield response is stored at `context.data.yield`, and a listen payload at its target path (`context.data.Slack.Reaction`). A later result with the same name overwrites the earlier one.
 
-State in Halo is **append-only**. You cannot mutate or delete variables once they are in the context.
+## Bare names and templates
 
-During a **Fan-Out** (`|*`), the context is cloned for each parallel branch. When the branches merge, their local contexts are combined.
+Inside a pipeline, a bare name such as `email` or `summary.title` resolves in this order:
 
-```halo
-pipeline MergeExample(doc: String) -> Result:
-  doc 
-    |* { AgentA.run(), AgentB.run() }
-    
-  // Here, BOTH context.data.AgentA and context.data.AgentB exist.
-  |> FinalAgent.summarize(
-       a: context.data.AgentA, 
-       b: context.data.AgentB
-     )
-```
+1. an input
+2. a declared tool, agent, pipeline, or policy, which stands for itself
+3. a `context.data` entry
+4. otherwise, the name as a plain string, such as the channel in `channel: Terminal`
+
+`{{name}}` placeholders check `context.data` first, then inputs. They also accept `{{context.…}}` and `{{current}}`.
+
+## Scope
+
+- **Fan-out** stages all see the same context and write into it. Each call's result goes to its own `Callee.method` slot.
+- **each** gives every iteration its own copy of `context.data` with the loop variable and `index`. Iterations can't see each other's results. The list of results is stored afterward.
+- **Called pipelines** start a fresh context with only their parameters. Their output comes back as the call's result. Their cost, tokens, calls, and violations are added to the caller's `meta`.
+
+## The validator's view
+
+`halo validate` follows what each stage writes. It warns when `context.data.x` or `{{x}}` is read before anything sets `x`, when `context.input.x` isn't a parameter, and when a namespace isn't one of the five above.

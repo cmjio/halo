@@ -1,331 +1,182 @@
-import type { ExecutionContext } from "./runtime.js";
-import { ToolExecutionError } from "../errors.js";
+/**
+ * Tool providers: the implementations behind `tool Name : Provider(...)`.
+ *
+ * A provider receives the tool's declaration args (resolved lazily, so a
+ * VectorStore never needs its remote key) and the call's resolved args.
+ */
 
-/** Interface for pluggable tool connectors. */
-export interface ToolPlugin {
-  /** The provider name used in DSL (e.g., "GitHub") */
-  provider: string;
-  /** Execute the tool logic */
-  execute(
-    args: string[],
-    config: Record<string, unknown>,
-    ctx: ExecutionContext
-  ): Promise<unknown>;
+import type { ToolDeclaration, Value } from "../parser/types.js";
+import { HttpError, HaloError } from "./errors.js";
+import type { LocalVectorStore } from "./vectors.js";
+import { INTEGRATIONS } from "./integrations.js";
+
+export interface ToolCall {
+  tool: ToolDeclaration;
+  method: string;
+  /** Positional call args. The first defaults to the pipeline value when none are given. */
+  positional: unknown[];
+  named: Record<string, unknown>;
+  /** Resolve one of the tool declaration's own args (e.g. `apiKey: Env.KEY`). */
+  config(name: string | number): unknown;
+  /** True when an agent invoked the tool via `Agent.method(tool: Name, ...)`. */
+  viaAgent: boolean;
+  signal: AbortSignal;
 }
 
-export class ToolRegistry {
-  private plugins = new Map<string, ToolPlugin>();
-
-  register(plugin: ToolPlugin): this {
-    this.plugins.set(plugin.provider, plugin);
-    return this;
-  }
-
-  get(provider: string): ToolPlugin | undefined {
-    return this.plugins.get(provider);
-  }
+export interface ToolServices {
+  fetch: typeof fetch;
+  vectors(): LocalVectorStore;
+  sql(url: string): InstanceType<typeof Bun.SQL>;
 }
 
-// ── Built-in Tools ─────
+export type ToolProvider = (call: ToolCall, services: ToolServices) => Promise<unknown>;
 
-export class RestTool implements ToolPlugin {
-  provider = "REST";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    let url = args[0] ?? "";
-    if (config.path) url += config.path;
-    if (config.query) url += `?${config.query}`;
-    
-    url = url.startsWith("http") ? url : `https://${url}`;
+const RESERVED = new Set(["path", "query", "tool"]);
 
-    const apiKey = config.apiKey as string;
-    const res = await fetch(url, {
-      method: "GET",
-      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-    });
-    if (!res.ok) throw new ToolExecutionError("REST", `REST error: ${await res.text()}`);
-    return await res.json();
-  }
+function str(v: unknown): string {
+  return typeof v === "string" ? v : JSON.stringify(v);
 }
 
-export class PostTool implements ToolPlugin {
-  provider = "POST";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    let url = args[0] ?? "";
-    if (config.path) url += config.path;
-    if (config.query) url += `?${config.query}`;
-    
-    url = url.startsWith("http") ? url : `https://${url}`;
-
-    const apiKey = config.apiKey as string;
-    // Use explicit body if provided, otherwise build from named args
-    const internalKeys = new Set(["apiKey", "path", "query", "method", "url", "body", "__args"]);
-    let body = config.body;
-    if (body === undefined) {
-      const namedArgs: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(config)) {
-        if (!internalKeys.has(k)) namedArgs[k] = v;
-      }
-      if (Object.keys(namedArgs).length > 0) body = namedArgs;
-    }
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new ToolExecutionError("POST", `POST error: ${await res.text()}`);
-    return await res.json();
-  }
+function baseUrl(call: ToolCall): string {
+  const url = call.config(0);
+  if (typeof url !== "string" || !url) throw new HaloError(`Tool "${call.tool.name}" needs a URL, e.g. ${call.tool.provider}("api.example.com/v1")`);
+  return /^https?:\/\//.test(url) ? url : `https://${url}`;
 }
 
-export class PostgreSQLTool implements ToolPlugin {
-  provider = "PostgreSQL";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    const query = config.query as string;
-    if (!query) throw new ToolExecutionError("PostgreSQL", "PostgreSQL requires a 'query' argument");
-    
-    const dbUrl = args[0] ?? "";
-    if (dbUrl.includes("sqlite") || dbUrl.includes("localhost")) {
-      const sqlitePath = dbUrl.includes("sqlite") ? dbUrl : "test-langly.sqlite";
-      const { Database } = await import("bun:sqlite");
-      const db = new Database(sqlitePath);
-      const rows = db.query(query).all();
-      db.close();
-      return rows;
-    }
-    return { result: "PostgreSQL actual driver not loaded", query };
+/**
+ * Request params: named args plus the first positional arg as `input`.
+ * A tool declared with `sendInput: false` sends named args only (for strict APIs).
+ */
+function params(call: ToolCall): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (call.config("sendInput") !== false) {
+    const [input, ...rest] = call.positional;
+    if (input !== undefined) out.input = input;
+    if (rest.length) out.args = rest;
   }
+  for (const [k, v] of Object.entries(call.named)) if (!RESERVED.has(k)) out[k] = v;
+  return out;
 }
 
-export class VectorStoreTool implements ToolPlugin {
-  provider = "VectorStore";
-  private stores = new Map<string, string[]>();
-
-  seed(name: string, data: string[]) {
-    if (!this.stores.has(name)) this.stores.set(name, []);
-    this.stores.get(name)!.push(...data);
+function buildUrl(call: ToolCall, defaultPath: string): URL {
+  let base = baseUrl(call);
+  // {{key}} placeholders in the base URL are filled from named args.
+  base = base.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k: string) => encodeURIComponent(str(call.named[k] ?? "")));
+  const path = typeof call.named.path === "string" ? call.named.path : defaultPath;
+  const url = new URL(base.replace(/\/+$/, "") + (path && !path.startsWith("/") ? "/" : "") + path);
+  if (typeof call.named.query === "string") {
+    for (const [k, v] of new URLSearchParams(call.named.query)) url.searchParams.append(k, v);
   }
-
-  /** Convenience method for internal RAG queries. Returns top-K results as string[]. */
-  search(namespace: string, query: string, topK: number = 3): string[] {
-    const store = this.stores.get(namespace) ?? [];
-    if (store.length === 0) return [];
-    return this.cosineSimilaritySearch(store, query, topK);
-  }
-
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    const method = config.method as string;
-    const query = config.query as string;
-    const indexName = args[0] ?? "default";
-    const topK = (config.topK as number) ?? 1;
-    
-    if (method === "search" && query) {
-      const results = this.search(indexName, query, topK);
-      // Return single result for backward compat when topK = 1
-      return topK === 1 ? (results[0] ?? null) : results;
-    }
-    return { result: `VectorStore ${method} called`, query };
-  }
-
-  /** TF-IDF cosine similarity search. */
-  private cosineSimilaritySearch(docs: string[], query: string, topK: number): string[] {
-    const tokenize = (text: string): string[] => 
-      text.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 1);
-
-    // Build vocabulary from all docs + query
-    const allTokens = new Set<string>();
-    const docTokens = docs.map(d => tokenize(d));
-    const queryTokens = tokenize(query);
-    for (const tokens of [...docTokens, queryTokens]) {
-      for (const t of tokens) allTokens.add(t);
-    }
-
-    // Compute IDF (inverse document frequency)
-    const idf = new Map<string, number>();
-    const N = docs.length + 1; // +1 for query as pseudo-doc
-    for (const term of allTokens) {
-      const docsWithTerm = docTokens.filter(tokens => tokens.includes(term)).length + 
-        (queryTokens.includes(term) ? 1 : 0);
-      idf.set(term, Math.log(N / (docsWithTerm + 1)) + 1);
-    }
-
-    // TF-IDF vector for a token list
-    const toVector = (tokens: string[]): Map<string, number> => {
-      const tf = new Map<string, number>();
-      for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-      const vec = new Map<string, number>();
-      for (const [term, count] of tf) {
-        vec.set(term, (count / tokens.length) * (idf.get(term) ?? 1));
-      }
-      return vec;
-    };
-
-    // Cosine similarity between two sparse vectors
-    const cosine = (a: Map<string, number>, b: Map<string, number>): number => {
-      let dot = 0, magA = 0, magB = 0;
-      for (const [k, v] of a) { magA += v * v; if (b.has(k)) dot += v * b.get(k)!; }
-      for (const [, v] of b) magB += v * v;
-      const denom = Math.sqrt(magA) * Math.sqrt(magB);
-      return denom === 0 ? 0 : dot / denom;
-    };
-
-    const queryVec = toVector(queryTokens);
-    const scored = docs.map((doc, i) => ({
-      doc,
-      score: cosine(queryVec, toVector(docTokens[i] || [])),
-    }));
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, topK).filter(s => s.score > 0).map(s => s.doc);
-  }
+  return url;
 }
 
-export class SlackTool implements ToolPlugin {
-  provider = "Slack";
-  async execute(args: string[], config: Record<string, unknown>, ctx: ExecutionContext): Promise<unknown> {
-    return {
-      channel: config.channel,
-      text: config.text,
-      langlyRunId: ctx.runId,
-      buttons: config.buttons
-    };
-  }
+function authHeaders(call: ToolCall): Record<string, string> {
+  const key = call.config("apiKey");
+  return typeof key === "string" && key ? { Authorization: `Bearer ${key}` } : {};
 }
 
-export class EmailTool implements ToolPlugin {
-  provider = "Email";
-  async execute(args: string[], config: Record<string, unknown>, ctx: ExecutionContext): Promise<unknown> {
-    return {
-      to: config.to,
-      subject: config.subject,
-      body: config.body,
-      langlyRunId: ctx.runId,
-    };
-  }
-}
-
-// ── Development & Design Connectors ─────
-
-export class GitHubTool implements ToolPlugin {
-  provider = "GitHub";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    return {
-      method: config.method,
-      repo: args[0],
-      prId: config.prId,
-      body: config.body,
-      result: "Mock GitHub success"
-    };
-  }
-}
-
-export class BashTool implements ToolPlugin {
-  provider = "Bash";
-  async execute(args: string[], config: Record<string, unknown>, ctx: ExecutionContext): Promise<unknown> {
-    const command = config.command ?? ctx.current;
-    if (typeof command !== "string") {
-      throw new ToolExecutionError("Bash", "Bash command must be a string");
-    }
-    
+async function readResponse(res: Response, label: string): Promise<unknown> {
+  const text = await res.text();
+  if (!res.ok) throw new HttpError(`${label} failed (${res.status}): ${text.slice(0, 500)}`, res.status, text);
+  if ((res.headers.get("content-type") ?? "").includes("json") || /^\s*[[{]/.test(text)) {
     try {
-      const proc = Bun.spawn(["bash", "-c", command]);
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      
-      const exitCode = await proc.exited;
-      
-      return {
-        command,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        exitCode
-      };
-    } catch (e: any) {
-      return {
-        command,
-        stdout: "",
-        stderr: e.message,
-        exitCode: 1
-      };
+      return JSON.parse(text);
+    } catch {}
+  }
+  return text;
+}
+
+const rest: ToolProvider = async (call, { fetch }) => {
+  const url = buildUrl(call, call.viaAgent ? "" : call.method);
+  for (const [k, v] of Object.entries(params(call))) url.searchParams.set(k, str(v));
+  const res = await fetch(url, { method: "GET", headers: authHeaders(call), signal: call.signal });
+  return readResponse(res, `GET ${url.origin}${url.pathname}`);
+};
+
+const post: ToolProvider = async (call, { fetch }) => {
+  const url = buildUrl(call, "");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders(call) },
+    body: JSON.stringify(params(call)),
+    signal: call.signal,
+  });
+  return readResponse(res, `POST ${url.origin}${url.pathname}`);
+};
+
+const VECTOR_METHODS = new Set(["log", "insert", "add", "upsert", "save", "store", "search", "query", "find", "recall", "similar", "delete", "forget", "count"]);
+
+const vectorStore: ToolProvider = async (call, services) => {
+  const store = services.vectors();
+  const ns = String(call.config("namespace") ?? call.tool.name);
+  const [first] = call.positional;
+  const named = call.named;
+  const tags = (v: unknown) => (v === undefined ? [] : (Array.isArray(v) ? v : [v]).map(str));
+  // An agent using the store (`Agent.task(tool: Store, ...)`) retrieves context for its task.
+  const method = call.viaAgent && !VECTOR_METHODS.has(call.method) ? "search" : call.method;
+
+  switch (method) {
+    case "log":
+    case "insert":
+    case "add":
+    case "upsert":
+    case "save":
+    case "store": {
+      const { content = first, tags: t, ...metadata } = named;
+      if (content === undefined) throw new HaloError(`${call.tool.name}.${call.method} needs content`);
+      return { stored: true, namespace: ns, ...store.insert(ns, content, tags(t), metadata) };
     }
-  }
-}
-
-export class FigmaTool implements ToolPlugin {
-  provider = "Figma";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    return {
-      method: config.method,
-      fileKey: args[0],
-      nodeId: config.nodeId,
-      result: "Mock Figma node data"
-    };
-  }
-}
-
-// ── Business & Research Connectors ─────
-
-export class LinearTool implements ToolPlugin {
-  provider = "Linear";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    return {
-      method: config.method,
-      team: config.team,
-      title: config.title,
-      description: config.description,
-      result: "Mock Linear ticket created: ENG-123"
-    };
-  }
-}
-
-export class BrowserTool implements ToolPlugin {
-  provider = "Browser";
-  async execute(args: string[], config: Record<string, unknown>, ctx: ExecutionContext): Promise<unknown> {
-    const url = (config.url ?? ctx.current) as string;
-    if (typeof url !== "string" || !url.startsWith("http")) {
-      throw new ToolExecutionError("Browser", `Invalid URL for BrowserTool: ${url}`);
+    case "search":
+    case "query":
+    case "find":
+    case "recall":
+    case "similar": {
+      const query = named.query ?? first ?? (Object.keys(named).length ? named : undefined);
+      if (query === undefined) throw new HaloError(`${call.tool.name}.${call.method} needs a query`);
+      return store.search(ns, query, Number(named.limit ?? 5), Number(named.min_score ?? named.minScore ?? 0), named.tags ? tags(named.tags) : undefined);
     }
-
-    try {
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": "Langly-Browser/1.0"
-        }
-      });
-      
-      if (!res.ok) {
-        throw new ToolExecutionError("Browser", `HTTP Error ${res.status}: ${res.statusText}`);
-      }
-
-      const html = await res.text();
-      
-      // Strip HTML tags to get clean text for LLMs
-      const cleanText = html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      return {
-        method: config.method,
-        url,
-        content: cleanText.slice(0, 15000) // Truncate to save context window
-      };
-    } catch (e: any) {
-      throw new ToolExecutionError("Browser", `BrowserTool failed to fetch ${url}: ${e.message}`);
-    }
+    case "delete":
+    case "forget":
+      return { deleted: store.delete(ns, { id: named.id !== undefined ? Number(named.id) : undefined, tags: tags(named.tags) }) };
+    case "count":
+      return store.count(ns);
+    default:
+      throw new HaloError(`VectorStore tool "${call.tool.name}" has no method "${call.method}" (use log, search, delete, count)`);
   }
-}
+};
 
-export class SearchTool implements ToolPlugin {
-  provider = "SearchEngine";
-  async execute(args: string[], config: Record<string, unknown>, _ctx: ExecutionContext): Promise<unknown> {
-    return {
-      query: config.query,
-      result: "Mock Search Result: Competitor pricing is $99/mo."
-    };
+const READ_ONLY_SQL = /^\s*(?:select|with|show|explain|values|table)\b/i;
+
+const postgres: ToolProvider = async (call, services) => {
+  const url = call.config(0);
+  if (typeof url !== "string" || !url) throw new HaloError(`Tool "${call.tool.name}" needs a connection URL, e.g. PostgreSQL(Env.DB_URI)`);
+  const text = call.named.sql ?? call.named.query ?? call.positional[0];
+  if (typeof text !== "string") throw new HaloError(`${call.tool.name}.${call.method} needs a SQL string (sql: "SELECT ...")`);
+  // Zero-trust default: only reads, unless the tool is declared with readOnly: false.
+  if (call.config("readOnly") !== false && !READ_ONLY_SQL.test(text)) {
+    throw new HaloError(`Tool "${call.tool.name}" is read-only; declare it with readOnly: false to allow: ${text.slice(0, 80)}`);
   }
+  const list = call.named.params;
+  const rows = await services.sql(url).unsafe(text, Array.isArray(list) ? list : list === undefined ? [] : [list]);
+  return [...rows];
+};
+
+export const BUILTIN_PROVIDERS: Record<string, ToolProvider> = {
+  REST: rest,
+  GET: rest,
+  POST: post,
+  VectorStore: vectorStore,
+  PostgreSQL: postgres,
+  SQL: postgres,
+  ...INTEGRATIONS,
+};
+
+export function declArgs(tool: ToolDeclaration): { positional: Value[]; named: Record<string, Value> } {
+  const positional: Value[] = [];
+  const named: Record<string, Value> = {};
+  for (const a of tool.argList) {
+    if (a.name) named[a.name] = a.value;
+    else positional.push(a.value);
+  }
+  return { positional, named };
 }

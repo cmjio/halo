@@ -3,100 +3,57 @@ layout: home
 
 hero:
   name: "Halo"
-  text: "Infrastructure as Code for AI Agents"
-  tagline: "Stop writing spaghetti Python to orchestrate LLMs. Halo is a strongly-typed, declarative orchestration language designed for production agentic workflows."
+  text: "A small language for AI workflows"
+  tagline: "Declare agents, tools, policies, and pipelines in a .halo file. The Bun runtime runs them with policies enforced, results traced, and humans in the loop."
   actions:
     - theme: brand
       text: Get Started
       link: /guide/quickstart
     - theme: alt
-      text: View Language Spec
-      link: /spec
+      text: Language Reference
+      link: /guide/reference
 
 features:
-  - title: Fully Declarative
-    details: Define agents, tools, guardrails, and pipelines as native language constructs, not endless API wrappers.
-  - title: Strongly Typed Data Flow
-    details: Pipelines enforce JSON schema inputs and outputs natively. If an LLM hallucinates a missing field, the pipeline halts safely.
-  - title: Production Guardrails
-    details: Bind MaxSpend, RedactPII, and MaxTokens policies directly to your agents.
+  - title: Declarative pipelines
+    details: Agents, tools, policies, and schemas are language constructs. Pipelines chain them with operators for piping, gates, branches, fan-out, loops, and human approval.
+  - title: Enforced policies
+    details: Block prompt injection and PII, redact secrets, cap words and spend, and require JSON. These rules are checked in code on every agent call. Rules the runtime can't check produce a validator warning.
+  - title: Inspectable runs
+    details: Every run records cost, tokens, calls, and a SHA-256 hash-chained trace. The CLI saves runs for Halo Studio. Paused runs resume from the CLI or from your server.
 ---
 
-<style>
-.comparison-container {
-  display: flex;
-  gap: 2rem;
-  margin-top: 4rem;
-  flex-wrap: wrap;
-}
-.comparison-col {
-  flex: 1;
-  min-width: 300px;
-}
-.comparison-col h3 {
-  text-align: center;
-  margin-bottom: 1rem;
-}
-</style>
-
-## The Paradigm Shift
-
-<div class="comparison-container">
-<div class="comparison-col">
-
-### The "Spaghetti" Way (Python/LangChain)
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.callbacks import get_openai_callback
-
-llm = ChatOpenAI(temperature=0.7, model_name="gpt-4")
-prompt = PromptTemplate(
-    input_variables=["claim"],
-    template="Analyze this claim: {claim}"
-)
-chain = LLMChain(llm=llm, prompt=prompt)
-
-def process_claim(claim_text):
-    with get_openai_callback() as cb:
-        if cb.total_cost > 0.50:
-            raise Exception("Max spend exceeded")
-        result = chain.run(claim_text)
-        # Manually redact PII...
-        # Manually parse JSON...
-        return result
-```
-</div>
-<div class="comparison-col">
-
-### The Halo Way
+## What it looks like
 
 ```halo
-policy MaxSpend : Limit(0.50)
-policy RedactPII : Redact()
+policy Safe   : Block(PromptInjection) & Redact(Email)
+policy Budget : MaxSpend(0.50)
 
-agent Assessor [openai/gpt-4, temp: 0.7]
-  requires MaxSpend, RedactPII
-
-schema ClaimResult {
-  fraudRisk: Number
-  summary: String
+schema Assessment {
+  fraudRisk: Number,
+  summary: String,
 }
 
-pipeline ProcessClaim(claim: String) -> ClaimResult:
-  claim 
-    |> Assessor.prompt("Analyze this claim: {{claim}}")
+agent Assessor [anthropic/claude-haiku-4-5, temp: 0.2]
+  system "You assess insurance claims. Reply with JSON only."
+  requires Safe, Budget
+
+pipeline ProcessClaim(claim: String) -> Assessment:
+  claim
+    |> Assessor.assess("""
+         Assess this claim. Reply as {"fraudRisk": <0-1>, "summary": "<one sentence>"}.
+         Claim: {{claim}}
+       """) as assessment
 ```
-</div>
-</div>
 
-<br>
-<br>
+```bash
+halo run claim.halo --arg claim="Rear-ended at a stop light, bumper damage"
+halo test claim.halo --arg claim="..."   # offline: every call mocked
+```
 
-### Why Halo?
+The run fails with a `SchemaValidationError` if the answer isn't JSON matching `Assessment`. It fails with a `PolicyViolation` if the input contains an injection attempt or the run has already spent $0.50.
 
-1. **Focus on the Prompt, Not the Plumbing**: Halo handles the LLM API calls, the JSON schema enforcement, the tracing, and the API key routing natively.
-2. **Native Tooling**: Equip an agent with `PostgreSQLTool` and Halo handles the tool-call loop automatically.
-3. **The Escape Hatch**: Under the hood, Halo compiles down to an AST that runs in a lightweight, zero-dependency Node/Bun runtime (`@halo-lang/runtime`). You can embed Halo directly in your Next.js API routes or Express servers.
+## Why Halo?
+
+1. **The prompt is the program.** Halo handles provider APIs, API keys, retries, timeouts, output parsing, and schema checks.
+2. **Real tools.** REST, Postgres, Bash, a fetch-based Browser, Slack, Email (Resend), GitHub, Linear, Figma, and a local vector store are built in. You can register your own in TypeScript.
+3. **Embeddable.** The parser and runtime are a TypeScript library for Bun. You can run pipelines from your own server and resume paused runs with `runtime.signal()`.

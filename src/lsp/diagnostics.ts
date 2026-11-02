@@ -1,42 +1,31 @@
-import { Diagnostic, DiagnosticSeverity, Range } from "vscode-languageserver";
+import { DiagnosticSeverity, type Diagnostic, type Range } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
+import { validate } from "../parser/validate.js";
 
+/** The identifier (or token) starting at a position, used to size a diagnostic's range. */
+function rangeAt(lines: string[], line: number, character: number, length?: number): Range {
+  const text = lines[line] ?? "";
+  const word = text.slice(character).match(/^[\w.@]+/)?.[0];
+  const len = length ?? (word?.length || Math.max(1, text.length - character));
+  return { start: { line, character }, end: { line, character: character + len } };
+}
+
+/** Syntax errors plus the validator's errors and warnings (undefined names, unequipped tools, ...). */
 export function getDiagnostics(sourceText: string): Diagnostic[] {
+  const lines = sourceText.split("\n");
   const ast = parse(sourceText);
-  const diagnostics: Diagnostic[] = [];
-
-  for (const errStr of ast.errors) {
-    // Expected format: [line:charPositionInLine] msg near "tokenText"
-    const match = errStr.match(/^\[(\d+):(\d+)\] (.+) near "(.+)"$/);
-    
-    let range: Range;
-    let message = errStr;
-
-    if (match) {
-      const line = parseInt(match[1] ?? "1", 10) - 1; // LSP lines are 0-indexed
-      const charPos = parseInt(match[2] ?? "0", 10);
-      const msg = match[3] ?? "Syntax Error";
-      const token = match[4] ?? "";
-      
-      message = msg;
-      range = {
-        start: { line, character: charPos },
-        end: { line, character: charPos + token.length }
-      };
-    } else {
-      range = {
-        start: { line: 0, character: 0 },
-        end: { line: 0, character: 0 }
-      };
-    }
-
-    diagnostics.push({
-      severity: DiagnosticSeverity.Error,
-      range,
-      message,
-      source: "halo"
+  if (ast.errors.length) {
+    return ast.errors.map((err) => {
+      const m = err.match(/^\[(\d+):(\d+)\] (.+?)(?: near "(.*)")?$/s);
+      if (!m) return { severity: DiagnosticSeverity.Error, range: rangeAt(lines, 0, 0, 0), message: err, source: "halo" };
+      const line = Number(m[1]) - 1;
+      return { severity: DiagnosticSeverity.Error, range: rangeAt(lines, line, Number(m[2]), m[4]?.length || undefined), message: m[3]!, source: "halo" };
     });
   }
-
-  return diagnostics;
+  return validate(ast).map((d) => ({
+    severity: d.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
+    range: d.line ? rangeAt(lines, d.line - 1, d.column ?? 0) : rangeAt(lines, 0, 0, 0),
+    message: d.message,
+    source: "halo",
+  }));
 }

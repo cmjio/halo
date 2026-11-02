@@ -13,11 +13,11 @@ tool TestRunner     : POST("api.playwright.dev/run", apiKey: Env.PW_KEY)
 tool SlackQA        : POST("hooks.slack.com/services/qa-team")
 tool JiraAPI        : POST("api.atlassian.com/jira", apiKey: Env.JIRA_KEY)
 
-// --- Memory ---
+// --- Store ---
 tool TestHistory    : VectorStore(Env.PINECONE_KEY, namespace: "test-results")
 tool FlakyPatterns  : VectorStore(Env.PINECONE_KEY, namespace: "flaky-test-dna")
 
-// --- Minds ---
+// --- Agents ---
 // The test architect generates test cases from requirements
 @shadow(Architect_V2)
 agent TestArchitect [anthropic/claude-sonnet-4, temp: 0.3]
@@ -41,7 +41,7 @@ agent FlakyDetector [openai/gpt-4o-mini, temp: 0.0]
   equips FlakyPatterns, TestHistory
   requires QABudget
 
-// --- The Stream ---
+// --- The Pipeline ---
 pipeline AutoTest(pr: GitHub.PullRequest) -> Report:
   pr
     // Step 1: Generate test cases from PR diff

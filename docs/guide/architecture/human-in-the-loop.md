@@ -1,61 +1,67 @@
 # Human-in-the-Loop
 
-AI models hallucinate, get confused, and can make high-stakes errors. Fully autonomous pipelines are a massive liability in production enterprise software.
+Two operators wait for something outside the pipeline:
 
-Halo embraces **Human-in-the-Loop (HITL)** as a first-class language primitive.
+- `|! yield(...)` asks a human. The response goes to `context.data.yield` and the `as` binding.
+- `~> listen(Source.Event)` waits for an event. The payload goes to `context.data.Source.Event` and the `as` binding.
 
-## The `|! yield` Operator
-
-The `yield` keyword acts like a webhook that instantly **suspends** the pipeline and freezes the context state. It pushes the state to an external system (like a Slack channel or a UI dashboard) and waits.
-
-```halo
-pipeline DeployToProduction(commit: String) -> Result:
-  // 1. Agent analyzes the commit
-  commit 
-    |> DevOpsAgent.analyze()
-
-  // 2. If risk is high, suspend the pipeline and ask a human
-  |? (context.data.DevOpsAgent.analyze.riskLevel == "HIGH") =>
-    |! yield(channel: "Slack", message: "Review this deployment!", data: commit)
-
-  // 3. This only executes after human approval
-  |> System.TriggerDeploy()
-```
-
-### How `yield` Works Under the Hood
-When the Halo Runtime encounters a `yield`, it:
-1. Emits a `yield` event to `runtime.telemetry`.
-2. Returns a `suspended` status to the host application.
-3. The host application saves the `ExecutionContext` (which contains the full pipeline state) to a database.
-4. The Halo process exits. **No server resources are blocked waiting for the human.**
-
-## The `~> listen` Operator
-
-While `yield` pushes data out to a human, `listen` is the mechanism for waiting for data to come back in.
+The flowing value continues unchanged after both.
 
 ```halo
-|! yield(channel: "Slack", data: invoice)
-~> listen(System.ApprovalReceived)
+tool   DeployHook : POST("deploy.example.com/hooks/deploy", apiKey: Env.DEPLOY_TOKEN, sendInput: false)
+agent  DevOps [anthropic/claude-sonnet-4-5]
+
+pipeline Deploy(commit: String) -> Result:
+  commit
+    |> DevOps.assess("""Reply with JSON: {"risk": "low" | "high", "reason": "..."}""") as assessment
+    |! yield("Deploy {{commit}}? Risk: {{assessment.risk}}", channel: "#deploys", [context.data.assessment]) as decision
+    |? (context.data.decision.approved == true)
+    |> DeployHook.trigger(commit: commit)
 ```
 
-In your host Node.js application, when a manager clicks "Approve" in the UI, you resume the pipeline by passing the event back to the runtime:
+Only a top-level pipeline can pause. If a pipeline you call reaches `yield` or `listen` with no handler, the run fails. A gate that halts inside a called pipeline stops only that pipeline, and the caller continues with its output.
 
-```typescript
-// In your Next.js API route
-export async function POST(req: Request) {
-  const { pipelineStateId, managerDecision } = await req.json();
-  
-  // Load the frozen state from your database
-  const state = await db.get(pipelineStateId);
-  
-  // Resume the pipeline, injecting the manager's decision into the listener
-  const result = await runtime.resume(state, {
-    event: "System.ApprovalReceived",
-    payload: { decision: managerDecision }
-  });
-  
-  return Response.json(result);
-}
+## Three ways to answer
+
+**1. A handler.** Register `onInterrupt` / `onListen` (or pass them in `RuntimeConfig`). Whatever the handler returns is the response.
+
+```ts
+runtime.onInterrupt(async (req) => {
+  // req.message, req.channel, req.attachments, req.timeoutMs, req.context
+  return { approved: await askSomeone(req.message) };
+});
 ```
 
-By making HITL a native language feature, Halo allows you to build asynchronous, long-running agentic workflows without writing complicated database polling logic in your backend.
+**2. Pause and signal.** With no handler, a top-level run stops with `status: "paused"`. `context.meta.paused` is `{ stage, waitingFor, message }`, where `waitingFor` is `"yield"` or the listen target. The run is saved in the `runStore`. Later, from any process that shares the store:
+
+```ts
+import { FileRunStore, HaloRuntime, parse } from "halo";
+
+const runtime = new HaloRuntime({ runStore: new FileRunStore(".halo/runs") }).load(parse(source));
+
+const first = await runtime.run("Deploy", { commit: "abc123" });
+if (first.status === "paused") await saveForLater(first.runId);
+
+// ...when the human answers (e.g. in a webhook handler):
+const done = await runtime.signal(runId, "yield", { approved: true });
+// For ~> listen(Slack.Reaction): runtime.signal(runId, "Slack.Reaction", payload)
+```
+
+`signal()` throws a `SignalError` with code `RUN_NOT_FOUND` if no paused run has that id (each run can be resumed only once). It throws with code `SIGNAL_MISMATCH` if the run is waiting for a different event. The default `MemoryRunStore` keeps paused runs only for the life of the process. Use `FileRunStore`, or implement `RunStore` (`save`/`load`/`delete`), to survive restarts.
+
+**3. The CLI.** `halo run` prompts in the terminal. Type `approve`, `reject`, any word, or JSON. A word becomes `{ action, status, reaction, text, approved }`, and `approved` is true for approve/yes/ok/lgtm/merged. With `--auto-approve` (and in `halo test`), every yield and listen gets `{ action: "approve", approved: true, status: "approved", reaction: "approve" }`. When stdin isn't a terminal, the run pauses, is saved to `.halo/runs/`, and prints the command that continues it:
+
+```bash
+halo resume deploy.halo 3f2c…-run-id --payload approve
+halo resume deploy.halo 3f2c…-run-id --payload '{"approved": false, "note": "wait for Monday"}'
+```
+
+`--event` names the event explicitly. By default the CLI uses whatever the run is waiting for.
+
+## Timeouts
+
+`yield(..., 30m)` or `timeout: "30m"` limits how long a **handler** may take. If it takes longer, the run fails with a `TimeoutError`. A paused run has no deadline.
+
+## Slack-style approvals
+
+`Slack.post(..., buttons: [...])` posts buttons, but Halo doesn't receive the clicks. Have your Slack app's interaction endpoint call `runtime.signal(runId, "Slack.Interaction", payload)` for a run paused at `~> listen(Slack.Interaction)`. You need to map the message back to its run yourself, for example by putting `{{context.meta.runId}}` in the message text.

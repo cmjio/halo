@@ -12,11 +12,11 @@ tool Linear          : POST("api.linear.app/graphql", apiKey: Env.LINEAR_KEY)
 tool Notion          : POST("api.notion.com/v1/pages", apiKey: Env.NOTION_KEY)
 tool SlackPM         : POST("hooks.slack.com/services/pm-team")
 
-// --- Memory ---
+// --- Store ---
 tool RequestHistory  : VectorStore(Env.PINECONE_KEY, namespace: "feature-requests")
 tool ProductDocs     : VectorStore(Env.PINECONE_KEY, namespace: "product-strategy")
 
-// --- Minds ---
+// --- Agents ---
 agent Clustering [openai/gpt-4o-mini, temp: 0.2]
   system """
     You are a feature request analyst. Cluster raw user
@@ -44,7 +44,7 @@ agent Writer [openai/gpt-4o-mini, temp: 0.5]
   """
   equips Notion
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(10m)
 pipeline RoadmapBrief(requests: FeatureRequests) -> Briefing:
   requests
@@ -53,7 +53,7 @@ pipeline RoadmapBrief(requests: FeatureRequests) -> Briefing:
          context.data.requests.items,
          ["user_segment", "problem_area", "urgency"],
          8
-       )
+       ) as clusters
 
     // Step 2: Gate — need at least 3 items to be actionable
     |? (context.data.clusters.total_items > 3)
@@ -63,17 +63,21 @@ pipeline RoadmapBrief(requests: FeatureRequests) -> Briefing:
          context.data.clusters.themes,
          ProductDocs,
          ["revenue_impact", "retention", "competitive_edge", "effort"]
-       )
+       ) as scoring
 
     // Step 4: Gate — drop clusters below threshold
     |? (context.data.scoring.top_scores > 50)
 
-    // Step 5: Draft the roadmap brief in Notion
+    // Step 5: Draft the roadmap brief, then save it to Notion
     |> Writer.compose(
          "RoadmapBrief",
          [context.data.clusters, context.data.scoring.ranked],
          "strategic_narrative"
-       )
+       ) as draft
+    |> Notion.create_page(
+         title: "Roadmap Brief",
+         content: context.data.draft
+       ) as notion
 
     // Step 6: Send draft to PM Slack for feedback
     |! yield(
@@ -84,7 +88,7 @@ pipeline RoadmapBrief(requests: FeatureRequests) -> Briefing:
        )
 
     // Step 7: Wait for PM review
-    ~> listen(SlackPM.Reaction)
+    ~> listen(SlackPM.Reaction) as pm_review
 
     // Step 8: Gate on approval
     |? (context.data.pm_review.status == "approved")

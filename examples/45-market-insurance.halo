@@ -6,7 +6,7 @@
 //          that cost $500K+/year to license and maintain.
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy ClaimsPrivacy   : Redact(SSN) & Redact(CreditCard) & Redact(HealthData)
 policy FraudPolicy     : Block(DestructiveOps)
 policy PayoutLimit     : Validate("amount", "<=", "context.data.verify_coverage.max_payout")
@@ -18,7 +18,7 @@ tool ClaimsDB      : REST("api.guidewire.com/v1/claims", apiKey: Env.GUIDEWIRE_K
 tool PaymentGW     : POST("api.stripe.com/v1/payouts", apiKey: Env.STRIPE_KEY)
 tool AdjusterSlack : POST("hooks.slack.com/services/claims-team")
 
-// --- Memory ---
+// --- Store ---
 tool FraudPatterns : VectorStore(Env.PINECONE_KEY, namespace: "fraud-indicators")
 tool ClaimHistory  : VectorStore(Env.PINECONE_KEY, namespace: "historical-claims")
 
@@ -32,8 +32,9 @@ schema ClaimDecision {
   adjuster_notes  : String
 }
 
-// --- Minds ---
+// --- Agents ---
 agent ClaimsBot [openai/gpt-4o-mini, temp: 0.0]
+  equips PolicyAPI, PaymentGW
   requires ClaimsPrivacy, CostGuard
 
 agent FraudAnalyst [anthropic/claude-sonnet-4, temp: 0.0]
@@ -45,7 +46,7 @@ agent AdjusterAssistant [openai/gpt-4o, temp: 0.2]
   equips ClaimHistory
   requires ClaimsPrivacy, CostGuard, PayoutLimit
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(5m)
 @retry(2, 10s)
 pipeline ProcessClaim(claim: ClaimFiling) -> ClaimDecision:

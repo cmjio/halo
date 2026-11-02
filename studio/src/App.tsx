@@ -98,7 +98,7 @@ function App() {
 
     runEvents.forEach((ev, i) => {
       // Create nodes for starts/calls
-      if (ev.type === "node_start" || ev.type === "tool_call" || ev.type === "stream_start") {
+      if (ev.type === "node_start" || ev.type === "tool_call" || ev.type === "llm_call" || ev.type === "stream_start") {
         const id = `${ev.stage}-${ev.id}`;
         stageMap.set(ev.stage, id);
         

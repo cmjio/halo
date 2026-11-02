@@ -4,7 +4,7 @@
 //          multiple LLM providers and local models
 // ============================================================
 
-// ── Minds with different providers ─────
+// ── Agents with different providers ─────
 
 // OpenAI cloud model
 agent Fast [openai/gpt-4o-mini, temp: 0.3]
@@ -29,14 +29,14 @@ agent Alt [together/meta-llama/Llama-3.1-8B-Instruct, temp: 0.5]
 //   }
 // }
 
-// ── Stream: Auto-routes to best model ─────
+// ── Pipeline: Auto-routes to best model ─────
 
 pipeline AskAnything(question: String) -> Result:
   question
     |> Fast.prompt("Answer: {{question}}")
     |> System.Print()
 
-// ── Stream: Cost-optimized ─────
+// ── Pipeline: Cost-optimized ─────
 // Router will prefer cheapest option (local > together > openai)
 
 pipeline CheapAnswer(question: String) -> Result:
@@ -44,7 +44,7 @@ pipeline CheapAnswer(question: String) -> Result:
     |> Alt.prompt("Quick answer: {{question}}")
     |> System.Print()
 
-// ── Stream: Performance-optimized ─────
+// ── Pipeline: Performance-optimized ─────
 // Router will pick most capable model
 
 pipeline SmartAnswer(question: String) -> Result:

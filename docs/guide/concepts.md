@@ -1,56 +1,79 @@
 # Core Concepts
 
-Halo is fundamentally different from frameworks like LangChain, AutoGen, or CrewAI. Most AI frameworks treat LLMs as "autonomous objects" that loop endlessly in a black box until they decide they are done. 
+A Halo program is a set of declarations (`policy`, `tool`, `store`, `schema`, `agent`) and one or more `pipeline`s that use them. Agents are not autonomous loops. Each one is a model plus a configuration, and a pipeline calls it as one step in a fixed sequence of stages.
 
-Halo treats agents as **functions in a state machine**. 
+## Pipelines and the flowing value
 
-## The Pipeline (`|>` Operator)
-
-In Halo, data moves linearly through a `pipeline` using the pipe forward operator (`|>`):
+A pipeline starts from a value (usually a parameter) and pushes it through stages with `|>`:
 
 ```halo
-pipeline Summarize(text: String) -> String:
+agent Reader [openai/gpt-4o-mini]
+agent Writer [openai/gpt-4o-mini]
+
+pipeline Summarize(text: String) -> Result:
   text
     |> Reader.extract_facts()
-    |> Writer.summarize()
+    |> Writer.summarize() as summary
 ```
 
-If an agent fails (e.g. hits a token limit, or fails schema validation), the pipeline halts predictably. There are no infinite recursive loops unless you explicitly code them.
+Each stage's result becomes the next stage's input, `context.current`. A result is also stored in three places:
 
-## Agents are Stateless
+- `context.data.Reader.extract_facts` (callee and method)
+- `context.data.extract_facts` (method alone, unless that name is an input or a declaration)
+- `context.data.summary` (the `as` binding)
 
-In Halo, an `agent` is just a configuration block that binds a Model ID (like `gpt-4o`) to a persona (a system prompt) and a set of tools. 
+Strings can reference parameters and results with `{{name}}` or `{{context.data.x.y}}`.
+
+## Agents
+
+An `agent` binds a model to parameters, a system prompt, tools, and policies:
 
 ```halo
-agent Reviewer [openai/gpt-4o]
+tool Repo : GitHub(Env.GITHUB_TOKEN, repo: "acme/api")
+policy Budget : MaxSpend(1.00)
+
+agent Reviewer [anthropic/claude-sonnet-4-5, temp: 0.2]
   system "You are a strict code reviewer."
-  equips GitHubTool, LinearTool
+  equips Repo
+  requires Budget
+
+pipeline Review(number: Number) -> Result:
+  number |> Reviewer.get_issue("Review this issue and list what is missing.", tool: Repo, number: number)
 ```
 
-Agents do not hold memory across different stages of a pipeline implicitly. If you want an agent to "remember" previous context, you pass it explicitly using the `context` variable or by utilizing native `store` integrations.
+The agent's method name becomes the task line of the prompt. String arguments become instructions. With `tool: Repo`, the runtime first calls `Repo.get_issue(number: ...)` and then sends the agent its result. There is no model-driven function-calling loop. Tools run only when the pipeline calls them. The one exception is equipped stores: a `VectorStore` adds its closest matches to the prompt, and a `File` store adds the conversation history.
 
-## Gates (`|?`) for Control Flow
+Agents keep no memory between calls. Pass earlier results explicitly (`context.data.…`) or equip a store.
 
-Instead of writing complex `if/else` statements in Python, Halo uses Pattern Matching Gates (`|?`) for declarative branching.
+## Control flow
+
+Gates, branches, and loops are pipeline stages, not statements:
 
 ```halo
-pipeline Triage(ticket: Ticket) -> Result:
-  // Route to the appropriate agent based on the ticket type
-  |? (ticket.type == "bug") =>
-    ticket |> Engineer.fix()
-    
-  |? (ticket.type == "billing") =>
-    ticket |> Support.reply()
+agent Engineer [openai/gpt-4o-mini]
+agent Support  [openai/gpt-4o-mini]
+agent Triager  [openai/gpt-4o-mini]
+
+pipeline Route(ticket: String) -> Result:
+  ticket
+    |> Triager.classify("""Reply with JSON: {"type": "bug" | "billing" | "other"}""") as kind
+    |? (context.data.kind.type != "other")
+    |? {
+         (context.data.kind.type == "bug") => Engineer.fix(ticket),
+         else => Support.reply(ticket),
+       }
 ```
 
-## Human in the Loop (`|! yield` and `~> listen`)
+- `|? (cond)` is a **gate**. If the condition is false, the run stops with status `"halted"`. This is not an error.
+- `|? { (cond) => Call(), else => Call() }` is a **branch**. The first arm that matches runs. If no arm matches, the value passes through unchanged.
+- `|<> loop(Agent, "cond", max: n)` sends the run back to that agent's earlier stage while the condition holds.
 
-Enterprise workflows cannot be fully autonomous. If an LLM makes a critical decision, a human often needs to approve it. Halo supports this natively using the `|! yield` operator, which acts like a webhook that suspends the pipeline to a persistent database (SQLite or PostgreSQL) until the host application resumes it.
+See [Pipe Operators](../reference/operators.md) for all of them.
 
-```halo
-pipeline TransferMoney(request: Transfer) -> Result:
-  |? (request.amount > 10000) =>
-    |! yield(action: "ManagerApproval", data: request)
-    
-  request |> BankTool.execute()
-```
+## Humans in the loop
+
+`|! yield(...)` asks a human, and `~> listen(Source.Event)` waits for an external event. If you register a handler (`runtime.onInterrupt` / `onListen`, or the CLI's terminal prompt), it answers right away. With no handler, the top-level run **pauses** with status `"paused"`. You continue it with `runtime.signal(runId, ...)` or `halo resume`. See [Human-in-the-Loop](./architecture/human-in-the-loop.md).
+
+## Run results
+
+A run returns `{ output, status, runId, context }`. `context.meta` has the cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain of the stages. `verifyTrace(trace)` checks that the chain is unbroken.

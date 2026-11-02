@@ -21,6 +21,6 @@ pipeline AnalyzeText(text: String) -> Result:
     |> System.Print()
 
 // NOTES:
-// - context.data.Mind.Method holds the LAST result from that mind+method
-// - For multiple results from same mind, use different methods or minds
-// - Context is available to all subsequent stages in the same stream
+// - context.data.Agent.Method holds the LAST result from that agent+method
+// - For multiple results from same agent, use different methods or agents
+// - Context is available to all subsequent stages in the same pipeline

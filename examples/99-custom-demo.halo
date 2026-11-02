@@ -1,5 +1,5 @@
 // ============================================================
-// CUSTOM DEMO: Langly DSL
+// CUSTOM DEMO: Halo DSL
 // ============================================================
 
 policy NoPessimism : Tone("Optimistic")

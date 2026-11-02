@@ -1,100 +1,142 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { rmSync, existsSync } from "fs";
-import { join } from "path";
-import { runCli } from "../src/cli.js";
+import { test, expect, describe, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
-// Helper to run the CLI directly in the same process
-async function executeCli(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  let stdout = "";
-  let stderr = "";
-  
-  const mockLogger = {
-    log: (msg: string) => { stdout += msg + "\n"; },
-    error: (msg: string) => { stderr += msg + "\n"; }
-  };
+const root = resolve(`${import.meta.dir}/..`);
+// Runs happen in a scratch directory, so .halo/ (telemetry, paused runs) never lands in the repo.
+const work = mkdtempSync(join(tmpdir(), "halo-cli-"));
+afterAll(() => rmSync(work, { recursive: true, force: true }));
 
-  const exitCode = await runCli(args, mockLogger);
-  return { stdout, stderr, exitCode };
+function cliIn(cwd: string, ...args: string[]) {
+  const argv = args.map((a) => (a.startsWith("examples/") || a === "examples" ? join(root, a) : a));
+  const p = Bun.spawnSync(["bun", join(root, "index.ts"), ...argv], { cwd, env: { ...Bun.env, NO_COLOR: "1", HALO_API_KEY: "", LANGLY_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "" } });
+  return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
 }
 
-describe("Halo CLI (P0)", () => {
-  const testProjectDir = "test-halo-project";
+const cli = (...args: string[]) => cliIn(work, ...args);
 
-  beforeAll(() => {
-    if (existsSync(testProjectDir)) {
-      rmSync(testProjectDir, { recursive: true, force: true });
-    }
+describe("CLI", () => {
+  test("validate examples/ succeeds", () => {
+    const r = cli("validate", "examples/");
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/43 file\(s\), 0 error\(s\)/);
   });
 
-  afterAll(() => {
-    if (existsSync(testProjectDir)) {
-      rmSync(testProjectDir, { recursive: true, force: true });
-    }
+  test("validate --strict fails on warnings", () => {
+    expect(cli("validate", "examples/14-env-vars.halo", "--strict").code).toBe(1);
   });
 
-  test("init creates a valid project structure", async () => {
-    const { stdout, stderr, exitCode } = await executeCli(["init", testProjectDir]);
-    
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain(`Project "${testProjectDir}" created successfully!`);
-    
-    // Verify files were created with correct names (Halo, not Langly)
-    expect(existsSync(join(testProjectDir, "halo.json"))).toBe(true);
-    expect(existsSync(join(testProjectDir, "src", "main.halo"))).toBe(true);
-    expect(existsSync(join(testProjectDir, ".env.example"))).toBe(true);
-    
-    // Verify content of main.halo does not contain .ly or Langly
-    const mainHaloContent = await Bun.file(join(testProjectDir, "src", "main.halo")).text();
-    expect(mainHaloContent).not.toContain(".ly");
+  test("run --mock prints the output once", () => {
+    const r = cli("run", "examples/01-hello.halo", "--arg", "name=World", "--mock");
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe("[mock Greeter.prompt] Write a warm, one-sentence 'Hello World' greeting for this person. Input: World");
   });
 
-  test("validate succeeds on valid file", async () => {
-    const { stdout, stderr, exitCode } = await executeCli(["validate", "examples/01-hello.halo"]);
-    
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Valid syntax");
-    expect(stderr).toBe("");
+  test("run --json returns the full result", () => {
+    const r = cli("run", "examples/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
+    const result = JSON.parse(r.out);
+    expect(result.status).toBe("halted");
+    expect(result.context.meta.halted.condition).toBe('lang != "en"');
+    expect(r.err).toContain("Halted at stage 2");
   });
 
-  test("validate fails on invalid file", async () => {
-    // Create a temporary file with syntax errors
-    const badFile = "test-bad-syntax.halo";
-    await Bun.write(badFile, "pipeline Bad : this is not valid syntax");
-    
+  test("missing arguments are explained", () => {
+    const r = cli("run", "examples/03-tools.halo", "--mock");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("Missing argument(s) for MultiLangHello(name: String, lang: String): name, lang");
+  });
+
+  test("multiple pipelines need --pipeline", () => {
+    const r = cli("run", "examples/10-named-args.halo", "--mock");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("pick one with --pipeline (GreetPerson, Summarize)");
+  });
+
+  test("a real run without keys fails with the variable to set", () => {
+    const r = cli("run", "examples/01-hello.halo", "--arg", "name=World");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("Set GEMINI_API_KEY or GOOGLE_API_KEY or HALO_API_KEY");
+  });
+
+  test("debug traces each stage", () => {
+    const r = cli("debug", "examples/05-fanout.halo", "--arg", "name=Ana", "--mock");
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("▶ [1] |* { Greeter.prompt, Greeter.prompt }");
+  });
+
+  test("parse prints the AST", () => {
+    const ast = JSON.parse(cli("parse", "examples/01-hello.halo").out);
+    expect(ast.agents[0].name).toBe("Greeter");
+  });
+
+  test("init creates a project that validates and runs offline with `halo test`", () => {
+    const dir = mkdtempSync(join(tmpdir(), "halo-init-"));
     try {
-      const { stdout, stderr, exitCode } = await executeCli(["validate", badFile]);
-      
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("Syntax error");
+      const r = cliIn(dir, "init", "demo");
+      expect(r.code).toBe(0);
+      expect(readdirSync(join(dir, "demo")).sort()).toEqual([".env.example", ".gitignore", "README.md", "main.halo"]);
+      expect(cliIn(dir, "init", "demo").err).toContain(`"demo" already exists`);
+      const project = join(dir, "demo");
+      expect(cliIn(project, "validate", ".").out).toContain("1 file(s), 0 error(s), 0 warning(s)");
+      const run = cliIn(project, "test", "main.halo", "--arg", "topic=tides");
+      expect(run.code).toBe(0);
+      expect(run.out).toContain("[mock Writer.explain]");
     } finally {
-      rmSync(badFile, { force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("run executes pipeline in mock mode", async () => {
-    // 01-hello.halo expects { name: String }
-    const { stdout, stderr, exitCode } = await executeCli([
-      "run", 
-      "examples/01-hello.halo", 
-      "--args", '{"name": "Alice"}',
-      "--mock",
-      "--api-key", "test-key"
-    ]);
-    
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Alice"); 
+  test("without a terminal, a yield pauses the run; `halo resume` continues it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "halo-pause-"));
+    try {
+      await Bun.write(
+        join(dir, "flow.halo"),
+        `agent W [openai/gpt-4o]
+pipeline Approve(doc: String) -> Result:
+  doc
+    |> W.draft("Draft {{doc}}") as draft
+    |! yield(msg: "Publish this draft?") as review
+    |? (context.data.review.approved == true)
+    |> System.Print("published")`,
+      );
+      const paused = cliIn(dir, "run", "flow.halo", "--mock", "--arg", "doc=memo");
+      expect(paused.code).toBe(0);
+      expect(paused.err).toContain("⏸ Paused at stage 2 |! yield, waiting for a human response: Publish this draft?");
+      const runId = paused.err.match(/halo resume flow\.halo ([\w-]+)/)![1]!;
+      expect(readdirSync(join(dir, ".halo/runs"))).toEqual([`${runId}.json`]);
+
+      const done = cliIn(dir, "resume", "flow.halo", runId, "--payload", "approve", "--mock");
+      expect(done.code).toBe(0);
+      expect(done.out).toBe("published\n");
+      expect(readdirSync(join(dir, ".halo/runs"))).toEqual([]);
+      expect(cliIn(dir, "resume", "flow.halo", runId, "--mock").err).toContain(`No paused run "${runId}"`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  test("test command is an alias for run --mock", async () => {
-    const { stdout, stderr, exitCode } = await executeCli([
-      "test", 
-      "examples/01-hello.halo", 
-      "--args", '{"name": "Bob"}',
-      "--api-key", "test-key"
-    ]);
-    
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Bob");
+  test("runs are recorded for Halo Studio unless --no-telemetry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "halo-telemetry-"));
+    try {
+      cliIn(dir, "run", "examples/01-hello.halo", "--arg", "name=World", "--mock", "--no-telemetry");
+      expect(existsSync(join(dir, ".halo/telemetry.db"))).toBe(false);
+      cliIn(dir, "run", "examples/01-hello.halo", "--arg", "name=World", "--mock");
+      const db = new Database(join(dir, ".halo/telemetry.db"));
+      const types = db.query("SELECT type FROM telemetry ORDER BY id").all().map((r: any) => r.type);
+      db.close();
+      expect(types[0]).toBe("stream_start");
+      expect(types).toContain("llm_call");
+      expect(types.at(-1)).toBe("stream_end");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
+  test("the package entry point does not run the CLI when imported", async () => {
+    const mod = await import("../index.ts");
+    expect(typeof mod.parse).toBe("function");
+    expect(typeof mod.HaloRuntime).toBe("function");
+  });
 });

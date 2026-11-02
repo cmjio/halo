@@ -1,74 +1,95 @@
 # Quickstart
 
-Welcome to Halo! This guide will get you from zero to a working AI agent workflow in under 5 minutes.
+## 1. Install
 
-## 1. Installation
-
-You can install the Halo CLI globally via npm, bun, or yarn.
+Halo runs on [Bun](https://bun.sh). Clone the repository and install its dependencies:
 
 ```bash
-npm install -g @halo-lang/cli
+git clone <halo repo> halo && cd halo
+bun install
+bun run index.ts --help
 ```
 
-## 2. Initialize a Project
+`bun run index.ts` is the CLI. The docs call it `halo`; to use that name, link the package once:
 
-Create a new directory for your workflow and run `halo init`.
+```bash
+bun link
+```
+
+## 2. Create a project
 
 ```bash
 halo init my-bot
 cd my-bot
 ```
 
-This will scaffold a basic project structure:
-- `src/main.halo`: Your primary workflow file.
-- `halo.json`: Configuration for the runtime.
-- `.env.example`: Template for your API keys.
+This creates:
 
-## 3. Configure API Keys
+- `main.halo`: a starter pipeline (an agent with a system prompt and two policies)
+- `.env.example`: the API key variables Halo reads
+- `.gitignore`: ignores `.env` and `.halo/` (paused runs, telemetry, the local vector store)
+- `README.md`
 
-Copy the `.env.example` file to `.env` and add your OpenAI or Anthropic API key.
+## 3. Set an API key
+
+Each provider reads its own variable. Set the ones for the models you use:
+
+| Model prefix | Variable |
+|---|---|
+| `anthropic/`, `claude/`, `claude-*` | `ANTHROPIC_API_KEY` |
+| `openai/`, `oai/`, `gpt-*`, `o1`… | `OPENAI_API_KEY` |
+| `google/`, `gemini/`, `gemini-*` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| `openrouter/`, `or/` | `OPENROUTER_API_KEY` |
+| `together/`, `tog/` | `TOGETHER_API_KEY` |
+| `replicate/`, `rep/` | `REPLICATE_API_TOKEN` or `REPLICATE_API_KEY` |
+| `ollama/`, `local/` | none (uses `OLLAMA_HOST`, default `http://localhost:11434`) |
+
+If a provider has no key of its own, Halo uses the `--api-key` flag, then `HALO_API_KEY`, then the legacy `LANGLY_API_KEY`. Bun loads `.env` automatically.
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # then fill in ANTHROPIC_API_KEY
 ```
 
-Open `.env` and add:
-```env
-HALO_API_KEY="sk-..."
-```
-*(Note: If you use the `--local` flag during init, you can use local Ollama models with no API key needed).*
+## 4. Read the pipeline
 
-## 4. Write Your First Pipeline
-
-Open `src/main.halo`. You will see something like this:
+`main.halo` looks like this:
 
 ```halo
-// Define an agent with a specific model and temperature
-agent Bot [openai/gpt-4o-mini, temp: 0.7]
-  system "You are a helpful pirate assistant. Speak like a pirate."
+policy Safe   : Block(PromptInjection) & Redact(APIKey)
+policy Budget : MaxSpend(0.25)
 
-// Define a pipeline that takes a String and returns a Result
-pipeline Chat(message: String) -> Result:
-  message
-    |> Bot.prompt("Reply to the user: {{message}}")
+agent Writer [anthropic/claude-haiku-4-5, temp: 0.4]
+  system """
+    You write short, friendly explanations for curious people.
+  """
+  requires Safe, Budget
+
+pipeline Explain(topic: String) -> Result:
+  topic
+    |> Writer.explain("Explain {{topic}} in three sentences.") as explanation
+    |? (context.data.explanation != null)
     |> System.Print()
 ```
 
-## 5. Run It!
-
-Use the `halo run` command to execute your pipeline directly from the terminal. Pass arguments using the `--args` flag as JSON.
+## 5. Run it
 
 ```bash
-halo run src/main.halo --args '{"message": "How do I make a cake?"}'
+halo validate .                                   # check syntax and names
+halo test main.halo --arg topic="tide pools"      # offline: every call mocked
+halo run main.halo --arg topic="tide pools"       # for real
+halo debug main.halo --arg topic="tide pools"     # print each stage, prompt, and model call
 ```
 
-**Output:**
-```
-Ahoy matey! To bake a proper cake, ye'll need some flour, sugar, and a hearty dash of rum...
+Pass arguments with `--arg key=value` (repeatable; values that parse as JSON are parsed) or `--args '{"topic": "tide pools"}'`. If a file has several pipelines, choose one with `--pipeline Name`. Run `halo --help` for every flag.
 
-✅ Execution finished.
+The repository's `examples/` directory has 40+ programs. `examples/50-github-triage.halo` triages a real GitHub repo and needs only `ANTHROPIC_API_KEY`:
+
+```bash
+halo run examples/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
 ```
 
-## Next Steps
-- Learn about the [Core Concepts](./concepts.md) of Halo's state-machine architecture.
-- Check out the [Escape Hatch SDK](./sdk.md) to learn how to embed this pipeline into your existing Node.js or Next.js app!
+## Next steps
+
+- [Core Concepts](./concepts.md)
+- [Language Reference](./reference.md)
+- [Using Halo as a library](./sdk.md)

@@ -1,29 +1,34 @@
-# Editor Support & LSP
+# Editor Support
 
-Halo provides a first-class Language Server Protocol (LSP) implementation to give you IDE-level support for agentic workflows.
+Halo has a small language server (`src/lsp/`) and editor packages in `editors/`.
 
-## VS Code Extension
+## Language server
 
-The official Halo VS Code extension provides:
-- Syntax highlighting for `.halo` files.
-- Autocomplete for Tools, Policies, and Stores.
-- Real-time syntax validation based on the ANTLR grammar.
-- Inline hover documentation for built-in Standard Library functions.
+The server provides:
 
-### Installation
+- **Diagnostics**: syntax errors at the offending token, plus every `halo validate` error and warning at its line.
+- **Hover**: details for declarations (model, system prompt, provider, policy rules) and for operators.
+- **Completion**: keywords and the names declared in the file. It also offers `System` methods after `System.`, directives after `@`, providers after `tool X :`, rule names on `policy` lines, and categories inside `Block(` / `Redact(`.
 
-Search for **"Halo Language"** in the VS Code Extensions marketplace, or install it via the CLI:
+It does not provide go-to-definition, rename, completion of `context.data` fields, or a debugger. For step-by-step output, use `halo debug`.
+
+## VS Code
+
+`editors/vscode` contains a syntax grammar and the language-server client. It isn't on the Marketplace. Build and install it from the repository:
 
 ```bash
-code --install-extension halo-lang.halo-vscode
+bun run package:vsx                                 # bundles the server and builds a .vsix
+code --install-extension editors/vscode/halo-dsl-0.1.0.vsix
 ```
 
-## Schema Autocomplete
+## Zed
 
-Because Halo parses your `.halo` files alongside your custom `schema` definitions, the LSP understands the exact shape of your `context` object. 
+`editors/zed` is a Zed extension with a tree-sitter grammar for highlighting, brackets, and indentation. It has no language server. See `editors/zed/README.md` to install it as a dev extension.
 
-If you type `context.data.` in your editor, the LSP will suggest the properties of the schema you defined, preventing typos before you ever execute the code.
+## Sublime Text
 
-## Debugging
+`editors/sublime/Halo.sublime-syntax` provides syntax highlighting. Copy it into your Sublime `Packages/User` directory.
 
-The VS Code extension includes a native debugger. You can place breakpoints on the `|>` pipe operators to pause the AST execution and inspect the exact state of the `context` object at that moment in time!
+## Docs
+
+This site highlights ```` ```halo ```` blocks with the VS Code TextMate grammar.

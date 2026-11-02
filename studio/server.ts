@@ -2,13 +2,18 @@ import { Database } from "bun:sqlite";
 import { serve } from "bun";
 
 import path from "node:path";
+import { mkdirSync } from "node:fs";
 
+// The Studio UI expects the API on this port.
 const PORT = 4000;
-const DB_PATH = path.join(import.meta.dir, "../.langly.db");
+// The CLI records runs to .halo/telemetry.db in the directory it runs in; start Studio from there
+// (or set HALO_TELEMETRY to that file).
+const DB_PATH = Bun.env.HALO_TELEMETRY ?? path.resolve(".halo/telemetry.db");
 
 // Ensure DB exists
 let db: Database;
 try {
+  mkdirSync(path.dirname(DB_PATH), { recursive: true });
   db = new Database(DB_PATH, { create: true });
 } catch (e) {
   console.error("Failed to open DB", e);
@@ -31,15 +36,18 @@ db.run(`
 
 serve({
   port: PORT,
+  // Run data includes prompts and outputs: only serve this machine.
+  hostname: "127.0.0.1",
   async fetch(req) {
     const url = new URL(req.url);
 
-    // CORS headers
-    const headers = {
-      "Access-Control-Allow-Origin": "*",
+    // Only the local Studio UI (any localhost port) may read run data from a browser.
+    const origin = req.headers.get("origin") ?? "";
+    const headers: Record<string, string> = {
       "Access-Control-Allow-Methods": "GET, OPTIONS",
       "Content-Type": "application/json",
     };
+    if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) headers["Access-Control-Allow-Origin"] = origin;
 
     if (req.method === "OPTIONS") {
       return new Response(null, { headers });
@@ -75,4 +83,4 @@ serve({
   },
 });
 
-console.log(`📡 Langly Trace Server running at http://localhost:${PORT}`);
+console.log(`📡 Halo Studio API at http://localhost:${PORT} (reading ${DB_PATH})`);

@@ -1,61 +1,68 @@
 # Telemetry & Tracing
 
-When an LLM pipeline fails in production, you need to know exactly which agent failed, what the prompt was, what the tools returned, and how much the execution cost.
+Every run returns its own record in `result.context`:
 
-Because Halo pipelines compile to an Abstract Syntax Tree (AST), the runtime has perfect visibility into every node transition.
+- `meta.calls`: every agent, tool, and shadow call, with model, latency, cost, tokens, attempts, and whether it was mocked
+- `meta.cost` and `meta.tokens`: totals for the run
+- `meta.violations` and `meta.shadows`
+- `trace`: one hash-chained entry per stage. Check it with `verifyTrace(trace)`.
 
-## The Telemetry Dispatcher
+`halo run --json` prints all of it.
 
-The `@halo-lang/runtime` exposes an event emitter called `telemetry` that fires at every stage of the pipeline lifecycle. 
+## Runtime events
 
-You can hook into this dispatcher to pipe execution traces to your observability platform of choice (Datadog, LangSmith, Helicone, or just stdout).
+Pass `onEvent` in `RuntimeConfig` to observe a run as it happens, or iterate `runtime.stream(...)`.
 
-```typescript
-import { HaloRuntime } from '@halo-lang/runtime';
+| `type` | When |
+|---|---|
+| `run` | Start and end of a top-level run (`status`: `start`, `completed`, `halted`, `paused`, or `error`) |
+| `stage` | Each stage starting and ending, with its value and duration |
+| `llm` | Each model call: agent, model, system, prompt, output, latency, cost, tokens, mocked |
+| `token` | A model's text (the whole answer as one chunk) |
+| `tool` | Each tool call: tool, method, output, latency, mocked |
+| `retry` | A retry under `@retry` |
+| `correction` | `@correct` asking an agent again |
+| `violation` | A policy failure |
+| `shadow` | A shadow call finishing |
+| `halt` | A gate closing |
+| `branch` | A branch choosing an arm (`arm: -1` when none matched) |
+| `loop` | A loop jumping back |
+| `paused` | A run pausing at yield or listen |
+| `checkpoint` | A checkpoint file being written |
 
-const runtime = new HaloRuntime({ apiKey: process.env.OPENAI_API_KEY });
-
-// 1. Listen for Pipeline Start
-runtime.telemetry.on("pipeline_start", (event) => {
-  console.log(`[START] Pipeline ${event.pipelineName} initialized with trace ID: ${event.traceId}`);
-});
-
-// 2. Listen for Agent Execution
-runtime.telemetry.on("node_start", (event) => {
-  console.log(`[AGENT] ${event.agentName} is thinking... Model: ${event.model}`);
-});
-
-// 3. Intercept Tool Calls
-runtime.telemetry.on("tool_call", (event) => {
-  console.log(`[TOOL] Agent called ${event.toolName} with args:`, event.payload);
-});
-
-// 4. Capture Final Output and Costs
-runtime.telemetry.on("pipeline_complete", (event) => {
-  console.log(`[END] Pipeline finished in ${event.durationMs}ms`);
-  console.log(`[COST] Total execution cost: $${event.totalCost}`);
+```ts
+const runtime = new HaloRuntime({
+  onEvent: (e) => {
+    if (e.type === "llm") console.log(`${e.agent} via ${e.model}: ${e.latencyMs}ms $${e.cost.toFixed(4)}`);
+    if (e.type === "violation") console.warn(`${e.policy}/${e.rule}: ${e.message}`);
+  },
 });
 ```
 
-## Built-in Datadog/LangSmith Adapters (Coming Soon)
+You can forward these events to any logging or tracing system. There are no built-in exporters for Datadog, LangSmith, or similar services.
 
-In the future, the SDK will ship with built-in adapters for major observability platforms. 
+## Halo Studio
 
-```typescript
-import { LangSmithTracer } from '@halo-lang/runtime/tracers';
+The CLI records every `run`, `debug`, `test`, and `resume` to `.halo/telemetry.db` (SQLite, the last 100 runs) in the current directory. Pass `--no-telemetry` to turn this off. Studio is a local viewer for that file:
 
-// This automatically binds all telemetry events to LangSmith traces
-runtime.telemetry.attach(new LangSmithTracer(process.env.LANGSMITH_API_KEY));
+```bash
+bun run studio   # API on 127.0.0.1:4000, plus the Vite UI
 ```
 
-## Cost Tracking
+Studio reads `HALO_TELEMETRY` if it is set. Otherwise it reads `.halo/telemetry.db` at the repository root, so either run the CLI from the repository root or point `HALO_TELEMETRY` at your project's file.
 
-The `HaloRuntime` exposes a `getCostTracker()` method that maintains a running tally of prompt and completion tokens across all agents in the pipeline, calculating the precise USD cost based on the models utilized (e.g., `gpt-4o` vs `claude-3-5-sonnet`).
+In the library, telemetry is **opt-in**. Use `SqliteTelemetry` as the event handler:
 
-```typescript
-const output = await runtime.execute("MainPipeline", { data });
+```ts
+// Not re-exported from "halo" yet: import it from the source file.
+import { SqliteTelemetry } from "/path/to/halo/src/runtime/telemetry.ts";
 
-const tracker = runtime.getCostTracker();
-console.log(tracker.getTotalCost()); // 0.045
-console.log(tracker.getTokenUsage()); // { prompt: 1500, completion: 450 }
+const telemetry = new SqliteTelemetry(".halo/telemetry.db");
+const runtime = new HaloRuntime({ onEvent: telemetry.handler });
+// ...
+telemetry.close();
 ```
+
+## Cost across runs
+
+`runtime.getCostTracker()` totals cost per model over the runtime's lifetime. It provides `getTotalCost()`, `getCostBreakdown()` (cost, count, and average per model), and `reset()`. Costs are estimated from each adapter's price table and the token counts the provider reports. Ollama is $0.

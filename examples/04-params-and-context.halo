@@ -1,5 +1,5 @@
 // ============================================================
-// STEP 4: Stream Params & Context
+// STEP 4: Pipeline Params & Context
 // Learn: Multiple pipeline params, context passing between stages
 // Each pipeline stage's output is stored in `context.data.<stage>`
 // ============================================================
@@ -12,7 +12,7 @@ agent Greeter [gemini-3-1-pro, temp: 0.7]
   equips Translator
   requires NoProfanity
 
-// Stream with two input params
+// Pipeline with two input params
 pipeline PersonalizedHello(name: String, lang: String) -> Result:
   name
     // Stage 1: Generate greeting (output stored to context)

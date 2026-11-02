@@ -14,11 +14,11 @@ tool NewsFeed        : REST("api.newsapi.org/v2", apiKey: Env.NEWS_KEY)
 tool SlackFounder    : POST("hooks.slack.com/services/founder-digest")
 tool InvestorCRM     : POST("api.affinity.co/api/updates")
 
-// --- Memory ---
+// --- Store ---
 tool DailyDigests    : VectorStore(Env.PINECONE_KEY, namespace: "founder-digests")
 tool CompetitorIntel : VectorStore(Env.PINECONE_KEY, namespace: "competitor-tracking")
 
-// --- Minds ---
+// --- Agents ---
 @shadow(Analyst_V2)
 agent Analyst [anthropic/claude-sonnet-4, temp: 0.1]
   system """
@@ -39,10 +39,10 @@ agent Summarizer [openai/gpt-4o-mini, temp: 0.3]
   """
   requires BrevityPolicy, Confidential
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(5m)
 @retry(2, 30s)
-pipeline MorningBriefing(date: Date) -> Digest:
+pipeline MorningBriefing(date: Date, company_name: String) -> Digest:
   date
     // Step 1: Fan-out — pull all data sources in parallel (fast, independent reads)
     |* {
@@ -51,41 +51,41 @@ pipeline MorningBriefing(date: Date) -> Digest:
            metric: "mrr",
            date: context.data.date,
            compare_to: "30d_ago"
-         ),
+         ) as stripe,
          Analyst.fetch_metric(
            tool: AnalyticsAPI,
            metric: "dau",
            date: context.data.date,
            compare_to: "7d_ago"
-         ),
+         ) as analytics,
          Analyst.search_news(
            tool: NewsFeed,
            query: context.data.company_name,
            sentiment: true
-         ),
+         ) as news,
          Analyst.track_competitors(
            tool: CompetitorIntel,
            since: "24h",
            signals: ["launch", "funding", "layoff"]
-         )
+         ) as competitors
        }
 
     // Step 2: Context merges automatically — analyze trends
     |> Analyst.analyze_trends(
-         metrics: [context.data.fetch_metric_0, context.data.fetch_metric_1],
-         news: context.data.search_news,
-         competitor_updates: context.data.track_competitors
-       )
+         metrics: [context.data.stripe, context.data.analytics],
+         news: context.data.news,
+         competitor_updates: context.data.competitors
+       ) as trends
 
     // Step 3: Gate — if nothing significant changed, skip detailed report
     |? (context.data.analyze_trends.notable_changes > 0)
 
-    // Step 4: Compose executive brief (max 500 words enforced by guardrail)
+    // Step 4: Compose executive brief (max 500 words enforced by policy)
     |> Summarizer.brief(
          trends: context.data.analyze_trends,
          section_order: ["metrics", "news", "competitors", "action_items"],
          tone: "executive"
-       )
+       ) as brief
 
     // Step 5: Post to founder Slack
     |> SlackFounder.post(

@@ -1,5 +1,5 @@
 // ============================================================
-// STEP 8: Memory - Persist Data Across Runs
+// STEP 8: Store - Persist Data Across Runs
 // Learn: Define store tools, save/retrieve data with `equips`
 // ============================================================
 
@@ -13,8 +13,8 @@ agent Greeter [gemini-3-1-pro, temp: 0.7]
 
 pipeline RememberedHello(name: String) -> Result:
   name
-    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.")
-    // Save greeting to memory
+    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.") as greeting
+    // Save greeting to store
     |> GreetingsDB.log(content: context.data.greeting, tags: [name])
     // Retrieve past greetings for this name
     |> GreetingsDB.search(query: name, limit: 3)

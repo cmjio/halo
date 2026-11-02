@@ -1,52 +1,52 @@
 # Types & Schemas
 
-Halo is fundamentally strongly-typed. While LLMs output unstructured strings, Halo forces them into deterministic boxes using Schemas.
+Models answer in text. If an answer is entirely JSON, optionally inside a `` ```json `` fence, Halo parses it into an object, so gates and later stages can read fields like `context.data.review.score`. A `schema` declares the shape a pipeline must return.
 
-## Primitives
-
-Halo supports the following primitive types out of the box:
-- `String`: Text data.
-- `Number`: Integers or floats.
-- `Boolean`: `true` or `false`.
-- `List<T>`: An array of a specific type (e.g., `List<String>`).
-- `JSON`: An escape-hatch primitive for unstructured nested objects.
-
-## Domain Primitives
-
-Halo includes special types designed specifically for AI workflows:
-
-### `Asset`
-The `Asset` type represents a multimodal blob (like an Image, Video, or Audio file).
-When you pass an `Asset` through the pipeline, the runtime stores the binary data in memory and passes a lightweight reference to the LLM.
+## Schemas
 
 ```halo
-pipeline Vision(image: Asset) -> Result:
-  image |> VQA_Agent.prompt("What is in this image?")
-```
+schema Address { city: String, zip: String }
 
-### `Embedding`
-The `Embedding` type is a native vector array representation `[0.12, -0.45, ...]`.
-
-## Custom Schemas
-
-You can define custom structured types using the `schema` keyword.
-
-```halo
 schema UserProfile {
-  id: String
-  age: Number
-  tags: List<String>
-  isPremium: Boolean
+  id: String,
+  age: Integer,
+  tags: Array<String>,
+  isPremium: Boolean,
+  address: Address,
 }
-```
 
-## Schema Enforcement
+agent Extractor [openai/gpt-4o-mini, temp: 0]
+  system "Extract a user profile. Reply with JSON only."
 
-When a pipeline defines a schema as its return type, the Halo runtime uses **Structural Forcing**.
-
-```halo
 pipeline ExtractProfile(text: String) -> UserProfile:
-  text |> ExtractionAgent.extract()
+  text |> Extractor.extract()
 ```
 
-If the LLM generates JSON that misses the `isPremium` field, the pipeline will **throw a Type Error** and halt, rather than passing malformed data to your backend. (To handle this automatically, use the `@retry` compiler directive).
+Field types:
+
+| Type | Accepts |
+|---|---|
+| `String` | a string |
+| `Number` | a finite number |
+| `Integer` | a whole number |
+| `Boolean` | `true` / `false` |
+| `Array`, `List`, `Array<T>` | a list (every item checked against `T`) |
+| `Object`, `JSON` | an object |
+| `Any` | anything |
+| another schema's name | an object matching that schema |
+
+Every field is required. Extra fields are allowed. The validator warns about unknown type names.
+
+## Enforcement
+
+When a pipeline is declared `-> SchemaName`, the runtime checks the output once the pipeline completes. A string output is parsed as JSON first. If the output doesn't match, the run throws a `SchemaValidationError` (code `SCHEMA_VALIDATION`) with the problem, for example `missing field "isPremium"`. If it matches, the output is returned parsed.
+
+`@retry` does not retry schema failures. To have the model fix bad JSON, add a `Require(JSON)` policy to the agent together with `@correct(n)`. That checks the answer at the agent call and asks the model again (see [Directives](./compiler-directives.md#correct)).
+
+Halted and paused runs aren't checked. A return type that isn't a declared schema, like `Result`, isn't checked either.
+
+## Parameters
+
+Parameter types (`text: String`, `items: List`, `user: UserProfile`) document the pipeline. They are **not** checked at runtime. The CLI requires that every parameter is given.
+
+There are no `Asset` or `Embedding` types. Multimodal inputs are not supported.

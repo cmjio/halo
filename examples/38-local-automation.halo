@@ -3,7 +3,7 @@
 // ============================================================
 // LEARN: How to build autonomous computer agents
 // WHY:   Agents are useless without real world capabilities.
-//        Langly natively supports bash execution and web parsing.
+//        Halo natively supports bash execution and web parsing.
 // ============================================================
 
 // 1. Define the real local tools
@@ -25,7 +25,7 @@ pipeline SummarizeWebsite(url: String) -> Result:
     |> Assistant.prompt("Summarize the following website content in one sentence.")
     
     // 3. We pass the summary into a real bash script to write it to disk!
-    |> Shell.execute(command: "echo '{{context.current}}' > .website_summary.txt")
+    |> Shell.execute(command: "echo {{context.current}} > .website_summary.txt")
     
     // 4. Verify it wrote correctly
     |> Shell.execute(command: "cat .website_summary.txt")
@@ -36,6 +36,7 @@ pipeline SummarizeWebsite(url: String) -> Result:
 // 1. The BrowserTool uses native Fetch to hit the URL.
 // 2. The BashTool uses `Bun.spawn` to securely execute commands 
 //    on your local machine and captures stdout/stderr.
-// 3. Langly automatically interpolates variables like `{{context.current}}`
-//    directly into the bash command before execution.
+// 3. Halo fills in variables like `{{context.current}}` before running the
+//    command, shell-quoting each value so text from a web page or a model
+//    can't run as a command. Don't wrap {{...}} in your own quotes.
 // ============================================================

@@ -4,7 +4,7 @@
 //          note generation while enforcing HIPAA compliance
 // ============================================================
 
-// --- Guardrails (HIPAA-grade) ---
+// --- Policies (HIPAA-grade) ---
 policy HIPAA          : Redact(SSN) & Redact(DateOfBirth) & Redact(MedicalRecordNumber)
 policy PHIProtection  : Redact(HealthData) & Redact(InsuranceID)
 policy ClinicalSafety : Block(DiagnosisClaim) & Block(PrescriptionAdvice)
@@ -16,7 +16,7 @@ tool EHR           : REST("api.epic.com/FHIR/R4", apiKey: Env.EPIC_KEY)
 tool InsuranceAPI  : REST("api.availity.com/v1/coverages", apiKey: Env.AVAILITY_KEY)
 tool ClinicSlack   : POST("hooks.slack.com/services/intake-alerts")
 
-// --- Memory ---
+// --- Store ---
 tool PatientHistory : VectorStore(Env.PINECONE_KEY, namespace: "patient-notes")
 tool ProtocolDB     : VectorStore(Env.PINECONE_KEY, namespace: "clinical-protocols")
 
@@ -29,15 +29,16 @@ schema IntakeResult {
   followup_actions : Array
 }
 
-// --- Minds ---
+// --- Agents ---
 agent IntakeBot [openai/gpt-4o-mini, temp: 0.0]
+  equips InsuranceAPI, EHR
   requires HIPAA, PHIProtection, ClinicalSafety, AuditTrail, CostGuard
 
 agent ClinicalScribe [anthropic/claude-sonnet-4, temp: 0.1]
   equips PatientHistory, ProtocolDB
   requires HIPAA, PHIProtection, ClinicalSafety, AuditTrail
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(3m)
 @retry(2, 10s)
 pipeline ProcessIntake(form: PatientForm) -> IntakeResult:

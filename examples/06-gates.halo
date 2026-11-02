@@ -2,6 +2,7 @@
 // STEP 6: Gates - Conditional Execution
 // Learn: Skip pipeline stages with `|? (condition)`
 // Condition uses variables or context from previous stages
+// `as name` stores a stage's result at context.data.name
 // ============================================================
 
 policy NoProfanity : Block(Profanity)
@@ -12,8 +13,8 @@ agent Greeter [gemini-3-1-pro, temp: 0.7]
 
 pipeline ConditionalHello(name: String, lang: String) -> Result:
   name
-    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.")
+    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.") as greeting
     // Gate: Only translate if target language is not English
     |? (lang != "en")
-    |> Greeter.prompt(context.data.greeting)
+    |> Greeter.prompt("Translate this greeting into the language with code {{lang}}:", context.data.greeting)
     |> System.Print()

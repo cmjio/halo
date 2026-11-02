@@ -1,10 +1,10 @@
 // ============================================================
 // ROLE: Software Engineer
-// PURPOSE: Auto-remediate production incidents with guardrails,
+// PURPOSE: Auto-remediate production incidents with policies,
 //          parallel diagnosis, and human sign-off for deploys
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy ChangeSafety    : Block(DestructiveOps) & Require(Approver)
 policy CostControl     : MaxSpend(5.00)
 
@@ -14,11 +14,11 @@ tool PagerDuty      : POST("api.pagerduty.com/incidents")
 tool SlackDev       : POST("hooks.slack.com/services/eng-oncall")
 tool RunbookDB      : PostgreSQL(Env.DB_URI, schema: "runbooks")
 
-// --- Memory ---
+// --- Store ---
 tool PastIncidents  : VectorStore(Env.PINECONE_KEY, namespace: "incident-history")
 tool CodebaseIndex  : VectorStore(Env.PINECONE_KEY, namespace: "code-embeddings")
 
-// --- Minds ---
+// --- Agents ---
 // Cheap triage — runs fast on every alert
 agent Triage [openai/gpt-4o-mini, temp: 0.0]
   system """
@@ -50,7 +50,7 @@ agent CodeReviewer [anthropic/claude-sonnet-4, temp: 0.0]
   equips GitHub
   requires ChangeSafety, CostControl
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(15m)
 @retry(2, 5s)
 pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
@@ -59,24 +59,24 @@ pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
     |> Triage.classify(
          context.data.incident.summary,
          context.data.incident.last_50_errors
-       )
+       ) as triage
 
     // Step 2: Fan-out — parallel investigation across three signals
     |* {
          Diagnoser.analyze_logs(
            context.data.incident.error_window,
            context.data.incident.service_name
-         ),
+         ) as diagnosis,
          Diagnoser.search_codebase(
            CodebaseIndex,
            context.data.incident.affected_endpoint,
            10
-         ),
+         ) as codebase,
          Diagnoser.search_history(
            PastIncidents,
            context.data.incident.summary,
            0.8
-         )
+         ) as history
        }
 
     // Step 3: Gate — only auto-fix if confidence > 85%
@@ -87,13 +87,13 @@ pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
          context.data.diagnosis,
          context.data.codebase.matches,
          context.data.incident.service_language
-       )
+       ) as fix
 
     // Step 5: Code review gate — must pass automated review
     |> CodeReviewer.review(
          context.data.fix.diff,
          context.data.incident.service_name
-       )
+       ) as review
 
     // Step 6: Gate on review approval
     |? (context.data.review.approved == true)
@@ -103,7 +103,7 @@ pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
          context.data.incident.repo,
          context.data.fix.title,
          context.data.fix.description
-       )
+       ) as github
 
     // Step 8: Human-in-the-loop — engineer must merge
     |! yield(
@@ -114,7 +114,7 @@ pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
        )
 
     // Step 9: Wait for engineer action
-    ~> listen(SlackDev.Reaction)
+    ~> listen(SlackDev.Reaction) as engineer
 
     // Step 10: Gate on merge confirmation
     |? (context.data.engineer.action == "merged")

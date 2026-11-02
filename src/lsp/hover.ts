@@ -1,127 +1,53 @@
-import { Hover, Position } from "vscode-languageserver";
+import { MarkupKind, type Hover, type Position } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
 
-function getWordAtPosition(sourceText: string, position: Position): string {
-  const lines = sourceText.split('\n');
-  const line = lines[position.line];
-  if (!line) return "";
-  
-  // Find word boundaries around position.character
-  const charPos = position.character;
-  let start = charPos;
-  while (start > 0 && /[\w]/.test(line.charAt(start - 1))) {
-    start--;
-  }
-  let end = charPos;
-  while (end < line.length && /[\w]/.test(line.charAt(end))) {
-    end++;
-  }
+const OPERATORS: Record<string, string> = {
+  "|>": "**Pipe**: run a call on the current value.",
+  "|?": "**Gate** `|? (cond)`: stop the run unless the condition holds.  \n**Branch** `|? { (cond) => A(), else => B() }`: run the first matching arm.",
+  "|!": "**Interrupt** `|! yield(...)`: ask a human. With no handler, the run pauses until `signal()` / `halo resume`.",
+  "|*": "**Fan-out** `|* { A(), B() }`: run calls in parallel.  \n**Each** `|* each(item in list) => Call()`: one call per item.",
+  "~>": "**Listen** `~> listen(Source.Event)`: wait for an external event.",
+  "|<>": "**Loop** `|<> loop(Agent, \"cond\", max: 3)`: while the condition holds, go back to the agent's stage.",
+};
+
+function wordAt(line: string, character: number): string {
+  const op = line.slice(Math.max(0, character - 2), character + 3).match(/\|<>|\|>|\|\?|\|!|\|\*|~>/);
+  if (op) return op[0];
+  let start = character;
+  while (start > 0 && /\w/.test(line.charAt(start - 1))) start--;
+  let end = character;
+  while (end < line.length && /\w/.test(line.charAt(end))) end++;
   return line.slice(start, end);
 }
 
-function extractDescription(sourceText: string, searchWord: string, type: string): string {
-    const lines = sourceText.split('\n');
-    let targetLine = -1;
-    // Find the declaration line
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]!;
-        if (line.includes(`${type} ${searchWord}`) || 
-            line.includes(`${type} ${searchWord}(`) || 
-            line.includes(`${type} ${searchWord} `) || 
-            line.includes(`${type} ${searchWord}:`) || 
-            line.includes(`${type} ${searchWord}[`)) {
-            targetLine = i;
-            break;
-        }
-    }
-
-    if (targetLine === -1) return "";
-
-    const description: string[] = [];
-    for (let i = targetLine - 1; i >= 0; i--) {
-        const line = lines[i]!.trim();
-        if (line.startsWith('//')) {
-            // Remove the '//' and any leading/trailing whitespace or '=' chars used for dividers
-            const text = line.replace(/^\/\/\s*/, '').replace(/^=+\s*$/, '').trim();
-            if (text) {
-              description.unshift(text);
-            }
-        } else if (line === '') {
-            // Stop at blank lines
-            continue;
-        } else {
-            break;
-        }
-    }
-    return description.join('\n');
-}
-
+/** Describe the declaration (or operator) under the cursor. */
 export function getHover(sourceText: string, position: Position): Hover | null {
-  const word = getWordAtPosition(sourceText, position);
+  const word = wordAt(sourceText.split("\n")[position.line] ?? "", position.character);
   if (!word) return null;
+  const md = (value: string): Hover => ({ contents: { kind: MarkupKind.Markdown, value } });
+  if (OPERATORS[word]) return md(OPERATORS[word]);
 
   const ast = parse(sourceText);
-
-  // Check tools
-  const tool = ast.tools.find(t => t.name === word);
-  if (tool) {
-    const desc = extractDescription(sourceText, word, 'tool');
-    return {
-      contents: {
-        kind: 'markdown',
-        value: `\`\`\`halo\ntool ${tool.name}: ${tool.provider}(${tool.args.join(", ")})\n\`\`\`\n\n${desc ? desc : '*Tool Definition*'}`
-      }
-    };
-  }
-
-  // Check agents
-  const agent = ast.agents.find(m => m.name === word);
+  const agent = ast.agents.find((a) => a.name === word);
   if (agent) {
-    const desc = extractDescription(sourceText, word, 'agent');
-    return {
-      contents: {
-        kind: 'markdown',
-        value: `\`\`\`halo\nmind ${agent.name} [${agent.modelId}]\n\`\`\`\n\n${desc ? desc : '*Agent Definition*'}`
-      }
-    };
+    const lines = [`**agent ${agent.name}** — \`${agent.modelId}\``];
+    const params = Object.entries(agent.params).map(([k, v]) => `${k}: ${v}`);
+    if (params.length) lines.push(params.join(", "));
+    if (agent.system) lines.push(`> ${agent.system.split("\n").join("\n> ")}`);
+    if (agent.equips?.length) lines.push(`equips ${agent.equips.join(", ")}`);
+    if (agent.requires?.length) lines.push(`requires ${agent.requires.join(", ")}`);
+    return md(lines.join("\n\n"));
   }
-
-  // Check pipelines
-  const pipeline = ast.pipelines.find(s => s.name === word);
+  const tool = [...ast.tools, ...ast.stores].find((t) => t.name === word);
+  if (tool) return md(`**tool ${tool.name}** : \`${tool.provider}(${[...tool.args, ...Object.entries(tool.namedArgs).map(([k, v]) => `${k}: ${v}`)].join(", ")})\``);
+  const policy = ast.policies.find((p) => p.name === word);
+  if (policy) return md(`**policy ${policy.name}**\n\n${policy.rules.map((r) => `- \`${r.name}(${r.args.join(", ")})\``).join("\n")}`);
+  const pipeline = ast.pipelines.find((p) => p.name === word);
   if (pipeline) {
-    const desc = extractDescription(sourceText, word, 'pipeline');
-    const params = pipeline.params.map(p => `${p.name}: ${p.type}`).join(', ');
-    return {
-      contents: {
-        kind: 'markdown',
-        value: `\`\`\`halo\nstream ${pipeline.name}(${params}) -> ${pipeline.returnType}\n\`\`\`\n\n${desc ? desc : '*Pipeline Definition*'}`
-      }
-    };
+    const sig = `${pipeline.name}(${pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ")})${pipeline.returnType ? ` -> ${pipeline.returnType}` : ""}`;
+    return md(`**pipeline** \`${sig}\` — ${pipeline.pipeline.length} stage(s)`);
   }
-
-  // Check schemas
-  const schema = ast.schemas.find(s => s.name === word);
-  if (schema) {
-    const desc = extractDescription(sourceText, word, 'schema');
-    return {
-      contents: {
-        kind: 'markdown',
-        value: `\`\`\`halo\nstruct ${schema.name}\n\`\`\`\n\n${desc ? desc : '*Data Structure*'}`
-      }
-    };
-  }
-  
-  // Check policies
-  const policy = ast.policies.find(g => g.name === word);
-  if (policy) {
-    const desc = extractDescription(sourceText, word, 'policy');
-    return {
-      contents: {
-        kind: 'markdown',
-        value: `\`\`\`halo\nguardrail ${policy.name}\n\`\`\`\n\n${desc ? desc : '*Policy Rule*'}`
-      }
-    };
-  }
-
+  const schema = ast.schemas.find((s) => s.name === word);
+  if (schema) return md(`**schema ${schema.name}**\n\n${schema.fields.map((f) => `- ${f.name}: \`${f.type}\``).join("\n")}`);
   return null;
 }

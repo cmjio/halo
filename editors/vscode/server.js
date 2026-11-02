@@ -18,13 +18,15 @@ var __toESM = (mod, isNodeMode, target) => {
       return cached;
   }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
-        enumerable: true
-      });
+  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  if (mod && typeof mod === "object" || typeof mod === "function") {
+    for (let key of __getOwnPropNames(mod))
+      if (!__hasOwnProp.call(to, key))
+        __defProp(to, key, {
+          get: __accessProp.bind(mod, key),
+          enumerable: true
+        });
+  }
   if (canCache)
     cache.set(mod, to);
   return to;
@@ -33,7 +35,7 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // node_modules/vscode-languageserver/lib/common/utils/is.js
-var require_is = __commonJS((exports) => {
+var require_is = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.thenable = exports.typedArray = exports.stringArray = exports.array = exports.func = exports.error = exports.number = exports.string = exports.boolean = undefined;
   function boolean(value) {
@@ -75,7 +77,7 @@ var require_is = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/is.js
-var require_is2 = __commonJS((exports) => {
+var require_is2 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.stringArray = exports.array = exports.func = exports.error = exports.number = exports.string = exports.boolean = undefined;
   function boolean(value) {
@@ -109,27 +111,27 @@ var require_is2 = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/messages.js
-var require_messages = __commonJS((exports) => {
+var require_messages = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Message = exports.NotificationType9 = exports.NotificationType8 = exports.NotificationType7 = exports.NotificationType6 = exports.NotificationType5 = exports.NotificationType4 = exports.NotificationType3 = exports.NotificationType2 = exports.NotificationType1 = exports.NotificationType0 = exports.NotificationType = exports.RequestType9 = exports.RequestType8 = exports.RequestType7 = exports.RequestType6 = exports.RequestType5 = exports.RequestType4 = exports.RequestType3 = exports.RequestType2 = exports.RequestType1 = exports.RequestType = exports.RequestType0 = exports.AbstractMessageSignature = exports.ParameterStructures = exports.ResponseError = exports.ErrorCodes = undefined;
   var is = require_is2();
   var ErrorCodes;
-  (function(ErrorCodes2) {
-    ErrorCodes2.ParseError = -32700;
-    ErrorCodes2.InvalidRequest = -32600;
-    ErrorCodes2.MethodNotFound = -32601;
-    ErrorCodes2.InvalidParams = -32602;
-    ErrorCodes2.InternalError = -32603;
-    ErrorCodes2.jsonrpcReservedErrorRangeStart = -32099;
-    ErrorCodes2.serverErrorStart = -32099;
-    ErrorCodes2.MessageWriteError = -32099;
-    ErrorCodes2.MessageReadError = -32098;
-    ErrorCodes2.PendingResponseRejected = -32097;
-    ErrorCodes2.ConnectionInactive = -32096;
-    ErrorCodes2.ServerNotInitialized = -32002;
-    ErrorCodes2.UnknownErrorCode = -32001;
-    ErrorCodes2.jsonrpcReservedErrorRangeEnd = -32000;
-    ErrorCodes2.serverErrorEnd = -32000;
+  (function(ErrorCodes) {
+    ErrorCodes.ParseError = -32700;
+    ErrorCodes.InvalidRequest = -32600;
+    ErrorCodes.MethodNotFound = -32601;
+    ErrorCodes.InvalidParams = -32602;
+    ErrorCodes.InternalError = -32603;
+    ErrorCodes.jsonrpcReservedErrorRangeStart = -32099;
+    ErrorCodes.serverErrorStart = -32099;
+    ErrorCodes.MessageWriteError = -32099;
+    ErrorCodes.MessageReadError = -32098;
+    ErrorCodes.PendingResponseRejected = -32097;
+    ErrorCodes.ConnectionInactive = -32096;
+    ErrorCodes.ServerNotInitialized = -32002;
+    ErrorCodes.UnknownErrorCode = -32001;
+    ErrorCodes.jsonrpcReservedErrorRangeEnd = -32000;
+    ErrorCodes.serverErrorEnd = -32000;
   })(ErrorCodes || (exports.ErrorCodes = ErrorCodes = {}));
 
   class ResponseError extends Error {
@@ -349,37 +351,37 @@ var require_messages = __commonJS((exports) => {
   }
   exports.NotificationType9 = NotificationType9;
   var Message;
-  (function(Message2) {
+  (function(Message) {
     function isRequest(message) {
       const candidate = message;
       return candidate && is.string(candidate.method) && (is.string(candidate.id) || is.number(candidate.id));
     }
-    Message2.isRequest = isRequest;
+    Message.isRequest = isRequest;
     function isNotification(message) {
       const candidate = message;
       return candidate && is.string(candidate.method) && message.id === undefined;
     }
-    Message2.isNotification = isNotification;
+    Message.isNotification = isNotification;
     function isResponse(message) {
       const candidate = message;
       return candidate && (candidate.result !== undefined || !!candidate.error) && (is.string(candidate.id) || is.number(candidate.id) || candidate.id === null);
     }
-    Message2.isResponse = isResponse;
+    Message.isResponse = isResponse;
   })(Message || (exports.Message = Message = {}));
 });
 
 // node_modules/vscode-jsonrpc/lib/common/linkedMap.js
-var require_linkedMap = __commonJS((exports) => {
+var require_linkedMap = __commonJS(function(exports) {
   var _a;
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.LRUCache = exports.LinkedMap = exports.Touch = undefined;
   var Touch;
-  (function(Touch2) {
-    Touch2.None = 0;
-    Touch2.First = 1;
-    Touch2.AsOld = Touch2.First;
-    Touch2.Last = 2;
-    Touch2.AsNew = Touch2.Last;
+  (function(Touch) {
+    Touch.None = 0;
+    Touch.First = 1;
+    Touch.AsOld = Touch.First;
+    Touch.Last = 2;
+    Touch.AsNew = Touch.Last;
   })(Touch || (exports.Touch = Touch = {}));
 
   class LinkedMap {
@@ -738,22 +740,22 @@ var require_linkedMap = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/disposable.js
-var require_disposable = __commonJS((exports) => {
+var require_disposable = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Disposable = undefined;
   var Disposable;
-  (function(Disposable2) {
+  (function(Disposable) {
     function create(func) {
       return {
         dispose: func
       };
     }
-    Disposable2.create = create;
+    Disposable.create = create;
   })(Disposable || (exports.Disposable = Disposable = {}));
 });
 
 // node_modules/vscode-jsonrpc/lib/common/ral.js
-var require_ral = __commonJS((exports) => {
+var require_ral = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var _ral;
   function RAL() {
@@ -762,27 +764,27 @@ var require_ral = __commonJS((exports) => {
     }
     return _ral;
   }
-  (function(RAL2) {
+  (function(RAL) {
     function install(ral) {
       if (ral === undefined) {
         throw new Error(`No runtime abstraction layer provided`);
       }
       _ral = ral;
     }
-    RAL2.install = install;
+    RAL.install = install;
   })(RAL || (RAL = {}));
   exports.default = RAL;
 });
 
 // node_modules/vscode-jsonrpc/lib/common/events.js
-var require_events = __commonJS((exports) => {
+var require_events = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Emitter = exports.Event = undefined;
   var ral_1 = require_ral();
   var Event;
-  (function(Event2) {
+  (function(Event) {
     const _disposable = { dispose() {} };
-    Event2.None = function() {
+    Event.None = function() {
       return _disposable;
     };
   })(Event || (exports.Event = Event = {}));
@@ -893,27 +895,27 @@ var require_events = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/cancellation.js
-var require_cancellation = __commonJS((exports) => {
+var require_cancellation = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.CancellationTokenSource = exports.CancellationToken = undefined;
   var ral_1 = require_ral();
   var Is = require_is2();
   var events_1 = require_events();
   var CancellationToken;
-  (function(CancellationToken2) {
-    CancellationToken2.None = Object.freeze({
+  (function(CancellationToken) {
+    CancellationToken.None = Object.freeze({
       isCancellationRequested: false,
       onCancellationRequested: events_1.Event.None
     });
-    CancellationToken2.Cancelled = Object.freeze({
+    CancellationToken.Cancelled = Object.freeze({
       isCancellationRequested: true,
       onCancellationRequested: events_1.Event.None
     });
     function is(value) {
       const candidate = value;
-      return candidate && (candidate === CancellationToken2.None || candidate === CancellationToken2.Cancelled || Is.boolean(candidate.isCancellationRequested) && !!candidate.onCancellationRequested);
+      return candidate && (candidate === CancellationToken.None || candidate === CancellationToken.Cancelled || Is.boolean(candidate.isCancellationRequested) && !!candidate.onCancellationRequested);
     }
-    CancellationToken2.is = is;
+    CancellationToken.is = is;
   })(CancellationToken || (exports.CancellationToken = CancellationToken = {}));
   var shortcutEvent = Object.freeze(function(callback, context) {
     const handle = (0, ral_1.default)().timer.setTimeout(callback.bind(context), 0);
@@ -981,14 +983,14 @@ var require_cancellation = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/sharedArrayCancellation.js
-var require_sharedArrayCancellation = __commonJS((exports) => {
+var require_sharedArrayCancellation = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.SharedArrayReceiverStrategy = exports.SharedArraySenderStrategy = undefined;
   var cancellation_1 = require_cancellation();
   var CancellationState;
-  (function(CancellationState2) {
-    CancellationState2.Continue = 0;
-    CancellationState2.Cancelled = 1;
+  (function(CancellationState) {
+    CancellationState.Continue = 0;
+    CancellationState.Cancelled = 1;
   })(CancellationState || (CancellationState = {}));
 
   class SharedArraySenderStrategy {
@@ -1058,7 +1060,7 @@ var require_sharedArrayCancellation = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/semaphore.js
-var require_semaphore = __commonJS((exports) => {
+var require_semaphore = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Semaphore = undefined;
   var ral_1 = require_ral();
@@ -1124,7 +1126,7 @@ var require_semaphore = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/messageReader.js
-var require_messageReader = __commonJS((exports) => {
+var require_messageReader = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ReadableStreamMessageReader = exports.AbstractMessageReader = exports.MessageReader = undefined;
   var ral_1 = require_ral();
@@ -1132,12 +1134,12 @@ var require_messageReader = __commonJS((exports) => {
   var events_1 = require_events();
   var semaphore_1 = require_semaphore();
   var MessageReader;
-  (function(MessageReader2) {
+  (function(MessageReader) {
     function is(value) {
       let candidate = value;
       return candidate && Is.func(candidate.listen) && Is.func(candidate.dispose) && Is.func(candidate.onError) && Is.func(candidate.onClose) && Is.func(candidate.onPartialMessage);
     }
-    MessageReader2.is = is;
+    MessageReader.is = is;
   })(MessageReader || (exports.MessageReader = MessageReader = {}));
 
   class AbstractMessageReader {
@@ -1178,7 +1180,7 @@ var require_messageReader = __commonJS((exports) => {
   }
   exports.AbstractMessageReader = AbstractMessageReader;
   var ResolvedMessageReaderOptions;
-  (function(ResolvedMessageReaderOptions2) {
+  (function(ResolvedMessageReaderOptions) {
     function fromOptions(options) {
       let charset;
       let result;
@@ -1215,7 +1217,7 @@ var require_messageReader = __commonJS((exports) => {
       }
       return { charset, contentDecoder, contentDecoders, contentTypeDecoder, contentTypeDecoders };
     }
-    ResolvedMessageReaderOptions2.fromOptions = fromOptions;
+    ResolvedMessageReaderOptions.fromOptions = fromOptions;
   })(ResolvedMessageReaderOptions || (ResolvedMessageReaderOptions = {}));
 
   class ReadableStreamMessageReader extends AbstractMessageReader {
@@ -1312,7 +1314,7 @@ ${JSON.stringify(Object.fromEntries(headers))}`));
 });
 
 // node_modules/vscode-jsonrpc/lib/common/messageWriter.js
-var require_messageWriter = __commonJS((exports) => {
+var require_messageWriter = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.WriteableStreamMessageWriter = exports.AbstractMessageWriter = exports.MessageWriter = undefined;
   var ral_1 = require_ral();
@@ -1323,12 +1325,12 @@ var require_messageWriter = __commonJS((exports) => {
   var CRLF = `\r
 `;
   var MessageWriter;
-  (function(MessageWriter2) {
+  (function(MessageWriter) {
     function is(value) {
       let candidate = value;
       return candidate && Is.func(candidate.dispose) && Is.func(candidate.onClose) && Is.func(candidate.onError) && Is.func(candidate.write);
     }
-    MessageWriter2.is = is;
+    MessageWriter.is = is;
   })(MessageWriter || (exports.MessageWriter = MessageWriter = {}));
 
   class AbstractMessageWriter {
@@ -1362,7 +1364,7 @@ var require_messageWriter = __commonJS((exports) => {
   }
   exports.AbstractMessageWriter = AbstractMessageWriter;
   var ResolvedMessageWriterOptions;
-  (function(ResolvedMessageWriterOptions2) {
+  (function(ResolvedMessageWriterOptions) {
     function fromOptions(options) {
       if (options === undefined || typeof options === "string") {
         return { charset: options ?? "utf-8", contentTypeEncoder: (0, ral_1.default)().applicationJson.encoder };
@@ -1370,7 +1372,7 @@ var require_messageWriter = __commonJS((exports) => {
         return { charset: options.charset ?? "utf-8", contentEncoder: options.contentEncoder, contentTypeEncoder: options.contentTypeEncoder ?? (0, ral_1.default)().applicationJson.encoder };
       }
     }
-    ResolvedMessageWriterOptions2.fromOptions = fromOptions;
+    ResolvedMessageWriterOptions.fromOptions = fromOptions;
   })(ResolvedMessageWriterOptions || (ResolvedMessageWriterOptions = {}));
 
   class WriteableStreamMessageWriter extends AbstractMessageWriter {
@@ -1424,7 +1426,7 @@ var require_messageWriter = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/common/messageBuffer.js
-var require_messageBuffer = __commonJS((exports) => {
+var require_messageBuffer = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.AbstractMessageBuffer = undefined;
   var CR = 13;
@@ -1541,10 +1543,10 @@ ${header}`);
       }
       if (this._chunks[0].byteLength > byteCount) {
         const chunk = this._chunks[0];
-        const result2 = this.asNative(chunk, byteCount);
+        const result = this.asNative(chunk, byteCount);
         this._chunks[0] = chunk.slice(byteCount);
         this._totalLength -= byteCount;
-        return result2;
+        return result;
       }
       const result = this.allocNative(byteCount);
       let resultOffset = 0;
@@ -1573,7 +1575,7 @@ ${header}`);
 });
 
 // node_modules/vscode-jsonrpc/lib/common/connection.js
-var require_connection = __commonJS((exports) => {
+var require_connection = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.createMessageConnection = exports.ConnectionOptions = exports.MessageStrategy = exports.CancellationStrategy = exports.CancellationSenderStrategy = exports.CancellationReceiverStrategy = exports.RequestCancellationReceiverStrategy = exports.IdCancellationReceiverStrategy = exports.ConnectionStrategy = exports.ConnectionError = exports.ConnectionErrors = exports.LogTraceNotification = exports.SetTraceNotification = exports.TraceFormat = exports.TraceValues = exports.Trace = exports.NullLogger = exports.ProgressType = exports.ProgressToken = undefined;
   var ral_1 = require_ral();
@@ -1583,19 +1585,19 @@ var require_connection = __commonJS((exports) => {
   var events_1 = require_events();
   var cancellation_1 = require_cancellation();
   var CancelNotification;
-  (function(CancelNotification2) {
-    CancelNotification2.type = new messages_1.NotificationType("$/cancelRequest");
+  (function(CancelNotification) {
+    CancelNotification.type = new messages_1.NotificationType("$/cancelRequest");
   })(CancelNotification || (CancelNotification = {}));
   var ProgressToken;
-  (function(ProgressToken2) {
+  (function(ProgressToken) {
     function is(value) {
       return typeof value === "string" || typeof value === "number";
     }
-    ProgressToken2.is = is;
+    ProgressToken.is = is;
   })(ProgressToken || (exports.ProgressToken = ProgressToken = {}));
   var ProgressNotification;
-  (function(ProgressNotification2) {
-    ProgressNotification2.type = new messages_1.NotificationType("$/progress");
+  (function(ProgressNotification) {
+    ProgressNotification.type = new messages_1.NotificationType("$/progress");
   })(ProgressNotification || (ProgressNotification = {}));
 
   class ProgressType {
@@ -1603,11 +1605,11 @@ var require_connection = __commonJS((exports) => {
   }
   exports.ProgressType = ProgressType;
   var StarRequestHandler;
-  (function(StarRequestHandler2) {
+  (function(StarRequestHandler) {
     function is(value) {
       return Is.func(value);
     }
-    StarRequestHandler2.is = is;
+    StarRequestHandler.is = is;
   })(StarRequestHandler || (StarRequestHandler = {}));
   exports.NullLogger = Object.freeze({
     error: () => {},
@@ -1616,87 +1618,87 @@ var require_connection = __commonJS((exports) => {
     log: () => {}
   });
   var Trace;
-  (function(Trace2) {
-    Trace2[Trace2["Off"] = 0] = "Off";
-    Trace2[Trace2["Messages"] = 1] = "Messages";
-    Trace2[Trace2["Compact"] = 2] = "Compact";
-    Trace2[Trace2["Verbose"] = 3] = "Verbose";
+  (function(Trace) {
+    Trace[Trace["Off"] = 0] = "Off";
+    Trace[Trace["Messages"] = 1] = "Messages";
+    Trace[Trace["Compact"] = 2] = "Compact";
+    Trace[Trace["Verbose"] = 3] = "Verbose";
   })(Trace || (exports.Trace = Trace = {}));
   var TraceValues;
-  (function(TraceValues2) {
-    TraceValues2.Off = "off";
-    TraceValues2.Messages = "messages";
-    TraceValues2.Compact = "compact";
-    TraceValues2.Verbose = "verbose";
+  (function(TraceValues) {
+    TraceValues.Off = "off";
+    TraceValues.Messages = "messages";
+    TraceValues.Compact = "compact";
+    TraceValues.Verbose = "verbose";
   })(TraceValues || (exports.TraceValues = TraceValues = {}));
-  (function(Trace2) {
+  (function(Trace) {
     function fromString(value) {
       if (!Is.string(value)) {
-        return Trace2.Off;
+        return Trace.Off;
       }
       value = value.toLowerCase();
       switch (value) {
         case "off":
-          return Trace2.Off;
+          return Trace.Off;
         case "messages":
-          return Trace2.Messages;
+          return Trace.Messages;
         case "compact":
-          return Trace2.Compact;
+          return Trace.Compact;
         case "verbose":
-          return Trace2.Verbose;
+          return Trace.Verbose;
         default:
-          return Trace2.Off;
+          return Trace.Off;
       }
     }
-    Trace2.fromString = fromString;
+    Trace.fromString = fromString;
     function toString(value) {
       switch (value) {
-        case Trace2.Off:
+        case Trace.Off:
           return "off";
-        case Trace2.Messages:
+        case Trace.Messages:
           return "messages";
-        case Trace2.Compact:
+        case Trace.Compact:
           return "compact";
-        case Trace2.Verbose:
+        case Trace.Verbose:
           return "verbose";
         default:
           return "off";
       }
     }
-    Trace2.toString = toString;
+    Trace.toString = toString;
   })(Trace || (exports.Trace = Trace = {}));
   var TraceFormat;
-  (function(TraceFormat2) {
-    TraceFormat2["Text"] = "text";
-    TraceFormat2["JSON"] = "json";
+  (function(TraceFormat) {
+    TraceFormat["Text"] = "text";
+    TraceFormat["JSON"] = "json";
   })(TraceFormat || (exports.TraceFormat = TraceFormat = {}));
-  (function(TraceFormat2) {
+  (function(TraceFormat) {
     function fromString(value) {
       if (!Is.string(value)) {
-        return TraceFormat2.Text;
+        return TraceFormat.Text;
       }
       value = value.toLowerCase();
       if (value === "json") {
-        return TraceFormat2.JSON;
+        return TraceFormat.JSON;
       } else {
-        return TraceFormat2.Text;
+        return TraceFormat.Text;
       }
     }
-    TraceFormat2.fromString = fromString;
+    TraceFormat.fromString = fromString;
   })(TraceFormat || (exports.TraceFormat = TraceFormat = {}));
   var SetTraceNotification;
-  (function(SetTraceNotification2) {
-    SetTraceNotification2.type = new messages_1.NotificationType("$/setTrace");
+  (function(SetTraceNotification) {
+    SetTraceNotification.type = new messages_1.NotificationType("$/setTrace");
   })(SetTraceNotification || (exports.SetTraceNotification = SetTraceNotification = {}));
   var LogTraceNotification;
-  (function(LogTraceNotification2) {
-    LogTraceNotification2.type = new messages_1.NotificationType("$/logTrace");
+  (function(LogTraceNotification) {
+    LogTraceNotification.type = new messages_1.NotificationType("$/logTrace");
   })(LogTraceNotification || (exports.LogTraceNotification = LogTraceNotification = {}));
   var ConnectionErrors;
-  (function(ConnectionErrors2) {
-    ConnectionErrors2[ConnectionErrors2["Closed"] = 1] = "Closed";
-    ConnectionErrors2[ConnectionErrors2["Disposed"] = 2] = "Disposed";
-    ConnectionErrors2[ConnectionErrors2["AlreadyListening"] = 3] = "AlreadyListening";
+  (function(ConnectionErrors) {
+    ConnectionErrors[ConnectionErrors["Closed"] = 1] = "Closed";
+    ConnectionErrors[ConnectionErrors["Disposed"] = 2] = "Disposed";
+    ConnectionErrors[ConnectionErrors["AlreadyListening"] = 3] = "AlreadyListening";
   })(ConnectionErrors || (exports.ConnectionErrors = ConnectionErrors = {}));
 
   class ConnectionError extends Error {
@@ -1708,32 +1710,32 @@ var require_connection = __commonJS((exports) => {
   }
   exports.ConnectionError = ConnectionError;
   var ConnectionStrategy;
-  (function(ConnectionStrategy2) {
+  (function(ConnectionStrategy) {
     function is(value) {
       const candidate = value;
       return candidate && Is.func(candidate.cancelUndispatched);
     }
-    ConnectionStrategy2.is = is;
+    ConnectionStrategy.is = is;
   })(ConnectionStrategy || (exports.ConnectionStrategy = ConnectionStrategy = {}));
   var IdCancellationReceiverStrategy;
-  (function(IdCancellationReceiverStrategy2) {
+  (function(IdCancellationReceiverStrategy) {
     function is(value) {
       const candidate = value;
       return candidate && (candidate.kind === undefined || candidate.kind === "id") && Is.func(candidate.createCancellationTokenSource) && (candidate.dispose === undefined || Is.func(candidate.dispose));
     }
-    IdCancellationReceiverStrategy2.is = is;
+    IdCancellationReceiverStrategy.is = is;
   })(IdCancellationReceiverStrategy || (exports.IdCancellationReceiverStrategy = IdCancellationReceiverStrategy = {}));
   var RequestCancellationReceiverStrategy;
-  (function(RequestCancellationReceiverStrategy2) {
+  (function(RequestCancellationReceiverStrategy) {
     function is(value) {
       const candidate = value;
       return candidate && candidate.kind === "request" && Is.func(candidate.createCancellationTokenSource) && (candidate.dispose === undefined || Is.func(candidate.dispose));
     }
-    RequestCancellationReceiverStrategy2.is = is;
+    RequestCancellationReceiverStrategy.is = is;
   })(RequestCancellationReceiverStrategy || (exports.RequestCancellationReceiverStrategy = RequestCancellationReceiverStrategy = {}));
   var CancellationReceiverStrategy;
-  (function(CancellationReceiverStrategy2) {
-    CancellationReceiverStrategy2.Message = Object.freeze({
+  (function(CancellationReceiverStrategy) {
+    CancellationReceiverStrategy.Message = Object.freeze({
       createCancellationTokenSource(_) {
         return new cancellation_1.CancellationTokenSource;
       }
@@ -1741,11 +1743,11 @@ var require_connection = __commonJS((exports) => {
     function is(value) {
       return IdCancellationReceiverStrategy.is(value) || RequestCancellationReceiverStrategy.is(value);
     }
-    CancellationReceiverStrategy2.is = is;
+    CancellationReceiverStrategy.is = is;
   })(CancellationReceiverStrategy || (exports.CancellationReceiverStrategy = CancellationReceiverStrategy = {}));
   var CancellationSenderStrategy;
-  (function(CancellationSenderStrategy2) {
-    CancellationSenderStrategy2.Message = Object.freeze({
+  (function(CancellationSenderStrategy) {
+    CancellationSenderStrategy.Message = Object.freeze({
       sendCancellation(conn, id) {
         return conn.sendNotification(CancelNotification.type, { id });
       },
@@ -1755,11 +1757,11 @@ var require_connection = __commonJS((exports) => {
       const candidate = value;
       return candidate && Is.func(candidate.sendCancellation) && Is.func(candidate.cleanup);
     }
-    CancellationSenderStrategy2.is = is;
+    CancellationSenderStrategy.is = is;
   })(CancellationSenderStrategy || (exports.CancellationSenderStrategy = CancellationSenderStrategy = {}));
   var CancellationStrategy;
-  (function(CancellationStrategy2) {
-    CancellationStrategy2.Message = Object.freeze({
+  (function(CancellationStrategy) {
+    CancellationStrategy.Message = Object.freeze({
       receiver: CancellationReceiverStrategy.Message,
       sender: CancellationSenderStrategy.Message
     });
@@ -1767,30 +1769,30 @@ var require_connection = __commonJS((exports) => {
       const candidate = value;
       return candidate && CancellationReceiverStrategy.is(candidate.receiver) && CancellationSenderStrategy.is(candidate.sender);
     }
-    CancellationStrategy2.is = is;
+    CancellationStrategy.is = is;
   })(CancellationStrategy || (exports.CancellationStrategy = CancellationStrategy = {}));
   var MessageStrategy;
-  (function(MessageStrategy2) {
+  (function(MessageStrategy) {
     function is(value) {
       const candidate = value;
       return candidate && Is.func(candidate.handleMessage);
     }
-    MessageStrategy2.is = is;
+    MessageStrategy.is = is;
   })(MessageStrategy || (exports.MessageStrategy = MessageStrategy = {}));
   var ConnectionOptions;
-  (function(ConnectionOptions2) {
+  (function(ConnectionOptions) {
     function is(value) {
       const candidate = value;
       return candidate && (CancellationStrategy.is(candidate.cancellationStrategy) || ConnectionStrategy.is(candidate.connectionStrategy) || MessageStrategy.is(candidate.messageStrategy));
     }
-    ConnectionOptions2.is = is;
+    ConnectionOptions.is = is;
   })(ConnectionOptions || (exports.ConnectionOptions = ConnectionOptions = {}));
   var ConnectionState;
-  (function(ConnectionState2) {
-    ConnectionState2[ConnectionState2["New"] = 1] = "New";
-    ConnectionState2[ConnectionState2["Listening"] = 2] = "Listening";
-    ConnectionState2[ConnectionState2["Closed"] = 3] = "Closed";
-    ConnectionState2[ConnectionState2["Disposed"] = 4] = "Disposed";
+  (function(ConnectionState) {
+    ConnectionState[ConnectionState["New"] = 1] = "New";
+    ConnectionState[ConnectionState["Listening"] = 2] = "Listening";
+    ConnectionState[ConnectionState["Closed"] = 3] = "Closed";
+    ConnectionState[ConnectionState["Disposed"] = 4] = "Disposed";
   })(ConnectionState || (ConnectionState = {}));
   function createMessageConnection(messageReader, messageWriter, _logger, options) {
     const logger = _logger !== undefined ? _logger : exports.NullLogger;
@@ -1943,7 +1945,7 @@ var require_connection = __commonJS((exports) => {
       if (isDisposed()) {
         return;
       }
-      function reply(resultOrError, method, startTime2) {
+      function reply(resultOrError, method, startTime) {
         const message = {
           jsonrpc: version,
           id: requestMessage.id
@@ -1953,19 +1955,19 @@ var require_connection = __commonJS((exports) => {
         } else {
           message.result = resultOrError === undefined ? null : resultOrError;
         }
-        traceSendingResponse(message, method, startTime2);
+        traceSendingResponse(message, method, startTime);
         messageWriter.write(message).catch(() => logger.error(`Sending response failed.`));
       }
-      function replyError(error, method, startTime2) {
+      function replyError(error, method, startTime) {
         const message = {
           jsonrpc: version,
           id: requestMessage.id,
           error: error.toJson()
         };
-        traceSendingResponse(message, method, startTime2);
+        traceSendingResponse(message, method, startTime);
         messageWriter.write(message).catch(() => logger.error(`Sending response failed.`));
       }
-      function replySuccess(result, method, startTime2) {
+      function replySuccess(result, method, startTime) {
         if (result === undefined) {
           result = null;
         }
@@ -1974,7 +1976,7 @@ var require_connection = __commonJS((exports) => {
           id: requestMessage.id,
           result
         };
-        traceSendingResponse(message, method, startTime2);
+        traceSendingResponse(message, method, startTime);
         messageWriter.write(message).catch(() => logger.error(`Sending response failed.`));
       }
       traceReceivedRequest(requestMessage);
@@ -2702,7 +2704,7 @@ ${JSON.stringify(message, null, 4)}`);
 });
 
 // node_modules/vscode-jsonrpc/lib/common/api.js
-var require_api = __commonJS((exports) => {
+var require_api = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ProgressType = exports.ProgressToken = exports.createMessageConnection = exports.NullLogger = exports.ConnectionOptions = exports.ConnectionStrategy = exports.AbstractMessageBuffer = exports.WriteableStreamMessageWriter = exports.AbstractMessageWriter = exports.MessageWriter = exports.ReadableStreamMessageReader = exports.AbstractMessageReader = exports.MessageReader = exports.SharedArrayReceiverStrategy = exports.SharedArraySenderStrategy = exports.CancellationToken = exports.CancellationTokenSource = exports.Emitter = exports.Event = exports.Disposable = exports.LRUCache = exports.Touch = exports.LinkedMap = exports.ParameterStructures = exports.NotificationType9 = exports.NotificationType8 = exports.NotificationType7 = exports.NotificationType6 = exports.NotificationType5 = exports.NotificationType4 = exports.NotificationType3 = exports.NotificationType2 = exports.NotificationType1 = exports.NotificationType0 = exports.NotificationType = exports.ErrorCodes = exports.ResponseError = exports.RequestType9 = exports.RequestType8 = exports.RequestType7 = exports.RequestType6 = exports.RequestType5 = exports.RequestType4 = exports.RequestType3 = exports.RequestType2 = exports.RequestType1 = exports.RequestType0 = exports.RequestType = exports.Message = exports.RAL = undefined;
   exports.MessageStrategy = exports.CancellationStrategy = exports.CancellationSenderStrategy = exports.CancellationReceiverStrategy = exports.ConnectionError = exports.ConnectionErrors = exports.LogTraceNotification = exports.SetTraceNotification = exports.TraceFormat = exports.TraceValues = exports.Trace = undefined;
@@ -2901,7 +2903,7 @@ var require_api = __commonJS((exports) => {
 });
 
 // node_modules/vscode-jsonrpc/lib/node/ril.js
-var require_ril = __commonJS((exports) => {
+var require_ril = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   var util_1 = __require("util");
   var api_1 = require_api();
@@ -3047,17 +3049,17 @@ var require_ril = __commonJS((exports) => {
   function RIL() {
     return _ril;
   }
-  (function(RIL2) {
+  (function(RIL) {
     function install() {
       api_1.RAL.install(_ril);
     }
-    RIL2.install = install;
+    RIL.install = install;
   })(RIL || (RIL = {}));
   exports.default = RIL;
 });
 
 // node_modules/vscode-jsonrpc/lib/node/main.js
-var require_main = __commonJS((exports) => {
+var require_main = __commonJS(function(exports) {
   var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === undefined)
       k2 = k;
@@ -3324,7 +3326,7 @@ var require_main = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver-types/lib/umd/main.js
-var require_main2 = __commonJS((exports, module) => {
+var require_main2 = __commonJS(function(exports, module) {
   (function(factory) {
     if (typeof module === "object" && typeof module.exports === "object") {
       var v = factory(__require, exports);
@@ -3337,39 +3339,39 @@ var require_main2 = __commonJS((exports, module) => {
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.TextDocument = exports2.EOL = exports2.WorkspaceFolder = exports2.InlineCompletionContext = exports2.SelectedCompletionInfo = exports2.InlineCompletionTriggerKind = exports2.InlineCompletionList = exports2.InlineCompletionItem = exports2.StringValue = exports2.InlayHint = exports2.InlayHintLabelPart = exports2.InlayHintKind = exports2.InlineValueContext = exports2.InlineValueEvaluatableExpression = exports2.InlineValueVariableLookup = exports2.InlineValueText = exports2.SemanticTokens = exports2.SemanticTokenModifiers = exports2.SemanticTokenTypes = exports2.SelectionRange = exports2.DocumentLink = exports2.FormattingOptions = exports2.CodeLens = exports2.CodeAction = exports2.CodeActionContext = exports2.CodeActionTriggerKind = exports2.CodeActionKind = exports2.DocumentSymbol = exports2.WorkspaceSymbol = exports2.SymbolInformation = exports2.SymbolTag = exports2.SymbolKind = exports2.DocumentHighlight = exports2.DocumentHighlightKind = exports2.SignatureInformation = exports2.ParameterInformation = exports2.Hover = exports2.MarkedString = exports2.CompletionList = exports2.CompletionItem = exports2.CompletionItemLabelDetails = exports2.InsertTextMode = exports2.InsertReplaceEdit = exports2.CompletionItemTag = exports2.InsertTextFormat = exports2.CompletionItemKind = exports2.MarkupContent = exports2.MarkupKind = exports2.TextDocumentItem = exports2.OptionalVersionedTextDocumentIdentifier = exports2.VersionedTextDocumentIdentifier = exports2.TextDocumentIdentifier = exports2.WorkspaceChange = exports2.WorkspaceEdit = exports2.DeleteFile = exports2.RenameFile = exports2.CreateFile = exports2.TextDocumentEdit = exports2.AnnotatedTextEdit = exports2.ChangeAnnotationIdentifier = exports2.ChangeAnnotation = exports2.TextEdit = exports2.Command = exports2.Diagnostic = exports2.CodeDescription = exports2.DiagnosticTag = exports2.DiagnosticSeverity = exports2.DiagnosticRelatedInformation = exports2.FoldingRange = exports2.FoldingRangeKind = exports2.ColorPresentation = exports2.ColorInformation = exports2.Color = exports2.LocationLink = exports2.Location = exports2.Range = exports2.Position = exports2.uinteger = exports2.integer = exports2.URI = exports2.DocumentUri = undefined;
     var DocumentUri;
-    (function(DocumentUri2) {
+    (function(DocumentUri) {
       function is(value) {
         return typeof value === "string";
       }
-      DocumentUri2.is = is;
+      DocumentUri.is = is;
     })(DocumentUri || (exports2.DocumentUri = DocumentUri = {}));
     var URI;
-    (function(URI2) {
+    (function(URI) {
       function is(value) {
         return typeof value === "string";
       }
-      URI2.is = is;
+      URI.is = is;
     })(URI || (exports2.URI = URI = {}));
     var integer;
-    (function(integer2) {
-      integer2.MIN_VALUE = -2147483648;
-      integer2.MAX_VALUE = 2147483647;
+    (function(integer) {
+      integer.MIN_VALUE = -2147483648;
+      integer.MAX_VALUE = 2147483647;
       function is(value) {
-        return typeof value === "number" && integer2.MIN_VALUE <= value && value <= integer2.MAX_VALUE;
+        return typeof value === "number" && integer.MIN_VALUE <= value && value <= integer.MAX_VALUE;
       }
-      integer2.is = is;
+      integer.is = is;
     })(integer || (exports2.integer = integer = {}));
     var uinteger;
-    (function(uinteger2) {
-      uinteger2.MIN_VALUE = 0;
-      uinteger2.MAX_VALUE = 2147483647;
+    (function(uinteger) {
+      uinteger.MIN_VALUE = 0;
+      uinteger.MAX_VALUE = 2147483647;
       function is(value) {
-        return typeof value === "number" && uinteger2.MIN_VALUE <= value && value <= uinteger2.MAX_VALUE;
+        return typeof value === "number" && uinteger.MIN_VALUE <= value && value <= uinteger.MAX_VALUE;
       }
-      uinteger2.is = is;
+      uinteger.is = is;
     })(uinteger || (exports2.uinteger = uinteger = {}));
     var Position;
-    (function(Position2) {
+    (function(Position) {
       function create(line, character) {
         if (line === Number.MAX_VALUE) {
           line = uinteger.MAX_VALUE;
@@ -3379,15 +3381,15 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return { line, character };
       }
-      Position2.create = create;
+      Position.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.uinteger(candidate.line) && Is.uinteger(candidate.character);
       }
-      Position2.is = is;
+      Position.is = is;
     })(Position || (exports2.Position = Position = {}));
     var Range;
-    (function(Range2) {
+    (function(Range) {
       function create(one, two, three, four) {
         if (Is.uinteger(one) && Is.uinteger(two) && Is.uinteger(three) && Is.uinteger(four)) {
           return { start: Position.create(one, two), end: Position.create(three, four) };
@@ -3397,39 +3399,39 @@ var require_main2 = __commonJS((exports, module) => {
           throw new Error("Range#create called with invalid arguments[".concat(one, ", ").concat(two, ", ").concat(three, ", ").concat(four, "]"));
         }
       }
-      Range2.create = create;
+      Range.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Position.is(candidate.start) && Position.is(candidate.end);
       }
-      Range2.is = is;
+      Range.is = is;
     })(Range || (exports2.Range = Range = {}));
     var Location;
-    (function(Location2) {
+    (function(Location) {
       function create(uri, range) {
         return { uri, range };
       }
-      Location2.create = create;
+      Location.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Range.is(candidate.range) && (Is.string(candidate.uri) || Is.undefined(candidate.uri));
       }
-      Location2.is = is;
+      Location.is = is;
     })(Location || (exports2.Location = Location = {}));
     var LocationLink;
-    (function(LocationLink2) {
+    (function(LocationLink) {
       function create(targetUri, targetRange, targetSelectionRange, originSelectionRange) {
         return { targetUri, targetRange, targetSelectionRange, originSelectionRange };
       }
-      LocationLink2.create = create;
+      LocationLink.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Range.is(candidate.targetRange) && Is.string(candidate.targetUri) && Range.is(candidate.targetSelectionRange) && (Range.is(candidate.originSelectionRange) || Is.undefined(candidate.originSelectionRange));
       }
-      LocationLink2.is = is;
+      LocationLink.is = is;
     })(LocationLink || (exports2.LocationLink = LocationLink = {}));
     var Color;
-    (function(Color2) {
+    (function(Color) {
       function create(red, green, blue, alpha) {
         return {
           red,
@@ -3438,30 +3440,30 @@ var require_main2 = __commonJS((exports, module) => {
           alpha
         };
       }
-      Color2.create = create;
+      Color.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.numberRange(candidate.red, 0, 1) && Is.numberRange(candidate.green, 0, 1) && Is.numberRange(candidate.blue, 0, 1) && Is.numberRange(candidate.alpha, 0, 1);
       }
-      Color2.is = is;
+      Color.is = is;
     })(Color || (exports2.Color = Color = {}));
     var ColorInformation;
-    (function(ColorInformation2) {
+    (function(ColorInformation) {
       function create(range, color) {
         return {
           range,
           color
         };
       }
-      ColorInformation2.create = create;
+      ColorInformation.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Range.is(candidate.range) && Color.is(candidate.color);
       }
-      ColorInformation2.is = is;
+      ColorInformation.is = is;
     })(ColorInformation || (exports2.ColorInformation = ColorInformation = {}));
     var ColorPresentation;
-    (function(ColorPresentation2) {
+    (function(ColorPresentation) {
       function create(label, textEdit, additionalTextEdits) {
         return {
           label,
@@ -3469,21 +3471,21 @@ var require_main2 = __commonJS((exports, module) => {
           additionalTextEdits
         };
       }
-      ColorPresentation2.create = create;
+      ColorPresentation.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.string(candidate.label) && (Is.undefined(candidate.textEdit) || TextEdit.is(candidate)) && (Is.undefined(candidate.additionalTextEdits) || Is.typedArray(candidate.additionalTextEdits, TextEdit.is));
       }
-      ColorPresentation2.is = is;
+      ColorPresentation.is = is;
     })(ColorPresentation || (exports2.ColorPresentation = ColorPresentation = {}));
     var FoldingRangeKind;
-    (function(FoldingRangeKind2) {
-      FoldingRangeKind2.Comment = "comment";
-      FoldingRangeKind2.Imports = "imports";
-      FoldingRangeKind2.Region = "region";
+    (function(FoldingRangeKind) {
+      FoldingRangeKind.Comment = "comment";
+      FoldingRangeKind.Imports = "imports";
+      FoldingRangeKind.Region = "region";
     })(FoldingRangeKind || (exports2.FoldingRangeKind = FoldingRangeKind = {}));
     var FoldingRange;
-    (function(FoldingRange2) {
+    (function(FoldingRange) {
       function create(startLine, endLine, startCharacter, endCharacter, kind, collapsedText) {
         var result = {
           startLine,
@@ -3503,50 +3505,50 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      FoldingRange2.create = create;
+      FoldingRange.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.uinteger(candidate.startLine) && Is.uinteger(candidate.startLine) && (Is.undefined(candidate.startCharacter) || Is.uinteger(candidate.startCharacter)) && (Is.undefined(candidate.endCharacter) || Is.uinteger(candidate.endCharacter)) && (Is.undefined(candidate.kind) || Is.string(candidate.kind));
       }
-      FoldingRange2.is = is;
+      FoldingRange.is = is;
     })(FoldingRange || (exports2.FoldingRange = FoldingRange = {}));
     var DiagnosticRelatedInformation;
-    (function(DiagnosticRelatedInformation2) {
+    (function(DiagnosticRelatedInformation) {
       function create(location, message) {
         return {
           location,
           message
         };
       }
-      DiagnosticRelatedInformation2.create = create;
+      DiagnosticRelatedInformation.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Location.is(candidate.location) && Is.string(candidate.message);
       }
-      DiagnosticRelatedInformation2.is = is;
+      DiagnosticRelatedInformation.is = is;
     })(DiagnosticRelatedInformation || (exports2.DiagnosticRelatedInformation = DiagnosticRelatedInformation = {}));
     var DiagnosticSeverity;
-    (function(DiagnosticSeverity2) {
-      DiagnosticSeverity2.Error = 1;
-      DiagnosticSeverity2.Warning = 2;
-      DiagnosticSeverity2.Information = 3;
-      DiagnosticSeverity2.Hint = 4;
+    (function(DiagnosticSeverity) {
+      DiagnosticSeverity.Error = 1;
+      DiagnosticSeverity.Warning = 2;
+      DiagnosticSeverity.Information = 3;
+      DiagnosticSeverity.Hint = 4;
     })(DiagnosticSeverity || (exports2.DiagnosticSeverity = DiagnosticSeverity = {}));
     var DiagnosticTag;
-    (function(DiagnosticTag2) {
-      DiagnosticTag2.Unnecessary = 1;
-      DiagnosticTag2.Deprecated = 2;
+    (function(DiagnosticTag) {
+      DiagnosticTag.Unnecessary = 1;
+      DiagnosticTag.Deprecated = 2;
     })(DiagnosticTag || (exports2.DiagnosticTag = DiagnosticTag = {}));
     var CodeDescription;
-    (function(CodeDescription2) {
+    (function(CodeDescription) {
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.string(candidate.href);
       }
-      CodeDescription2.is = is;
+      CodeDescription.is = is;
     })(CodeDescription || (exports2.CodeDescription = CodeDescription = {}));
     var Diagnostic;
-    (function(Diagnostic2) {
+    (function(Diagnostic) {
       function create(range, message, severity, code, source, relatedInformation) {
         var result = { range, message };
         if (Is.defined(severity)) {
@@ -3563,16 +3565,16 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      Diagnostic2.create = create;
+      Diagnostic.create = create;
       function is(value) {
         var _a;
         var candidate = value;
         return Is.defined(candidate) && Range.is(candidate.range) && Is.string(candidate.message) && (Is.number(candidate.severity) || Is.undefined(candidate.severity)) && (Is.integer(candidate.code) || Is.string(candidate.code) || Is.undefined(candidate.code)) && (Is.undefined(candidate.codeDescription) || Is.string((_a = candidate.codeDescription) === null || _a === undefined ? undefined : _a.href)) && (Is.string(candidate.source) || Is.undefined(candidate.source)) && (Is.undefined(candidate.relatedInformation) || Is.typedArray(candidate.relatedInformation, DiagnosticRelatedInformation.is));
       }
-      Diagnostic2.is = is;
+      Diagnostic.is = is;
     })(Diagnostic || (exports2.Diagnostic = Diagnostic = {}));
     var Command;
-    (function(Command2) {
+    (function(Command) {
       function create(title, command) {
         var args = [];
         for (var _i = 2;_i < arguments.length; _i++) {
@@ -3584,35 +3586,35 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      Command2.create = create;
+      Command.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.string(candidate.title) && Is.string(candidate.command);
       }
-      Command2.is = is;
+      Command.is = is;
     })(Command || (exports2.Command = Command = {}));
     var TextEdit;
-    (function(TextEdit2) {
+    (function(TextEdit) {
       function replace(range, newText) {
         return { range, newText };
       }
-      TextEdit2.replace = replace;
+      TextEdit.replace = replace;
       function insert(position, newText) {
         return { range: { start: position, end: position }, newText };
       }
-      TextEdit2.insert = insert;
+      TextEdit.insert = insert;
       function del(range) {
         return { range, newText: "" };
       }
-      TextEdit2.del = del;
+      TextEdit.del = del;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.string(candidate.newText) && Range.is(candidate.range);
       }
-      TextEdit2.is = is;
+      TextEdit.is = is;
     })(TextEdit || (exports2.TextEdit = TextEdit = {}));
     var ChangeAnnotation;
-    (function(ChangeAnnotation2) {
+    (function(ChangeAnnotation) {
       function create(label, needsConfirmation, description) {
         var result = { label };
         if (needsConfirmation !== undefined) {
@@ -3623,55 +3625,55 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      ChangeAnnotation2.create = create;
+      ChangeAnnotation.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Is.string(candidate.label) && (Is.boolean(candidate.needsConfirmation) || candidate.needsConfirmation === undefined) && (Is.string(candidate.description) || candidate.description === undefined);
       }
-      ChangeAnnotation2.is = is;
+      ChangeAnnotation.is = is;
     })(ChangeAnnotation || (exports2.ChangeAnnotation = ChangeAnnotation = {}));
     var ChangeAnnotationIdentifier;
-    (function(ChangeAnnotationIdentifier2) {
+    (function(ChangeAnnotationIdentifier) {
       function is(value) {
         var candidate = value;
         return Is.string(candidate);
       }
-      ChangeAnnotationIdentifier2.is = is;
+      ChangeAnnotationIdentifier.is = is;
     })(ChangeAnnotationIdentifier || (exports2.ChangeAnnotationIdentifier = ChangeAnnotationIdentifier = {}));
     var AnnotatedTextEdit;
-    (function(AnnotatedTextEdit2) {
+    (function(AnnotatedTextEdit) {
       function replace(range, newText, annotation) {
         return { range, newText, annotationId: annotation };
       }
-      AnnotatedTextEdit2.replace = replace;
+      AnnotatedTextEdit.replace = replace;
       function insert(position, newText, annotation) {
         return { range: { start: position, end: position }, newText, annotationId: annotation };
       }
-      AnnotatedTextEdit2.insert = insert;
+      AnnotatedTextEdit.insert = insert;
       function del(range, annotation) {
         return { range, newText: "", annotationId: annotation };
       }
-      AnnotatedTextEdit2.del = del;
+      AnnotatedTextEdit.del = del;
       function is(value) {
         var candidate = value;
         return TextEdit.is(candidate) && (ChangeAnnotation.is(candidate.annotationId) || ChangeAnnotationIdentifier.is(candidate.annotationId));
       }
-      AnnotatedTextEdit2.is = is;
+      AnnotatedTextEdit.is = is;
     })(AnnotatedTextEdit || (exports2.AnnotatedTextEdit = AnnotatedTextEdit = {}));
     var TextDocumentEdit;
-    (function(TextDocumentEdit2) {
+    (function(TextDocumentEdit) {
       function create(textDocument, edits) {
         return { textDocument, edits };
       }
-      TextDocumentEdit2.create = create;
+      TextDocumentEdit.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && OptionalVersionedTextDocumentIdentifier.is(candidate.textDocument) && Array.isArray(candidate.edits);
       }
-      TextDocumentEdit2.is = is;
+      TextDocumentEdit.is = is;
     })(TextDocumentEdit || (exports2.TextDocumentEdit = TextDocumentEdit = {}));
     var CreateFile;
-    (function(CreateFile2) {
+    (function(CreateFile) {
       function create(uri, options, annotation) {
         var result = {
           kind: "create",
@@ -3685,15 +3687,15 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      CreateFile2.create = create;
+      CreateFile.create = create;
       function is(value) {
         var candidate = value;
         return candidate && candidate.kind === "create" && Is.string(candidate.uri) && (candidate.options === undefined || (candidate.options.overwrite === undefined || Is.boolean(candidate.options.overwrite)) && (candidate.options.ignoreIfExists === undefined || Is.boolean(candidate.options.ignoreIfExists))) && (candidate.annotationId === undefined || ChangeAnnotationIdentifier.is(candidate.annotationId));
       }
-      CreateFile2.is = is;
+      CreateFile.is = is;
     })(CreateFile || (exports2.CreateFile = CreateFile = {}));
     var RenameFile;
-    (function(RenameFile2) {
+    (function(RenameFile) {
       function create(oldUri, newUri, options, annotation) {
         var result = {
           kind: "rename",
@@ -3708,15 +3710,15 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      RenameFile2.create = create;
+      RenameFile.create = create;
       function is(value) {
         var candidate = value;
         return candidate && candidate.kind === "rename" && Is.string(candidate.oldUri) && Is.string(candidate.newUri) && (candidate.options === undefined || (candidate.options.overwrite === undefined || Is.boolean(candidate.options.overwrite)) && (candidate.options.ignoreIfExists === undefined || Is.boolean(candidate.options.ignoreIfExists))) && (candidate.annotationId === undefined || ChangeAnnotationIdentifier.is(candidate.annotationId));
       }
-      RenameFile2.is = is;
+      RenameFile.is = is;
     })(RenameFile || (exports2.RenameFile = RenameFile = {}));
     var DeleteFile;
-    (function(DeleteFile2) {
+    (function(DeleteFile) {
       function create(uri, options, annotation) {
         var result = {
           kind: "delete",
@@ -3730,15 +3732,15 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      DeleteFile2.create = create;
+      DeleteFile.create = create;
       function is(value) {
         var candidate = value;
         return candidate && candidate.kind === "delete" && Is.string(candidate.uri) && (candidate.options === undefined || (candidate.options.recursive === undefined || Is.boolean(candidate.options.recursive)) && (candidate.options.ignoreIfNotExists === undefined || Is.boolean(candidate.options.ignoreIfNotExists))) && (candidate.annotationId === undefined || ChangeAnnotationIdentifier.is(candidate.annotationId));
       }
-      DeleteFile2.is = is;
+      DeleteFile.is = is;
     })(DeleteFile || (exports2.DeleteFile = DeleteFile = {}));
     var WorkspaceEdit;
-    (function(WorkspaceEdit2) {
+    (function(WorkspaceEdit) {
       function is(value) {
         var candidate = value;
         return candidate && (candidate.changes !== undefined || candidate.documentChanges !== undefined) && (candidate.documentChanges === undefined || candidate.documentChanges.every(function(change) {
@@ -3749,14 +3751,14 @@ var require_main2 = __commonJS((exports, module) => {
           }
         }));
       }
-      WorkspaceEdit2.is = is;
+      WorkspaceEdit.is = is;
     })(WorkspaceEdit || (exports2.WorkspaceEdit = WorkspaceEdit = {}));
     var TextEditChangeImpl = function() {
-      function TextEditChangeImpl2(edits, changeAnnotations) {
+      function TextEditChangeImpl(edits, changeAnnotations) {
         this.edits = edits;
         this.changeAnnotations = changeAnnotations;
       }
-      TextEditChangeImpl2.prototype.insert = function(position, newText, annotation) {
+      TextEditChangeImpl.prototype.insert = function(position, newText, annotation) {
         var edit;
         var id;
         if (annotation === undefined) {
@@ -3774,7 +3776,7 @@ var require_main2 = __commonJS((exports, module) => {
           return id;
         }
       };
-      TextEditChangeImpl2.prototype.replace = function(range, newText, annotation) {
+      TextEditChangeImpl.prototype.replace = function(range, newText, annotation) {
         var edit;
         var id;
         if (annotation === undefined) {
@@ -3792,7 +3794,7 @@ var require_main2 = __commonJS((exports, module) => {
           return id;
         }
       };
-      TextEditChangeImpl2.prototype.delete = function(range, annotation) {
+      TextEditChangeImpl.prototype.delete = function(range, annotation) {
         var edit;
         var id;
         if (annotation === undefined) {
@@ -3810,39 +3812,39 @@ var require_main2 = __commonJS((exports, module) => {
           return id;
         }
       };
-      TextEditChangeImpl2.prototype.add = function(edit) {
+      TextEditChangeImpl.prototype.add = function(edit) {
         this.edits.push(edit);
       };
-      TextEditChangeImpl2.prototype.all = function() {
+      TextEditChangeImpl.prototype.all = function() {
         return this.edits;
       };
-      TextEditChangeImpl2.prototype.clear = function() {
+      TextEditChangeImpl.prototype.clear = function() {
         this.edits.splice(0, this.edits.length);
       };
-      TextEditChangeImpl2.prototype.assertChangeAnnotations = function(value) {
+      TextEditChangeImpl.prototype.assertChangeAnnotations = function(value) {
         if (value === undefined) {
           throw new Error("Text edit change is not configured to manage change annotations.");
         }
       };
-      return TextEditChangeImpl2;
+      return TextEditChangeImpl;
     }();
     var ChangeAnnotations = function() {
-      function ChangeAnnotations2(annotations) {
+      function ChangeAnnotations(annotations) {
         this._annotations = annotations === undefined ? Object.create(null) : annotations;
         this._counter = 0;
         this._size = 0;
       }
-      ChangeAnnotations2.prototype.all = function() {
+      ChangeAnnotations.prototype.all = function() {
         return this._annotations;
       };
-      Object.defineProperty(ChangeAnnotations2.prototype, "size", {
+      Object.defineProperty(ChangeAnnotations.prototype, "size", {
         get: function() {
           return this._size;
         },
         enumerable: false,
         configurable: true
       });
-      ChangeAnnotations2.prototype.manage = function(idOrAnnotation, annotation) {
+      ChangeAnnotations.prototype.manage = function(idOrAnnotation, annotation) {
         var id;
         if (ChangeAnnotationIdentifier.is(idOrAnnotation)) {
           id = idOrAnnotation;
@@ -3860,14 +3862,14 @@ var require_main2 = __commonJS((exports, module) => {
         this._size++;
         return id;
       };
-      ChangeAnnotations2.prototype.nextId = function() {
+      ChangeAnnotations.prototype.nextId = function() {
         this._counter++;
         return this._counter.toString();
       };
-      return ChangeAnnotations2;
+      return ChangeAnnotations;
     }();
     var WorkspaceChange = function() {
-      function WorkspaceChange2(workspaceEdit) {
+      function WorkspaceChange(workspaceEdit) {
         var _this = this;
         this._textEditChanges = Object.create(null);
         if (workspaceEdit !== undefined) {
@@ -3891,7 +3893,7 @@ var require_main2 = __commonJS((exports, module) => {
           this._workspaceEdit = {};
         }
       }
-      Object.defineProperty(WorkspaceChange2.prototype, "edit", {
+      Object.defineProperty(WorkspaceChange.prototype, "edit", {
         get: function() {
           this.initDocumentChanges();
           if (this._changeAnnotations !== undefined) {
@@ -3906,7 +3908,7 @@ var require_main2 = __commonJS((exports, module) => {
         enumerable: false,
         configurable: true
       });
-      WorkspaceChange2.prototype.getTextEditChange = function(key) {
+      WorkspaceChange.prototype.getTextEditChange = function(key) {
         if (OptionalVersionedTextDocumentIdentifier.is(key)) {
           this.initDocumentChanges();
           if (this._workspaceEdit.documentChanges === undefined) {
@@ -3940,19 +3942,19 @@ var require_main2 = __commonJS((exports, module) => {
           return result;
         }
       };
-      WorkspaceChange2.prototype.initDocumentChanges = function() {
+      WorkspaceChange.prototype.initDocumentChanges = function() {
         if (this._workspaceEdit.documentChanges === undefined && this._workspaceEdit.changes === undefined) {
           this._changeAnnotations = new ChangeAnnotations;
           this._workspaceEdit.documentChanges = [];
           this._workspaceEdit.changeAnnotations = this._changeAnnotations.all();
         }
       };
-      WorkspaceChange2.prototype.initChanges = function() {
+      WorkspaceChange.prototype.initChanges = function() {
         if (this._workspaceEdit.documentChanges === undefined && this._workspaceEdit.changes === undefined) {
           this._workspaceEdit.changes = Object.create(null);
         }
       };
-      WorkspaceChange2.prototype.createFile = function(uri, optionsOrAnnotation, options) {
+      WorkspaceChange.prototype.createFile = function(uri, optionsOrAnnotation, options) {
         this.initDocumentChanges();
         if (this._workspaceEdit.documentChanges === undefined) {
           throw new Error("Workspace edit is not configured for document changes.");
@@ -3976,7 +3978,7 @@ var require_main2 = __commonJS((exports, module) => {
           return id;
         }
       };
-      WorkspaceChange2.prototype.renameFile = function(oldUri, newUri, optionsOrAnnotation, options) {
+      WorkspaceChange.prototype.renameFile = function(oldUri, newUri, optionsOrAnnotation, options) {
         this.initDocumentChanges();
         if (this._workspaceEdit.documentChanges === undefined) {
           throw new Error("Workspace edit is not configured for document changes.");
@@ -4000,7 +4002,7 @@ var require_main2 = __commonJS((exports, module) => {
           return id;
         }
       };
-      WorkspaceChange2.prototype.deleteFile = function(uri, optionsOrAnnotation, options) {
+      WorkspaceChange.prototype.deleteFile = function(uri, optionsOrAnnotation, options) {
         this.initDocumentChanges();
         if (this._workspaceEdit.documentChanges === undefined) {
           throw new Error("Workspace edit is not configured for document changes.");
@@ -4024,180 +4026,180 @@ var require_main2 = __commonJS((exports, module) => {
           return id;
         }
       };
-      return WorkspaceChange2;
+      return WorkspaceChange;
     }();
     exports2.WorkspaceChange = WorkspaceChange;
     var TextDocumentIdentifier;
-    (function(TextDocumentIdentifier2) {
+    (function(TextDocumentIdentifier) {
       function create(uri) {
         return { uri };
       }
-      TextDocumentIdentifier2.create = create;
+      TextDocumentIdentifier.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.string(candidate.uri);
       }
-      TextDocumentIdentifier2.is = is;
+      TextDocumentIdentifier.is = is;
     })(TextDocumentIdentifier || (exports2.TextDocumentIdentifier = TextDocumentIdentifier = {}));
     var VersionedTextDocumentIdentifier;
-    (function(VersionedTextDocumentIdentifier2) {
+    (function(VersionedTextDocumentIdentifier) {
       function create(uri, version) {
         return { uri, version };
       }
-      VersionedTextDocumentIdentifier2.create = create;
+      VersionedTextDocumentIdentifier.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.string(candidate.uri) && Is.integer(candidate.version);
       }
-      VersionedTextDocumentIdentifier2.is = is;
+      VersionedTextDocumentIdentifier.is = is;
     })(VersionedTextDocumentIdentifier || (exports2.VersionedTextDocumentIdentifier = VersionedTextDocumentIdentifier = {}));
     var OptionalVersionedTextDocumentIdentifier;
-    (function(OptionalVersionedTextDocumentIdentifier2) {
+    (function(OptionalVersionedTextDocumentIdentifier) {
       function create(uri, version) {
         return { uri, version };
       }
-      OptionalVersionedTextDocumentIdentifier2.create = create;
+      OptionalVersionedTextDocumentIdentifier.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.string(candidate.uri) && (candidate.version === null || Is.integer(candidate.version));
       }
-      OptionalVersionedTextDocumentIdentifier2.is = is;
+      OptionalVersionedTextDocumentIdentifier.is = is;
     })(OptionalVersionedTextDocumentIdentifier || (exports2.OptionalVersionedTextDocumentIdentifier = OptionalVersionedTextDocumentIdentifier = {}));
     var TextDocumentItem;
-    (function(TextDocumentItem2) {
+    (function(TextDocumentItem) {
       function create(uri, languageId, version, text) {
         return { uri, languageId, version, text };
       }
-      TextDocumentItem2.create = create;
+      TextDocumentItem.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.string(candidate.uri) && Is.string(candidate.languageId) && Is.integer(candidate.version) && Is.string(candidate.text);
       }
-      TextDocumentItem2.is = is;
+      TextDocumentItem.is = is;
     })(TextDocumentItem || (exports2.TextDocumentItem = TextDocumentItem = {}));
     var MarkupKind;
-    (function(MarkupKind2) {
-      MarkupKind2.PlainText = "plaintext";
-      MarkupKind2.Markdown = "markdown";
+    (function(MarkupKind) {
+      MarkupKind.PlainText = "plaintext";
+      MarkupKind.Markdown = "markdown";
       function is(value) {
         var candidate = value;
-        return candidate === MarkupKind2.PlainText || candidate === MarkupKind2.Markdown;
+        return candidate === MarkupKind.PlainText || candidate === MarkupKind.Markdown;
       }
-      MarkupKind2.is = is;
+      MarkupKind.is = is;
     })(MarkupKind || (exports2.MarkupKind = MarkupKind = {}));
     var MarkupContent;
-    (function(MarkupContent2) {
+    (function(MarkupContent) {
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(value) && MarkupKind.is(candidate.kind) && Is.string(candidate.value);
       }
-      MarkupContent2.is = is;
+      MarkupContent.is = is;
     })(MarkupContent || (exports2.MarkupContent = MarkupContent = {}));
     var CompletionItemKind;
-    (function(CompletionItemKind2) {
-      CompletionItemKind2.Text = 1;
-      CompletionItemKind2.Method = 2;
-      CompletionItemKind2.Function = 3;
-      CompletionItemKind2.Constructor = 4;
-      CompletionItemKind2.Field = 5;
-      CompletionItemKind2.Variable = 6;
-      CompletionItemKind2.Class = 7;
-      CompletionItemKind2.Interface = 8;
-      CompletionItemKind2.Module = 9;
-      CompletionItemKind2.Property = 10;
-      CompletionItemKind2.Unit = 11;
-      CompletionItemKind2.Value = 12;
-      CompletionItemKind2.Enum = 13;
-      CompletionItemKind2.Keyword = 14;
-      CompletionItemKind2.Snippet = 15;
-      CompletionItemKind2.Color = 16;
-      CompletionItemKind2.File = 17;
-      CompletionItemKind2.Reference = 18;
-      CompletionItemKind2.Folder = 19;
-      CompletionItemKind2.EnumMember = 20;
-      CompletionItemKind2.Constant = 21;
-      CompletionItemKind2.Struct = 22;
-      CompletionItemKind2.Event = 23;
-      CompletionItemKind2.Operator = 24;
-      CompletionItemKind2.TypeParameter = 25;
+    (function(CompletionItemKind) {
+      CompletionItemKind.Text = 1;
+      CompletionItemKind.Method = 2;
+      CompletionItemKind.Function = 3;
+      CompletionItemKind.Constructor = 4;
+      CompletionItemKind.Field = 5;
+      CompletionItemKind.Variable = 6;
+      CompletionItemKind.Class = 7;
+      CompletionItemKind.Interface = 8;
+      CompletionItemKind.Module = 9;
+      CompletionItemKind.Property = 10;
+      CompletionItemKind.Unit = 11;
+      CompletionItemKind.Value = 12;
+      CompletionItemKind.Enum = 13;
+      CompletionItemKind.Keyword = 14;
+      CompletionItemKind.Snippet = 15;
+      CompletionItemKind.Color = 16;
+      CompletionItemKind.File = 17;
+      CompletionItemKind.Reference = 18;
+      CompletionItemKind.Folder = 19;
+      CompletionItemKind.EnumMember = 20;
+      CompletionItemKind.Constant = 21;
+      CompletionItemKind.Struct = 22;
+      CompletionItemKind.Event = 23;
+      CompletionItemKind.Operator = 24;
+      CompletionItemKind.TypeParameter = 25;
     })(CompletionItemKind || (exports2.CompletionItemKind = CompletionItemKind = {}));
     var InsertTextFormat;
-    (function(InsertTextFormat2) {
-      InsertTextFormat2.PlainText = 1;
-      InsertTextFormat2.Snippet = 2;
+    (function(InsertTextFormat) {
+      InsertTextFormat.PlainText = 1;
+      InsertTextFormat.Snippet = 2;
     })(InsertTextFormat || (exports2.InsertTextFormat = InsertTextFormat = {}));
     var CompletionItemTag;
-    (function(CompletionItemTag2) {
-      CompletionItemTag2.Deprecated = 1;
+    (function(CompletionItemTag) {
+      CompletionItemTag.Deprecated = 1;
     })(CompletionItemTag || (exports2.CompletionItemTag = CompletionItemTag = {}));
     var InsertReplaceEdit;
-    (function(InsertReplaceEdit2) {
+    (function(InsertReplaceEdit) {
       function create(newText, insert, replace) {
         return { newText, insert, replace };
       }
-      InsertReplaceEdit2.create = create;
+      InsertReplaceEdit.create = create;
       function is(value) {
         var candidate = value;
         return candidate && Is.string(candidate.newText) && Range.is(candidate.insert) && Range.is(candidate.replace);
       }
-      InsertReplaceEdit2.is = is;
+      InsertReplaceEdit.is = is;
     })(InsertReplaceEdit || (exports2.InsertReplaceEdit = InsertReplaceEdit = {}));
     var InsertTextMode;
-    (function(InsertTextMode2) {
-      InsertTextMode2.asIs = 1;
-      InsertTextMode2.adjustIndentation = 2;
+    (function(InsertTextMode) {
+      InsertTextMode.asIs = 1;
+      InsertTextMode.adjustIndentation = 2;
     })(InsertTextMode || (exports2.InsertTextMode = InsertTextMode = {}));
     var CompletionItemLabelDetails;
-    (function(CompletionItemLabelDetails2) {
+    (function(CompletionItemLabelDetails) {
       function is(value) {
         var candidate = value;
         return candidate && (Is.string(candidate.detail) || candidate.detail === undefined) && (Is.string(candidate.description) || candidate.description === undefined);
       }
-      CompletionItemLabelDetails2.is = is;
+      CompletionItemLabelDetails.is = is;
     })(CompletionItemLabelDetails || (exports2.CompletionItemLabelDetails = CompletionItemLabelDetails = {}));
     var CompletionItem;
-    (function(CompletionItem2) {
+    (function(CompletionItem) {
       function create(label) {
         return { label };
       }
-      CompletionItem2.create = create;
+      CompletionItem.create = create;
     })(CompletionItem || (exports2.CompletionItem = CompletionItem = {}));
     var CompletionList;
-    (function(CompletionList2) {
+    (function(CompletionList) {
       function create(items, isIncomplete) {
         return { items: items ? items : [], isIncomplete: !!isIncomplete };
       }
-      CompletionList2.create = create;
+      CompletionList.create = create;
     })(CompletionList || (exports2.CompletionList = CompletionList = {}));
     var MarkedString;
-    (function(MarkedString2) {
+    (function(MarkedString) {
       function fromPlainText(plainText) {
         return plainText.replace(/[\\`*_{}[\]()#+\-.!]/g, "\\$&");
       }
-      MarkedString2.fromPlainText = fromPlainText;
+      MarkedString.fromPlainText = fromPlainText;
       function is(value) {
         var candidate = value;
         return Is.string(candidate) || Is.objectLiteral(candidate) && Is.string(candidate.language) && Is.string(candidate.value);
       }
-      MarkedString2.is = is;
+      MarkedString.is = is;
     })(MarkedString || (exports2.MarkedString = MarkedString = {}));
     var Hover;
-    (function(Hover2) {
+    (function(Hover) {
       function is(value) {
         var candidate = value;
         return !!candidate && Is.objectLiteral(candidate) && (MarkupContent.is(candidate.contents) || MarkedString.is(candidate.contents) || Is.typedArray(candidate.contents, MarkedString.is)) && (value.range === undefined || Range.is(value.range));
       }
-      Hover2.is = is;
+      Hover.is = is;
     })(Hover || (exports2.Hover = Hover = {}));
     var ParameterInformation;
-    (function(ParameterInformation2) {
+    (function(ParameterInformation) {
       function create(label, documentation) {
         return documentation ? { label, documentation } : { label };
       }
-      ParameterInformation2.create = create;
+      ParameterInformation.create = create;
     })(ParameterInformation || (exports2.ParameterInformation = ParameterInformation = {}));
     var SignatureInformation;
-    (function(SignatureInformation2) {
+    (function(SignatureInformation) {
       function create(label, documentation) {
         var parameters = [];
         for (var _i = 2;_i < arguments.length; _i++) {
@@ -4214,16 +4216,16 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      SignatureInformation2.create = create;
+      SignatureInformation.create = create;
     })(SignatureInformation || (exports2.SignatureInformation = SignatureInformation = {}));
     var DocumentHighlightKind;
-    (function(DocumentHighlightKind2) {
-      DocumentHighlightKind2.Text = 1;
-      DocumentHighlightKind2.Read = 2;
-      DocumentHighlightKind2.Write = 3;
+    (function(DocumentHighlightKind) {
+      DocumentHighlightKind.Text = 1;
+      DocumentHighlightKind.Read = 2;
+      DocumentHighlightKind.Write = 3;
     })(DocumentHighlightKind || (exports2.DocumentHighlightKind = DocumentHighlightKind = {}));
     var DocumentHighlight;
-    (function(DocumentHighlight2) {
+    (function(DocumentHighlight) {
       function create(range, kind) {
         var result = { range };
         if (Is.number(kind)) {
@@ -4231,43 +4233,43 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      DocumentHighlight2.create = create;
+      DocumentHighlight.create = create;
     })(DocumentHighlight || (exports2.DocumentHighlight = DocumentHighlight = {}));
     var SymbolKind;
-    (function(SymbolKind2) {
-      SymbolKind2.File = 1;
-      SymbolKind2.Module = 2;
-      SymbolKind2.Namespace = 3;
-      SymbolKind2.Package = 4;
-      SymbolKind2.Class = 5;
-      SymbolKind2.Method = 6;
-      SymbolKind2.Property = 7;
-      SymbolKind2.Field = 8;
-      SymbolKind2.Constructor = 9;
-      SymbolKind2.Enum = 10;
-      SymbolKind2.Interface = 11;
-      SymbolKind2.Function = 12;
-      SymbolKind2.Variable = 13;
-      SymbolKind2.Constant = 14;
-      SymbolKind2.String = 15;
-      SymbolKind2.Number = 16;
-      SymbolKind2.Boolean = 17;
-      SymbolKind2.Array = 18;
-      SymbolKind2.Object = 19;
-      SymbolKind2.Key = 20;
-      SymbolKind2.Null = 21;
-      SymbolKind2.EnumMember = 22;
-      SymbolKind2.Struct = 23;
-      SymbolKind2.Event = 24;
-      SymbolKind2.Operator = 25;
-      SymbolKind2.TypeParameter = 26;
+    (function(SymbolKind) {
+      SymbolKind.File = 1;
+      SymbolKind.Module = 2;
+      SymbolKind.Namespace = 3;
+      SymbolKind.Package = 4;
+      SymbolKind.Class = 5;
+      SymbolKind.Method = 6;
+      SymbolKind.Property = 7;
+      SymbolKind.Field = 8;
+      SymbolKind.Constructor = 9;
+      SymbolKind.Enum = 10;
+      SymbolKind.Interface = 11;
+      SymbolKind.Function = 12;
+      SymbolKind.Variable = 13;
+      SymbolKind.Constant = 14;
+      SymbolKind.String = 15;
+      SymbolKind.Number = 16;
+      SymbolKind.Boolean = 17;
+      SymbolKind.Array = 18;
+      SymbolKind.Object = 19;
+      SymbolKind.Key = 20;
+      SymbolKind.Null = 21;
+      SymbolKind.EnumMember = 22;
+      SymbolKind.Struct = 23;
+      SymbolKind.Event = 24;
+      SymbolKind.Operator = 25;
+      SymbolKind.TypeParameter = 26;
     })(SymbolKind || (exports2.SymbolKind = SymbolKind = {}));
     var SymbolTag;
-    (function(SymbolTag2) {
-      SymbolTag2.Deprecated = 1;
+    (function(SymbolTag) {
+      SymbolTag.Deprecated = 1;
     })(SymbolTag || (exports2.SymbolTag = SymbolTag = {}));
     var SymbolInformation;
-    (function(SymbolInformation2) {
+    (function(SymbolInformation) {
       function create(name, kind, range, uri, containerName) {
         var result = {
           name,
@@ -4279,17 +4281,17 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      SymbolInformation2.create = create;
+      SymbolInformation.create = create;
     })(SymbolInformation || (exports2.SymbolInformation = SymbolInformation = {}));
     var WorkspaceSymbol;
-    (function(WorkspaceSymbol2) {
+    (function(WorkspaceSymbol) {
       function create(name, kind, uri, range) {
         return range !== undefined ? { name, kind, location: { uri, range } } : { name, kind, location: { uri } };
       }
-      WorkspaceSymbol2.create = create;
+      WorkspaceSymbol.create = create;
     })(WorkspaceSymbol || (exports2.WorkspaceSymbol = WorkspaceSymbol = {}));
     var DocumentSymbol;
-    (function(DocumentSymbol2) {
+    (function(DocumentSymbol) {
       function create(name, detail, kind, range, selectionRange, children) {
         var result = {
           name,
@@ -4303,32 +4305,32 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      DocumentSymbol2.create = create;
+      DocumentSymbol.create = create;
       function is(value) {
         var candidate = value;
         return candidate && Is.string(candidate.name) && Is.number(candidate.kind) && Range.is(candidate.range) && Range.is(candidate.selectionRange) && (candidate.detail === undefined || Is.string(candidate.detail)) && (candidate.deprecated === undefined || Is.boolean(candidate.deprecated)) && (candidate.children === undefined || Array.isArray(candidate.children)) && (candidate.tags === undefined || Array.isArray(candidate.tags));
       }
-      DocumentSymbol2.is = is;
+      DocumentSymbol.is = is;
     })(DocumentSymbol || (exports2.DocumentSymbol = DocumentSymbol = {}));
     var CodeActionKind;
-    (function(CodeActionKind2) {
-      CodeActionKind2.Empty = "";
-      CodeActionKind2.QuickFix = "quickfix";
-      CodeActionKind2.Refactor = "refactor";
-      CodeActionKind2.RefactorExtract = "refactor.extract";
-      CodeActionKind2.RefactorInline = "refactor.inline";
-      CodeActionKind2.RefactorRewrite = "refactor.rewrite";
-      CodeActionKind2.Source = "source";
-      CodeActionKind2.SourceOrganizeImports = "source.organizeImports";
-      CodeActionKind2.SourceFixAll = "source.fixAll";
+    (function(CodeActionKind) {
+      CodeActionKind.Empty = "";
+      CodeActionKind.QuickFix = "quickfix";
+      CodeActionKind.Refactor = "refactor";
+      CodeActionKind.RefactorExtract = "refactor.extract";
+      CodeActionKind.RefactorInline = "refactor.inline";
+      CodeActionKind.RefactorRewrite = "refactor.rewrite";
+      CodeActionKind.Source = "source";
+      CodeActionKind.SourceOrganizeImports = "source.organizeImports";
+      CodeActionKind.SourceFixAll = "source.fixAll";
     })(CodeActionKind || (exports2.CodeActionKind = CodeActionKind = {}));
     var CodeActionTriggerKind;
-    (function(CodeActionTriggerKind2) {
-      CodeActionTriggerKind2.Invoked = 1;
-      CodeActionTriggerKind2.Automatic = 2;
+    (function(CodeActionTriggerKind) {
+      CodeActionTriggerKind.Invoked = 1;
+      CodeActionTriggerKind.Automatic = 2;
     })(CodeActionTriggerKind || (exports2.CodeActionTriggerKind = CodeActionTriggerKind = {}));
     var CodeActionContext;
-    (function(CodeActionContext2) {
+    (function(CodeActionContext) {
       function create(diagnostics, only, triggerKind) {
         var result = { diagnostics };
         if (only !== undefined && only !== null) {
@@ -4339,15 +4341,15 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      CodeActionContext2.create = create;
+      CodeActionContext.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.typedArray(candidate.diagnostics, Diagnostic.is) && (candidate.only === undefined || Is.typedArray(candidate.only, Is.string)) && (candidate.triggerKind === undefined || candidate.triggerKind === CodeActionTriggerKind.Invoked || candidate.triggerKind === CodeActionTriggerKind.Automatic);
       }
-      CodeActionContext2.is = is;
+      CodeActionContext.is = is;
     })(CodeActionContext || (exports2.CodeActionContext = CodeActionContext = {}));
     var CodeAction;
-    (function(CodeAction2) {
+    (function(CodeAction) {
       function create(title, kindOrCommandOrEdit, kind) {
         var result = { title };
         var checkKind = true;
@@ -4364,15 +4366,15 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      CodeAction2.create = create;
+      CodeAction.create = create;
       function is(value) {
         var candidate = value;
         return candidate && Is.string(candidate.title) && (candidate.diagnostics === undefined || Is.typedArray(candidate.diagnostics, Diagnostic.is)) && (candidate.kind === undefined || Is.string(candidate.kind)) && (candidate.edit !== undefined || candidate.command !== undefined) && (candidate.command === undefined || Command.is(candidate.command)) && (candidate.isPreferred === undefined || Is.boolean(candidate.isPreferred)) && (candidate.edit === undefined || WorkspaceEdit.is(candidate.edit));
       }
-      CodeAction2.is = is;
+      CodeAction.is = is;
     })(CodeAction || (exports2.CodeAction = CodeAction = {}));
     var CodeLens;
-    (function(CodeLens2) {
+    (function(CodeLens) {
       function create(range, data) {
         var result = { range };
         if (Is.defined(data)) {
@@ -4380,167 +4382,167 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      CodeLens2.create = create;
+      CodeLens.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Range.is(candidate.range) && (Is.undefined(candidate.command) || Command.is(candidate.command));
       }
-      CodeLens2.is = is;
+      CodeLens.is = is;
     })(CodeLens || (exports2.CodeLens = CodeLens = {}));
     var FormattingOptions;
-    (function(FormattingOptions2) {
+    (function(FormattingOptions) {
       function create(tabSize, insertSpaces) {
         return { tabSize, insertSpaces };
       }
-      FormattingOptions2.create = create;
+      FormattingOptions.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.uinteger(candidate.tabSize) && Is.boolean(candidate.insertSpaces);
       }
-      FormattingOptions2.is = is;
+      FormattingOptions.is = is;
     })(FormattingOptions || (exports2.FormattingOptions = FormattingOptions = {}));
     var DocumentLink;
-    (function(DocumentLink2) {
+    (function(DocumentLink) {
       function create(range, target, data) {
         return { range, target, data };
       }
-      DocumentLink2.create = create;
+      DocumentLink.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Range.is(candidate.range) && (Is.undefined(candidate.target) || Is.string(candidate.target));
       }
-      DocumentLink2.is = is;
+      DocumentLink.is = is;
     })(DocumentLink || (exports2.DocumentLink = DocumentLink = {}));
     var SelectionRange;
-    (function(SelectionRange2) {
+    (function(SelectionRange) {
       function create(range, parent) {
         return { range, parent };
       }
-      SelectionRange2.create = create;
+      SelectionRange.create = create;
       function is(value) {
         var candidate = value;
-        return Is.objectLiteral(candidate) && Range.is(candidate.range) && (candidate.parent === undefined || SelectionRange2.is(candidate.parent));
+        return Is.objectLiteral(candidate) && Range.is(candidate.range) && (candidate.parent === undefined || SelectionRange.is(candidate.parent));
       }
-      SelectionRange2.is = is;
+      SelectionRange.is = is;
     })(SelectionRange || (exports2.SelectionRange = SelectionRange = {}));
     var SemanticTokenTypes;
-    (function(SemanticTokenTypes2) {
-      SemanticTokenTypes2["namespace"] = "namespace";
-      SemanticTokenTypes2["type"] = "type";
-      SemanticTokenTypes2["class"] = "class";
-      SemanticTokenTypes2["enum"] = "enum";
-      SemanticTokenTypes2["interface"] = "interface";
-      SemanticTokenTypes2["struct"] = "struct";
-      SemanticTokenTypes2["typeParameter"] = "typeParameter";
-      SemanticTokenTypes2["parameter"] = "parameter";
-      SemanticTokenTypes2["variable"] = "variable";
-      SemanticTokenTypes2["property"] = "property";
-      SemanticTokenTypes2["enumMember"] = "enumMember";
-      SemanticTokenTypes2["event"] = "event";
-      SemanticTokenTypes2["function"] = "function";
-      SemanticTokenTypes2["method"] = "method";
-      SemanticTokenTypes2["macro"] = "macro";
-      SemanticTokenTypes2["keyword"] = "keyword";
-      SemanticTokenTypes2["modifier"] = "modifier";
-      SemanticTokenTypes2["comment"] = "comment";
-      SemanticTokenTypes2["string"] = "string";
-      SemanticTokenTypes2["number"] = "number";
-      SemanticTokenTypes2["regexp"] = "regexp";
-      SemanticTokenTypes2["operator"] = "operator";
-      SemanticTokenTypes2["decorator"] = "decorator";
+    (function(SemanticTokenTypes) {
+      SemanticTokenTypes["namespace"] = "namespace";
+      SemanticTokenTypes["type"] = "type";
+      SemanticTokenTypes["class"] = "class";
+      SemanticTokenTypes["enum"] = "enum";
+      SemanticTokenTypes["interface"] = "interface";
+      SemanticTokenTypes["struct"] = "struct";
+      SemanticTokenTypes["typeParameter"] = "typeParameter";
+      SemanticTokenTypes["parameter"] = "parameter";
+      SemanticTokenTypes["variable"] = "variable";
+      SemanticTokenTypes["property"] = "property";
+      SemanticTokenTypes["enumMember"] = "enumMember";
+      SemanticTokenTypes["event"] = "event";
+      SemanticTokenTypes["function"] = "function";
+      SemanticTokenTypes["method"] = "method";
+      SemanticTokenTypes["macro"] = "macro";
+      SemanticTokenTypes["keyword"] = "keyword";
+      SemanticTokenTypes["modifier"] = "modifier";
+      SemanticTokenTypes["comment"] = "comment";
+      SemanticTokenTypes["string"] = "string";
+      SemanticTokenTypes["number"] = "number";
+      SemanticTokenTypes["regexp"] = "regexp";
+      SemanticTokenTypes["operator"] = "operator";
+      SemanticTokenTypes["decorator"] = "decorator";
     })(SemanticTokenTypes || (exports2.SemanticTokenTypes = SemanticTokenTypes = {}));
     var SemanticTokenModifiers;
-    (function(SemanticTokenModifiers2) {
-      SemanticTokenModifiers2["declaration"] = "declaration";
-      SemanticTokenModifiers2["definition"] = "definition";
-      SemanticTokenModifiers2["readonly"] = "readonly";
-      SemanticTokenModifiers2["static"] = "static";
-      SemanticTokenModifiers2["deprecated"] = "deprecated";
-      SemanticTokenModifiers2["abstract"] = "abstract";
-      SemanticTokenModifiers2["async"] = "async";
-      SemanticTokenModifiers2["modification"] = "modification";
-      SemanticTokenModifiers2["documentation"] = "documentation";
-      SemanticTokenModifiers2["defaultLibrary"] = "defaultLibrary";
+    (function(SemanticTokenModifiers) {
+      SemanticTokenModifiers["declaration"] = "declaration";
+      SemanticTokenModifiers["definition"] = "definition";
+      SemanticTokenModifiers["readonly"] = "readonly";
+      SemanticTokenModifiers["static"] = "static";
+      SemanticTokenModifiers["deprecated"] = "deprecated";
+      SemanticTokenModifiers["abstract"] = "abstract";
+      SemanticTokenModifiers["async"] = "async";
+      SemanticTokenModifiers["modification"] = "modification";
+      SemanticTokenModifiers["documentation"] = "documentation";
+      SemanticTokenModifiers["defaultLibrary"] = "defaultLibrary";
     })(SemanticTokenModifiers || (exports2.SemanticTokenModifiers = SemanticTokenModifiers = {}));
     var SemanticTokens;
-    (function(SemanticTokens2) {
+    (function(SemanticTokens) {
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && (candidate.resultId === undefined || typeof candidate.resultId === "string") && Array.isArray(candidate.data) && (candidate.data.length === 0 || typeof candidate.data[0] === "number");
       }
-      SemanticTokens2.is = is;
+      SemanticTokens.is = is;
     })(SemanticTokens || (exports2.SemanticTokens = SemanticTokens = {}));
     var InlineValueText;
-    (function(InlineValueText2) {
+    (function(InlineValueText) {
       function create(range, text) {
         return { range, text };
       }
-      InlineValueText2.create = create;
+      InlineValueText.create = create;
       function is(value) {
         var candidate = value;
         return candidate !== undefined && candidate !== null && Range.is(candidate.range) && Is.string(candidate.text);
       }
-      InlineValueText2.is = is;
+      InlineValueText.is = is;
     })(InlineValueText || (exports2.InlineValueText = InlineValueText = {}));
     var InlineValueVariableLookup;
-    (function(InlineValueVariableLookup2) {
+    (function(InlineValueVariableLookup) {
       function create(range, variableName, caseSensitiveLookup) {
         return { range, variableName, caseSensitiveLookup };
       }
-      InlineValueVariableLookup2.create = create;
+      InlineValueVariableLookup.create = create;
       function is(value) {
         var candidate = value;
         return candidate !== undefined && candidate !== null && Range.is(candidate.range) && Is.boolean(candidate.caseSensitiveLookup) && (Is.string(candidate.variableName) || candidate.variableName === undefined);
       }
-      InlineValueVariableLookup2.is = is;
+      InlineValueVariableLookup.is = is;
     })(InlineValueVariableLookup || (exports2.InlineValueVariableLookup = InlineValueVariableLookup = {}));
     var InlineValueEvaluatableExpression;
-    (function(InlineValueEvaluatableExpression2) {
+    (function(InlineValueEvaluatableExpression) {
       function create(range, expression) {
         return { range, expression };
       }
-      InlineValueEvaluatableExpression2.create = create;
+      InlineValueEvaluatableExpression.create = create;
       function is(value) {
         var candidate = value;
         return candidate !== undefined && candidate !== null && Range.is(candidate.range) && (Is.string(candidate.expression) || candidate.expression === undefined);
       }
-      InlineValueEvaluatableExpression2.is = is;
+      InlineValueEvaluatableExpression.is = is;
     })(InlineValueEvaluatableExpression || (exports2.InlineValueEvaluatableExpression = InlineValueEvaluatableExpression = {}));
     var InlineValueContext;
-    (function(InlineValueContext2) {
+    (function(InlineValueContext) {
       function create(frameId, stoppedLocation) {
         return { frameId, stoppedLocation };
       }
-      InlineValueContext2.create = create;
+      InlineValueContext.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Range.is(value.stoppedLocation);
       }
-      InlineValueContext2.is = is;
+      InlineValueContext.is = is;
     })(InlineValueContext || (exports2.InlineValueContext = InlineValueContext = {}));
     var InlayHintKind;
-    (function(InlayHintKind2) {
-      InlayHintKind2.Type = 1;
-      InlayHintKind2.Parameter = 2;
+    (function(InlayHintKind) {
+      InlayHintKind.Type = 1;
+      InlayHintKind.Parameter = 2;
       function is(value) {
         return value === 1 || value === 2;
       }
-      InlayHintKind2.is = is;
+      InlayHintKind.is = is;
     })(InlayHintKind || (exports2.InlayHintKind = InlayHintKind = {}));
     var InlayHintLabelPart;
-    (function(InlayHintLabelPart2) {
+    (function(InlayHintLabelPart) {
       function create(value) {
         return { value };
       }
-      InlayHintLabelPart2.create = create;
+      InlayHintLabelPart.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && (candidate.tooltip === undefined || Is.string(candidate.tooltip) || MarkupContent.is(candidate.tooltip)) && (candidate.location === undefined || Location.is(candidate.location)) && (candidate.command === undefined || Command.is(candidate.command));
       }
-      InlayHintLabelPart2.is = is;
+      InlayHintLabelPart.is = is;
     })(InlayHintLabelPart || (exports2.InlayHintLabelPart = InlayHintLabelPart = {}));
     var InlayHint;
-    (function(InlayHint2) {
+    (function(InlayHint) {
       function create(position, label, kind) {
         var result = { position, label };
         if (kind !== undefined) {
@@ -4548,75 +4550,75 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return result;
       }
-      InlayHint2.create = create;
+      InlayHint.create = create;
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && Position.is(candidate.position) && (Is.string(candidate.label) || Is.typedArray(candidate.label, InlayHintLabelPart.is)) && (candidate.kind === undefined || InlayHintKind.is(candidate.kind)) && candidate.textEdits === undefined || Is.typedArray(candidate.textEdits, TextEdit.is) && (candidate.tooltip === undefined || Is.string(candidate.tooltip) || MarkupContent.is(candidate.tooltip)) && (candidate.paddingLeft === undefined || Is.boolean(candidate.paddingLeft)) && (candidate.paddingRight === undefined || Is.boolean(candidate.paddingRight));
       }
-      InlayHint2.is = is;
+      InlayHint.is = is;
     })(InlayHint || (exports2.InlayHint = InlayHint = {}));
     var StringValue;
-    (function(StringValue2) {
+    (function(StringValue) {
       function createSnippet(value) {
         return { kind: "snippet", value };
       }
-      StringValue2.createSnippet = createSnippet;
+      StringValue.createSnippet = createSnippet;
     })(StringValue || (exports2.StringValue = StringValue = {}));
     var InlineCompletionItem;
-    (function(InlineCompletionItem2) {
+    (function(InlineCompletionItem) {
       function create(insertText, filterText, range, command) {
         return { insertText, filterText, range, command };
       }
-      InlineCompletionItem2.create = create;
+      InlineCompletionItem.create = create;
     })(InlineCompletionItem || (exports2.InlineCompletionItem = InlineCompletionItem = {}));
     var InlineCompletionList;
-    (function(InlineCompletionList2) {
+    (function(InlineCompletionList) {
       function create(items) {
         return { items };
       }
-      InlineCompletionList2.create = create;
+      InlineCompletionList.create = create;
     })(InlineCompletionList || (exports2.InlineCompletionList = InlineCompletionList = {}));
     var InlineCompletionTriggerKind;
-    (function(InlineCompletionTriggerKind2) {
-      InlineCompletionTriggerKind2.Invoked = 0;
-      InlineCompletionTriggerKind2.Automatic = 1;
+    (function(InlineCompletionTriggerKind) {
+      InlineCompletionTriggerKind.Invoked = 0;
+      InlineCompletionTriggerKind.Automatic = 1;
     })(InlineCompletionTriggerKind || (exports2.InlineCompletionTriggerKind = InlineCompletionTriggerKind = {}));
     var SelectedCompletionInfo;
-    (function(SelectedCompletionInfo2) {
+    (function(SelectedCompletionInfo) {
       function create(range, text) {
         return { range, text };
       }
-      SelectedCompletionInfo2.create = create;
+      SelectedCompletionInfo.create = create;
     })(SelectedCompletionInfo || (exports2.SelectedCompletionInfo = SelectedCompletionInfo = {}));
     var InlineCompletionContext;
-    (function(InlineCompletionContext2) {
+    (function(InlineCompletionContext) {
       function create(triggerKind, selectedCompletionInfo) {
         return { triggerKind, selectedCompletionInfo };
       }
-      InlineCompletionContext2.create = create;
+      InlineCompletionContext.create = create;
     })(InlineCompletionContext || (exports2.InlineCompletionContext = InlineCompletionContext = {}));
     var WorkspaceFolder;
-    (function(WorkspaceFolder2) {
+    (function(WorkspaceFolder) {
       function is(value) {
         var candidate = value;
         return Is.objectLiteral(candidate) && URI.is(candidate.uri) && Is.string(candidate.name);
       }
-      WorkspaceFolder2.is = is;
+      WorkspaceFolder.is = is;
     })(WorkspaceFolder || (exports2.WorkspaceFolder = WorkspaceFolder = {}));
     exports2.EOL = [`
 `, `\r
 `, "\r"];
     var TextDocument;
-    (function(TextDocument2) {
+    (function(TextDocument) {
       function create(uri, languageId, version, content) {
         return new FullTextDocument(uri, languageId, version, content);
       }
-      TextDocument2.create = create;
+      TextDocument.create = create;
       function is(value) {
         var candidate = value;
         return Is.defined(candidate) && Is.string(candidate.uri) && (Is.undefined(candidate.languageId) || Is.string(candidate.languageId)) && Is.uinteger(candidate.lineCount) && Is.func(candidate.getText) && Is.func(candidate.positionAt) && Is.func(candidate.offsetAt) ? true : false;
       }
-      TextDocument2.is = is;
+      TextDocument.is = is;
       function applyEdits(document, edits) {
         var text = document.getText();
         var sortedEdits = mergeSort(edits, function(a, b) {
@@ -4640,7 +4642,7 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return text;
       }
-      TextDocument2.applyEdits = applyEdits;
+      TextDocument.applyEdits = applyEdits;
       function mergeSort(data, compare) {
         if (data.length <= 1) {
           return data;
@@ -4671,35 +4673,35 @@ var require_main2 = __commonJS((exports, module) => {
       }
     })(TextDocument || (exports2.TextDocument = TextDocument = {}));
     var FullTextDocument = function() {
-      function FullTextDocument2(uri, languageId, version, content) {
+      function FullTextDocument(uri, languageId, version, content) {
         this._uri = uri;
         this._languageId = languageId;
         this._version = version;
         this._content = content;
         this._lineOffsets = undefined;
       }
-      Object.defineProperty(FullTextDocument2.prototype, "uri", {
+      Object.defineProperty(FullTextDocument.prototype, "uri", {
         get: function() {
           return this._uri;
         },
         enumerable: false,
         configurable: true
       });
-      Object.defineProperty(FullTextDocument2.prototype, "languageId", {
+      Object.defineProperty(FullTextDocument.prototype, "languageId", {
         get: function() {
           return this._languageId;
         },
         enumerable: false,
         configurable: true
       });
-      Object.defineProperty(FullTextDocument2.prototype, "version", {
+      Object.defineProperty(FullTextDocument.prototype, "version", {
         get: function() {
           return this._version;
         },
         enumerable: false,
         configurable: true
       });
-      FullTextDocument2.prototype.getText = function(range) {
+      FullTextDocument.prototype.getText = function(range) {
         if (range) {
           var start = this.offsetAt(range.start);
           var end = this.offsetAt(range.end);
@@ -4707,12 +4709,12 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return this._content;
       };
-      FullTextDocument2.prototype.update = function(event, version) {
+      FullTextDocument.prototype.update = function(event, version) {
         this._content = event.text;
         this._version = version;
         this._lineOffsets = undefined;
       };
-      FullTextDocument2.prototype.getLineOffsets = function() {
+      FullTextDocument.prototype.getLineOffsets = function() {
         if (this._lineOffsets === undefined) {
           var lineOffsets = [];
           var text = this._content;
@@ -4737,7 +4739,7 @@ var require_main2 = __commonJS((exports, module) => {
         }
         return this._lineOffsets;
       };
-      FullTextDocument2.prototype.positionAt = function(offset) {
+      FullTextDocument.prototype.positionAt = function(offset) {
         offset = Math.max(Math.min(offset, this._content.length), 0);
         var lineOffsets = this.getLineOffsets();
         var low = 0, high = lineOffsets.length;
@@ -4755,7 +4757,7 @@ var require_main2 = __commonJS((exports, module) => {
         var line = low - 1;
         return Position.create(line, offset - lineOffsets[line]);
       };
-      FullTextDocument2.prototype.offsetAt = function(position) {
+      FullTextDocument.prototype.offsetAt = function(position) {
         var lineOffsets = this.getLineOffsets();
         if (position.line >= lineOffsets.length) {
           return this._content.length;
@@ -4766,76 +4768,76 @@ var require_main2 = __commonJS((exports, module) => {
         var nextLineOffset = position.line + 1 < lineOffsets.length ? lineOffsets[position.line + 1] : this._content.length;
         return Math.max(Math.min(lineOffset + position.character, nextLineOffset), lineOffset);
       };
-      Object.defineProperty(FullTextDocument2.prototype, "lineCount", {
+      Object.defineProperty(FullTextDocument.prototype, "lineCount", {
         get: function() {
           return this.getLineOffsets().length;
         },
         enumerable: false,
         configurable: true
       });
-      return FullTextDocument2;
+      return FullTextDocument;
     }();
     var Is;
-    (function(Is2) {
+    (function(Is) {
       var toString = Object.prototype.toString;
       function defined(value) {
         return typeof value !== "undefined";
       }
-      Is2.defined = defined;
+      Is.defined = defined;
       function undefined2(value) {
         return typeof value === "undefined";
       }
-      Is2.undefined = undefined2;
+      Is.undefined = undefined2;
       function boolean(value) {
         return value === true || value === false;
       }
-      Is2.boolean = boolean;
+      Is.boolean = boolean;
       function string(value) {
         return toString.call(value) === "[object String]";
       }
-      Is2.string = string;
+      Is.string = string;
       function number(value) {
         return toString.call(value) === "[object Number]";
       }
-      Is2.number = number;
+      Is.number = number;
       function numberRange(value, min, max) {
         return toString.call(value) === "[object Number]" && min <= value && value <= max;
       }
-      Is2.numberRange = numberRange;
-      function integer2(value) {
+      Is.numberRange = numberRange;
+      function integer(value) {
         return toString.call(value) === "[object Number]" && -2147483648 <= value && value <= 2147483647;
       }
-      Is2.integer = integer2;
-      function uinteger2(value) {
+      Is.integer = integer;
+      function uinteger(value) {
         return toString.call(value) === "[object Number]" && 0 <= value && value <= 2147483647;
       }
-      Is2.uinteger = uinteger2;
+      Is.uinteger = uinteger;
       function func(value) {
         return toString.call(value) === "[object Function]";
       }
-      Is2.func = func;
+      Is.func = func;
       function objectLiteral(value) {
         return value !== null && typeof value === "object";
       }
-      Is2.objectLiteral = objectLiteral;
+      Is.objectLiteral = objectLiteral;
       function typedArray(value, check) {
         return Array.isArray(value) && value.every(check);
       }
-      Is2.typedArray = typedArray;
+      Is.typedArray = typedArray;
     })(Is || (Is = {}));
   });
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/messages.js
-var require_messages2 = __commonJS((exports) => {
+var require_messages2 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ProtocolNotificationType = exports.ProtocolNotificationType0 = exports.ProtocolRequestType = exports.ProtocolRequestType0 = exports.RegistrationType = exports.MessageDirection = undefined;
   var vscode_jsonrpc_1 = require_main();
   var MessageDirection;
-  (function(MessageDirection2) {
-    MessageDirection2["clientToServer"] = "clientToServer";
-    MessageDirection2["serverToClient"] = "serverToClient";
-    MessageDirection2["both"] = "both";
+  (function(MessageDirection) {
+    MessageDirection["clientToServer"] = "clientToServer";
+    MessageDirection["serverToClient"] = "serverToClient";
+    MessageDirection["both"] = "both";
   })(MessageDirection || (exports.MessageDirection = MessageDirection = {}));
 
   class RegistrationType {
@@ -4875,7 +4877,7 @@ var require_messages2 = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/utils/is.js
-var require_is3 = __commonJS((exports) => {
+var require_is3 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.objectLiteral = exports.typedArray = exports.stringArray = exports.array = exports.func = exports.error = exports.number = exports.string = exports.boolean = undefined;
   function boolean(value) {
@@ -4917,453 +4919,453 @@ var require_is3 = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.implementation.js
-var require_protocol_implementation = __commonJS((exports) => {
+var require_protocol_implementation = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ImplementationRequest = undefined;
   var messages_1 = require_messages2();
   var ImplementationRequest;
-  (function(ImplementationRequest2) {
-    ImplementationRequest2.method = "textDocument/implementation";
-    ImplementationRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    ImplementationRequest2.type = new messages_1.ProtocolRequestType(ImplementationRequest2.method);
+  (function(ImplementationRequest) {
+    ImplementationRequest.method = "textDocument/implementation";
+    ImplementationRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    ImplementationRequest.type = new messages_1.ProtocolRequestType(ImplementationRequest.method);
   })(ImplementationRequest || (exports.ImplementationRequest = ImplementationRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.typeDefinition.js
-var require_protocol_typeDefinition = __commonJS((exports) => {
+var require_protocol_typeDefinition = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.TypeDefinitionRequest = undefined;
   var messages_1 = require_messages2();
   var TypeDefinitionRequest;
-  (function(TypeDefinitionRequest2) {
-    TypeDefinitionRequest2.method = "textDocument/typeDefinition";
-    TypeDefinitionRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    TypeDefinitionRequest2.type = new messages_1.ProtocolRequestType(TypeDefinitionRequest2.method);
+  (function(TypeDefinitionRequest) {
+    TypeDefinitionRequest.method = "textDocument/typeDefinition";
+    TypeDefinitionRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    TypeDefinitionRequest.type = new messages_1.ProtocolRequestType(TypeDefinitionRequest.method);
   })(TypeDefinitionRequest || (exports.TypeDefinitionRequest = TypeDefinitionRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.workspaceFolder.js
-var require_protocol_workspaceFolder = __commonJS((exports) => {
+var require_protocol_workspaceFolder = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DidChangeWorkspaceFoldersNotification = exports.WorkspaceFoldersRequest = undefined;
   var messages_1 = require_messages2();
   var WorkspaceFoldersRequest;
-  (function(WorkspaceFoldersRequest2) {
-    WorkspaceFoldersRequest2.method = "workspace/workspaceFolders";
-    WorkspaceFoldersRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    WorkspaceFoldersRequest2.type = new messages_1.ProtocolRequestType0(WorkspaceFoldersRequest2.method);
+  (function(WorkspaceFoldersRequest) {
+    WorkspaceFoldersRequest.method = "workspace/workspaceFolders";
+    WorkspaceFoldersRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    WorkspaceFoldersRequest.type = new messages_1.ProtocolRequestType0(WorkspaceFoldersRequest.method);
   })(WorkspaceFoldersRequest || (exports.WorkspaceFoldersRequest = WorkspaceFoldersRequest = {}));
   var DidChangeWorkspaceFoldersNotification;
-  (function(DidChangeWorkspaceFoldersNotification2) {
-    DidChangeWorkspaceFoldersNotification2.method = "workspace/didChangeWorkspaceFolders";
-    DidChangeWorkspaceFoldersNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidChangeWorkspaceFoldersNotification2.type = new messages_1.ProtocolNotificationType(DidChangeWorkspaceFoldersNotification2.method);
+  (function(DidChangeWorkspaceFoldersNotification) {
+    DidChangeWorkspaceFoldersNotification.method = "workspace/didChangeWorkspaceFolders";
+    DidChangeWorkspaceFoldersNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidChangeWorkspaceFoldersNotification.type = new messages_1.ProtocolNotificationType(DidChangeWorkspaceFoldersNotification.method);
   })(DidChangeWorkspaceFoldersNotification || (exports.DidChangeWorkspaceFoldersNotification = DidChangeWorkspaceFoldersNotification = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.configuration.js
-var require_protocol_configuration = __commonJS((exports) => {
+var require_protocol_configuration = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ConfigurationRequest = undefined;
   var messages_1 = require_messages2();
   var ConfigurationRequest;
-  (function(ConfigurationRequest2) {
-    ConfigurationRequest2.method = "workspace/configuration";
-    ConfigurationRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    ConfigurationRequest2.type = new messages_1.ProtocolRequestType(ConfigurationRequest2.method);
+  (function(ConfigurationRequest) {
+    ConfigurationRequest.method = "workspace/configuration";
+    ConfigurationRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    ConfigurationRequest.type = new messages_1.ProtocolRequestType(ConfigurationRequest.method);
   })(ConfigurationRequest || (exports.ConfigurationRequest = ConfigurationRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.colorProvider.js
-var require_protocol_colorProvider = __commonJS((exports) => {
+var require_protocol_colorProvider = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ColorPresentationRequest = exports.DocumentColorRequest = undefined;
   var messages_1 = require_messages2();
   var DocumentColorRequest;
-  (function(DocumentColorRequest2) {
-    DocumentColorRequest2.method = "textDocument/documentColor";
-    DocumentColorRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentColorRequest2.type = new messages_1.ProtocolRequestType(DocumentColorRequest2.method);
+  (function(DocumentColorRequest) {
+    DocumentColorRequest.method = "textDocument/documentColor";
+    DocumentColorRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentColorRequest.type = new messages_1.ProtocolRequestType(DocumentColorRequest.method);
   })(DocumentColorRequest || (exports.DocumentColorRequest = DocumentColorRequest = {}));
   var ColorPresentationRequest;
-  (function(ColorPresentationRequest2) {
-    ColorPresentationRequest2.method = "textDocument/colorPresentation";
-    ColorPresentationRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    ColorPresentationRequest2.type = new messages_1.ProtocolRequestType(ColorPresentationRequest2.method);
+  (function(ColorPresentationRequest) {
+    ColorPresentationRequest.method = "textDocument/colorPresentation";
+    ColorPresentationRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    ColorPresentationRequest.type = new messages_1.ProtocolRequestType(ColorPresentationRequest.method);
   })(ColorPresentationRequest || (exports.ColorPresentationRequest = ColorPresentationRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.foldingRange.js
-var require_protocol_foldingRange = __commonJS((exports) => {
+var require_protocol_foldingRange = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.FoldingRangeRefreshRequest = exports.FoldingRangeRequest = undefined;
   var messages_1 = require_messages2();
   var FoldingRangeRequest;
-  (function(FoldingRangeRequest2) {
-    FoldingRangeRequest2.method = "textDocument/foldingRange";
-    FoldingRangeRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    FoldingRangeRequest2.type = new messages_1.ProtocolRequestType(FoldingRangeRequest2.method);
+  (function(FoldingRangeRequest) {
+    FoldingRangeRequest.method = "textDocument/foldingRange";
+    FoldingRangeRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    FoldingRangeRequest.type = new messages_1.ProtocolRequestType(FoldingRangeRequest.method);
   })(FoldingRangeRequest || (exports.FoldingRangeRequest = FoldingRangeRequest = {}));
   var FoldingRangeRefreshRequest;
-  (function(FoldingRangeRefreshRequest2) {
-    FoldingRangeRefreshRequest2.method = `workspace/foldingRange/refresh`;
-    FoldingRangeRefreshRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    FoldingRangeRefreshRequest2.type = new messages_1.ProtocolRequestType0(FoldingRangeRefreshRequest2.method);
+  (function(FoldingRangeRefreshRequest) {
+    FoldingRangeRefreshRequest.method = `workspace/foldingRange/refresh`;
+    FoldingRangeRefreshRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    FoldingRangeRefreshRequest.type = new messages_1.ProtocolRequestType0(FoldingRangeRefreshRequest.method);
   })(FoldingRangeRefreshRequest || (exports.FoldingRangeRefreshRequest = FoldingRangeRefreshRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.declaration.js
-var require_protocol_declaration = __commonJS((exports) => {
+var require_protocol_declaration = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DeclarationRequest = undefined;
   var messages_1 = require_messages2();
   var DeclarationRequest;
-  (function(DeclarationRequest2) {
-    DeclarationRequest2.method = "textDocument/declaration";
-    DeclarationRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DeclarationRequest2.type = new messages_1.ProtocolRequestType(DeclarationRequest2.method);
+  (function(DeclarationRequest) {
+    DeclarationRequest.method = "textDocument/declaration";
+    DeclarationRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DeclarationRequest.type = new messages_1.ProtocolRequestType(DeclarationRequest.method);
   })(DeclarationRequest || (exports.DeclarationRequest = DeclarationRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.selectionRange.js
-var require_protocol_selectionRange = __commonJS((exports) => {
+var require_protocol_selectionRange = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.SelectionRangeRequest = undefined;
   var messages_1 = require_messages2();
   var SelectionRangeRequest;
-  (function(SelectionRangeRequest2) {
-    SelectionRangeRequest2.method = "textDocument/selectionRange";
-    SelectionRangeRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    SelectionRangeRequest2.type = new messages_1.ProtocolRequestType(SelectionRangeRequest2.method);
+  (function(SelectionRangeRequest) {
+    SelectionRangeRequest.method = "textDocument/selectionRange";
+    SelectionRangeRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    SelectionRangeRequest.type = new messages_1.ProtocolRequestType(SelectionRangeRequest.method);
   })(SelectionRangeRequest || (exports.SelectionRangeRequest = SelectionRangeRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.progress.js
-var require_protocol_progress = __commonJS((exports) => {
+var require_protocol_progress = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.WorkDoneProgressCancelNotification = exports.WorkDoneProgressCreateRequest = exports.WorkDoneProgress = undefined;
   var vscode_jsonrpc_1 = require_main();
   var messages_1 = require_messages2();
   var WorkDoneProgress;
-  (function(WorkDoneProgress2) {
-    WorkDoneProgress2.type = new vscode_jsonrpc_1.ProgressType;
+  (function(WorkDoneProgress) {
+    WorkDoneProgress.type = new vscode_jsonrpc_1.ProgressType;
     function is(value) {
-      return value === WorkDoneProgress2.type;
+      return value === WorkDoneProgress.type;
     }
-    WorkDoneProgress2.is = is;
+    WorkDoneProgress.is = is;
   })(WorkDoneProgress || (exports.WorkDoneProgress = WorkDoneProgress = {}));
   var WorkDoneProgressCreateRequest;
-  (function(WorkDoneProgressCreateRequest2) {
-    WorkDoneProgressCreateRequest2.method = "window/workDoneProgress/create";
-    WorkDoneProgressCreateRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    WorkDoneProgressCreateRequest2.type = new messages_1.ProtocolRequestType(WorkDoneProgressCreateRequest2.method);
+  (function(WorkDoneProgressCreateRequest) {
+    WorkDoneProgressCreateRequest.method = "window/workDoneProgress/create";
+    WorkDoneProgressCreateRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    WorkDoneProgressCreateRequest.type = new messages_1.ProtocolRequestType(WorkDoneProgressCreateRequest.method);
   })(WorkDoneProgressCreateRequest || (exports.WorkDoneProgressCreateRequest = WorkDoneProgressCreateRequest = {}));
   var WorkDoneProgressCancelNotification;
-  (function(WorkDoneProgressCancelNotification2) {
-    WorkDoneProgressCancelNotification2.method = "window/workDoneProgress/cancel";
-    WorkDoneProgressCancelNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WorkDoneProgressCancelNotification2.type = new messages_1.ProtocolNotificationType(WorkDoneProgressCancelNotification2.method);
+  (function(WorkDoneProgressCancelNotification) {
+    WorkDoneProgressCancelNotification.method = "window/workDoneProgress/cancel";
+    WorkDoneProgressCancelNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    WorkDoneProgressCancelNotification.type = new messages_1.ProtocolNotificationType(WorkDoneProgressCancelNotification.method);
   })(WorkDoneProgressCancelNotification || (exports.WorkDoneProgressCancelNotification = WorkDoneProgressCancelNotification = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.callHierarchy.js
-var require_protocol_callHierarchy = __commonJS((exports) => {
+var require_protocol_callHierarchy = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.CallHierarchyOutgoingCallsRequest = exports.CallHierarchyIncomingCallsRequest = exports.CallHierarchyPrepareRequest = undefined;
   var messages_1 = require_messages2();
   var CallHierarchyPrepareRequest;
-  (function(CallHierarchyPrepareRequest2) {
-    CallHierarchyPrepareRequest2.method = "textDocument/prepareCallHierarchy";
-    CallHierarchyPrepareRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CallHierarchyPrepareRequest2.type = new messages_1.ProtocolRequestType(CallHierarchyPrepareRequest2.method);
+  (function(CallHierarchyPrepareRequest) {
+    CallHierarchyPrepareRequest.method = "textDocument/prepareCallHierarchy";
+    CallHierarchyPrepareRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CallHierarchyPrepareRequest.type = new messages_1.ProtocolRequestType(CallHierarchyPrepareRequest.method);
   })(CallHierarchyPrepareRequest || (exports.CallHierarchyPrepareRequest = CallHierarchyPrepareRequest = {}));
   var CallHierarchyIncomingCallsRequest;
-  (function(CallHierarchyIncomingCallsRequest2) {
-    CallHierarchyIncomingCallsRequest2.method = "callHierarchy/incomingCalls";
-    CallHierarchyIncomingCallsRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CallHierarchyIncomingCallsRequest2.type = new messages_1.ProtocolRequestType(CallHierarchyIncomingCallsRequest2.method);
+  (function(CallHierarchyIncomingCallsRequest) {
+    CallHierarchyIncomingCallsRequest.method = "callHierarchy/incomingCalls";
+    CallHierarchyIncomingCallsRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CallHierarchyIncomingCallsRequest.type = new messages_1.ProtocolRequestType(CallHierarchyIncomingCallsRequest.method);
   })(CallHierarchyIncomingCallsRequest || (exports.CallHierarchyIncomingCallsRequest = CallHierarchyIncomingCallsRequest = {}));
   var CallHierarchyOutgoingCallsRequest;
-  (function(CallHierarchyOutgoingCallsRequest2) {
-    CallHierarchyOutgoingCallsRequest2.method = "callHierarchy/outgoingCalls";
-    CallHierarchyOutgoingCallsRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CallHierarchyOutgoingCallsRequest2.type = new messages_1.ProtocolRequestType(CallHierarchyOutgoingCallsRequest2.method);
+  (function(CallHierarchyOutgoingCallsRequest) {
+    CallHierarchyOutgoingCallsRequest.method = "callHierarchy/outgoingCalls";
+    CallHierarchyOutgoingCallsRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CallHierarchyOutgoingCallsRequest.type = new messages_1.ProtocolRequestType(CallHierarchyOutgoingCallsRequest.method);
   })(CallHierarchyOutgoingCallsRequest || (exports.CallHierarchyOutgoingCallsRequest = CallHierarchyOutgoingCallsRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.semanticTokens.js
-var require_protocol_semanticTokens = __commonJS((exports) => {
+var require_protocol_semanticTokens = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.SemanticTokensRefreshRequest = exports.SemanticTokensRangeRequest = exports.SemanticTokensDeltaRequest = exports.SemanticTokensRequest = exports.SemanticTokensRegistrationType = exports.TokenFormat = undefined;
   var messages_1 = require_messages2();
   var TokenFormat;
-  (function(TokenFormat2) {
-    TokenFormat2.Relative = "relative";
+  (function(TokenFormat) {
+    TokenFormat.Relative = "relative";
   })(TokenFormat || (exports.TokenFormat = TokenFormat = {}));
   var SemanticTokensRegistrationType;
-  (function(SemanticTokensRegistrationType2) {
-    SemanticTokensRegistrationType2.method = "textDocument/semanticTokens";
-    SemanticTokensRegistrationType2.type = new messages_1.RegistrationType(SemanticTokensRegistrationType2.method);
+  (function(SemanticTokensRegistrationType) {
+    SemanticTokensRegistrationType.method = "textDocument/semanticTokens";
+    SemanticTokensRegistrationType.type = new messages_1.RegistrationType(SemanticTokensRegistrationType.method);
   })(SemanticTokensRegistrationType || (exports.SemanticTokensRegistrationType = SemanticTokensRegistrationType = {}));
   var SemanticTokensRequest;
-  (function(SemanticTokensRequest2) {
-    SemanticTokensRequest2.method = "textDocument/semanticTokens/full";
-    SemanticTokensRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    SemanticTokensRequest2.type = new messages_1.ProtocolRequestType(SemanticTokensRequest2.method);
-    SemanticTokensRequest2.registrationMethod = SemanticTokensRegistrationType.method;
+  (function(SemanticTokensRequest) {
+    SemanticTokensRequest.method = "textDocument/semanticTokens/full";
+    SemanticTokensRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    SemanticTokensRequest.type = new messages_1.ProtocolRequestType(SemanticTokensRequest.method);
+    SemanticTokensRequest.registrationMethod = SemanticTokensRegistrationType.method;
   })(SemanticTokensRequest || (exports.SemanticTokensRequest = SemanticTokensRequest = {}));
   var SemanticTokensDeltaRequest;
-  (function(SemanticTokensDeltaRequest2) {
-    SemanticTokensDeltaRequest2.method = "textDocument/semanticTokens/full/delta";
-    SemanticTokensDeltaRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    SemanticTokensDeltaRequest2.type = new messages_1.ProtocolRequestType(SemanticTokensDeltaRequest2.method);
-    SemanticTokensDeltaRequest2.registrationMethod = SemanticTokensRegistrationType.method;
+  (function(SemanticTokensDeltaRequest) {
+    SemanticTokensDeltaRequest.method = "textDocument/semanticTokens/full/delta";
+    SemanticTokensDeltaRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    SemanticTokensDeltaRequest.type = new messages_1.ProtocolRequestType(SemanticTokensDeltaRequest.method);
+    SemanticTokensDeltaRequest.registrationMethod = SemanticTokensRegistrationType.method;
   })(SemanticTokensDeltaRequest || (exports.SemanticTokensDeltaRequest = SemanticTokensDeltaRequest = {}));
   var SemanticTokensRangeRequest;
-  (function(SemanticTokensRangeRequest2) {
-    SemanticTokensRangeRequest2.method = "textDocument/semanticTokens/range";
-    SemanticTokensRangeRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    SemanticTokensRangeRequest2.type = new messages_1.ProtocolRequestType(SemanticTokensRangeRequest2.method);
-    SemanticTokensRangeRequest2.registrationMethod = SemanticTokensRegistrationType.method;
+  (function(SemanticTokensRangeRequest) {
+    SemanticTokensRangeRequest.method = "textDocument/semanticTokens/range";
+    SemanticTokensRangeRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    SemanticTokensRangeRequest.type = new messages_1.ProtocolRequestType(SemanticTokensRangeRequest.method);
+    SemanticTokensRangeRequest.registrationMethod = SemanticTokensRegistrationType.method;
   })(SemanticTokensRangeRequest || (exports.SemanticTokensRangeRequest = SemanticTokensRangeRequest = {}));
   var SemanticTokensRefreshRequest;
-  (function(SemanticTokensRefreshRequest2) {
-    SemanticTokensRefreshRequest2.method = `workspace/semanticTokens/refresh`;
-    SemanticTokensRefreshRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    SemanticTokensRefreshRequest2.type = new messages_1.ProtocolRequestType0(SemanticTokensRefreshRequest2.method);
+  (function(SemanticTokensRefreshRequest) {
+    SemanticTokensRefreshRequest.method = `workspace/semanticTokens/refresh`;
+    SemanticTokensRefreshRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    SemanticTokensRefreshRequest.type = new messages_1.ProtocolRequestType0(SemanticTokensRefreshRequest.method);
   })(SemanticTokensRefreshRequest || (exports.SemanticTokensRefreshRequest = SemanticTokensRefreshRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.showDocument.js
-var require_protocol_showDocument = __commonJS((exports) => {
+var require_protocol_showDocument = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ShowDocumentRequest = undefined;
   var messages_1 = require_messages2();
   var ShowDocumentRequest;
-  (function(ShowDocumentRequest2) {
-    ShowDocumentRequest2.method = "window/showDocument";
-    ShowDocumentRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    ShowDocumentRequest2.type = new messages_1.ProtocolRequestType(ShowDocumentRequest2.method);
+  (function(ShowDocumentRequest) {
+    ShowDocumentRequest.method = "window/showDocument";
+    ShowDocumentRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    ShowDocumentRequest.type = new messages_1.ProtocolRequestType(ShowDocumentRequest.method);
   })(ShowDocumentRequest || (exports.ShowDocumentRequest = ShowDocumentRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.linkedEditingRange.js
-var require_protocol_linkedEditingRange = __commonJS((exports) => {
+var require_protocol_linkedEditingRange = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.LinkedEditingRangeRequest = undefined;
   var messages_1 = require_messages2();
   var LinkedEditingRangeRequest;
-  (function(LinkedEditingRangeRequest2) {
-    LinkedEditingRangeRequest2.method = "textDocument/linkedEditingRange";
-    LinkedEditingRangeRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    LinkedEditingRangeRequest2.type = new messages_1.ProtocolRequestType(LinkedEditingRangeRequest2.method);
+  (function(LinkedEditingRangeRequest) {
+    LinkedEditingRangeRequest.method = "textDocument/linkedEditingRange";
+    LinkedEditingRangeRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    LinkedEditingRangeRequest.type = new messages_1.ProtocolRequestType(LinkedEditingRangeRequest.method);
   })(LinkedEditingRangeRequest || (exports.LinkedEditingRangeRequest = LinkedEditingRangeRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.fileOperations.js
-var require_protocol_fileOperations = __commonJS((exports) => {
+var require_protocol_fileOperations = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.WillDeleteFilesRequest = exports.DidDeleteFilesNotification = exports.DidRenameFilesNotification = exports.WillRenameFilesRequest = exports.DidCreateFilesNotification = exports.WillCreateFilesRequest = exports.FileOperationPatternKind = undefined;
   var messages_1 = require_messages2();
   var FileOperationPatternKind;
-  (function(FileOperationPatternKind2) {
-    FileOperationPatternKind2.file = "file";
-    FileOperationPatternKind2.folder = "folder";
+  (function(FileOperationPatternKind) {
+    FileOperationPatternKind.file = "file";
+    FileOperationPatternKind.folder = "folder";
   })(FileOperationPatternKind || (exports.FileOperationPatternKind = FileOperationPatternKind = {}));
   var WillCreateFilesRequest;
-  (function(WillCreateFilesRequest2) {
-    WillCreateFilesRequest2.method = "workspace/willCreateFiles";
-    WillCreateFilesRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WillCreateFilesRequest2.type = new messages_1.ProtocolRequestType(WillCreateFilesRequest2.method);
+  (function(WillCreateFilesRequest) {
+    WillCreateFilesRequest.method = "workspace/willCreateFiles";
+    WillCreateFilesRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WillCreateFilesRequest.type = new messages_1.ProtocolRequestType(WillCreateFilesRequest.method);
   })(WillCreateFilesRequest || (exports.WillCreateFilesRequest = WillCreateFilesRequest = {}));
   var DidCreateFilesNotification;
-  (function(DidCreateFilesNotification2) {
-    DidCreateFilesNotification2.method = "workspace/didCreateFiles";
-    DidCreateFilesNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidCreateFilesNotification2.type = new messages_1.ProtocolNotificationType(DidCreateFilesNotification2.method);
+  (function(DidCreateFilesNotification) {
+    DidCreateFilesNotification.method = "workspace/didCreateFiles";
+    DidCreateFilesNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidCreateFilesNotification.type = new messages_1.ProtocolNotificationType(DidCreateFilesNotification.method);
   })(DidCreateFilesNotification || (exports.DidCreateFilesNotification = DidCreateFilesNotification = {}));
   var WillRenameFilesRequest;
-  (function(WillRenameFilesRequest2) {
-    WillRenameFilesRequest2.method = "workspace/willRenameFiles";
-    WillRenameFilesRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WillRenameFilesRequest2.type = new messages_1.ProtocolRequestType(WillRenameFilesRequest2.method);
+  (function(WillRenameFilesRequest) {
+    WillRenameFilesRequest.method = "workspace/willRenameFiles";
+    WillRenameFilesRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WillRenameFilesRequest.type = new messages_1.ProtocolRequestType(WillRenameFilesRequest.method);
   })(WillRenameFilesRequest || (exports.WillRenameFilesRequest = WillRenameFilesRequest = {}));
   var DidRenameFilesNotification;
-  (function(DidRenameFilesNotification2) {
-    DidRenameFilesNotification2.method = "workspace/didRenameFiles";
-    DidRenameFilesNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidRenameFilesNotification2.type = new messages_1.ProtocolNotificationType(DidRenameFilesNotification2.method);
+  (function(DidRenameFilesNotification) {
+    DidRenameFilesNotification.method = "workspace/didRenameFiles";
+    DidRenameFilesNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidRenameFilesNotification.type = new messages_1.ProtocolNotificationType(DidRenameFilesNotification.method);
   })(DidRenameFilesNotification || (exports.DidRenameFilesNotification = DidRenameFilesNotification = {}));
   var DidDeleteFilesNotification;
-  (function(DidDeleteFilesNotification2) {
-    DidDeleteFilesNotification2.method = "workspace/didDeleteFiles";
-    DidDeleteFilesNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidDeleteFilesNotification2.type = new messages_1.ProtocolNotificationType(DidDeleteFilesNotification2.method);
+  (function(DidDeleteFilesNotification) {
+    DidDeleteFilesNotification.method = "workspace/didDeleteFiles";
+    DidDeleteFilesNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidDeleteFilesNotification.type = new messages_1.ProtocolNotificationType(DidDeleteFilesNotification.method);
   })(DidDeleteFilesNotification || (exports.DidDeleteFilesNotification = DidDeleteFilesNotification = {}));
   var WillDeleteFilesRequest;
-  (function(WillDeleteFilesRequest2) {
-    WillDeleteFilesRequest2.method = "workspace/willDeleteFiles";
-    WillDeleteFilesRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WillDeleteFilesRequest2.type = new messages_1.ProtocolRequestType(WillDeleteFilesRequest2.method);
+  (function(WillDeleteFilesRequest) {
+    WillDeleteFilesRequest.method = "workspace/willDeleteFiles";
+    WillDeleteFilesRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WillDeleteFilesRequest.type = new messages_1.ProtocolRequestType(WillDeleteFilesRequest.method);
   })(WillDeleteFilesRequest || (exports.WillDeleteFilesRequest = WillDeleteFilesRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.moniker.js
-var require_protocol_moniker = __commonJS((exports) => {
+var require_protocol_moniker = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.MonikerRequest = exports.MonikerKind = exports.UniquenessLevel = undefined;
   var messages_1 = require_messages2();
   var UniquenessLevel;
-  (function(UniquenessLevel2) {
-    UniquenessLevel2.document = "document";
-    UniquenessLevel2.project = "project";
-    UniquenessLevel2.group = "group";
-    UniquenessLevel2.scheme = "scheme";
-    UniquenessLevel2.global = "global";
+  (function(UniquenessLevel) {
+    UniquenessLevel.document = "document";
+    UniquenessLevel.project = "project";
+    UniquenessLevel.group = "group";
+    UniquenessLevel.scheme = "scheme";
+    UniquenessLevel.global = "global";
   })(UniquenessLevel || (exports.UniquenessLevel = UniquenessLevel = {}));
   var MonikerKind;
-  (function(MonikerKind2) {
-    MonikerKind2.$import = "import";
-    MonikerKind2.$export = "export";
-    MonikerKind2.local = "local";
+  (function(MonikerKind) {
+    MonikerKind.$import = "import";
+    MonikerKind.$export = "export";
+    MonikerKind.local = "local";
   })(MonikerKind || (exports.MonikerKind = MonikerKind = {}));
   var MonikerRequest;
-  (function(MonikerRequest2) {
-    MonikerRequest2.method = "textDocument/moniker";
-    MonikerRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    MonikerRequest2.type = new messages_1.ProtocolRequestType(MonikerRequest2.method);
+  (function(MonikerRequest) {
+    MonikerRequest.method = "textDocument/moniker";
+    MonikerRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    MonikerRequest.type = new messages_1.ProtocolRequestType(MonikerRequest.method);
   })(MonikerRequest || (exports.MonikerRequest = MonikerRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.typeHierarchy.js
-var require_protocol_typeHierarchy = __commonJS((exports) => {
+var require_protocol_typeHierarchy = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.TypeHierarchySubtypesRequest = exports.TypeHierarchySupertypesRequest = exports.TypeHierarchyPrepareRequest = undefined;
   var messages_1 = require_messages2();
   var TypeHierarchyPrepareRequest;
-  (function(TypeHierarchyPrepareRequest2) {
-    TypeHierarchyPrepareRequest2.method = "textDocument/prepareTypeHierarchy";
-    TypeHierarchyPrepareRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    TypeHierarchyPrepareRequest2.type = new messages_1.ProtocolRequestType(TypeHierarchyPrepareRequest2.method);
+  (function(TypeHierarchyPrepareRequest) {
+    TypeHierarchyPrepareRequest.method = "textDocument/prepareTypeHierarchy";
+    TypeHierarchyPrepareRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    TypeHierarchyPrepareRequest.type = new messages_1.ProtocolRequestType(TypeHierarchyPrepareRequest.method);
   })(TypeHierarchyPrepareRequest || (exports.TypeHierarchyPrepareRequest = TypeHierarchyPrepareRequest = {}));
   var TypeHierarchySupertypesRequest;
-  (function(TypeHierarchySupertypesRequest2) {
-    TypeHierarchySupertypesRequest2.method = "typeHierarchy/supertypes";
-    TypeHierarchySupertypesRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    TypeHierarchySupertypesRequest2.type = new messages_1.ProtocolRequestType(TypeHierarchySupertypesRequest2.method);
+  (function(TypeHierarchySupertypesRequest) {
+    TypeHierarchySupertypesRequest.method = "typeHierarchy/supertypes";
+    TypeHierarchySupertypesRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    TypeHierarchySupertypesRequest.type = new messages_1.ProtocolRequestType(TypeHierarchySupertypesRequest.method);
   })(TypeHierarchySupertypesRequest || (exports.TypeHierarchySupertypesRequest = TypeHierarchySupertypesRequest = {}));
   var TypeHierarchySubtypesRequest;
-  (function(TypeHierarchySubtypesRequest2) {
-    TypeHierarchySubtypesRequest2.method = "typeHierarchy/subtypes";
-    TypeHierarchySubtypesRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    TypeHierarchySubtypesRequest2.type = new messages_1.ProtocolRequestType(TypeHierarchySubtypesRequest2.method);
+  (function(TypeHierarchySubtypesRequest) {
+    TypeHierarchySubtypesRequest.method = "typeHierarchy/subtypes";
+    TypeHierarchySubtypesRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    TypeHierarchySubtypesRequest.type = new messages_1.ProtocolRequestType(TypeHierarchySubtypesRequest.method);
   })(TypeHierarchySubtypesRequest || (exports.TypeHierarchySubtypesRequest = TypeHierarchySubtypesRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.inlineValue.js
-var require_protocol_inlineValue = __commonJS((exports) => {
+var require_protocol_inlineValue = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.InlineValueRefreshRequest = exports.InlineValueRequest = undefined;
   var messages_1 = require_messages2();
   var InlineValueRequest;
-  (function(InlineValueRequest2) {
-    InlineValueRequest2.method = "textDocument/inlineValue";
-    InlineValueRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    InlineValueRequest2.type = new messages_1.ProtocolRequestType(InlineValueRequest2.method);
+  (function(InlineValueRequest) {
+    InlineValueRequest.method = "textDocument/inlineValue";
+    InlineValueRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    InlineValueRequest.type = new messages_1.ProtocolRequestType(InlineValueRequest.method);
   })(InlineValueRequest || (exports.InlineValueRequest = InlineValueRequest = {}));
   var InlineValueRefreshRequest;
-  (function(InlineValueRefreshRequest2) {
-    InlineValueRefreshRequest2.method = `workspace/inlineValue/refresh`;
-    InlineValueRefreshRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    InlineValueRefreshRequest2.type = new messages_1.ProtocolRequestType0(InlineValueRefreshRequest2.method);
+  (function(InlineValueRefreshRequest) {
+    InlineValueRefreshRequest.method = `workspace/inlineValue/refresh`;
+    InlineValueRefreshRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    InlineValueRefreshRequest.type = new messages_1.ProtocolRequestType0(InlineValueRefreshRequest.method);
   })(InlineValueRefreshRequest || (exports.InlineValueRefreshRequest = InlineValueRefreshRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.inlayHint.js
-var require_protocol_inlayHint = __commonJS((exports) => {
+var require_protocol_inlayHint = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.InlayHintRefreshRequest = exports.InlayHintResolveRequest = exports.InlayHintRequest = undefined;
   var messages_1 = require_messages2();
   var InlayHintRequest;
-  (function(InlayHintRequest2) {
-    InlayHintRequest2.method = "textDocument/inlayHint";
-    InlayHintRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    InlayHintRequest2.type = new messages_1.ProtocolRequestType(InlayHintRequest2.method);
+  (function(InlayHintRequest) {
+    InlayHintRequest.method = "textDocument/inlayHint";
+    InlayHintRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    InlayHintRequest.type = new messages_1.ProtocolRequestType(InlayHintRequest.method);
   })(InlayHintRequest || (exports.InlayHintRequest = InlayHintRequest = {}));
   var InlayHintResolveRequest;
-  (function(InlayHintResolveRequest2) {
-    InlayHintResolveRequest2.method = "inlayHint/resolve";
-    InlayHintResolveRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    InlayHintResolveRequest2.type = new messages_1.ProtocolRequestType(InlayHintResolveRequest2.method);
+  (function(InlayHintResolveRequest) {
+    InlayHintResolveRequest.method = "inlayHint/resolve";
+    InlayHintResolveRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    InlayHintResolveRequest.type = new messages_1.ProtocolRequestType(InlayHintResolveRequest.method);
   })(InlayHintResolveRequest || (exports.InlayHintResolveRequest = InlayHintResolveRequest = {}));
   var InlayHintRefreshRequest;
-  (function(InlayHintRefreshRequest2) {
-    InlayHintRefreshRequest2.method = `workspace/inlayHint/refresh`;
-    InlayHintRefreshRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    InlayHintRefreshRequest2.type = new messages_1.ProtocolRequestType0(InlayHintRefreshRequest2.method);
+  (function(InlayHintRefreshRequest) {
+    InlayHintRefreshRequest.method = `workspace/inlayHint/refresh`;
+    InlayHintRefreshRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    InlayHintRefreshRequest.type = new messages_1.ProtocolRequestType0(InlayHintRefreshRequest.method);
   })(InlayHintRefreshRequest || (exports.InlayHintRefreshRequest = InlayHintRefreshRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.diagnostic.js
-var require_protocol_diagnostic = __commonJS((exports) => {
+var require_protocol_diagnostic = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DiagnosticRefreshRequest = exports.WorkspaceDiagnosticRequest = exports.DocumentDiagnosticRequest = exports.DocumentDiagnosticReportKind = exports.DiagnosticServerCancellationData = undefined;
   var vscode_jsonrpc_1 = require_main();
   var Is = require_is3();
   var messages_1 = require_messages2();
   var DiagnosticServerCancellationData;
-  (function(DiagnosticServerCancellationData2) {
+  (function(DiagnosticServerCancellationData) {
     function is(value) {
       const candidate = value;
       return candidate && Is.boolean(candidate.retriggerRequest);
     }
-    DiagnosticServerCancellationData2.is = is;
+    DiagnosticServerCancellationData.is = is;
   })(DiagnosticServerCancellationData || (exports.DiagnosticServerCancellationData = DiagnosticServerCancellationData = {}));
   var DocumentDiagnosticReportKind;
-  (function(DocumentDiagnosticReportKind2) {
-    DocumentDiagnosticReportKind2.Full = "full";
-    DocumentDiagnosticReportKind2.Unchanged = "unchanged";
+  (function(DocumentDiagnosticReportKind) {
+    DocumentDiagnosticReportKind.Full = "full";
+    DocumentDiagnosticReportKind.Unchanged = "unchanged";
   })(DocumentDiagnosticReportKind || (exports.DocumentDiagnosticReportKind = DocumentDiagnosticReportKind = {}));
   var DocumentDiagnosticRequest;
-  (function(DocumentDiagnosticRequest2) {
-    DocumentDiagnosticRequest2.method = "textDocument/diagnostic";
-    DocumentDiagnosticRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentDiagnosticRequest2.type = new messages_1.ProtocolRequestType(DocumentDiagnosticRequest2.method);
-    DocumentDiagnosticRequest2.partialResult = new vscode_jsonrpc_1.ProgressType;
+  (function(DocumentDiagnosticRequest) {
+    DocumentDiagnosticRequest.method = "textDocument/diagnostic";
+    DocumentDiagnosticRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentDiagnosticRequest.type = new messages_1.ProtocolRequestType(DocumentDiagnosticRequest.method);
+    DocumentDiagnosticRequest.partialResult = new vscode_jsonrpc_1.ProgressType;
   })(DocumentDiagnosticRequest || (exports.DocumentDiagnosticRequest = DocumentDiagnosticRequest = {}));
   var WorkspaceDiagnosticRequest;
-  (function(WorkspaceDiagnosticRequest2) {
-    WorkspaceDiagnosticRequest2.method = "workspace/diagnostic";
-    WorkspaceDiagnosticRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WorkspaceDiagnosticRequest2.type = new messages_1.ProtocolRequestType(WorkspaceDiagnosticRequest2.method);
-    WorkspaceDiagnosticRequest2.partialResult = new vscode_jsonrpc_1.ProgressType;
+  (function(WorkspaceDiagnosticRequest) {
+    WorkspaceDiagnosticRequest.method = "workspace/diagnostic";
+    WorkspaceDiagnosticRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WorkspaceDiagnosticRequest.type = new messages_1.ProtocolRequestType(WorkspaceDiagnosticRequest.method);
+    WorkspaceDiagnosticRequest.partialResult = new vscode_jsonrpc_1.ProgressType;
   })(WorkspaceDiagnosticRequest || (exports.WorkspaceDiagnosticRequest = WorkspaceDiagnosticRequest = {}));
   var DiagnosticRefreshRequest;
-  (function(DiagnosticRefreshRequest2) {
-    DiagnosticRefreshRequest2.method = `workspace/diagnostic/refresh`;
-    DiagnosticRefreshRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    DiagnosticRefreshRequest2.type = new messages_1.ProtocolRequestType0(DiagnosticRefreshRequest2.method);
+  (function(DiagnosticRefreshRequest) {
+    DiagnosticRefreshRequest.method = `workspace/diagnostic/refresh`;
+    DiagnosticRefreshRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    DiagnosticRefreshRequest.type = new messages_1.ProtocolRequestType0(DiagnosticRefreshRequest.method);
   })(DiagnosticRefreshRequest || (exports.DiagnosticRefreshRequest = DiagnosticRefreshRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.notebook.js
-var require_protocol_notebook = __commonJS((exports) => {
+var require_protocol_notebook = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DidCloseNotebookDocumentNotification = exports.DidSaveNotebookDocumentNotification = exports.DidChangeNotebookDocumentNotification = exports.NotebookCellArrayChange = exports.DidOpenNotebookDocumentNotification = exports.NotebookDocumentSyncRegistrationType = exports.NotebookDocument = exports.NotebookCell = exports.ExecutionSummary = exports.NotebookCellKind = undefined;
   var vscode_languageserver_types_1 = require_main2();
   var Is = require_is3();
   var messages_1 = require_messages2();
   var NotebookCellKind;
-  (function(NotebookCellKind2) {
-    NotebookCellKind2.Markup = 1;
-    NotebookCellKind2.Code = 2;
+  (function(NotebookCellKind) {
+    NotebookCellKind.Markup = 1;
+    NotebookCellKind.Code = 2;
     function is(value) {
       return value === 1 || value === 2;
     }
-    NotebookCellKind2.is = is;
+    NotebookCellKind.is = is;
   })(NotebookCellKind || (exports.NotebookCellKind = NotebookCellKind = {}));
   var ExecutionSummary;
-  (function(ExecutionSummary2) {
+  (function(ExecutionSummary) {
     function create(executionOrder, success) {
       const result = { executionOrder };
       if (success === true || success === false) {
@@ -5371,12 +5373,12 @@ var require_protocol_notebook = __commonJS((exports) => {
       }
       return result;
     }
-    ExecutionSummary2.create = create;
+    ExecutionSummary.create = create;
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && vscode_languageserver_types_1.uinteger.is(candidate.executionOrder) && (candidate.success === undefined || Is.boolean(candidate.success));
     }
-    ExecutionSummary2.is = is;
+    ExecutionSummary.is = is;
     function equals(one, other) {
       if (one === other) {
         return true;
@@ -5386,19 +5388,19 @@ var require_protocol_notebook = __commonJS((exports) => {
       }
       return one.executionOrder === other.executionOrder && one.success === other.success;
     }
-    ExecutionSummary2.equals = equals;
+    ExecutionSummary.equals = equals;
   })(ExecutionSummary || (exports.ExecutionSummary = ExecutionSummary = {}));
   var NotebookCell;
-  (function(NotebookCell2) {
+  (function(NotebookCell) {
     function create(kind, document) {
       return { kind, document };
     }
-    NotebookCell2.create = create;
+    NotebookCell.create = create;
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && NotebookCellKind.is(candidate.kind) && vscode_languageserver_types_1.DocumentUri.is(candidate.document) && (candidate.metadata === undefined || Is.objectLiteral(candidate.metadata));
     }
-    NotebookCell2.is = is;
+    NotebookCell.is = is;
     function diff(one, two) {
       const result = new Set;
       if (one.document !== two.document) {
@@ -5418,7 +5420,7 @@ var require_protocol_notebook = __commonJS((exports) => {
       }
       return result;
     }
-    NotebookCell2.diff = diff;
+    NotebookCell.diff = diff;
     function equalsMetadata(one, other) {
       if (one === other) {
         return true;
@@ -5469,37 +5471,37 @@ var require_protocol_notebook = __commonJS((exports) => {
     }
   })(NotebookCell || (exports.NotebookCell = NotebookCell = {}));
   var NotebookDocument;
-  (function(NotebookDocument2) {
+  (function(NotebookDocument) {
     function create(uri, notebookType, version, cells) {
       return { uri, notebookType, version, cells };
     }
-    NotebookDocument2.create = create;
+    NotebookDocument.create = create;
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && Is.string(candidate.uri) && vscode_languageserver_types_1.integer.is(candidate.version) && Is.typedArray(candidate.cells, NotebookCell.is);
     }
-    NotebookDocument2.is = is;
+    NotebookDocument.is = is;
   })(NotebookDocument || (exports.NotebookDocument = NotebookDocument = {}));
   var NotebookDocumentSyncRegistrationType;
-  (function(NotebookDocumentSyncRegistrationType2) {
-    NotebookDocumentSyncRegistrationType2.method = "notebookDocument/sync";
-    NotebookDocumentSyncRegistrationType2.messageDirection = messages_1.MessageDirection.clientToServer;
-    NotebookDocumentSyncRegistrationType2.type = new messages_1.RegistrationType(NotebookDocumentSyncRegistrationType2.method);
+  (function(NotebookDocumentSyncRegistrationType) {
+    NotebookDocumentSyncRegistrationType.method = "notebookDocument/sync";
+    NotebookDocumentSyncRegistrationType.messageDirection = messages_1.MessageDirection.clientToServer;
+    NotebookDocumentSyncRegistrationType.type = new messages_1.RegistrationType(NotebookDocumentSyncRegistrationType.method);
   })(NotebookDocumentSyncRegistrationType || (exports.NotebookDocumentSyncRegistrationType = NotebookDocumentSyncRegistrationType = {}));
   var DidOpenNotebookDocumentNotification;
-  (function(DidOpenNotebookDocumentNotification2) {
-    DidOpenNotebookDocumentNotification2.method = "notebookDocument/didOpen";
-    DidOpenNotebookDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidOpenNotebookDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidOpenNotebookDocumentNotification2.method);
-    DidOpenNotebookDocumentNotification2.registrationMethod = NotebookDocumentSyncRegistrationType.method;
+  (function(DidOpenNotebookDocumentNotification) {
+    DidOpenNotebookDocumentNotification.method = "notebookDocument/didOpen";
+    DidOpenNotebookDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidOpenNotebookDocumentNotification.type = new messages_1.ProtocolNotificationType(DidOpenNotebookDocumentNotification.method);
+    DidOpenNotebookDocumentNotification.registrationMethod = NotebookDocumentSyncRegistrationType.method;
   })(DidOpenNotebookDocumentNotification || (exports.DidOpenNotebookDocumentNotification = DidOpenNotebookDocumentNotification = {}));
   var NotebookCellArrayChange;
-  (function(NotebookCellArrayChange2) {
+  (function(NotebookCellArrayChange) {
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && vscode_languageserver_types_1.uinteger.is(candidate.start) && vscode_languageserver_types_1.uinteger.is(candidate.deleteCount) && (candidate.cells === undefined || Is.typedArray(candidate.cells, NotebookCell.is));
     }
-    NotebookCellArrayChange2.is = is;
+    NotebookCellArrayChange.is = is;
     function create(start, deleteCount, cells) {
       const result = { start, deleteCount };
       if (cells !== undefined) {
@@ -5507,46 +5509,46 @@ var require_protocol_notebook = __commonJS((exports) => {
       }
       return result;
     }
-    NotebookCellArrayChange2.create = create;
+    NotebookCellArrayChange.create = create;
   })(NotebookCellArrayChange || (exports.NotebookCellArrayChange = NotebookCellArrayChange = {}));
   var DidChangeNotebookDocumentNotification;
-  (function(DidChangeNotebookDocumentNotification2) {
-    DidChangeNotebookDocumentNotification2.method = "notebookDocument/didChange";
-    DidChangeNotebookDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidChangeNotebookDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidChangeNotebookDocumentNotification2.method);
-    DidChangeNotebookDocumentNotification2.registrationMethod = NotebookDocumentSyncRegistrationType.method;
+  (function(DidChangeNotebookDocumentNotification) {
+    DidChangeNotebookDocumentNotification.method = "notebookDocument/didChange";
+    DidChangeNotebookDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidChangeNotebookDocumentNotification.type = new messages_1.ProtocolNotificationType(DidChangeNotebookDocumentNotification.method);
+    DidChangeNotebookDocumentNotification.registrationMethod = NotebookDocumentSyncRegistrationType.method;
   })(DidChangeNotebookDocumentNotification || (exports.DidChangeNotebookDocumentNotification = DidChangeNotebookDocumentNotification = {}));
   var DidSaveNotebookDocumentNotification;
-  (function(DidSaveNotebookDocumentNotification2) {
-    DidSaveNotebookDocumentNotification2.method = "notebookDocument/didSave";
-    DidSaveNotebookDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidSaveNotebookDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidSaveNotebookDocumentNotification2.method);
-    DidSaveNotebookDocumentNotification2.registrationMethod = NotebookDocumentSyncRegistrationType.method;
+  (function(DidSaveNotebookDocumentNotification) {
+    DidSaveNotebookDocumentNotification.method = "notebookDocument/didSave";
+    DidSaveNotebookDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidSaveNotebookDocumentNotification.type = new messages_1.ProtocolNotificationType(DidSaveNotebookDocumentNotification.method);
+    DidSaveNotebookDocumentNotification.registrationMethod = NotebookDocumentSyncRegistrationType.method;
   })(DidSaveNotebookDocumentNotification || (exports.DidSaveNotebookDocumentNotification = DidSaveNotebookDocumentNotification = {}));
   var DidCloseNotebookDocumentNotification;
-  (function(DidCloseNotebookDocumentNotification2) {
-    DidCloseNotebookDocumentNotification2.method = "notebookDocument/didClose";
-    DidCloseNotebookDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidCloseNotebookDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidCloseNotebookDocumentNotification2.method);
-    DidCloseNotebookDocumentNotification2.registrationMethod = NotebookDocumentSyncRegistrationType.method;
+  (function(DidCloseNotebookDocumentNotification) {
+    DidCloseNotebookDocumentNotification.method = "notebookDocument/didClose";
+    DidCloseNotebookDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidCloseNotebookDocumentNotification.type = new messages_1.ProtocolNotificationType(DidCloseNotebookDocumentNotification.method);
+    DidCloseNotebookDocumentNotification.registrationMethod = NotebookDocumentSyncRegistrationType.method;
   })(DidCloseNotebookDocumentNotification || (exports.DidCloseNotebookDocumentNotification = DidCloseNotebookDocumentNotification = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.inlineCompletion.js
-var require_protocol_inlineCompletion = __commonJS((exports) => {
+var require_protocol_inlineCompletion = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.InlineCompletionRequest = undefined;
   var messages_1 = require_messages2();
   var InlineCompletionRequest;
-  (function(InlineCompletionRequest2) {
-    InlineCompletionRequest2.method = "textDocument/inlineCompletion";
-    InlineCompletionRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    InlineCompletionRequest2.type = new messages_1.ProtocolRequestType(InlineCompletionRequest2.method);
+  (function(InlineCompletionRequest) {
+    InlineCompletionRequest.method = "textDocument/inlineCompletion";
+    InlineCompletionRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    InlineCompletionRequest.type = new messages_1.ProtocolRequestType(InlineCompletionRequest.method);
   })(InlineCompletionRequest || (exports.InlineCompletionRequest = InlineCompletionRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/protocol.js
-var require_protocol = __commonJS((exports) => {
+var require_protocol = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.WorkspaceSymbolRequest = exports.CodeActionResolveRequest = exports.CodeActionRequest = exports.DocumentSymbolRequest = exports.DocumentHighlightRequest = exports.ReferencesRequest = exports.DefinitionRequest = exports.SignatureHelpRequest = exports.SignatureHelpTriggerKind = exports.HoverRequest = exports.CompletionResolveRequest = exports.CompletionRequest = exports.CompletionTriggerKind = exports.PublishDiagnosticsNotification = exports.WatchKind = exports.RelativePattern = exports.FileChangeType = exports.DidChangeWatchedFilesNotification = exports.WillSaveTextDocumentWaitUntilRequest = exports.WillSaveTextDocumentNotification = exports.TextDocumentSaveReason = exports.DidSaveTextDocumentNotification = exports.DidCloseTextDocumentNotification = exports.DidChangeTextDocumentNotification = exports.TextDocumentContentChangeEvent = exports.DidOpenTextDocumentNotification = exports.TextDocumentSyncKind = exports.TelemetryEventNotification = exports.LogMessageNotification = exports.ShowMessageRequest = exports.ShowMessageNotification = exports.MessageType = exports.DidChangeConfigurationNotification = exports.ExitNotification = exports.ShutdownRequest = exports.InitializedNotification = exports.InitializeErrorCodes = exports.InitializeRequest = exports.WorkDoneProgressOptions = exports.TextDocumentRegistrationOptions = exports.StaticRegistrationOptions = exports.PositionEncodingKind = exports.FailureHandlingKind = exports.ResourceOperationKind = exports.UnregistrationRequest = exports.RegistrationRequest = exports.DocumentSelector = exports.NotebookCellTextDocumentFilter = exports.NotebookDocumentFilter = exports.TextDocumentFilter = undefined;
   exports.MonikerRequest = exports.MonikerKind = exports.UniquenessLevel = exports.WillDeleteFilesRequest = exports.DidDeleteFilesNotification = exports.WillRenameFilesRequest = exports.DidRenameFilesNotification = exports.WillCreateFilesRequest = exports.DidCreateFilesNotification = exports.FileOperationPatternKind = exports.LinkedEditingRangeRequest = exports.ShowDocumentRequest = exports.SemanticTokensRegistrationType = exports.SemanticTokensRefreshRequest = exports.SemanticTokensRangeRequest = exports.SemanticTokensDeltaRequest = exports.SemanticTokensRequest = exports.TokenFormat = exports.CallHierarchyPrepareRequest = exports.CallHierarchyOutgoingCallsRequest = exports.CallHierarchyIncomingCallsRequest = exports.WorkDoneProgressCancelNotification = exports.WorkDoneProgressCreateRequest = exports.WorkDoneProgress = exports.SelectionRangeRequest = exports.DeclarationRequest = exports.FoldingRangeRefreshRequest = exports.FoldingRangeRequest = exports.ColorPresentationRequest = exports.DocumentColorRequest = exports.ConfigurationRequest = exports.DidChangeWorkspaceFoldersNotification = exports.WorkspaceFoldersRequest = exports.TypeDefinitionRequest = exports.ImplementationRequest = exports.ApplyWorkspaceEditRequest = exports.ExecuteCommandRequest = exports.PrepareRenameRequest = exports.RenameRequest = exports.PrepareSupportDefaultBehavior = exports.DocumentOnTypeFormattingRequest = exports.DocumentRangesFormattingRequest = exports.DocumentRangeFormattingRequest = exports.DocumentFormattingRequest = exports.DocumentLinkResolveRequest = exports.DocumentLinkRequest = exports.CodeLensRefreshRequest = exports.CodeLensResolveRequest = exports.CodeLensRequest = exports.WorkspaceSymbolResolveRequest = undefined;
@@ -5753,31 +5755,31 @@ var require_protocol = __commonJS((exports) => {
     return protocol_inlineCompletion_1.InlineCompletionRequest;
   } });
   var TextDocumentFilter;
-  (function(TextDocumentFilter2) {
+  (function(TextDocumentFilter) {
     function is(value) {
       const candidate = value;
       return Is.string(candidate) || (Is.string(candidate.language) || Is.string(candidate.scheme) || Is.string(candidate.pattern));
     }
-    TextDocumentFilter2.is = is;
+    TextDocumentFilter.is = is;
   })(TextDocumentFilter || (exports.TextDocumentFilter = TextDocumentFilter = {}));
   var NotebookDocumentFilter;
-  (function(NotebookDocumentFilter2) {
+  (function(NotebookDocumentFilter) {
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && (Is.string(candidate.notebookType) || Is.string(candidate.scheme) || Is.string(candidate.pattern));
     }
-    NotebookDocumentFilter2.is = is;
+    NotebookDocumentFilter.is = is;
   })(NotebookDocumentFilter || (exports.NotebookDocumentFilter = NotebookDocumentFilter = {}));
   var NotebookCellTextDocumentFilter;
-  (function(NotebookCellTextDocumentFilter2) {
+  (function(NotebookCellTextDocumentFilter) {
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && (Is.string(candidate.notebook) || NotebookDocumentFilter.is(candidate.notebook)) && (candidate.language === undefined || Is.string(candidate.language));
     }
-    NotebookCellTextDocumentFilter2.is = is;
+    NotebookCellTextDocumentFilter.is = is;
   })(NotebookCellTextDocumentFilter || (exports.NotebookCellTextDocumentFilter = NotebookCellTextDocumentFilter = {}));
   var DocumentSelector;
-  (function(DocumentSelector2) {
+  (function(DocumentSelector) {
     function is(value) {
       if (!Array.isArray(value)) {
         return false;
@@ -5789,397 +5791,397 @@ var require_protocol = __commonJS((exports) => {
       }
       return true;
     }
-    DocumentSelector2.is = is;
+    DocumentSelector.is = is;
   })(DocumentSelector || (exports.DocumentSelector = DocumentSelector = {}));
   var RegistrationRequest;
-  (function(RegistrationRequest2) {
-    RegistrationRequest2.method = "client/registerCapability";
-    RegistrationRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    RegistrationRequest2.type = new messages_1.ProtocolRequestType(RegistrationRequest2.method);
+  (function(RegistrationRequest) {
+    RegistrationRequest.method = "client/registerCapability";
+    RegistrationRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    RegistrationRequest.type = new messages_1.ProtocolRequestType(RegistrationRequest.method);
   })(RegistrationRequest || (exports.RegistrationRequest = RegistrationRequest = {}));
   var UnregistrationRequest;
-  (function(UnregistrationRequest2) {
-    UnregistrationRequest2.method = "client/unregisterCapability";
-    UnregistrationRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    UnregistrationRequest2.type = new messages_1.ProtocolRequestType(UnregistrationRequest2.method);
+  (function(UnregistrationRequest) {
+    UnregistrationRequest.method = "client/unregisterCapability";
+    UnregistrationRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    UnregistrationRequest.type = new messages_1.ProtocolRequestType(UnregistrationRequest.method);
   })(UnregistrationRequest || (exports.UnregistrationRequest = UnregistrationRequest = {}));
   var ResourceOperationKind;
-  (function(ResourceOperationKind2) {
-    ResourceOperationKind2.Create = "create";
-    ResourceOperationKind2.Rename = "rename";
-    ResourceOperationKind2.Delete = "delete";
+  (function(ResourceOperationKind) {
+    ResourceOperationKind.Create = "create";
+    ResourceOperationKind.Rename = "rename";
+    ResourceOperationKind.Delete = "delete";
   })(ResourceOperationKind || (exports.ResourceOperationKind = ResourceOperationKind = {}));
   var FailureHandlingKind;
-  (function(FailureHandlingKind2) {
-    FailureHandlingKind2.Abort = "abort";
-    FailureHandlingKind2.Transactional = "transactional";
-    FailureHandlingKind2.TextOnlyTransactional = "textOnlyTransactional";
-    FailureHandlingKind2.Undo = "undo";
+  (function(FailureHandlingKind) {
+    FailureHandlingKind.Abort = "abort";
+    FailureHandlingKind.Transactional = "transactional";
+    FailureHandlingKind.TextOnlyTransactional = "textOnlyTransactional";
+    FailureHandlingKind.Undo = "undo";
   })(FailureHandlingKind || (exports.FailureHandlingKind = FailureHandlingKind = {}));
   var PositionEncodingKind;
-  (function(PositionEncodingKind2) {
-    PositionEncodingKind2.UTF8 = "utf-8";
-    PositionEncodingKind2.UTF16 = "utf-16";
-    PositionEncodingKind2.UTF32 = "utf-32";
+  (function(PositionEncodingKind) {
+    PositionEncodingKind.UTF8 = "utf-8";
+    PositionEncodingKind.UTF16 = "utf-16";
+    PositionEncodingKind.UTF32 = "utf-32";
   })(PositionEncodingKind || (exports.PositionEncodingKind = PositionEncodingKind = {}));
   var StaticRegistrationOptions;
-  (function(StaticRegistrationOptions2) {
+  (function(StaticRegistrationOptions) {
     function hasId(value) {
       const candidate = value;
       return candidate && Is.string(candidate.id) && candidate.id.length > 0;
     }
-    StaticRegistrationOptions2.hasId = hasId;
+    StaticRegistrationOptions.hasId = hasId;
   })(StaticRegistrationOptions || (exports.StaticRegistrationOptions = StaticRegistrationOptions = {}));
   var TextDocumentRegistrationOptions;
-  (function(TextDocumentRegistrationOptions2) {
+  (function(TextDocumentRegistrationOptions) {
     function is(value) {
       const candidate = value;
       return candidate && (candidate.documentSelector === null || DocumentSelector.is(candidate.documentSelector));
     }
-    TextDocumentRegistrationOptions2.is = is;
+    TextDocumentRegistrationOptions.is = is;
   })(TextDocumentRegistrationOptions || (exports.TextDocumentRegistrationOptions = TextDocumentRegistrationOptions = {}));
   var WorkDoneProgressOptions;
-  (function(WorkDoneProgressOptions2) {
+  (function(WorkDoneProgressOptions) {
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && (candidate.workDoneProgress === undefined || Is.boolean(candidate.workDoneProgress));
     }
-    WorkDoneProgressOptions2.is = is;
+    WorkDoneProgressOptions.is = is;
     function hasWorkDoneProgress(value) {
       const candidate = value;
       return candidate && Is.boolean(candidate.workDoneProgress);
     }
-    WorkDoneProgressOptions2.hasWorkDoneProgress = hasWorkDoneProgress;
+    WorkDoneProgressOptions.hasWorkDoneProgress = hasWorkDoneProgress;
   })(WorkDoneProgressOptions || (exports.WorkDoneProgressOptions = WorkDoneProgressOptions = {}));
   var InitializeRequest;
-  (function(InitializeRequest2) {
-    InitializeRequest2.method = "initialize";
-    InitializeRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    InitializeRequest2.type = new messages_1.ProtocolRequestType(InitializeRequest2.method);
+  (function(InitializeRequest) {
+    InitializeRequest.method = "initialize";
+    InitializeRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    InitializeRequest.type = new messages_1.ProtocolRequestType(InitializeRequest.method);
   })(InitializeRequest || (exports.InitializeRequest = InitializeRequest = {}));
   var InitializeErrorCodes;
-  (function(InitializeErrorCodes2) {
-    InitializeErrorCodes2.unknownProtocolVersion = 1;
+  (function(InitializeErrorCodes) {
+    InitializeErrorCodes.unknownProtocolVersion = 1;
   })(InitializeErrorCodes || (exports.InitializeErrorCodes = InitializeErrorCodes = {}));
   var InitializedNotification;
-  (function(InitializedNotification2) {
-    InitializedNotification2.method = "initialized";
-    InitializedNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    InitializedNotification2.type = new messages_1.ProtocolNotificationType(InitializedNotification2.method);
+  (function(InitializedNotification) {
+    InitializedNotification.method = "initialized";
+    InitializedNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    InitializedNotification.type = new messages_1.ProtocolNotificationType(InitializedNotification.method);
   })(InitializedNotification || (exports.InitializedNotification = InitializedNotification = {}));
   var ShutdownRequest;
-  (function(ShutdownRequest2) {
-    ShutdownRequest2.method = "shutdown";
-    ShutdownRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    ShutdownRequest2.type = new messages_1.ProtocolRequestType0(ShutdownRequest2.method);
+  (function(ShutdownRequest) {
+    ShutdownRequest.method = "shutdown";
+    ShutdownRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    ShutdownRequest.type = new messages_1.ProtocolRequestType0(ShutdownRequest.method);
   })(ShutdownRequest || (exports.ShutdownRequest = ShutdownRequest = {}));
   var ExitNotification;
-  (function(ExitNotification2) {
-    ExitNotification2.method = "exit";
-    ExitNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    ExitNotification2.type = new messages_1.ProtocolNotificationType0(ExitNotification2.method);
+  (function(ExitNotification) {
+    ExitNotification.method = "exit";
+    ExitNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    ExitNotification.type = new messages_1.ProtocolNotificationType0(ExitNotification.method);
   })(ExitNotification || (exports.ExitNotification = ExitNotification = {}));
   var DidChangeConfigurationNotification;
-  (function(DidChangeConfigurationNotification2) {
-    DidChangeConfigurationNotification2.method = "workspace/didChangeConfiguration";
-    DidChangeConfigurationNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidChangeConfigurationNotification2.type = new messages_1.ProtocolNotificationType(DidChangeConfigurationNotification2.method);
+  (function(DidChangeConfigurationNotification) {
+    DidChangeConfigurationNotification.method = "workspace/didChangeConfiguration";
+    DidChangeConfigurationNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidChangeConfigurationNotification.type = new messages_1.ProtocolNotificationType(DidChangeConfigurationNotification.method);
   })(DidChangeConfigurationNotification || (exports.DidChangeConfigurationNotification = DidChangeConfigurationNotification = {}));
   var MessageType;
-  (function(MessageType2) {
-    MessageType2.Error = 1;
-    MessageType2.Warning = 2;
-    MessageType2.Info = 3;
-    MessageType2.Log = 4;
-    MessageType2.Debug = 5;
+  (function(MessageType) {
+    MessageType.Error = 1;
+    MessageType.Warning = 2;
+    MessageType.Info = 3;
+    MessageType.Log = 4;
+    MessageType.Debug = 5;
   })(MessageType || (exports.MessageType = MessageType = {}));
   var ShowMessageNotification;
-  (function(ShowMessageNotification2) {
-    ShowMessageNotification2.method = "window/showMessage";
-    ShowMessageNotification2.messageDirection = messages_1.MessageDirection.serverToClient;
-    ShowMessageNotification2.type = new messages_1.ProtocolNotificationType(ShowMessageNotification2.method);
+  (function(ShowMessageNotification) {
+    ShowMessageNotification.method = "window/showMessage";
+    ShowMessageNotification.messageDirection = messages_1.MessageDirection.serverToClient;
+    ShowMessageNotification.type = new messages_1.ProtocolNotificationType(ShowMessageNotification.method);
   })(ShowMessageNotification || (exports.ShowMessageNotification = ShowMessageNotification = {}));
   var ShowMessageRequest;
-  (function(ShowMessageRequest2) {
-    ShowMessageRequest2.method = "window/showMessageRequest";
-    ShowMessageRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    ShowMessageRequest2.type = new messages_1.ProtocolRequestType(ShowMessageRequest2.method);
+  (function(ShowMessageRequest) {
+    ShowMessageRequest.method = "window/showMessageRequest";
+    ShowMessageRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    ShowMessageRequest.type = new messages_1.ProtocolRequestType(ShowMessageRequest.method);
   })(ShowMessageRequest || (exports.ShowMessageRequest = ShowMessageRequest = {}));
   var LogMessageNotification;
-  (function(LogMessageNotification2) {
-    LogMessageNotification2.method = "window/logMessage";
-    LogMessageNotification2.messageDirection = messages_1.MessageDirection.serverToClient;
-    LogMessageNotification2.type = new messages_1.ProtocolNotificationType(LogMessageNotification2.method);
+  (function(LogMessageNotification) {
+    LogMessageNotification.method = "window/logMessage";
+    LogMessageNotification.messageDirection = messages_1.MessageDirection.serverToClient;
+    LogMessageNotification.type = new messages_1.ProtocolNotificationType(LogMessageNotification.method);
   })(LogMessageNotification || (exports.LogMessageNotification = LogMessageNotification = {}));
   var TelemetryEventNotification;
-  (function(TelemetryEventNotification2) {
-    TelemetryEventNotification2.method = "telemetry/event";
-    TelemetryEventNotification2.messageDirection = messages_1.MessageDirection.serverToClient;
-    TelemetryEventNotification2.type = new messages_1.ProtocolNotificationType(TelemetryEventNotification2.method);
+  (function(TelemetryEventNotification) {
+    TelemetryEventNotification.method = "telemetry/event";
+    TelemetryEventNotification.messageDirection = messages_1.MessageDirection.serverToClient;
+    TelemetryEventNotification.type = new messages_1.ProtocolNotificationType(TelemetryEventNotification.method);
   })(TelemetryEventNotification || (exports.TelemetryEventNotification = TelemetryEventNotification = {}));
   var TextDocumentSyncKind;
-  (function(TextDocumentSyncKind2) {
-    TextDocumentSyncKind2.None = 0;
-    TextDocumentSyncKind2.Full = 1;
-    TextDocumentSyncKind2.Incremental = 2;
+  (function(TextDocumentSyncKind) {
+    TextDocumentSyncKind.None = 0;
+    TextDocumentSyncKind.Full = 1;
+    TextDocumentSyncKind.Incremental = 2;
   })(TextDocumentSyncKind || (exports.TextDocumentSyncKind = TextDocumentSyncKind = {}));
   var DidOpenTextDocumentNotification;
-  (function(DidOpenTextDocumentNotification2) {
-    DidOpenTextDocumentNotification2.method = "textDocument/didOpen";
-    DidOpenTextDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidOpenTextDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidOpenTextDocumentNotification2.method);
+  (function(DidOpenTextDocumentNotification) {
+    DidOpenTextDocumentNotification.method = "textDocument/didOpen";
+    DidOpenTextDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidOpenTextDocumentNotification.type = new messages_1.ProtocolNotificationType(DidOpenTextDocumentNotification.method);
   })(DidOpenTextDocumentNotification || (exports.DidOpenTextDocumentNotification = DidOpenTextDocumentNotification = {}));
   var TextDocumentContentChangeEvent;
-  (function(TextDocumentContentChangeEvent2) {
+  (function(TextDocumentContentChangeEvent) {
     function isIncremental(event) {
       let candidate = event;
       return candidate !== undefined && candidate !== null && typeof candidate.text === "string" && candidate.range !== undefined && (candidate.rangeLength === undefined || typeof candidate.rangeLength === "number");
     }
-    TextDocumentContentChangeEvent2.isIncremental = isIncremental;
+    TextDocumentContentChangeEvent.isIncremental = isIncremental;
     function isFull(event) {
       let candidate = event;
       return candidate !== undefined && candidate !== null && typeof candidate.text === "string" && candidate.range === undefined && candidate.rangeLength === undefined;
     }
-    TextDocumentContentChangeEvent2.isFull = isFull;
+    TextDocumentContentChangeEvent.isFull = isFull;
   })(TextDocumentContentChangeEvent || (exports.TextDocumentContentChangeEvent = TextDocumentContentChangeEvent = {}));
   var DidChangeTextDocumentNotification;
-  (function(DidChangeTextDocumentNotification2) {
-    DidChangeTextDocumentNotification2.method = "textDocument/didChange";
-    DidChangeTextDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidChangeTextDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidChangeTextDocumentNotification2.method);
+  (function(DidChangeTextDocumentNotification) {
+    DidChangeTextDocumentNotification.method = "textDocument/didChange";
+    DidChangeTextDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidChangeTextDocumentNotification.type = new messages_1.ProtocolNotificationType(DidChangeTextDocumentNotification.method);
   })(DidChangeTextDocumentNotification || (exports.DidChangeTextDocumentNotification = DidChangeTextDocumentNotification = {}));
   var DidCloseTextDocumentNotification;
-  (function(DidCloseTextDocumentNotification2) {
-    DidCloseTextDocumentNotification2.method = "textDocument/didClose";
-    DidCloseTextDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidCloseTextDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidCloseTextDocumentNotification2.method);
+  (function(DidCloseTextDocumentNotification) {
+    DidCloseTextDocumentNotification.method = "textDocument/didClose";
+    DidCloseTextDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidCloseTextDocumentNotification.type = new messages_1.ProtocolNotificationType(DidCloseTextDocumentNotification.method);
   })(DidCloseTextDocumentNotification || (exports.DidCloseTextDocumentNotification = DidCloseTextDocumentNotification = {}));
   var DidSaveTextDocumentNotification;
-  (function(DidSaveTextDocumentNotification2) {
-    DidSaveTextDocumentNotification2.method = "textDocument/didSave";
-    DidSaveTextDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidSaveTextDocumentNotification2.type = new messages_1.ProtocolNotificationType(DidSaveTextDocumentNotification2.method);
+  (function(DidSaveTextDocumentNotification) {
+    DidSaveTextDocumentNotification.method = "textDocument/didSave";
+    DidSaveTextDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidSaveTextDocumentNotification.type = new messages_1.ProtocolNotificationType(DidSaveTextDocumentNotification.method);
   })(DidSaveTextDocumentNotification || (exports.DidSaveTextDocumentNotification = DidSaveTextDocumentNotification = {}));
   var TextDocumentSaveReason;
-  (function(TextDocumentSaveReason2) {
-    TextDocumentSaveReason2.Manual = 1;
-    TextDocumentSaveReason2.AfterDelay = 2;
-    TextDocumentSaveReason2.FocusOut = 3;
+  (function(TextDocumentSaveReason) {
+    TextDocumentSaveReason.Manual = 1;
+    TextDocumentSaveReason.AfterDelay = 2;
+    TextDocumentSaveReason.FocusOut = 3;
   })(TextDocumentSaveReason || (exports.TextDocumentSaveReason = TextDocumentSaveReason = {}));
   var WillSaveTextDocumentNotification;
-  (function(WillSaveTextDocumentNotification2) {
-    WillSaveTextDocumentNotification2.method = "textDocument/willSave";
-    WillSaveTextDocumentNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WillSaveTextDocumentNotification2.type = new messages_1.ProtocolNotificationType(WillSaveTextDocumentNotification2.method);
+  (function(WillSaveTextDocumentNotification) {
+    WillSaveTextDocumentNotification.method = "textDocument/willSave";
+    WillSaveTextDocumentNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    WillSaveTextDocumentNotification.type = new messages_1.ProtocolNotificationType(WillSaveTextDocumentNotification.method);
   })(WillSaveTextDocumentNotification || (exports.WillSaveTextDocumentNotification = WillSaveTextDocumentNotification = {}));
   var WillSaveTextDocumentWaitUntilRequest;
-  (function(WillSaveTextDocumentWaitUntilRequest2) {
-    WillSaveTextDocumentWaitUntilRequest2.method = "textDocument/willSaveWaitUntil";
-    WillSaveTextDocumentWaitUntilRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WillSaveTextDocumentWaitUntilRequest2.type = new messages_1.ProtocolRequestType(WillSaveTextDocumentWaitUntilRequest2.method);
+  (function(WillSaveTextDocumentWaitUntilRequest) {
+    WillSaveTextDocumentWaitUntilRequest.method = "textDocument/willSaveWaitUntil";
+    WillSaveTextDocumentWaitUntilRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WillSaveTextDocumentWaitUntilRequest.type = new messages_1.ProtocolRequestType(WillSaveTextDocumentWaitUntilRequest.method);
   })(WillSaveTextDocumentWaitUntilRequest || (exports.WillSaveTextDocumentWaitUntilRequest = WillSaveTextDocumentWaitUntilRequest = {}));
   var DidChangeWatchedFilesNotification;
-  (function(DidChangeWatchedFilesNotification2) {
-    DidChangeWatchedFilesNotification2.method = "workspace/didChangeWatchedFiles";
-    DidChangeWatchedFilesNotification2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DidChangeWatchedFilesNotification2.type = new messages_1.ProtocolNotificationType(DidChangeWatchedFilesNotification2.method);
+  (function(DidChangeWatchedFilesNotification) {
+    DidChangeWatchedFilesNotification.method = "workspace/didChangeWatchedFiles";
+    DidChangeWatchedFilesNotification.messageDirection = messages_1.MessageDirection.clientToServer;
+    DidChangeWatchedFilesNotification.type = new messages_1.ProtocolNotificationType(DidChangeWatchedFilesNotification.method);
   })(DidChangeWatchedFilesNotification || (exports.DidChangeWatchedFilesNotification = DidChangeWatchedFilesNotification = {}));
   var FileChangeType;
-  (function(FileChangeType2) {
-    FileChangeType2.Created = 1;
-    FileChangeType2.Changed = 2;
-    FileChangeType2.Deleted = 3;
+  (function(FileChangeType) {
+    FileChangeType.Created = 1;
+    FileChangeType.Changed = 2;
+    FileChangeType.Deleted = 3;
   })(FileChangeType || (exports.FileChangeType = FileChangeType = {}));
   var RelativePattern;
-  (function(RelativePattern2) {
+  (function(RelativePattern) {
     function is(value) {
       const candidate = value;
       return Is.objectLiteral(candidate) && (vscode_languageserver_types_1.URI.is(candidate.baseUri) || vscode_languageserver_types_1.WorkspaceFolder.is(candidate.baseUri)) && Is.string(candidate.pattern);
     }
-    RelativePattern2.is = is;
+    RelativePattern.is = is;
   })(RelativePattern || (exports.RelativePattern = RelativePattern = {}));
   var WatchKind;
-  (function(WatchKind2) {
-    WatchKind2.Create = 1;
-    WatchKind2.Change = 2;
-    WatchKind2.Delete = 4;
+  (function(WatchKind) {
+    WatchKind.Create = 1;
+    WatchKind.Change = 2;
+    WatchKind.Delete = 4;
   })(WatchKind || (exports.WatchKind = WatchKind = {}));
   var PublishDiagnosticsNotification;
-  (function(PublishDiagnosticsNotification2) {
-    PublishDiagnosticsNotification2.method = "textDocument/publishDiagnostics";
-    PublishDiagnosticsNotification2.messageDirection = messages_1.MessageDirection.serverToClient;
-    PublishDiagnosticsNotification2.type = new messages_1.ProtocolNotificationType(PublishDiagnosticsNotification2.method);
+  (function(PublishDiagnosticsNotification) {
+    PublishDiagnosticsNotification.method = "textDocument/publishDiagnostics";
+    PublishDiagnosticsNotification.messageDirection = messages_1.MessageDirection.serverToClient;
+    PublishDiagnosticsNotification.type = new messages_1.ProtocolNotificationType(PublishDiagnosticsNotification.method);
   })(PublishDiagnosticsNotification || (exports.PublishDiagnosticsNotification = PublishDiagnosticsNotification = {}));
   var CompletionTriggerKind;
-  (function(CompletionTriggerKind2) {
-    CompletionTriggerKind2.Invoked = 1;
-    CompletionTriggerKind2.TriggerCharacter = 2;
-    CompletionTriggerKind2.TriggerForIncompleteCompletions = 3;
+  (function(CompletionTriggerKind) {
+    CompletionTriggerKind.Invoked = 1;
+    CompletionTriggerKind.TriggerCharacter = 2;
+    CompletionTriggerKind.TriggerForIncompleteCompletions = 3;
   })(CompletionTriggerKind || (exports.CompletionTriggerKind = CompletionTriggerKind = {}));
   var CompletionRequest;
-  (function(CompletionRequest2) {
-    CompletionRequest2.method = "textDocument/completion";
-    CompletionRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CompletionRequest2.type = new messages_1.ProtocolRequestType(CompletionRequest2.method);
+  (function(CompletionRequest) {
+    CompletionRequest.method = "textDocument/completion";
+    CompletionRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CompletionRequest.type = new messages_1.ProtocolRequestType(CompletionRequest.method);
   })(CompletionRequest || (exports.CompletionRequest = CompletionRequest = {}));
   var CompletionResolveRequest;
-  (function(CompletionResolveRequest2) {
-    CompletionResolveRequest2.method = "completionItem/resolve";
-    CompletionResolveRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CompletionResolveRequest2.type = new messages_1.ProtocolRequestType(CompletionResolveRequest2.method);
+  (function(CompletionResolveRequest) {
+    CompletionResolveRequest.method = "completionItem/resolve";
+    CompletionResolveRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CompletionResolveRequest.type = new messages_1.ProtocolRequestType(CompletionResolveRequest.method);
   })(CompletionResolveRequest || (exports.CompletionResolveRequest = CompletionResolveRequest = {}));
   var HoverRequest;
-  (function(HoverRequest2) {
-    HoverRequest2.method = "textDocument/hover";
-    HoverRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    HoverRequest2.type = new messages_1.ProtocolRequestType(HoverRequest2.method);
+  (function(HoverRequest) {
+    HoverRequest.method = "textDocument/hover";
+    HoverRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    HoverRequest.type = new messages_1.ProtocolRequestType(HoverRequest.method);
   })(HoverRequest || (exports.HoverRequest = HoverRequest = {}));
   var SignatureHelpTriggerKind;
-  (function(SignatureHelpTriggerKind2) {
-    SignatureHelpTriggerKind2.Invoked = 1;
-    SignatureHelpTriggerKind2.TriggerCharacter = 2;
-    SignatureHelpTriggerKind2.ContentChange = 3;
+  (function(SignatureHelpTriggerKind) {
+    SignatureHelpTriggerKind.Invoked = 1;
+    SignatureHelpTriggerKind.TriggerCharacter = 2;
+    SignatureHelpTriggerKind.ContentChange = 3;
   })(SignatureHelpTriggerKind || (exports.SignatureHelpTriggerKind = SignatureHelpTriggerKind = {}));
   var SignatureHelpRequest;
-  (function(SignatureHelpRequest2) {
-    SignatureHelpRequest2.method = "textDocument/signatureHelp";
-    SignatureHelpRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    SignatureHelpRequest2.type = new messages_1.ProtocolRequestType(SignatureHelpRequest2.method);
+  (function(SignatureHelpRequest) {
+    SignatureHelpRequest.method = "textDocument/signatureHelp";
+    SignatureHelpRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    SignatureHelpRequest.type = new messages_1.ProtocolRequestType(SignatureHelpRequest.method);
   })(SignatureHelpRequest || (exports.SignatureHelpRequest = SignatureHelpRequest = {}));
   var DefinitionRequest;
-  (function(DefinitionRequest2) {
-    DefinitionRequest2.method = "textDocument/definition";
-    DefinitionRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DefinitionRequest2.type = new messages_1.ProtocolRequestType(DefinitionRequest2.method);
+  (function(DefinitionRequest) {
+    DefinitionRequest.method = "textDocument/definition";
+    DefinitionRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DefinitionRequest.type = new messages_1.ProtocolRequestType(DefinitionRequest.method);
   })(DefinitionRequest || (exports.DefinitionRequest = DefinitionRequest = {}));
   var ReferencesRequest;
-  (function(ReferencesRequest2) {
-    ReferencesRequest2.method = "textDocument/references";
-    ReferencesRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    ReferencesRequest2.type = new messages_1.ProtocolRequestType(ReferencesRequest2.method);
+  (function(ReferencesRequest) {
+    ReferencesRequest.method = "textDocument/references";
+    ReferencesRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    ReferencesRequest.type = new messages_1.ProtocolRequestType(ReferencesRequest.method);
   })(ReferencesRequest || (exports.ReferencesRequest = ReferencesRequest = {}));
   var DocumentHighlightRequest;
-  (function(DocumentHighlightRequest2) {
-    DocumentHighlightRequest2.method = "textDocument/documentHighlight";
-    DocumentHighlightRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentHighlightRequest2.type = new messages_1.ProtocolRequestType(DocumentHighlightRequest2.method);
+  (function(DocumentHighlightRequest) {
+    DocumentHighlightRequest.method = "textDocument/documentHighlight";
+    DocumentHighlightRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentHighlightRequest.type = new messages_1.ProtocolRequestType(DocumentHighlightRequest.method);
   })(DocumentHighlightRequest || (exports.DocumentHighlightRequest = DocumentHighlightRequest = {}));
   var DocumentSymbolRequest;
-  (function(DocumentSymbolRequest2) {
-    DocumentSymbolRequest2.method = "textDocument/documentSymbol";
-    DocumentSymbolRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentSymbolRequest2.type = new messages_1.ProtocolRequestType(DocumentSymbolRequest2.method);
+  (function(DocumentSymbolRequest) {
+    DocumentSymbolRequest.method = "textDocument/documentSymbol";
+    DocumentSymbolRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentSymbolRequest.type = new messages_1.ProtocolRequestType(DocumentSymbolRequest.method);
   })(DocumentSymbolRequest || (exports.DocumentSymbolRequest = DocumentSymbolRequest = {}));
   var CodeActionRequest;
-  (function(CodeActionRequest2) {
-    CodeActionRequest2.method = "textDocument/codeAction";
-    CodeActionRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CodeActionRequest2.type = new messages_1.ProtocolRequestType(CodeActionRequest2.method);
+  (function(CodeActionRequest) {
+    CodeActionRequest.method = "textDocument/codeAction";
+    CodeActionRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CodeActionRequest.type = new messages_1.ProtocolRequestType(CodeActionRequest.method);
   })(CodeActionRequest || (exports.CodeActionRequest = CodeActionRequest = {}));
   var CodeActionResolveRequest;
-  (function(CodeActionResolveRequest2) {
-    CodeActionResolveRequest2.method = "codeAction/resolve";
-    CodeActionResolveRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CodeActionResolveRequest2.type = new messages_1.ProtocolRequestType(CodeActionResolveRequest2.method);
+  (function(CodeActionResolveRequest) {
+    CodeActionResolveRequest.method = "codeAction/resolve";
+    CodeActionResolveRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CodeActionResolveRequest.type = new messages_1.ProtocolRequestType(CodeActionResolveRequest.method);
   })(CodeActionResolveRequest || (exports.CodeActionResolveRequest = CodeActionResolveRequest = {}));
   var WorkspaceSymbolRequest;
-  (function(WorkspaceSymbolRequest2) {
-    WorkspaceSymbolRequest2.method = "workspace/symbol";
-    WorkspaceSymbolRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WorkspaceSymbolRequest2.type = new messages_1.ProtocolRequestType(WorkspaceSymbolRequest2.method);
+  (function(WorkspaceSymbolRequest) {
+    WorkspaceSymbolRequest.method = "workspace/symbol";
+    WorkspaceSymbolRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WorkspaceSymbolRequest.type = new messages_1.ProtocolRequestType(WorkspaceSymbolRequest.method);
   })(WorkspaceSymbolRequest || (exports.WorkspaceSymbolRequest = WorkspaceSymbolRequest = {}));
   var WorkspaceSymbolResolveRequest;
-  (function(WorkspaceSymbolResolveRequest2) {
-    WorkspaceSymbolResolveRequest2.method = "workspaceSymbol/resolve";
-    WorkspaceSymbolResolveRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    WorkspaceSymbolResolveRequest2.type = new messages_1.ProtocolRequestType(WorkspaceSymbolResolveRequest2.method);
+  (function(WorkspaceSymbolResolveRequest) {
+    WorkspaceSymbolResolveRequest.method = "workspaceSymbol/resolve";
+    WorkspaceSymbolResolveRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    WorkspaceSymbolResolveRequest.type = new messages_1.ProtocolRequestType(WorkspaceSymbolResolveRequest.method);
   })(WorkspaceSymbolResolveRequest || (exports.WorkspaceSymbolResolveRequest = WorkspaceSymbolResolveRequest = {}));
   var CodeLensRequest;
-  (function(CodeLensRequest2) {
-    CodeLensRequest2.method = "textDocument/codeLens";
-    CodeLensRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CodeLensRequest2.type = new messages_1.ProtocolRequestType(CodeLensRequest2.method);
+  (function(CodeLensRequest) {
+    CodeLensRequest.method = "textDocument/codeLens";
+    CodeLensRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CodeLensRequest.type = new messages_1.ProtocolRequestType(CodeLensRequest.method);
   })(CodeLensRequest || (exports.CodeLensRequest = CodeLensRequest = {}));
   var CodeLensResolveRequest;
-  (function(CodeLensResolveRequest2) {
-    CodeLensResolveRequest2.method = "codeLens/resolve";
-    CodeLensResolveRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    CodeLensResolveRequest2.type = new messages_1.ProtocolRequestType(CodeLensResolveRequest2.method);
+  (function(CodeLensResolveRequest) {
+    CodeLensResolveRequest.method = "codeLens/resolve";
+    CodeLensResolveRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    CodeLensResolveRequest.type = new messages_1.ProtocolRequestType(CodeLensResolveRequest.method);
   })(CodeLensResolveRequest || (exports.CodeLensResolveRequest = CodeLensResolveRequest = {}));
   var CodeLensRefreshRequest;
-  (function(CodeLensRefreshRequest2) {
-    CodeLensRefreshRequest2.method = `workspace/codeLens/refresh`;
-    CodeLensRefreshRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    CodeLensRefreshRequest2.type = new messages_1.ProtocolRequestType0(CodeLensRefreshRequest2.method);
+  (function(CodeLensRefreshRequest) {
+    CodeLensRefreshRequest.method = `workspace/codeLens/refresh`;
+    CodeLensRefreshRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    CodeLensRefreshRequest.type = new messages_1.ProtocolRequestType0(CodeLensRefreshRequest.method);
   })(CodeLensRefreshRequest || (exports.CodeLensRefreshRequest = CodeLensRefreshRequest = {}));
   var DocumentLinkRequest;
-  (function(DocumentLinkRequest2) {
-    DocumentLinkRequest2.method = "textDocument/documentLink";
-    DocumentLinkRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentLinkRequest2.type = new messages_1.ProtocolRequestType(DocumentLinkRequest2.method);
+  (function(DocumentLinkRequest) {
+    DocumentLinkRequest.method = "textDocument/documentLink";
+    DocumentLinkRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentLinkRequest.type = new messages_1.ProtocolRequestType(DocumentLinkRequest.method);
   })(DocumentLinkRequest || (exports.DocumentLinkRequest = DocumentLinkRequest = {}));
   var DocumentLinkResolveRequest;
-  (function(DocumentLinkResolveRequest2) {
-    DocumentLinkResolveRequest2.method = "documentLink/resolve";
-    DocumentLinkResolveRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentLinkResolveRequest2.type = new messages_1.ProtocolRequestType(DocumentLinkResolveRequest2.method);
+  (function(DocumentLinkResolveRequest) {
+    DocumentLinkResolveRequest.method = "documentLink/resolve";
+    DocumentLinkResolveRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentLinkResolveRequest.type = new messages_1.ProtocolRequestType(DocumentLinkResolveRequest.method);
   })(DocumentLinkResolveRequest || (exports.DocumentLinkResolveRequest = DocumentLinkResolveRequest = {}));
   var DocumentFormattingRequest;
-  (function(DocumentFormattingRequest2) {
-    DocumentFormattingRequest2.method = "textDocument/formatting";
-    DocumentFormattingRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentFormattingRequest2.type = new messages_1.ProtocolRequestType(DocumentFormattingRequest2.method);
+  (function(DocumentFormattingRequest) {
+    DocumentFormattingRequest.method = "textDocument/formatting";
+    DocumentFormattingRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentFormattingRequest.type = new messages_1.ProtocolRequestType(DocumentFormattingRequest.method);
   })(DocumentFormattingRequest || (exports.DocumentFormattingRequest = DocumentFormattingRequest = {}));
   var DocumentRangeFormattingRequest;
-  (function(DocumentRangeFormattingRequest2) {
-    DocumentRangeFormattingRequest2.method = "textDocument/rangeFormatting";
-    DocumentRangeFormattingRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentRangeFormattingRequest2.type = new messages_1.ProtocolRequestType(DocumentRangeFormattingRequest2.method);
+  (function(DocumentRangeFormattingRequest) {
+    DocumentRangeFormattingRequest.method = "textDocument/rangeFormatting";
+    DocumentRangeFormattingRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentRangeFormattingRequest.type = new messages_1.ProtocolRequestType(DocumentRangeFormattingRequest.method);
   })(DocumentRangeFormattingRequest || (exports.DocumentRangeFormattingRequest = DocumentRangeFormattingRequest = {}));
   var DocumentRangesFormattingRequest;
-  (function(DocumentRangesFormattingRequest2) {
-    DocumentRangesFormattingRequest2.method = "textDocument/rangesFormatting";
-    DocumentRangesFormattingRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentRangesFormattingRequest2.type = new messages_1.ProtocolRequestType(DocumentRangesFormattingRequest2.method);
+  (function(DocumentRangesFormattingRequest) {
+    DocumentRangesFormattingRequest.method = "textDocument/rangesFormatting";
+    DocumentRangesFormattingRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentRangesFormattingRequest.type = new messages_1.ProtocolRequestType(DocumentRangesFormattingRequest.method);
   })(DocumentRangesFormattingRequest || (exports.DocumentRangesFormattingRequest = DocumentRangesFormattingRequest = {}));
   var DocumentOnTypeFormattingRequest;
-  (function(DocumentOnTypeFormattingRequest2) {
-    DocumentOnTypeFormattingRequest2.method = "textDocument/onTypeFormatting";
-    DocumentOnTypeFormattingRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    DocumentOnTypeFormattingRequest2.type = new messages_1.ProtocolRequestType(DocumentOnTypeFormattingRequest2.method);
+  (function(DocumentOnTypeFormattingRequest) {
+    DocumentOnTypeFormattingRequest.method = "textDocument/onTypeFormatting";
+    DocumentOnTypeFormattingRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    DocumentOnTypeFormattingRequest.type = new messages_1.ProtocolRequestType(DocumentOnTypeFormattingRequest.method);
   })(DocumentOnTypeFormattingRequest || (exports.DocumentOnTypeFormattingRequest = DocumentOnTypeFormattingRequest = {}));
   var PrepareSupportDefaultBehavior;
-  (function(PrepareSupportDefaultBehavior2) {
-    PrepareSupportDefaultBehavior2.Identifier = 1;
+  (function(PrepareSupportDefaultBehavior) {
+    PrepareSupportDefaultBehavior.Identifier = 1;
   })(PrepareSupportDefaultBehavior || (exports.PrepareSupportDefaultBehavior = PrepareSupportDefaultBehavior = {}));
   var RenameRequest;
-  (function(RenameRequest2) {
-    RenameRequest2.method = "textDocument/rename";
-    RenameRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    RenameRequest2.type = new messages_1.ProtocolRequestType(RenameRequest2.method);
+  (function(RenameRequest) {
+    RenameRequest.method = "textDocument/rename";
+    RenameRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    RenameRequest.type = new messages_1.ProtocolRequestType(RenameRequest.method);
   })(RenameRequest || (exports.RenameRequest = RenameRequest = {}));
   var PrepareRenameRequest;
-  (function(PrepareRenameRequest2) {
-    PrepareRenameRequest2.method = "textDocument/prepareRename";
-    PrepareRenameRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    PrepareRenameRequest2.type = new messages_1.ProtocolRequestType(PrepareRenameRequest2.method);
+  (function(PrepareRenameRequest) {
+    PrepareRenameRequest.method = "textDocument/prepareRename";
+    PrepareRenameRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    PrepareRenameRequest.type = new messages_1.ProtocolRequestType(PrepareRenameRequest.method);
   })(PrepareRenameRequest || (exports.PrepareRenameRequest = PrepareRenameRequest = {}));
   var ExecuteCommandRequest;
-  (function(ExecuteCommandRequest2) {
-    ExecuteCommandRequest2.method = "workspace/executeCommand";
-    ExecuteCommandRequest2.messageDirection = messages_1.MessageDirection.clientToServer;
-    ExecuteCommandRequest2.type = new messages_1.ProtocolRequestType(ExecuteCommandRequest2.method);
+  (function(ExecuteCommandRequest) {
+    ExecuteCommandRequest.method = "workspace/executeCommand";
+    ExecuteCommandRequest.messageDirection = messages_1.MessageDirection.clientToServer;
+    ExecuteCommandRequest.type = new messages_1.ProtocolRequestType(ExecuteCommandRequest.method);
   })(ExecuteCommandRequest || (exports.ExecuteCommandRequest = ExecuteCommandRequest = {}));
   var ApplyWorkspaceEditRequest;
-  (function(ApplyWorkspaceEditRequest2) {
-    ApplyWorkspaceEditRequest2.method = "workspace/applyEdit";
-    ApplyWorkspaceEditRequest2.messageDirection = messages_1.MessageDirection.serverToClient;
-    ApplyWorkspaceEditRequest2.type = new messages_1.ProtocolRequestType("workspace/applyEdit");
+  (function(ApplyWorkspaceEditRequest) {
+    ApplyWorkspaceEditRequest.method = "workspace/applyEdit";
+    ApplyWorkspaceEditRequest.messageDirection = messages_1.MessageDirection.serverToClient;
+    ApplyWorkspaceEditRequest.type = new messages_1.ProtocolRequestType("workspace/applyEdit");
   })(ApplyWorkspaceEditRequest || (exports.ApplyWorkspaceEditRequest = ApplyWorkspaceEditRequest = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/connection.js
-var require_connection2 = __commonJS((exports) => {
+var require_connection2 = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.createProtocolConnection = undefined;
   var vscode_jsonrpc_1 = require_main();
@@ -6193,7 +6195,7 @@ var require_connection2 = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver-protocol/lib/common/api.js
-var require_api2 = __commonJS((exports) => {
+var require_api2 = __commonJS(function(exports) {
   var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === undefined)
       k2 = k;
@@ -6225,18 +6227,18 @@ var require_api2 = __commonJS((exports) => {
     return connection_1.createProtocolConnection;
   } });
   var LSPErrorCodes;
-  (function(LSPErrorCodes2) {
-    LSPErrorCodes2.lspReservedErrorRangeStart = -32899;
-    LSPErrorCodes2.RequestFailed = -32803;
-    LSPErrorCodes2.ServerCancelled = -32802;
-    LSPErrorCodes2.ContentModified = -32801;
-    LSPErrorCodes2.RequestCancelled = -32800;
-    LSPErrorCodes2.lspReservedErrorRangeEnd = -32800;
+  (function(LSPErrorCodes) {
+    LSPErrorCodes.lspReservedErrorRangeStart = -32899;
+    LSPErrorCodes.RequestFailed = -32803;
+    LSPErrorCodes.ServerCancelled = -32802;
+    LSPErrorCodes.ContentModified = -32801;
+    LSPErrorCodes.RequestCancelled = -32800;
+    LSPErrorCodes.lspReservedErrorRangeEnd = -32800;
   })(LSPErrorCodes || (exports.LSPErrorCodes = LSPErrorCodes = {}));
 });
 
 // node_modules/vscode-languageserver-protocol/lib/node/main.js
-var require_main3 = __commonJS((exports) => {
+var require_main3 = __commonJS(function(exports) {
   var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === undefined)
       k2 = k;
@@ -6269,7 +6271,7 @@ var require_main3 = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/utils/uuid.js
-var require_uuid = __commonJS((exports) => {
+var require_uuid = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.generateUuid = exports.parse = exports.isUUID = exports.v4 = exports.empty = undefined;
 
@@ -6359,7 +6361,7 @@ var require_uuid = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/progress.js
-var require_progress = __commonJS((exports) => {
+var require_progress = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.attachPartialResult = exports.ProgressFeature = exports.attachWorkDone = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6490,8 +6492,8 @@ var require_progress = __commonJS((exports) => {
   };
   exports.ProgressFeature = ProgressFeature;
   var ResultProgress;
-  (function(ResultProgress2) {
-    ResultProgress2.type = new vscode_languageserver_protocol_1.ProgressType;
+  (function(ResultProgress) {
+    ResultProgress.type = new vscode_languageserver_protocol_1.ProgressType;
   })(ResultProgress || (ResultProgress = {}));
 
   class ResultProgressReporterImpl {
@@ -6515,7 +6517,7 @@ var require_progress = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/configuration.js
-var require_configuration = __commonJS((exports) => {
+var require_configuration = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ConfigurationFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6549,7 +6551,7 @@ var require_configuration = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/workspaceFolder.js
-var require_workspaceFolder = __commonJS((exports) => {
+var require_workspaceFolder = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.WorkspaceFoldersFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6592,7 +6594,7 @@ var require_workspaceFolder = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/callHierarchy.js
-var require_callHierarchy = __commonJS((exports) => {
+var require_callHierarchy = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.CallHierarchyFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6625,7 +6627,7 @@ var require_callHierarchy = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/semanticTokens.js
-var require_semanticTokens = __commonJS((exports) => {
+var require_semanticTokens = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.SemanticTokensBuilder = exports.SemanticTokensDiff = exports.SemanticTokensFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6772,7 +6774,7 @@ var require_semanticTokens = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/showDocument.js
-var require_showDocument = __commonJS((exports) => {
+var require_showDocument = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.ShowDocumentFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6787,7 +6789,7 @@ var require_showDocument = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/fileOperations.js
-var require_fileOperations = __commonJS((exports) => {
+var require_fileOperations = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.FileOperationsFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6829,7 +6831,7 @@ var require_fileOperations = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/linkedEditingRange.js
-var require_linkedEditingRange = __commonJS((exports) => {
+var require_linkedEditingRange = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.LinkedEditingRangeFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6846,7 +6848,7 @@ var require_linkedEditingRange = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/typeHierarchy.js
-var require_typeHierarchy = __commonJS((exports) => {
+var require_typeHierarchy = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.TypeHierarchyFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6879,7 +6881,7 @@ var require_typeHierarchy = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/inlineValue.js
-var require_inlineValue = __commonJS((exports) => {
+var require_inlineValue = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.InlineValueFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6903,7 +6905,7 @@ var require_inlineValue = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/foldingRange.js
-var require_foldingRange = __commonJS((exports) => {
+var require_foldingRange = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.FoldingRangeFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6928,7 +6930,7 @@ var require_foldingRange = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/inlayHint.js
-var require_inlayHint = __commonJS((exports) => {
+var require_inlayHint = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.InlayHintFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6957,7 +6959,7 @@ var require_inlayHint = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/diagnostic.js
-var require_diagnostic = __commonJS((exports) => {
+var require_diagnostic = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DiagnosticFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -6986,7 +6988,7 @@ var require_diagnostic = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/textDocuments.js
-var require_textDocuments = __commonJS((exports) => {
+var require_textDocuments = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.TextDocuments = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -7092,7 +7094,7 @@ var require_textDocuments = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/notebook.js
-var require_notebook = __commonJS((exports) => {
+var require_notebook = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.NotebookDocuments = exports.NotebookSyncFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -7261,11 +7263,11 @@ var require_notebook = __commonJS((exports) => {
           if (changedCells.data !== undefined) {
             const cellUpdates = new Map(changedCells.data.map((cell) => [cell.document, cell]));
             for (let i = 0;i <= notebookDocument.cells.length; i++) {
-              const change2 = cellUpdates.get(notebookDocument.cells[i].document);
-              if (change2 !== undefined) {
-                const old = notebookDocument.cells.splice(i, 1, change2);
-                data.push({ old: old[0], new: change2 });
-                cellUpdates.delete(change2.document);
+              const change = cellUpdates.get(notebookDocument.cells[i].document);
+              if (change !== undefined) {
+                const old = notebookDocument.cells.splice(i, 1, change);
+                data.push({ old: old[0], new: change });
+                cellUpdates.delete(change.document);
                 if (cellUpdates.size === 0) {
                   break;
                 }
@@ -7293,8 +7295,8 @@ var require_notebook = __commonJS((exports) => {
           removed.push(this.getNotebookCell(close));
         }
         const textContent = [];
-        for (const change2 of text) {
-          textContent.push(this.getNotebookCell(change2));
+        for (const change of text) {
+          textContent.push(this.getNotebookCell(change));
         }
         if (added.length > 0 || removed.length > 0 || data.length > 0 || textContent.length > 0) {
           changeEvent.cells = { added, removed, changed: { data, textContent } };
@@ -7338,7 +7340,7 @@ var require_notebook = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/moniker.js
-var require_moniker = __commonJS((exports) => {
+var require_moniker = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.MonikerFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -7360,7 +7362,7 @@ var require_moniker = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/server.js
-var require_server = __commonJS((exports) => {
+var require_server = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.createConnection = exports.combineFeatures = exports.combineNotebooksFeatures = exports.combineLanguagesFeatures = exports.combineWorkspaceFeatures = exports.combineWindowFeatures = exports.combineClientFeatures = exports.combineTracerFeatures = exports.combineTelemetryFeatures = exports.combineConsoleFeatures = exports._NotebooksImpl = exports._LanguagesImpl = exports.BulkUnregistration = exports.BulkRegistration = exports.ErrorMessageTracker = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -7476,11 +7478,11 @@ var require_server = __commonJS((exports) => {
   }
   var RemoteWindowImpl = (0, showDocument_1.ShowDocumentFeature)((0, progress_1.ProgressFeature)(_RemoteWindowImpl));
   var BulkRegistration;
-  (function(BulkRegistration2) {
+  (function(BulkRegistration) {
     function create() {
       return new BulkRegistrationImpl;
     }
-    BulkRegistration2.create = create;
+    BulkRegistration.create = create;
   })(BulkRegistration || (exports.BulkRegistration = BulkRegistration = {}));
 
   class BulkRegistrationImpl {
@@ -7508,11 +7510,11 @@ var require_server = __commonJS((exports) => {
     }
   }
   var BulkUnregistration;
-  (function(BulkUnregistration2) {
+  (function(BulkUnregistration) {
     function create() {
       return new BulkUnregistrationImpl(undefined, []);
     }
-    BulkUnregistration2.create = create;
+    BulkUnregistration.create = create;
   })(BulkUnregistration || (exports.BulkUnregistration = BulkUnregistration = {}));
 
   class BulkUnregistrationImpl {
@@ -7804,13 +7806,13 @@ var require_server = __commonJS((exports) => {
   }
   exports.combineNotebooksFeatures = combineNotebooksFeatures;
   function combineFeatures(one, two) {
-    function combine(one2, two2, func) {
-      if (one2 && two2) {
-        return func(one2, two2);
-      } else if (one2) {
-        return one2;
+    function combine(one, two, func) {
+      if (one && two) {
+        return func(one, two);
+      } else if (one) {
+        return one;
       } else {
-        return two2;
+        return two;
       }
     }
     let result = {
@@ -8025,14 +8027,14 @@ var require_server = __commonJS((exports) => {
           if (value instanceof vscode_languageserver_protocol_1.ResponseError) {
             return value;
           }
-          let result2 = value;
-          if (!result2) {
-            result2 = { capabilities: {} };
+          let result = value;
+          if (!result) {
+            result = { capabilities: {} };
           }
-          let capabilities = result2.capabilities;
+          let capabilities = result.capabilities;
           if (!capabilities) {
             capabilities = {};
-            result2.capabilities = capabilities;
+            result.capabilities = capabilities;
           }
           if (capabilities.textDocumentSync === undefined || capabilities.textDocumentSync === null) {
             capabilities.textDocumentSync = Is.number(protocolConnection.__textDocumentSync) ? protocolConnection.__textDocumentSync : vscode_languageserver_protocol_1.TextDocumentSyncKind.None;
@@ -8042,7 +8044,7 @@ var require_server = __commonJS((exports) => {
           for (let remote of allRemotes) {
             remote.fillServerCapabilities(capabilities);
           }
-          return result2;
+          return result;
         });
       } else {
         let result = { capabilities: { textDocumentSync: vscode_languageserver_protocol_1.TextDocumentSyncKind.None } };
@@ -8082,8 +8084,8 @@ var require_server = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/node/files.js
-var require_files = __commonJS((exports) => {
-  var __filename = "/Users/cmj/projects/oneshots/langly/node_modules/vscode-languageserver/lib/node/files.js";
+var require_files = __commonJS(function(exports) {
+  var __filename = "/Users/cmj/projects/oneshots/langly/.claude/worktrees/deep-work-4ed0fb/node_modules/vscode-languageserver/lib/node/files.js";
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.resolveModulePath = exports.FileSystem = exports.resolveGlobalYarnPath = exports.resolveGlobalNodePath = exports.resolve = exports.uriToFilePath = undefined;
   var url = __require("url");
@@ -8131,7 +8133,7 @@ var require_files = __commonJS((exports) => {
       "}",
       "});"
     ].join("");
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve, reject) => {
       let env = process.env;
       let newEnv = Object.create(null);
       Object.keys(env).forEach((key) => newEnv[key] = env[key]);
@@ -8159,11 +8161,11 @@ var require_files = __commonJS((exports) => {
         cp.on("error", (error) => {
           reject(error);
         });
-        cp.on("message", (message2) => {
-          if (message2.c === "r") {
+        cp.on("message", (message) => {
+          if (message.c === "r") {
             cp.send({ c: "e" });
-            if (message2.s) {
-              resolve2(message2.r);
+            if (message.s) {
+              resolve(message.r);
             } else {
               reject(new Error(`Failed to resolve module: ${moduleName}`));
             }
@@ -8263,7 +8265,7 @@ var require_files = __commonJS((exports) => {
   }
   exports.resolveGlobalYarnPath = resolveGlobalYarnPath;
   var FileSystem;
-  (function(FileSystem2) {
+  (function(FileSystem) {
     let _isCaseSensitive = undefined;
     function isCaseSensitive() {
       if (_isCaseSensitive !== undefined) {
@@ -8276,7 +8278,7 @@ var require_files = __commonJS((exports) => {
       }
       return _isCaseSensitive;
     }
-    FileSystem2.isCaseSensitive = isCaseSensitive;
+    FileSystem.isCaseSensitive = isCaseSensitive;
     function isParent(parent, child) {
       if (isCaseSensitive()) {
         return path.normalize(child).indexOf(path.normalize(parent)) === 0;
@@ -8284,7 +8286,7 @@ var require_files = __commonJS((exports) => {
         return path.normalize(child).toLowerCase().indexOf(path.normalize(parent).toLowerCase()) === 0;
       }
     }
-    FileSystem2.isParent = isParent;
+    FileSystem.isParent = isParent;
   })(FileSystem || (exports.FileSystem = FileSystem = {}));
   function resolveModulePath(workspaceRoot, moduleName, nodePath, tracer) {
     if (nodePath) {
@@ -8308,7 +8310,7 @@ var require_files = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/inlineCompletion.proposed.js
-var require_inlineCompletion_proposed = __commonJS((exports) => {
+var require_inlineCompletion_proposed = __commonJS(function(exports) {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.InlineCompletionFeature = undefined;
   var vscode_languageserver_protocol_1 = require_main3();
@@ -8329,7 +8331,7 @@ var require_inlineCompletion_proposed = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/common/api.js
-var require_api3 = __commonJS((exports) => {
+var require_api3 = __commonJS(function(exports) {
   var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === undefined)
       k2 = k;
@@ -8368,8 +8370,8 @@ var require_api3 = __commonJS((exports) => {
   } });
   __exportStar(require_server(), exports);
   var ProposedFeatures;
-  (function(ProposedFeatures2) {
-    ProposedFeatures2.all = {
+  (function(ProposedFeatures) {
+    ProposedFeatures.all = {
       __brand: "features",
       languages: ic.InlineCompletionFeature
     };
@@ -8377,7 +8379,7 @@ var require_api3 = __commonJS((exports) => {
 });
 
 // node_modules/vscode-languageserver/lib/node/main.js
-var require_main4 = __commonJS((exports) => {
+var require_main4 = __commonJS(function(exports) {
   var __createBinding = exports && exports.__createBinding || (Object.create ? function(o, m, k, k2) {
     if (k2 === undefined)
       k2 = k;
@@ -8408,12 +8410,12 @@ var require_main4 = __commonJS((exports) => {
   __exportStar(require_main3(), exports);
   __exportStar(require_api3(), exports);
   var Files;
-  (function(Files2) {
-    Files2.uriToFilePath = fm.uriToFilePath;
-    Files2.resolveGlobalNodePath = fm.resolveGlobalNodePath;
-    Files2.resolveGlobalYarnPath = fm.resolveGlobalYarnPath;
-    Files2.resolve = fm.resolve;
-    Files2.resolveModulePath = fm.resolveModulePath;
+  (function(Files) {
+    Files.uriToFilePath = fm.uriToFilePath;
+    Files.resolveGlobalNodePath = fm.resolveGlobalNodePath;
+    Files.resolveGlobalYarnPath = fm.resolveGlobalYarnPath;
+    Files.resolve = fm.resolve;
+    Files.resolveModulePath = fm.resolveModulePath;
   })(Files || (exports.Files = Files = {}));
   var _protocolConnection;
   function endProtocolConnection() {
@@ -8755,11 +8757,11 @@ class FullTextDocument {
   }
 }
 var TextDocument;
-(function(TextDocument2) {
+(function(TextDocument) {
   function create(uri, languageId, version, content) {
     return new FullTextDocument(uri, languageId, version, content);
   }
-  TextDocument2.create = create;
+  TextDocument.create = create;
   function update(document, changes, version) {
     if (document instanceof FullTextDocument) {
       document.update(changes, version);
@@ -8768,7 +8770,7 @@ var TextDocument;
       throw new Error("TextDocument.update: document must be created by TextDocument.create");
     }
   }
-  TextDocument2.update = update;
+  TextDocument.update = update;
   function applyEdits(document, edits) {
     const text = document.getText();
     const sortedEdits = mergeSort(edits.map(getWellformedEdit), (a, b) => {
@@ -8795,7 +8797,7 @@ var TextDocument;
     spans.push(text.substr(lastModifiedOffset));
     return spans.join("");
   }
-  TextDocument2.applyEdits = applyEdits;
+  TextDocument.applyEdits = applyEdits;
 })(TextDocument || (TextDocument = {}));
 function mergeSort(data, compare) {
   if (data.length <= 1) {
@@ -22481,7 +22483,7 @@ var UnbufferedTokenStream = class {
   }
 };
 
-// src/parser/grammars/HaloLexer.ts
+// src/parser/generated/HaloLexer.ts
 class HaloLexer extends Lexer {
   static T__0 = 1;
   static T__1 = 2;
@@ -22519,21 +22521,27 @@ class HaloLexer extends Lexer {
   static T__33 = 34;
   static T__34 = 35;
   static T__35 = 36;
-  static WS = 37;
-  static NL = 38;
-  static COMMENT = 39;
-  static LOOP = 40;
-  static FANOUT = 41;
-  static INTERRUPT = 42;
-  static GATE = 43;
-  static LISTEN = 44;
-  static PIPE = 45;
-  static DURATION = 46;
-  static IDENTIFIER = 47;
-  static MODEL_REF = 48;
-  static STRING = 49;
-  static NUMBER = 50;
-  static BOOL = 51;
+  static T__36 = 37;
+  static T__37 = 38;
+  static T__38 = 39;
+  static WS = 40;
+  static NL = 41;
+  static LINE_COMMENT = 42;
+  static BLOCK_COMMENT = 43;
+  static LOOP = 44;
+  static FANOUT = 45;
+  static INTERRUPT = 46;
+  static GATE = 47;
+  static LISTEN = 48;
+  static PIPE = 49;
+  static BOOL = 50;
+  static NULL = 51;
+  static DURATION = 52;
+  static NUMBER = 53;
+  static MODEL_REF = 54;
+  static IDENTIFIER = 55;
+  static TRIPLE_STRING = 56;
+  static STRING = 57;
   static channelNames = [
     "DEFAULT_TOKEN_CHANNEL",
     "HIDDEN"
@@ -22541,41 +22549,45 @@ class HaloLexer extends Lexer {
   static literalNames = [
     null,
     "'policy'",
+    "'tool'",
+    "'store'",
+    "'schema'",
+    "'agent'",
+    "'pipeline'",
+    "'equips'",
+    "'requires'",
+    "'system'",
+    "'context'",
+    "'yield'",
+    "'listen'",
+    "'loop'",
+    "'as'",
+    "'each'",
+    "'in'",
+    "'else'",
+    "'.'",
     "':'",
     "'&'",
     "'('",
     "')'",
+    "'{'",
     "','",
-    "'tool'",
-    "'agent'",
-    "'store'",
-    "'pipeline'",
-    "'schema'",
-    "'equips'",
-    "'requires'",
-    "'listen'",
-    "'yield'",
-    "'context'",
-    "'timeout'",
-    "'shadow'",
-    "'checkpoint'",
-    "'retry'",
-    "'correct'",
-    "'.'",
+    "'}'",
     "'['",
     "']'",
-    "'->'",
     "'@'",
+    "'->'",
     "'<'",
     "'>'",
-    "'{'",
-    "'}'",
     "'=>'",
+    "'||'",
+    "'&&'",
+    "'!'",
     "'=='",
     "'!='",
     "'>='",
     "'<='",
-    "'loop'",
+    null,
     null,
     null,
     null,
@@ -22584,7 +22596,9 @@ class HaloLexer extends Lexer {
     "'|!'",
     "'|?'",
     "'~>'",
-    "'|>'"
+    "'|>'",
+    null,
+    "'null'"
   ];
   static symbolicNames = [
     null,
@@ -22624,21 +22638,27 @@ class HaloLexer extends Lexer {
     null,
     null,
     null,
+    null,
+    null,
+    null,
     "WS",
     "NL",
-    "COMMENT",
+    "LINE_COMMENT",
+    "BLOCK_COMMENT",
     "LOOP",
     "FANOUT",
     "INTERRUPT",
     "GATE",
     "LISTEN",
     "PIPE",
+    "BOOL",
+    "NULL",
     "DURATION",
-    "IDENTIFIER",
-    "MODEL_REF",
-    "STRING",
     "NUMBER",
-    "BOOL"
+    "MODEL_REF",
+    "IDENTIFIER",
+    "TRIPLE_STRING",
+    "STRING"
   ];
   static modeNames = [
     "DEFAULT_MODE"
@@ -22680,21 +22700,27 @@ class HaloLexer extends Lexer {
     "T__33",
     "T__34",
     "T__35",
+    "T__36",
+    "T__37",
+    "T__38",
     "WS",
     "NL",
-    "COMMENT",
+    "LINE_COMMENT",
+    "BLOCK_COMMENT",
     "LOOP",
     "FANOUT",
     "INTERRUPT",
     "GATE",
     "LISTEN",
     "PIPE",
+    "BOOL",
+    "NULL",
     "DURATION",
-    "IDENTIFIER",
-    "MODEL_REF",
-    "STRING",
     "NUMBER",
-    "BOOL"
+    "MODEL_REF",
+    "IDENTIFIER",
+    "TRIPLE_STRING",
+    "STRING"
   ];
   constructor(input) {
     super(input);
@@ -22724,8 +22750,8 @@ class HaloLexer extends Lexer {
   static _serializedATN = [
     4,
     0,
-    51,
-    399,
+    57,
+    435,
     6,
     -1,
     2,
@@ -22932,6 +22958,30 @@ class HaloLexer extends Lexer {
     50,
     7,
     50,
+    2,
+    51,
+    7,
+    51,
+    2,
+    52,
+    7,
+    52,
+    2,
+    53,
+    7,
+    53,
+    2,
+    54,
+    7,
+    54,
+    2,
+    55,
+    7,
+    55,
+    2,
+    56,
+    7,
+    56,
     1,
     0,
     1,
@@ -22946,6 +22996,12 @@ class HaloLexer extends Lexer {
     0,
     1,
     0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
     1,
     1,
     1,
@@ -22955,9 +23011,35 @@ class HaloLexer extends Lexer {
     1,
     2,
     1,
+    2,
+    1,
+    2,
+    1,
+    2,
+    1,
+    2,
+    1,
     3,
     1,
     3,
+    1,
+    3,
+    1,
+    3,
+    1,
+    3,
+    1,
+    3,
+    1,
+    3,
+    1,
+    4,
+    1,
+    4,
+    1,
+    4,
+    1,
+    4,
     1,
     4,
     1,
@@ -22967,7 +23049,19 @@ class HaloLexer extends Lexer {
     1,
     5,
     1,
-    6,
+    5,
+    1,
+    5,
+    1,
+    5,
+    1,
+    5,
+    1,
+    5,
+    1,
+    5,
+    1,
+    5,
     1,
     6,
     1,
@@ -22977,6 +23071,18 @@ class HaloLexer extends Lexer {
     1,
     6,
     1,
+    6,
+    1,
+    6,
+    1,
+    6,
+    1,
+    7,
+    1,
+    7,
+    1,
+    7,
+    1,
     7,
     1,
     7,
@@ -23001,7 +23107,7 @@ class HaloLexer extends Lexer {
     1,
     8,
     1,
-    9,
+    8,
     1,
     9,
     1,
@@ -23018,8 +23124,6 @@ class HaloLexer extends Lexer {
     9,
     1,
     9,
-    1,
-    10,
     1,
     10,
     1,
@@ -23056,22 +23160,6 @@ class HaloLexer extends Lexer {
     12,
     1,
     12,
-    1,
-    12,
-    1,
-    12,
-    1,
-    12,
-    1,
-    12,
-    1,
-    13,
-    1,
-    13,
-    1,
-    13,
-    1,
-    13,
     1,
     13,
     1,
@@ -23089,29 +23177,11 @@ class HaloLexer extends Lexer {
     1,
     14,
     1,
-    14,
-    1,
     15,
     1,
     15,
     1,
     15,
-    1,
-    15,
-    1,
-    15,
-    1,
-    15,
-    1,
-    15,
-    1,
-    15,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
     1,
     16,
     1,
@@ -23126,34 +23196,6 @@ class HaloLexer extends Lexer {
     17,
     1,
     17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
-    1,
-    18,
     1,
     18,
     1,
@@ -23162,26 +23204,6 @@ class HaloLexer extends Lexer {
     19,
     1,
     19,
-    1,
-    19,
-    1,
-    19,
-    1,
-    19,
-    1,
-    19,
-    1,
-    20,
-    1,
-    20,
-    1,
-    20,
-    1,
-    20,
-    1,
-    20,
-    1,
-    20,
     1,
     20,
     1,
@@ -23203,8 +23225,6 @@ class HaloLexer extends Lexer {
     1,
     24,
     1,
-    24,
-    1,
     25,
     1,
     25,
@@ -23221,11 +23241,11 @@ class HaloLexer extends Lexer {
     1,
     28,
     1,
-    29,
+    28,
     1,
     29,
     1,
-    30,
+    29,
     1,
     30,
     1,
@@ -23252,12 +23272,6 @@ class HaloLexer extends Lexer {
     34,
     1,
     34,
-    1,
-    34,
-    1,
-    35,
-    1,
-    35,
     1,
     35,
     1,
@@ -23266,297 +23280,387 @@ class HaloLexer extends Lexer {
     35,
     1,
     36,
+    1,
+    36,
+    1,
+    36,
+    1,
+    37,
+    1,
+    37,
+    1,
+    37,
+    1,
+    38,
+    1,
+    38,
+    1,
+    38,
+    1,
+    39,
     4,
-    36,
-    271,
+    39,
+    274,
     8,
-    36,
+    39,
     11,
-    36,
+    39,
     12,
-    36,
-    272,
+    39,
+    275,
     1,
-    36,
+    39,
     1,
-    36,
+    39,
     1,
-    37,
+    40,
     3,
-    37,
-    278,
-    8,
-    37,
-    1,
-    37,
-    4,
-    37,
+    40,
     281,
     8,
-    37,
-    11,
-    37,
-    12,
-    37,
-    282,
+    40,
     1,
-    37,
-    1,
-    37,
-    1,
-    38,
-    1,
-    38,
-    1,
-    38,
-    1,
-    38,
-    5,
-    38,
-    291,
+    40,
+    4,
+    40,
+    284,
     8,
-    38,
-    10,
-    38,
+    40,
+    11,
+    40,
     12,
-    38,
+    40,
+    285,
+    1,
+    40,
+    1,
+    40,
+    1,
+    41,
+    1,
+    41,
+    1,
+    41,
+    1,
+    41,
+    5,
+    41,
     294,
-    9,
-    38,
-    1,
-    38,
-    1,
-    38,
-    1,
-    39,
-    1,
-    39,
-    1,
-    39,
-    1,
-    39,
-    1,
-    40,
-    1,
-    40,
-    1,
-    40,
-    1,
-    41,
-    1,
-    41,
-    1,
-    41,
-    1,
-    42,
-    1,
-    42,
-    1,
-    42,
-    1,
-    43,
-    1,
-    43,
-    1,
-    43,
-    1,
-    44,
-    1,
-    44,
-    1,
-    44,
-    1,
-    45,
-    4,
-    45,
-    318,
     8,
-    45,
-    11,
-    45,
-    12,
-    45,
-    319,
-    1,
-    45,
-    1,
-    45,
-    1,
-    46,
-    1,
-    46,
-    5,
-    46,
-    326,
-    8,
-    46,
+    41,
     10,
-    46,
+    41,
     12,
-    46,
-    329,
+    41,
+    297,
     9,
+    41,
+    1,
+    41,
+    1,
+    41,
+    1,
+    42,
+    1,
+    42,
+    1,
+    42,
+    1,
+    42,
+    5,
+    42,
+    305,
+    8,
+    42,
+    10,
+    42,
+    12,
+    42,
+    308,
+    9,
+    42,
+    1,
+    42,
+    1,
+    42,
+    1,
+    42,
+    1,
+    42,
+    1,
+    42,
+    1,
+    43,
+    1,
+    43,
+    1,
+    43,
+    1,
+    43,
+    1,
+    44,
+    1,
+    44,
+    1,
+    44,
+    1,
+    45,
+    1,
+    45,
+    1,
+    45,
+    1,
+    46,
+    1,
+    46,
+    1,
     46,
     1,
     47,
+    1,
+    47,
+    1,
+    47,
+    1,
+    48,
+    1,
+    48,
+    1,
+    48,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
+    1,
+    49,
     3,
-    47,
-    332,
-    8,
-    47,
-    1,
-    47,
-    1,
-    47,
-    5,
-    47,
-    336,
-    8,
-    47,
-    10,
-    47,
-    12,
-    47,
-    339,
-    9,
-    47,
-    1,
-    47,
-    1,
-    47,
-    4,
-    47,
+    49,
     343,
     8,
-    47,
-    11,
-    47,
-    12,
-    47,
-    344,
+    49,
+    1,
+    50,
+    1,
+    50,
+    1,
+    50,
+    1,
+    50,
+    1,
+    50,
+    1,
+    51,
     4,
-    47,
-    347,
+    51,
+    351,
     8,
-    47,
+    51,
     11,
-    47,
+    51,
     12,
-    47,
-    348,
+    51,
+    352,
     1,
-    48,
+    51,
     1,
-    48,
+    51,
     1,
-    48,
-    1,
-    48,
-    5,
-    48,
-    355,
-    8,
-    48,
-    10,
-    48,
-    12,
-    48,
+    51,
+    3,
+    51,
     358,
-    9,
-    48,
-    1,
-    48,
-    1,
-    48,
-    1,
-    48,
-    1,
-    48,
-    1,
-    48,
-    5,
-    48,
-    365,
     8,
-    48,
-    10,
-    48,
+    51,
+    1,
+    52,
+    3,
+    52,
+    361,
+    8,
+    52,
+    1,
+    52,
+    4,
+    52,
+    364,
+    8,
+    52,
+    11,
+    52,
     12,
-    48,
-    368,
-    9,
-    48,
+    52,
+    365,
     1,
-    48,
-    3,
-    48,
-    371,
+    52,
+    1,
+    52,
+    4,
+    52,
+    370,
     8,
-    48,
-    1,
-    49,
+    52,
+    11,
+    52,
+    12,
+    52,
+    371,
     3,
-    49,
+    52,
     374,
     8,
-    49,
+    52,
     1,
-    49,
-    4,
-    49,
-    377,
-    8,
-    49,
-    11,
-    49,
-    12,
-    49,
+    53,
+    1,
+    53,
+    5,
+    53,
     378,
-    1,
-    49,
-    1,
-    49,
-    4,
-    49,
-    383,
     8,
-    49,
-    11,
-    49,
+    53,
+    10,
+    53,
     12,
-    49,
-    384,
-    3,
-    49,
-    387,
+    53,
+    381,
+    9,
+    53,
+    1,
+    53,
+    1,
+    53,
+    4,
+    53,
+    385,
     8,
-    49,
+    53,
+    11,
+    53,
+    12,
+    53,
+    386,
+    4,
+    53,
+    389,
+    8,
+    53,
+    11,
+    53,
+    12,
+    53,
+    390,
     1,
-    50,
+    54,
     1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    3,
-    50,
+    54,
+    5,
+    54,
+    395,
+    8,
+    54,
+    10,
+    54,
+    12,
+    54,
     398,
+    9,
+    54,
+    1,
+    55,
+    1,
+    55,
+    1,
+    55,
+    1,
+    55,
+    1,
+    55,
+    5,
+    55,
+    405,
     8,
-    50,
+    55,
+    10,
+    55,
+    12,
+    55,
+    408,
+    9,
+    55,
+    1,
+    55,
+    1,
+    55,
+    1,
+    55,
+    1,
+    55,
+    1,
+    56,
+    1,
+    56,
+    1,
+    56,
+    1,
+    56,
+    5,
+    56,
+    418,
+    8,
+    56,
+    10,
+    56,
+    12,
+    56,
+    421,
+    9,
+    56,
+    1,
+    56,
+    1,
+    56,
+    1,
+    56,
+    1,
+    56,
+    1,
+    56,
+    5,
+    56,
+    428,
+    8,
+    56,
+    10,
+    56,
+    12,
+    56,
+    431,
+    9,
+    56,
+    1,
+    56,
+    3,
+    56,
+    434,
+    8,
+    56,
+    2,
+    306,
+    406,
     0,
-    0,
-    51,
+    57,
     1,
     1,
     3,
@@ -23659,9 +23763,21 @@ class HaloLexer extends Lexer {
     50,
     101,
     51,
+    103,
+    52,
+    105,
+    53,
+    107,
+    54,
+    109,
+    55,
+    111,
+    56,
+    113,
+    57,
     1,
     0,
-    11,
+    10,
     2,
     0,
     9,
@@ -23696,30 +23812,6 @@ class HaloLexer extends Lexer {
     95,
     97,
     122,
-    4,
-    0,
-    48,
-    57,
-    65,
-    90,
-    95,
-    95,
-    97,
-    122,
-    3,
-    0,
-    48,
-    57,
-    65,
-    90,
-    97,
-    122,
-    2,
-    0,
-    45,
-    45,
-    47,
-    47,
     5,
     0,
     46,
@@ -23734,17 +23826,41 @@ class HaloLexer extends Lexer {
     122,
     2,
     0,
-    34,
-    34,
-    92,
-    92,
-    2,
+    45,
+    45,
+    47,
+    47,
+    4,
     0,
+    48,
+    57,
+    65,
+    90,
+    95,
+    95,
+    97,
+    122,
+    4,
+    0,
+    10,
+    10,
+    13,
+    13,
+    34,
+    34,
+    92,
+    92,
+    4,
+    0,
+    10,
+    10,
+    13,
+    13,
     39,
     39,
     92,
     92,
-    418,
+    456,
     0,
     1,
     1,
@@ -24051,550 +24167,550 @@ class HaloLexer extends Lexer {
     0,
     0,
     0,
-    1,
+    0,
     103,
     1,
     0,
     0,
     0,
+    0,
+    105,
+    1,
+    0,
+    0,
+    0,
+    0,
+    107,
+    1,
+    0,
+    0,
+    0,
+    0,
+    109,
+    1,
+    0,
+    0,
+    0,
+    0,
+    111,
+    1,
+    0,
+    0,
+    0,
+    0,
+    113,
+    1,
+    0,
+    0,
+    0,
+    1,
+    115,
+    1,
+    0,
+    0,
+    0,
     3,
-    110,
+    122,
     1,
     0,
     0,
     0,
     5,
-    112,
+    127,
     1,
     0,
     0,
     0,
     7,
-    114,
+    133,
     1,
     0,
     0,
     0,
     9,
-    116,
+    140,
     1,
     0,
     0,
     0,
     11,
-    118,
-    1,
-    0,
-    0,
-    0,
-    13,
-    120,
-    1,
-    0,
-    0,
-    0,
-    15,
-    125,
-    1,
-    0,
-    0,
-    0,
-    17,
-    131,
-    1,
-    0,
-    0,
-    0,
-    19,
-    137,
-    1,
-    0,
-    0,
-    0,
-    21,
     146,
     1,
     0,
     0,
     0,
+    13,
+    155,
+    1,
+    0,
+    0,
+    0,
+    15,
+    162,
+    1,
+    0,
+    0,
+    0,
+    17,
+    171,
+    1,
+    0,
+    0,
+    0,
+    19,
+    178,
+    1,
+    0,
+    0,
+    0,
+    21,
+    186,
+    1,
+    0,
+    0,
+    0,
     23,
-    153,
+    192,
     1,
     0,
     0,
     0,
     25,
-    160,
+    199,
     1,
     0,
     0,
     0,
     27,
-    169,
+    204,
     1,
     0,
     0,
     0,
     29,
-    176,
+    207,
     1,
     0,
     0,
     0,
     31,
-    182,
+    212,
     1,
     0,
     0,
     0,
     33,
-    190,
+    215,
     1,
     0,
     0,
     0,
     35,
-    198,
+    220,
     1,
     0,
     0,
     0,
     37,
-    205,
-    1,
-    0,
-    0,
-    0,
-    39,
-    216,
-    1,
-    0,
-    0,
-    0,
-    41,
     222,
     1,
     0,
     0,
     0,
+    39,
+    224,
+    1,
+    0,
+    0,
+    0,
+    41,
+    226,
+    1,
+    0,
+    0,
+    0,
     43,
-    230,
+    228,
     1,
     0,
     0,
     0,
     45,
-    232,
+    230,
     1,
     0,
     0,
     0,
     47,
-    234,
+    232,
     1,
     0,
     0,
     0,
     49,
-    236,
+    234,
     1,
     0,
     0,
     0,
     51,
-    239,
+    236,
     1,
     0,
     0,
     0,
     53,
-    241,
+    238,
     1,
     0,
     0,
     0,
     55,
-    243,
+    240,
     1,
     0,
     0,
     0,
     57,
+    242,
+    1,
+    0,
+    0,
+    0,
+    59,
     245,
     1,
     0,
     0,
     0,
-    59,
+    61,
     247,
     1,
     0,
     0,
     0,
-    61,
+    63,
     249,
     1,
     0,
     0,
     0,
-    63,
+    65,
     252,
     1,
     0,
     0,
     0,
-    65,
+    67,
     255,
     1,
     0,
     0,
     0,
-    67,
+    69,
     258,
     1,
     0,
     0,
     0,
-    69,
-    261,
-    1,
-    0,
-    0,
-    0,
     71,
-    264,
+    260,
     1,
     0,
     0,
     0,
     73,
-    270,
+    263,
     1,
     0,
     0,
     0,
     75,
-    277,
+    266,
     1,
     0,
     0,
     0,
     77,
-    286,
+    269,
     1,
     0,
     0,
     0,
     79,
-    297,
+    273,
     1,
     0,
     0,
     0,
     81,
-    301,
+    283,
     1,
     0,
     0,
     0,
     83,
-    304,
+    289,
     1,
     0,
     0,
     0,
     85,
-    307,
+    300,
     1,
     0,
     0,
     0,
     87,
-    310,
+    314,
     1,
     0,
     0,
     0,
     89,
-    313,
+    318,
     1,
     0,
     0,
     0,
     91,
-    317,
+    321,
     1,
     0,
     0,
     0,
     93,
-    323,
+    324,
     1,
     0,
     0,
     0,
     95,
-    331,
+    327,
     1,
     0,
     0,
     0,
     97,
-    370,
+    330,
     1,
     0,
     0,
     0,
     99,
-    373,
+    342,
     1,
     0,
     0,
     0,
     101,
-    397,
+    344,
     1,
     0,
     0,
     0,
     103,
-    104,
-    5,
-    112,
+    350,
+    1,
     0,
-    0,
-    104,
-    105,
-    5,
-    111,
     0,
     0,
     105,
-    106,
-    5,
-    108,
+    360,
+    1,
     0,
-    0,
-    106,
-    107,
-    5,
-    105,
     0,
     0,
     107,
-    108,
-    5,
-    99,
-    0,
-    0,
-    108,
-    109,
-    5,
-    121,
-    0,
-    0,
-    109,
-    2,
+    375,
     1,
     0,
     0,
     0,
-    110,
-    111,
-    5,
-    58,
-    0,
-    0,
-    111,
-    4,
+    109,
+    392,
     1,
     0,
     0,
     0,
+    111,
+    399,
+    1,
+    0,
+    0,
+    0,
+    113,
+    433,
+    1,
+    0,
+    0,
+    0,
+    115,
+    116,
+    5,
     112,
-    113,
-    5,
-    38,
-    0,
-    0,
-    113,
-    6,
-    1,
-    0,
-    0,
-    0,
-    114,
-    115,
-    5,
-    40,
-    0,
-    0,
-    115,
-    8,
-    1,
-    0,
     0,
     0,
     116,
     117,
     5,
-    41,
+    111,
     0,
     0,
     117,
-    10,
-    1,
-    0,
+    118,
+    5,
+    108,
     0,
     0,
     118,
     119,
     5,
-    44,
+    105,
     0,
     0,
     119,
-    12,
-    1,
-    0,
+    120,
+    5,
+    99,
     0,
     0,
     120,
     121,
     5,
-    116,
+    121,
     0,
     0,
     121,
-    122,
-    5,
-    111,
-    0,
-    0,
-    122,
-    123,
-    5,
-    111,
-    0,
-    0,
-    123,
-    124,
-    5,
-    108,
-    0,
-    0,
-    124,
-    14,
+    2,
     1,
     0,
+    0,
+    0,
+    122,
+    123,
+    5,
+    116,
+    0,
+    0,
+    123,
+    124,
+    5,
+    111,
+    0,
+    0,
+    124,
+    125,
+    5,
+    111,
     0,
     0,
     125,
     126,
     5,
-    97,
+    108,
     0,
     0,
     126,
-    127,
-    5,
-    103,
+    4,
+    1,
+    0,
     0,
     0,
     127,
     128,
     5,
-    101,
+    115,
     0,
     0,
     128,
     129,
-    5,
-    110,
-    0,
-    0,
-    129,
-    130,
     5,
     116,
     0,
     0,
+    129,
     130,
-    16,
-    1,
+    5,
+    111,
     0,
+    0,
+    130,
+    131,
+    5,
+    114,
     0,
     0,
     131,
     132,
     5,
-    115,
-    0,
-    0,
-    132,
-    133,
-    5,
-    116,
-    0,
-    0,
-    133,
-    134,
-    5,
-    111,
-    0,
-    0,
-    134,
-    135,
-    5,
-    114,
-    0,
-    0,
-    135,
-    136,
-    5,
     101,
     0,
     0,
-    136,
-    18,
+    132,
+    6,
     1,
     0,
+    0,
+    0,
+    133,
+    134,
+    5,
+    115,
+    0,
+    0,
+    134,
+    135,
+    5,
+    99,
+    0,
+    0,
+    135,
+    136,
+    5,
+    104,
+    0,
+    0,
+    136,
+    137,
+    5,
+    101,
     0,
     0,
     137,
     138,
     5,
-    112,
+    109,
     0,
     0,
     138,
     139,
     5,
-    105,
+    97,
     0,
     0,
     139,
-    140,
-    5,
-    112,
+    8,
+    1,
+    0,
     0,
     0,
     140,
     141,
     5,
-    101,
+    97,
     0,
     0,
     141,
     142,
     5,
-    108,
+    103,
     0,
     0,
     142,
     143,
     5,
-    105,
+    101,
     0,
     0,
     143,
@@ -24606,11 +24722,11 @@ class HaloLexer extends Lexer {
     144,
     145,
     5,
-    101,
+    116,
     0,
     0,
     145,
-    20,
+    10,
     1,
     0,
     0,
@@ -24618,19 +24734,19 @@ class HaloLexer extends Lexer {
     146,
     147,
     5,
-    115,
+    112,
     0,
     0,
     147,
     148,
     5,
-    99,
+    105,
     0,
     0,
     148,
     149,
     5,
-    104,
+    112,
     0,
     0,
     149,
@@ -24642,19 +24758,19 @@ class HaloLexer extends Lexer {
     150,
     151,
     5,
-    109,
+    108,
     0,
     0,
     151,
     152,
     5,
-    97,
+    105,
     0,
     0,
     152,
-    22,
-    1,
-    0,
+    153,
+    5,
+    110,
     0,
     0,
     153,
@@ -24664,105 +24780,105 @@ class HaloLexer extends Lexer {
     0,
     0,
     154,
+    12,
+    1,
+    0,
+    0,
+    0,
     155,
+    156,
+    5,
+    101,
+    0,
+    0,
+    156,
+    157,
     5,
     113,
     0,
     0,
-    155,
-    156,
+    157,
+    158,
     5,
     117,
     0,
     0,
-    156,
-    157,
+    158,
+    159,
     5,
     105,
     0,
     0,
-    157,
-    158,
+    159,
+    160,
     5,
     112,
-    0,
-    0,
-    158,
-    159,
-    5,
-    115,
-    0,
-    0,
-    159,
-    24,
-    1,
-    0,
     0,
     0,
     160,
     161,
     5,
-    114,
+    115,
     0,
     0,
     161,
-    162,
-    5,
-    101,
+    14,
+    1,
+    0,
     0,
     0,
     162,
     163,
+    5,
+    114,
+    0,
+    0,
+    163,
+    164,
+    5,
+    101,
+    0,
+    0,
+    164,
+    165,
     5,
     113,
     0,
     0,
-    163,
-    164,
+    165,
+    166,
     5,
     117,
     0,
     0,
-    164,
-    165,
+    166,
+    167,
     5,
     105,
     0,
     0,
-    165,
-    166,
+    167,
+    168,
     5,
     114,
     0,
     0,
-    166,
-    167,
+    168,
+    169,
     5,
     101,
-    0,
-    0,
-    167,
-    168,
-    5,
-    115,
-    0,
-    0,
-    168,
-    26,
-    1,
-    0,
     0,
     0,
     169,
     170,
     5,
-    108,
+    115,
     0,
     0,
     170,
-    171,
-    5,
-    105,
+    16,
+    1,
+    0,
     0,
     0,
     171,
@@ -24774,211 +24890,211 @@ class HaloLexer extends Lexer {
     172,
     173,
     5,
-    116,
+    121,
     0,
     0,
     173,
     174,
     5,
-    101,
+    115,
     0,
     0,
     174,
     175,
     5,
-    110,
+    116,
     0,
     0,
     175,
-    28,
-    1,
-    0,
+    176,
+    5,
+    101,
     0,
     0,
     176,
     177,
     5,
-    121,
+    109,
     0,
     0,
     177,
-    178,
-    5,
-    105,
-    0,
-    0,
-    178,
-    179,
-    5,
-    101,
-    0,
-    0,
-    179,
-    180,
-    5,
-    108,
-    0,
-    0,
-    180,
-    181,
-    5,
-    100,
-    0,
-    0,
-    181,
-    30,
+    18,
     1,
     0,
+    0,
+    0,
+    178,
+    179,
+    5,
+    99,
+    0,
+    0,
+    179,
+    180,
+    5,
+    111,
+    0,
+    0,
+    180,
+    181,
+    5,
+    110,
+    0,
+    0,
+    181,
+    182,
+    5,
+    116,
     0,
     0,
     182,
     183,
     5,
-    99,
+    101,
     0,
     0,
     183,
     184,
     5,
-    111,
+    120,
     0,
     0,
     184,
     185,
     5,
-    110,
+    116,
     0,
     0,
     185,
-    186,
-    5,
-    116,
+    20,
+    1,
+    0,
     0,
     0,
     186,
     187,
+    5,
+    121,
+    0,
+    0,
+    187,
+    188,
+    5,
+    105,
+    0,
+    0,
+    188,
+    189,
     5,
     101,
     0,
     0,
-    187,
-    188,
-    5,
-    120,
-    0,
-    0,
-    188,
     189,
+    190,
     5,
-    116,
-    0,
-    0,
-    189,
-    32,
-    1,
-    0,
+    108,
     0,
     0,
     190,
     191,
     5,
-    116,
+    100,
     0,
     0,
     191,
+    22,
+    1,
+    0,
+    0,
+    0,
     192,
+    193,
+    5,
+    108,
+    0,
+    0,
+    193,
+    194,
     5,
     105,
     0,
     0,
-    192,
-    193,
-    5,
-    109,
-    0,
-    0,
-    193,
-    194,
-    5,
-    101,
-    0,
-    0,
     194,
     195,
-    5,
-    111,
-    0,
-    0,
-    195,
-    196,
-    5,
-    117,
-    0,
-    0,
-    196,
-    197,
-    5,
-    116,
-    0,
-    0,
-    197,
-    34,
-    1,
-    0,
-    0,
-    0,
-    198,
-    199,
     5,
     115,
     0,
     0,
+    195,
+    196,
+    5,
+    116,
+    0,
+    0,
+    196,
+    197,
+    5,
+    101,
+    0,
+    0,
+    197,
+    198,
+    5,
+    110,
+    0,
+    0,
+    198,
+    24,
+    1,
+    0,
+    0,
+    0,
     199,
     200,
     5,
-    104,
+    108,
     0,
     0,
     200,
     201,
-    5,
-    97,
-    0,
-    0,
-    201,
-    202,
-    5,
-    100,
-    0,
-    0,
-    202,
-    203,
     5,
     111,
     0,
     0,
-    203,
-    204,
+    201,
+    202,
     5,
-    119,
+    111,
     0,
     0,
-    204,
-    36,
+    202,
+    203,
+    5,
+    112,
+    0,
+    0,
+    203,
+    26,
     1,
     0,
+    0,
+    0,
+    204,
+    205,
+    5,
+    97,
     0,
     0,
     205,
     206,
     5,
-    99,
+    115,
     0,
     0,
     206,
-    207,
-    5,
-    104,
+    28,
+    1,
+    0,
     0,
     0,
     207,
@@ -24990,25 +25106,25 @@ class HaloLexer extends Lexer {
     208,
     209,
     5,
-    99,
+    97,
     0,
     0,
     209,
     210,
     5,
-    107,
+    99,
     0,
     0,
     210,
     211,
     5,
-    112,
+    104,
     0,
     0,
     211,
-    212,
-    5,
-    111,
+    30,
+    1,
+    0,
     0,
     0,
     212,
@@ -25024,49 +25140,49 @@ class HaloLexer extends Lexer {
     0,
     0,
     214,
-    215,
-    5,
-    116,
-    0,
-    0,
-    215,
-    38,
+    32,
     1,
     0,
+    0,
+    0,
+    215,
+    216,
+    5,
+    101,
     0,
     0,
     216,
     217,
     5,
-    114,
+    108,
     0,
     0,
     217,
     218,
     5,
-    101,
+    115,
     0,
     0,
     218,
     219,
     5,
-    116,
+    101,
     0,
     0,
     219,
-    220,
-    5,
-    114,
+    34,
+    1,
+    0,
     0,
     0,
     220,
     221,
     5,
-    121,
+    46,
     0,
     0,
     221,
-    40,
+    36,
     1,
     0,
     0,
@@ -25074,47 +25190,47 @@ class HaloLexer extends Lexer {
     222,
     223,
     5,
-    99,
+    58,
     0,
     0,
     223,
-    224,
-    5,
-    111,
+    38,
+    1,
+    0,
     0,
     0,
     224,
     225,
     5,
-    114,
+    38,
     0,
     0,
     225,
-    226,
-    5,
-    114,
+    40,
+    1,
+    0,
     0,
     0,
     226,
     227,
     5,
-    101,
+    40,
     0,
     0,
     227,
-    228,
-    5,
-    99,
-    0,
-    0,
-    228,
-    229,
-    5,
-    116,
-    0,
-    0,
-    229,
     42,
+    1,
+    0,
+    0,
+    0,
+    228,
+    229,
+    5,
+    41,
+    0,
+    0,
+    229,
+    44,
     1,
     0,
     0,
@@ -25122,11 +25238,11 @@ class HaloLexer extends Lexer {
     230,
     231,
     5,
-    46,
+    123,
     0,
     0,
     231,
-    44,
+    46,
     1,
     0,
     0,
@@ -25134,11 +25250,11 @@ class HaloLexer extends Lexer {
     232,
     233,
     5,
-    91,
+    44,
     0,
     0,
     233,
-    46,
+    48,
     1,
     0,
     0,
@@ -25146,11 +25262,11 @@ class HaloLexer extends Lexer {
     234,
     235,
     5,
-    93,
+    125,
     0,
     0,
     235,
-    48,
+    50,
     1,
     0,
     0,
@@ -25158,43 +25274,43 @@ class HaloLexer extends Lexer {
     236,
     237,
     5,
-    45,
+    91,
     0,
     0,
     237,
-    238,
-    5,
-    62,
-    0,
-    0,
-    238,
-    50,
-    1,
-    0,
-    0,
-    0,
-    239,
-    240,
-    5,
-    64,
-    0,
-    0,
-    240,
     52,
     1,
     0,
     0,
     0,
-    241,
-    242,
+    238,
+    239,
     5,
-    60,
+    93,
     0,
     0,
-    242,
+    239,
     54,
     1,
     0,
+    0,
+    0,
+    240,
+    241,
+    5,
+    64,
+    0,
+    0,
+    241,
+    56,
+    1,
+    0,
+    0,
+    0,
+    242,
+    243,
+    5,
+    45,
     0,
     0,
     243,
@@ -25204,7 +25320,7 @@ class HaloLexer extends Lexer {
     0,
     0,
     244,
-    56,
+    58,
     1,
     0,
     0,
@@ -25212,11 +25328,11 @@ class HaloLexer extends Lexer {
     245,
     246,
     5,
-    123,
+    60,
     0,
     0,
     246,
-    58,
+    60,
     1,
     0,
     0,
@@ -25224,11 +25340,11 @@ class HaloLexer extends Lexer {
     247,
     248,
     5,
-    125,
+    62,
     0,
     0,
     248,
-    60,
+    62,
     1,
     0,
     0,
@@ -25246,7 +25362,7 @@ class HaloLexer extends Lexer {
     0,
     0,
     251,
-    62,
+    64,
     1,
     0,
     0,
@@ -25254,17 +25370,17 @@ class HaloLexer extends Lexer {
     252,
     253,
     5,
-    61,
+    124,
     0,
     0,
     253,
     254,
     5,
-    61,
+    124,
     0,
     0,
     254,
-    64,
+    66,
     1,
     0,
     0,
@@ -25272,17 +25388,17 @@ class HaloLexer extends Lexer {
     255,
     256,
     5,
-    33,
+    38,
     0,
     0,
     256,
     257,
     5,
-    61,
+    38,
     0,
     0,
     257,
-    66,
+    68,
     1,
     0,
     0,
@@ -25290,991 +25406,1221 @@ class HaloLexer extends Lexer {
     258,
     259,
     5,
-    62,
+    33,
     0,
     0,
     259,
-    260,
-    5,
-    61,
-    0,
-    0,
-    260,
-    68,
-    1,
-    0,
-    0,
-    0,
-    261,
-    262,
-    5,
-    60,
-    0,
-    0,
-    262,
-    263,
-    5,
-    61,
-    0,
-    0,
-    263,
     70,
     1,
     0,
     0,
     0,
-    264,
-    265,
+    260,
+    261,
     5,
-    108,
+    61,
     0,
     0,
-    265,
-    266,
+    261,
+    262,
     5,
-    111,
+    61,
     0,
     0,
-    266,
-    267,
-    5,
-    111,
-    0,
-    0,
-    267,
-    268,
-    5,
-    112,
-    0,
-    0,
-    268,
+    262,
     72,
     1,
     0,
     0,
     0,
-    269,
-    271,
-    7,
+    263,
+    264,
+    5,
+    33,
     0,
     0,
-    0,
-    270,
-    269,
-    1,
-    0,
-    0,
-    0,
-    271,
-    272,
-    1,
+    264,
+    265,
+    5,
+    61,
     0,
     0,
-    0,
-    272,
-    270,
-    1,
-    0,
-    0,
-    0,
-    272,
-    273,
-    1,
-    0,
-    0,
-    0,
-    273,
-    274,
-    1,
-    0,
-    0,
-    0,
-    274,
-    275,
-    6,
-    36,
-    0,
-    0,
-    275,
+    265,
     74,
     1,
     0,
     0,
     0,
+    266,
+    267,
+    5,
+    62,
+    0,
+    0,
+    267,
+    268,
+    5,
+    61,
+    0,
+    0,
+    268,
+    76,
+    1,
+    0,
+    0,
+    0,
+    269,
+    270,
+    5,
+    60,
+    0,
+    0,
+    270,
+    271,
+    5,
+    61,
+    0,
+    0,
+    271,
+    78,
+    1,
+    0,
+    0,
+    0,
+    272,
+    274,
+    7,
+    0,
+    0,
+    0,
+    273,
+    272,
+    1,
+    0,
+    0,
+    0,
+    274,
+    275,
+    1,
+    0,
+    0,
+    0,
+    275,
+    273,
+    1,
+    0,
+    0,
+    0,
+    275,
     276,
+    1,
+    0,
+    0,
+    0,
+    276,
+    277,
+    1,
+    0,
+    0,
+    0,
+    277,
     278,
+    6,
+    39,
+    0,
+    0,
+    278,
+    80,
+    1,
+    0,
+    0,
+    0,
+    279,
+    281,
     5,
     13,
     0,
     0,
-    277,
-    276,
-    1,
-    0,
-    0,
-    0,
-    277,
-    278,
-    1,
-    0,
-    0,
-    0,
-    278,
     280,
+    279,
     1,
     0,
     0,
     0,
-    279,
+    280,
     281,
+    1,
+    0,
+    0,
+    0,
+    281,
+    282,
+    1,
+    0,
+    0,
+    0,
+    282,
+    284,
     5,
     10,
     0,
     0,
-    280,
-    279,
-    1,
-    0,
-    0,
-    0,
-    281,
-    282,
-    1,
-    0,
-    0,
-    0,
-    282,
-    280,
-    1,
-    0,
-    0,
-    0,
-    282,
     283,
-    1,
-    0,
-    0,
-    0,
-    283,
-    284,
+    280,
     1,
     0,
     0,
     0,
     284,
     285,
-    6,
-    37,
+    1,
+    0,
     0,
     0,
     285,
-    76,
+    283,
+    1,
+    0,
+    0,
+    0,
+    285,
+    286,
     1,
     0,
     0,
     0,
     286,
     287,
-    5,
-    47,
+    1,
+    0,
     0,
     0,
     287,
     288,
-    5,
-    47,
+    6,
+    40,
     0,
     0,
     288,
-    292,
-    1,
-    0,
-    0,
-    0,
-    289,
-    291,
-    8,
-    1,
-    0,
-    0,
-    290,
-    289,
-    1,
-    0,
-    0,
-    0,
-    291,
-    294,
-    1,
-    0,
-    0,
-    0,
-    292,
-    290,
-    1,
-    0,
-    0,
-    0,
-    292,
-    293,
-    1,
-    0,
-    0,
-    0,
-    293,
-    295,
-    1,
-    0,
-    0,
-    0,
-    294,
-    292,
-    1,
-    0,
-    0,
-    0,
-    295,
-    296,
-    6,
-    38,
-    0,
-    0,
-    296,
-    78,
-    1,
-    0,
-    0,
-    0,
-    297,
-    298,
-    5,
-    124,
-    0,
-    0,
-    298,
-    299,
-    5,
-    60,
-    0,
-    0,
-    299,
-    300,
-    5,
-    62,
-    0,
-    0,
-    300,
-    80,
-    1,
-    0,
-    0,
-    0,
-    301,
-    302,
-    5,
-    124,
-    0,
-    0,
-    302,
-    303,
-    5,
-    42,
-    0,
-    0,
-    303,
     82,
     1,
     0,
     0,
     0,
-    304,
-    305,
+    289,
+    290,
     5,
-    124,
+    47,
     0,
     0,
-    305,
-    306,
+    290,
+    291,
     5,
-    33,
+    47,
     0,
     0,
-    306,
+    291,
+    295,
+    1,
+    0,
+    0,
+    0,
+    292,
+    294,
+    8,
+    1,
+    0,
+    0,
+    293,
+    292,
+    1,
+    0,
+    0,
+    0,
+    294,
+    297,
+    1,
+    0,
+    0,
+    0,
+    295,
+    293,
+    1,
+    0,
+    0,
+    0,
+    295,
+    296,
+    1,
+    0,
+    0,
+    0,
+    296,
+    298,
+    1,
+    0,
+    0,
+    0,
+    297,
+    295,
+    1,
+    0,
+    0,
+    0,
+    298,
+    299,
+    6,
+    41,
+    0,
+    0,
+    299,
     84,
     1,
     0,
     0,
     0,
-    307,
-    308,
+    300,
+    301,
     5,
-    124,
+    47,
     0,
     0,
-    308,
-    309,
+    301,
+    302,
     5,
-    63,
+    42,
     0,
     0,
-    309,
-    86,
+    302,
+    306,
     1,
     0,
+    0,
+    0,
+    303,
+    305,
+    9,
+    0,
+    0,
+    0,
+    304,
+    303,
+    1,
+    0,
+    0,
+    0,
+    305,
+    308,
+    1,
+    0,
+    0,
+    0,
+    306,
+    307,
+    1,
+    0,
+    0,
+    0,
+    306,
+    304,
+    1,
+    0,
+    0,
+    0,
+    307,
+    309,
+    1,
+    0,
+    0,
+    0,
+    308,
+    306,
+    1,
+    0,
+    0,
+    0,
+    309,
+    310,
+    5,
+    42,
     0,
     0,
     310,
     311,
     5,
-    126,
+    47,
     0,
     0,
     311,
     312,
+    1,
+    0,
+    0,
+    0,
+    312,
+    313,
+    6,
+    42,
+    0,
+    0,
+    313,
+    86,
+    1,
+    0,
+    0,
+    0,
+    314,
+    315,
+    5,
+    124,
+    0,
+    0,
+    315,
+    316,
+    5,
+    60,
+    0,
+    0,
+    316,
+    317,
     5,
     62,
     0,
     0,
-    312,
+    317,
     88,
     1,
     0,
     0,
     0,
-    313,
-    314,
+    318,
+    319,
     5,
     124,
     0,
     0,
-    314,
-    315,
+    319,
+    320,
     5,
-    62,
+    42,
     0,
     0,
-    315,
+    320,
     90,
     1,
     0,
     0,
     0,
-    316,
-    318,
-    7,
-    2,
-    0,
-    0,
-    317,
-    316,
-    1,
-    0,
-    0,
-    0,
-    318,
-    319,
-    1,
-    0,
-    0,
-    0,
-    319,
-    317,
-    1,
-    0,
-    0,
-    0,
-    319,
-    320,
-    1,
-    0,
-    0,
-    0,
-    320,
-    321,
-    1,
-    0,
-    0,
-    0,
     321,
     322,
-    7,
-    3,
+    5,
+    124,
     0,
     0,
     322,
+    323,
+    5,
+    33,
+    0,
+    0,
+    323,
     92,
     1,
     0,
     0,
     0,
-    323,
-    327,
-    7,
-    4,
-    0,
-    0,
     324,
-    326,
-    7,
+    325,
     5,
+    124,
     0,
     0,
     325,
-    324,
-    1,
-    0,
+    326,
+    5,
+    63,
     0,
     0,
     326,
-    329,
-    1,
-    0,
-    0,
-    0,
-    327,
-    325,
-    1,
-    0,
-    0,
-    0,
-    327,
-    328,
-    1,
-    0,
-    0,
-    0,
-    328,
     94,
     1,
     0,
     0,
     0,
-    329,
     327,
-    1,
-    0,
-    0,
-    0,
-    330,
-    332,
+    328,
     5,
-    47,
+    126,
     0,
     0,
-    331,
-    330,
-    1,
+    328,
+    329,
+    5,
+    62,
     0,
     0,
-    0,
-    331,
-    332,
-    1,
-    0,
-    0,
-    0,
-    332,
-    333,
-    1,
-    0,
-    0,
-    0,
-    333,
-    337,
-    7,
-    4,
-    0,
-    0,
-    334,
-    336,
-    7,
-    6,
-    0,
-    0,
-    335,
-    334,
-    1,
-    0,
-    0,
-    0,
-    336,
-    339,
-    1,
-    0,
-    0,
-    0,
-    337,
-    335,
-    1,
-    0,
-    0,
-    0,
-    337,
-    338,
-    1,
-    0,
-    0,
-    0,
-    338,
-    346,
-    1,
-    0,
-    0,
-    0,
-    339,
-    337,
-    1,
-    0,
-    0,
-    0,
-    340,
-    342,
-    7,
-    7,
-    0,
-    0,
-    341,
-    343,
-    7,
-    8,
-    0,
-    0,
-    342,
-    341,
-    1,
-    0,
-    0,
-    0,
-    343,
-    344,
-    1,
-    0,
-    0,
-    0,
-    344,
-    342,
-    1,
-    0,
-    0,
-    0,
-    344,
-    345,
-    1,
-    0,
-    0,
-    0,
-    345,
-    347,
-    1,
-    0,
-    0,
-    0,
-    346,
-    340,
-    1,
-    0,
-    0,
-    0,
-    347,
-    348,
-    1,
-    0,
-    0,
-    0,
-    348,
-    346,
-    1,
-    0,
-    0,
-    0,
-    348,
-    349,
-    1,
-    0,
-    0,
-    0,
-    349,
+    329,
     96,
     1,
     0,
     0,
     0,
-    350,
-    356,
+    330,
+    331,
     5,
-    34,
+    124,
     0,
     0,
-    351,
-    355,
-    8,
-    9,
-    0,
-    0,
-    352,
-    353,
+    331,
+    332,
     5,
-    92,
+    62,
     0,
     0,
-    353,
-    355,
-    9,
-    0,
-    0,
-    0,
-    354,
-    351,
-    1,
-    0,
-    0,
-    0,
-    354,
-    352,
-    1,
-    0,
-    0,
-    0,
-    355,
-    358,
-    1,
-    0,
-    0,
-    0,
-    356,
-    354,
-    1,
-    0,
-    0,
-    0,
-    356,
-    357,
-    1,
-    0,
-    0,
-    0,
-    357,
-    359,
-    1,
-    0,
-    0,
-    0,
-    358,
-    356,
-    1,
-    0,
-    0,
-    0,
-    359,
-    371,
-    5,
-    34,
-    0,
-    0,
-    360,
-    366,
-    5,
-    39,
-    0,
-    0,
-    361,
-    365,
-    8,
-    10,
-    0,
-    0,
-    362,
-    363,
-    5,
-    92,
-    0,
-    0,
-    363,
-    365,
-    9,
-    0,
-    0,
-    0,
-    364,
-    361,
-    1,
-    0,
-    0,
-    0,
-    364,
-    362,
-    1,
-    0,
-    0,
-    0,
-    365,
-    368,
-    1,
-    0,
-    0,
-    0,
-    366,
-    364,
-    1,
-    0,
-    0,
-    0,
-    366,
-    367,
-    1,
-    0,
-    0,
-    0,
-    367,
-    369,
-    1,
-    0,
-    0,
-    0,
-    368,
-    366,
-    1,
-    0,
-    0,
-    0,
-    369,
-    371,
-    5,
-    39,
-    0,
-    0,
-    370,
-    350,
-    1,
-    0,
-    0,
-    0,
-    370,
-    360,
-    1,
-    0,
-    0,
-    0,
-    371,
+    332,
     98,
     1,
     0,
     0,
     0,
-    372,
-    374,
+    333,
+    334,
     5,
-    45,
+    116,
     0,
     0,
-    373,
-    372,
-    1,
-    0,
-    0,
-    0,
-    373,
-    374,
-    1,
-    0,
-    0,
-    0,
-    374,
-    376,
-    1,
-    0,
-    0,
-    0,
-    375,
-    377,
-    7,
-    2,
-    0,
-    0,
-    376,
-    375,
-    1,
-    0,
-    0,
-    0,
-    377,
-    378,
-    1,
-    0,
-    0,
-    0,
-    378,
-    376,
-    1,
-    0,
-    0,
-    0,
-    378,
-    379,
-    1,
-    0,
-    0,
-    0,
-    379,
-    386,
-    1,
-    0,
-    0,
-    0,
-    380,
-    382,
+    334,
+    335,
     5,
-    46,
+    114,
     0,
     0,
-    381,
-    383,
-    7,
-    2,
+    335,
+    336,
+    5,
+    117,
     0,
     0,
-    382,
-    381,
+    336,
+    343,
+    5,
+    101,
+    0,
+    0,
+    337,
+    338,
+    5,
+    102,
+    0,
+    0,
+    338,
+    339,
+    5,
+    97,
+    0,
+    0,
+    339,
+    340,
+    5,
+    108,
+    0,
+    0,
+    340,
+    341,
+    5,
+    115,
+    0,
+    0,
+    341,
+    343,
+    5,
+    101,
+    0,
+    0,
+    342,
+    333,
     1,
     0,
     0,
     0,
-    383,
-    384,
+    342,
+    337,
     1,
     0,
     0,
     0,
-    384,
-    382,
-    1,
-    0,
-    0,
-    0,
-    384,
-    385,
-    1,
-    0,
-    0,
-    0,
-    385,
-    387,
-    1,
-    0,
-    0,
-    0,
-    386,
-    380,
-    1,
-    0,
-    0,
-    0,
-    386,
-    387,
-    1,
-    0,
-    0,
-    0,
-    387,
+    343,
     100,
     1,
     0,
     0,
     0,
-    388,
-    389,
+    344,
+    345,
     5,
-    116,
+    110,
     0,
     0,
-    389,
-    390,
-    5,
-    114,
-    0,
-    0,
-    390,
-    391,
+    345,
+    346,
     5,
     117,
     0,
     0,
-    391,
-    398,
-    5,
-    101,
-    0,
-    0,
-    392,
-    393,
-    5,
-    102,
-    0,
-    0,
-    393,
-    394,
-    5,
-    97,
-    0,
-    0,
-    394,
-    395,
+    346,
+    347,
     5,
     108,
     0,
     0,
-    395,
-    396,
+    347,
+    348,
+    5,
+    108,
+    0,
+    0,
+    348,
+    102,
+    1,
+    0,
+    0,
+    0,
+    349,
+    351,
+    7,
+    2,
+    0,
+    0,
+    350,
+    349,
+    1,
+    0,
+    0,
+    0,
+    351,
+    352,
+    1,
+    0,
+    0,
+    0,
+    352,
+    350,
+    1,
+    0,
+    0,
+    0,
+    352,
+    353,
+    1,
+    0,
+    0,
+    0,
+    353,
+    357,
+    1,
+    0,
+    0,
+    0,
+    354,
+    355,
+    5,
+    109,
+    0,
+    0,
+    355,
+    358,
     5,
     115,
     0,
     0,
-    396,
-    398,
+    356,
+    358,
+    7,
+    3,
+    0,
+    0,
+    357,
+    354,
+    1,
+    0,
+    0,
+    0,
+    357,
+    356,
+    1,
+    0,
+    0,
+    0,
+    358,
+    104,
+    1,
+    0,
+    0,
+    0,
+    359,
+    361,
     5,
-    101,
+    45,
     0,
     0,
-    397,
+    360,
+    359,
+    1,
+    0,
+    0,
+    0,
+    360,
+    361,
+    1,
+    0,
+    0,
+    0,
+    361,
+    363,
+    1,
+    0,
+    0,
+    0,
+    362,
+    364,
+    7,
+    2,
+    0,
+    0,
+    363,
+    362,
+    1,
+    0,
+    0,
+    0,
+    364,
+    365,
+    1,
+    0,
+    0,
+    0,
+    365,
+    363,
+    1,
+    0,
+    0,
+    0,
+    365,
+    366,
+    1,
+    0,
+    0,
+    0,
+    366,
+    373,
+    1,
+    0,
+    0,
+    0,
+    367,
+    369,
+    5,
+    46,
+    0,
+    0,
+    368,
+    370,
+    7,
+    2,
+    0,
+    0,
+    369,
+    368,
+    1,
+    0,
+    0,
+    0,
+    370,
+    371,
+    1,
+    0,
+    0,
+    0,
+    371,
+    369,
+    1,
+    0,
+    0,
+    0,
+    371,
+    372,
+    1,
+    0,
+    0,
+    0,
+    372,
+    374,
+    1,
+    0,
+    0,
+    0,
+    373,
+    367,
+    1,
+    0,
+    0,
+    0,
+    373,
+    374,
+    1,
+    0,
+    0,
+    0,
+    374,
+    106,
+    1,
+    0,
+    0,
+    0,
+    375,
+    379,
+    7,
+    4,
+    0,
+    0,
+    376,
+    378,
+    7,
+    5,
+    0,
+    0,
+    377,
+    376,
+    1,
+    0,
+    0,
+    0,
+    378,
+    381,
+    1,
+    0,
+    0,
+    0,
+    379,
+    377,
+    1,
+    0,
+    0,
+    0,
+    379,
+    380,
+    1,
+    0,
+    0,
+    0,
+    380,
     388,
     1,
     0,
     0,
     0,
-    397,
+    381,
+    379,
+    1,
+    0,
+    0,
+    0,
+    382,
+    384,
+    7,
+    6,
+    0,
+    0,
+    383,
+    385,
+    7,
+    5,
+    0,
+    0,
+    384,
+    383,
+    1,
+    0,
+    0,
+    0,
+    385,
+    386,
+    1,
+    0,
+    0,
+    0,
+    386,
+    384,
+    1,
+    0,
+    0,
+    0,
+    386,
+    387,
+    1,
+    0,
+    0,
+    0,
+    387,
+    389,
+    1,
+    0,
+    0,
+    0,
+    388,
+    382,
+    1,
+    0,
+    0,
+    0,
+    389,
+    390,
+    1,
+    0,
+    0,
+    0,
+    390,
+    388,
+    1,
+    0,
+    0,
+    0,
+    390,
+    391,
+    1,
+    0,
+    0,
+    0,
+    391,
+    108,
+    1,
+    0,
+    0,
+    0,
     392,
+    396,
+    7,
+    4,
+    0,
+    0,
+    393,
+    395,
+    7,
+    7,
+    0,
+    0,
+    394,
+    393,
+    1,
+    0,
+    0,
+    0,
+    395,
+    398,
+    1,
+    0,
+    0,
+    0,
+    396,
+    394,
+    1,
+    0,
+    0,
+    0,
+    396,
+    397,
+    1,
+    0,
+    0,
+    0,
+    397,
+    110,
     1,
     0,
     0,
     0,
     398,
-    102,
+    396,
     1,
     0,
     0,
     0,
-    21,
+    399,
+    400,
+    5,
+    34,
     0,
-    272,
-    277,
-    282,
-    292,
-    319,
-    327,
-    331,
-    337,
-    344,
-    348,
-    354,
-    356,
-    364,
-    366,
-    370,
+    0,
+    400,
+    401,
+    5,
+    34,
+    0,
+    0,
+    401,
+    402,
+    5,
+    34,
+    0,
+    0,
+    402,
+    406,
+    1,
+    0,
+    0,
+    0,
+    403,
+    405,
+    9,
+    0,
+    0,
+    0,
+    404,
+    403,
+    1,
+    0,
+    0,
+    0,
+    405,
+    408,
+    1,
+    0,
+    0,
+    0,
+    406,
+    407,
+    1,
+    0,
+    0,
+    0,
+    406,
+    404,
+    1,
+    0,
+    0,
+    0,
+    407,
+    409,
+    1,
+    0,
+    0,
+    0,
+    408,
+    406,
+    1,
+    0,
+    0,
+    0,
+    409,
+    410,
+    5,
+    34,
+    0,
+    0,
+    410,
+    411,
+    5,
+    34,
+    0,
+    0,
+    411,
+    412,
+    5,
+    34,
+    0,
+    0,
+    412,
+    112,
+    1,
+    0,
+    0,
+    0,
+    413,
+    419,
+    5,
+    34,
+    0,
+    0,
+    414,
+    418,
+    8,
+    8,
+    0,
+    0,
+    415,
+    416,
+    5,
+    92,
+    0,
+    0,
+    416,
+    418,
+    9,
+    0,
+    0,
+    0,
+    417,
+    414,
+    1,
+    0,
+    0,
+    0,
+    417,
+    415,
+    1,
+    0,
+    0,
+    0,
+    418,
+    421,
+    1,
+    0,
+    0,
+    0,
+    419,
+    417,
+    1,
+    0,
+    0,
+    0,
+    419,
+    420,
+    1,
+    0,
+    0,
+    0,
+    420,
+    422,
+    1,
+    0,
+    0,
+    0,
+    421,
+    419,
+    1,
+    0,
+    0,
+    0,
+    422,
+    434,
+    5,
+    34,
+    0,
+    0,
+    423,
+    429,
+    5,
+    39,
+    0,
+    0,
+    424,
+    428,
+    8,
+    9,
+    0,
+    0,
+    425,
+    426,
+    5,
+    92,
+    0,
+    0,
+    426,
+    428,
+    9,
+    0,
+    0,
+    0,
+    427,
+    424,
+    1,
+    0,
+    0,
+    0,
+    427,
+    425,
+    1,
+    0,
+    0,
+    0,
+    428,
+    431,
+    1,
+    0,
+    0,
+    0,
+    429,
+    427,
+    1,
+    0,
+    0,
+    0,
+    429,
+    430,
+    1,
+    0,
+    0,
+    0,
+    430,
+    432,
+    1,
+    0,
+    0,
+    0,
+    431,
+    429,
+    1,
+    0,
+    0,
+    0,
+    432,
+    434,
+    5,
+    39,
+    0,
+    0,
+    433,
+    413,
+    1,
+    0,
+    0,
+    0,
+    433,
+    423,
+    1,
+    0,
+    0,
+    0,
+    434,
+    114,
+    1,
+    0,
+    0,
+    0,
+    23,
+    0,
+    275,
+    280,
+    285,
+    295,
+    306,
+    342,
+    352,
+    357,
+    360,
+    365,
+    371,
     373,
-    378,
-    384,
+    379,
     386,
-    397,
+    390,
+    396,
+    406,
+    417,
+    419,
+    427,
+    429,
+    433,
     1,
     6,
     0,
@@ -26294,7 +26640,7 @@ class HaloLexer extends Lexer {
   static decisionsToDFA = HaloLexer._ATN.decisionToState.map((ds, index) => new DFA(ds, index));
 }
 
-// src/parser/grammars/HaloParser.ts
+// src/parser/generated/HaloParser.ts
 class HaloParser extends Parser {
   static T__0 = 1;
   static T__1 = 2;
@@ -26332,116 +26678,110 @@ class HaloParser extends Parser {
   static T__33 = 34;
   static T__34 = 35;
   static T__35 = 36;
-  static WS = 37;
-  static NL = 38;
-  static COMMENT = 39;
-  static LOOP = 40;
-  static FANOUT = 41;
-  static INTERRUPT = 42;
-  static GATE = 43;
-  static LISTEN = 44;
-  static PIPE = 45;
-  static DURATION = 46;
-  static IDENTIFIER = 47;
-  static MODEL_REF = 48;
-  static STRING = 49;
-  static NUMBER = 50;
-  static BOOL = 51;
+  static T__36 = 37;
+  static T__37 = 38;
+  static T__38 = 39;
+  static WS = 40;
+  static NL = 41;
+  static LINE_COMMENT = 42;
+  static BLOCK_COMMENT = 43;
+  static LOOP = 44;
+  static FANOUT = 45;
+  static INTERRUPT = 46;
+  static GATE = 47;
+  static LISTEN = 48;
+  static PIPE = 49;
+  static BOOL = 50;
+  static NULL = 51;
+  static DURATION = 52;
+  static NUMBER = 53;
+  static MODEL_REF = 54;
+  static IDENTIFIER = 55;
+  static TRIPLE_STRING = 56;
+  static STRING = 57;
   static RULE_program = 0;
   static RULE_declaration = 1;
-  static RULE_policyDecl = 2;
-  static RULE_policyRule = 3;
-  static RULE_policyArgs = 4;
-  static RULE_policyArg = 5;
-  static RULE_idOrKeyword = 6;
-  static RULE_dottedId = 7;
+  static RULE_name = 2;
+  static RULE_dottedId = 3;
+  static RULE_policyDecl = 4;
+  static RULE_policyRule = 5;
+  static RULE_toolDecl = 6;
+  static RULE_storeDecl = 7;
   static RULE_schemaDecl = 8;
-  static RULE_schemaFields = 9;
-  static RULE_schemaField = 10;
-  static RULE_toolDecl = 11;
-  static RULE_toolArgs = 12;
-  static RULE_toolArg = 13;
-  static RULE_storeDecl = 14;
-  static RULE_storeArgs = 15;
-  static RULE_storeArg = 16;
-  static RULE_agentDecl = 17;
-  static RULE_agentModifiers = 18;
-  static RULE_agentModifier = 19;
-  static RULE_equipsList = 20;
-  static RULE_requiresList = 21;
-  static RULE_modelConfig = 22;
-  static RULE_modelId = 23;
-  static RULE_modelParam = 24;
-  static RULE_pipelineDecl = 25;
-  static RULE_directive = 26;
-  static RULE_directiveName = 27;
-  static RULE_directiveValue = 28;
-  static RULE_directiveArgs = 29;
-  static RULE_paramList = 30;
-  static RULE_param = 31;
-  static RULE_typeRef = 32;
-  static RULE_typeName = 33;
-  static RULE_pipeline = 34;
-  static RULE_pipelineStage = 35;
-  static RULE_condition = 36;
-  static RULE_conditionExpr = 37;
-  static RULE_comparisonOp = 38;
-  static RULE_fanoutStages = 39;
-  static RULE_fanoutStage = 40;
-  static RULE_yieldExpr = 41;
-  static RULE_yieldArgs = 42;
-  static RULE_yieldArg = 43;
-  static RULE_yieldArgValue = 44;
-  static RULE_listenExpr = 45;
-  static RULE_listenTarget = 46;
-  static RULE_loopExpr = 47;
-  static RULE_expression = 48;
-  static RULE_callExpr = 49;
-  static RULE_callArgs = 50;
-  static RULE_callArg = 51;
-  static RULE_callValue = 52;
-  static RULE_callItems = 53;
-  static RULE_value = 54;
-  static RULE_contextRef = 55;
-  static RULE_contextTail = 56;
+  static RULE_schemaField = 9;
+  static RULE_agentDecl = 10;
+  static RULE_modelRef = 11;
+  static RULE_modelParam = 12;
+  static RULE_agentModifier = 13;
+  static RULE_directive = 14;
+  static RULE_directiveArg = 15;
+  static RULE_pipelineDecl = 16;
+  static RULE_paramList = 17;
+  static RULE_param = 18;
+  static RULE_typeRef = 19;
+  static RULE_pipeline = 20;
+  static RULE_pipelineOp = 21;
+  static RULE_binding = 22;
+  static RULE_branchArm = 23;
+  static RULE_fanoutItem = 24;
+  static RULE_callExpr = 25;
+  static RULE_callArgs = 26;
+  static RULE_callArg = 27;
+  static RULE_callValue = 28;
+  static RULE_listValue = 29;
+  static RULE_value = 30;
+  static RULE_literal = 31;
+  static RULE_expression = 32;
+  static RULE_contextRef = 33;
+  static RULE_condExpr = 34;
+  static RULE_orExpr = 35;
+  static RULE_andExpr = 36;
+  static RULE_notExpr = 37;
+  static RULE_comparison = 38;
+  static RULE_compOp = 39;
+  static RULE_operand = 40;
   static literalNames = [
     null,
     "'policy'",
+    "'tool'",
+    "'store'",
+    "'schema'",
+    "'agent'",
+    "'pipeline'",
+    "'equips'",
+    "'requires'",
+    "'system'",
+    "'context'",
+    "'yield'",
+    "'listen'",
+    "'loop'",
+    "'as'",
+    "'each'",
+    "'in'",
+    "'else'",
+    "'.'",
     "':'",
     "'&'",
     "'('",
     "')'",
+    "'{'",
     "','",
-    "'tool'",
-    "'agent'",
-    "'store'",
-    "'pipeline'",
-    "'schema'",
-    "'equips'",
-    "'requires'",
-    "'listen'",
-    "'yield'",
-    "'context'",
-    "'timeout'",
-    "'shadow'",
-    "'checkpoint'",
-    "'retry'",
-    "'correct'",
-    "'.'",
+    "'}'",
     "'['",
     "']'",
-    "'->'",
     "'@'",
+    "'->'",
     "'<'",
     "'>'",
-    "'{'",
-    "'}'",
     "'=>'",
+    "'||'",
+    "'&&'",
+    "'!'",
     "'=='",
     "'!='",
     "'>='",
     "'<='",
-    "'loop'",
+    null,
     null,
     null,
     null,
@@ -26450,7 +26790,9 @@ class HaloParser extends Parser {
     "'|!'",
     "'|?'",
     "'~>'",
-    "'|>'"
+    "'|>'",
+    null,
+    "'null'"
   ];
   static symbolicNames = [
     null,
@@ -26490,80 +26832,70 @@ class HaloParser extends Parser {
     null,
     null,
     null,
+    null,
+    null,
+    null,
     "WS",
     "NL",
-    "COMMENT",
+    "LINE_COMMENT",
+    "BLOCK_COMMENT",
     "LOOP",
     "FANOUT",
     "INTERRUPT",
     "GATE",
     "LISTEN",
     "PIPE",
+    "BOOL",
+    "NULL",
     "DURATION",
-    "IDENTIFIER",
-    "MODEL_REF",
-    "STRING",
     "NUMBER",
-    "BOOL"
+    "MODEL_REF",
+    "IDENTIFIER",
+    "TRIPLE_STRING",
+    "STRING"
   ];
   static ruleNames = [
     "program",
     "declaration",
+    "name",
+    "dottedId",
     "policyDecl",
     "policyRule",
-    "policyArgs",
-    "policyArg",
-    "idOrKeyword",
-    "dottedId",
-    "schemaDecl",
-    "schemaFields",
-    "schemaField",
     "toolDecl",
-    "toolArgs",
-    "toolArg",
     "storeDecl",
-    "storeArgs",
-    "storeArg",
+    "schemaDecl",
+    "schemaField",
     "agentDecl",
-    "agentModifiers",
-    "agentModifier",
-    "equipsList",
-    "requiresList",
-    "modelConfig",
-    "modelId",
+    "modelRef",
     "modelParam",
-    "pipelineDecl",
+    "agentModifier",
     "directive",
-    "directiveName",
-    "directiveValue",
-    "directiveArgs",
+    "directiveArg",
+    "pipelineDecl",
     "paramList",
     "param",
     "typeRef",
-    "typeName",
     "pipeline",
-    "pipelineStage",
-    "condition",
-    "conditionExpr",
-    "comparisonOp",
-    "fanoutStages",
-    "fanoutStage",
-    "yieldExpr",
-    "yieldArgs",
-    "yieldArg",
-    "yieldArgValue",
-    "listenExpr",
-    "listenTarget",
-    "loopExpr",
-    "expression",
+    "pipelineOp",
+    "binding",
+    "branchArm",
+    "fanoutItem",
     "callExpr",
     "callArgs",
     "callArg",
     "callValue",
-    "callItems",
+    "listValue",
     "value",
+    "literal",
+    "expression",
     "contextRef",
-    "contextTail"
+    "condExpr",
+    "orExpr",
+    "andExpr",
+    "notExpr",
+    "comparison",
+    "compOp",
+    "operand"
   ];
   get grammarFileName() {
     return "Halo.g4";
@@ -26594,21 +26926,21 @@ class HaloParser extends Parser {
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 117;
+        this.state = 85;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        while ((_la & ~31) === 0 && (1 << _la & 67112834) !== 0) {
+        while ((_la & ~31) === 0 && (1 << _la & 268435582) !== 0) {
           {
             {
-              this.state = 114;
+              this.state = 82;
               this.declaration();
             }
           }
-          this.state = 119;
+          this.state = 87;
           this.errorHandler.sync(this);
           _la = this.tokenStream.LA(1);
         }
-        this.state = 120;
+        this.state = 88;
         this.match(HaloParser.EOF);
       }
     } catch (re) {
@@ -26627,228 +26959,49 @@ class HaloParser extends Parser {
     let localContext = new DeclarationContext(this.context, this.state);
     this.enterRule(localContext, 2, HaloParser.RULE_declaration);
     try {
-      this.state = 128;
+      this.state = 96;
       this.errorHandler.sync(this);
       switch (this.interpreter.adaptivePredict(this.tokenStream, 1, this.context)) {
         case 1:
           this.enterOuterAlt(localContext, 1);
           {
-            this.state = 122;
+            this.state = 90;
             this.policyDecl();
           }
           break;
         case 2:
           this.enterOuterAlt(localContext, 2);
           {
-            this.state = 123;
+            this.state = 91;
             this.toolDecl();
           }
           break;
         case 3:
           this.enterOuterAlt(localContext, 3);
           {
-            this.state = 124;
+            this.state = 92;
             this.storeDecl();
           }
           break;
         case 4:
           this.enterOuterAlt(localContext, 4);
           {
-            this.state = 125;
-            this.agentDecl();
-          }
-          break;
-        case 5:
-          this.enterOuterAlt(localContext, 5);
-          {
-            this.state = 126;
-            this.pipelineDecl();
-          }
-          break;
-        case 6:
-          this.enterOuterAlt(localContext, 6);
-          {
-            this.state = 127;
+            this.state = 93;
             this.schemaDecl();
           }
           break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  policyDecl() {
-    let localContext = new PolicyDeclContext(this.context, this.state);
-    this.enterRule(localContext, 4, HaloParser.RULE_policyDecl);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 130;
-        this.match(HaloParser.T__0);
-        this.state = 131;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 132;
-        this.match(HaloParser.T__1);
-        this.state = 133;
-        this.policyRule();
-        this.state = 138;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 3) {
-          {
-            {
-              this.state = 134;
-              this.match(HaloParser.T__2);
-              this.state = 135;
-              this.policyRule();
-            }
-          }
-          this.state = 140;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  policyRule() {
-    let localContext = new PolicyRuleContext(this.context, this.state);
-    this.enterRule(localContext, 6, HaloParser.RULE_policyRule);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 141;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 142;
-        this.match(HaloParser.T__3);
-        this.state = 144;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if ((_la & ~31) === 0 && (1 << _la & 4194178) !== 0 || (_la - 46 & ~31) === 0 && (1 << _la - 46 & 31) !== 0) {
-          {
-            this.state = 143;
-            this.policyArgs();
-          }
-        }
-        this.state = 146;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  policyArgs() {
-    let localContext = new PolicyArgsContext(this.context, this.state);
-    this.enterRule(localContext, 8, HaloParser.RULE_policyArgs);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 148;
-        this.policyArg();
-        this.state = 153;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 149;
-              this.match(HaloParser.T__5);
-              this.state = 150;
-              this.policyArg();
-            }
-          }
-          this.state = 155;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  policyArg() {
-    let localContext = new PolicyArgContext(this.context, this.state);
-    this.enterRule(localContext, 10, HaloParser.RULE_policyArg);
-    try {
-      this.state = 162;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 5, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 156;
-            this.match(HaloParser.MODEL_REF);
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 157;
-            this.dottedId();
-          }
-          break;
-        case 3:
-          this.enterOuterAlt(localContext, 3);
-          {
-            this.state = 158;
-            this.match(HaloParser.IDENTIFIER);
-          }
-          break;
-        case 4:
-          this.enterOuterAlt(localContext, 4);
-          {
-            this.state = 159;
-            this.match(HaloParser.STRING);
-          }
-          break;
         case 5:
           this.enterOuterAlt(localContext, 5);
           {
-            this.state = 160;
-            this.match(HaloParser.NUMBER);
+            this.state = 94;
+            this.agentDecl();
           }
           break;
         case 6:
           this.enterOuterAlt(localContext, 6);
           {
-            this.state = 161;
-            this.match(HaloParser.DURATION);
+            this.state = 95;
+            this.pipelineDecl();
           }
           break;
       }
@@ -26864,16 +27017,16 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  idOrKeyword() {
-    let localContext = new IdOrKeywordContext(this.context, this.state);
-    this.enterRule(localContext, 12, HaloParser.RULE_idOrKeyword);
+  name() {
+    let localContext = new NameContext(this.context, this.state);
+    this.enterRule(localContext, 4, HaloParser.RULE_name);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 164;
+        this.state = 98;
         _la = this.tokenStream.LA(1);
-        if (!((_la & ~31) === 0 && (1 << _la & 4194178) !== 0 || _la === 47)) {
+        if (!((_la & ~31) === 0 && (1 << _la & 262142) !== 0 || _la === 55)) {
           this.errorHandler.recoverInline(this);
         } else {
           this.errorHandler.reportMatch(this);
@@ -26894,29 +27047,190 @@ class HaloParser extends Parser {
   }
   dottedId() {
     let localContext = new DottedIdContext(this.context, this.state);
-    this.enterRule(localContext, 14, HaloParser.RULE_dottedId);
+    this.enterRule(localContext, 6, HaloParser.RULE_dottedId);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 166;
-        this.idOrKeyword();
-        this.state = 171;
+        this.state = 100;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 105;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        while (_la === 22) {
+        while (_la === 18) {
           {
             {
-              this.state = 167;
-              this.match(HaloParser.T__21);
-              this.state = 168;
-              this.idOrKeyword();
+              this.state = 101;
+              this.match(HaloParser.T__17);
+              this.state = 102;
+              this.name();
             }
           }
-          this.state = 173;
+          this.state = 107;
           this.errorHandler.sync(this);
           _la = this.tokenStream.LA(1);
         }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  policyDecl() {
+    let localContext = new PolicyDeclContext(this.context, this.state);
+    this.enterRule(localContext, 8, HaloParser.RULE_policyDecl);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 108;
+        this.match(HaloParser.T__0);
+        this.state = 109;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 110;
+        this.match(HaloParser.T__18);
+        this.state = 111;
+        this.policyRule();
+        this.state = 116;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        while (_la === 20) {
+          {
+            {
+              this.state = 112;
+              this.match(HaloParser.T__19);
+              this.state = 113;
+              this.policyRule();
+            }
+          }
+          this.state = 118;
+          this.errorHandler.sync(this);
+          _la = this.tokenStream.LA(1);
+        }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  policyRule() {
+    let localContext = new PolicyRuleContext(this.context, this.state);
+    this.enterRule(localContext, 10, HaloParser.RULE_policyRule);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 119;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 120;
+        this.match(HaloParser.T__20);
+        this.state = 122;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if ((_la & ~31) === 0 && (1 << _la & 67371006) !== 0 || (_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+          {
+            this.state = 121;
+            this.callArgs();
+          }
+        }
+        this.state = 124;
+        this.match(HaloParser.T__21);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  toolDecl() {
+    let localContext = new ToolDeclContext(this.context, this.state);
+    this.enterRule(localContext, 12, HaloParser.RULE_toolDecl);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 126;
+        this.match(HaloParser.T__1);
+        this.state = 127;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 128;
+        this.match(HaloParser.T__18);
+        this.state = 129;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 130;
+        this.match(HaloParser.T__20);
+        this.state = 132;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if ((_la & ~31) === 0 && (1 << _la & 67371006) !== 0 || (_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+          {
+            this.state = 131;
+            this.callArgs();
+          }
+        }
+        this.state = 134;
+        this.match(HaloParser.T__21);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  storeDecl() {
+    let localContext = new StoreDeclContext(this.context, this.state);
+    this.enterRule(localContext, 14, HaloParser.RULE_storeDecl);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 136;
+        this.match(HaloParser.T__2);
+        this.state = 137;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 138;
+        this.match(HaloParser.T__18);
+        this.state = 139;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 140;
+        this.match(HaloParser.T__20);
+        this.state = 142;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if ((_la & ~31) === 0 && (1 << _la & 67371006) !== 0 || (_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+          {
+            this.state = 141;
+            this.callArgs();
+          }
+        }
+        this.state = 144;
+        this.match(HaloParser.T__21);
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -26933,51 +27247,41 @@ class HaloParser extends Parser {
   schemaDecl() {
     let localContext = new SchemaDeclContext(this.context, this.state);
     this.enterRule(localContext, 16, HaloParser.RULE_schemaDecl);
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 174;
-        this.match(HaloParser.T__10);
-        this.state = 175;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 176;
-        this.match(HaloParser.T__1);
-        this.state = 177;
-        this.schemaFields();
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  schemaFields() {
-    let localContext = new SchemaFieldsContext(this.context, this.state);
-    this.enterRule(localContext, 18, HaloParser.RULE_schemaFields);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 182;
+        this.state = 146;
+        this.match(HaloParser.T__3);
+        this.state = 147;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 148;
+        this.match(HaloParser.T__22);
+        this.state = 155;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        while (_la === 47) {
+        while ((_la & ~31) === 0 && (1 << _la & 262142) !== 0 || _la === 55) {
           {
             {
-              this.state = 179;
+              this.state = 149;
               this.schemaField();
+              this.state = 151;
+              this.errorHandler.sync(this);
+              _la = this.tokenStream.LA(1);
+              if (_la === 24) {
+                {
+                  this.state = 150;
+                  this.match(HaloParser.T__23);
+                }
+              }
             }
           }
-          this.state = 184;
+          this.state = 157;
           this.errorHandler.sync(this);
           _la = this.tokenStream.LA(1);
         }
+        this.state = 158;
+        this.match(HaloParser.T__24);
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -26993,367 +27297,16 @@ class HaloParser extends Parser {
   }
   schemaField() {
     let localContext = new SchemaFieldContext(this.context, this.state);
-    this.enterRule(localContext, 20, HaloParser.RULE_schemaField);
+    this.enterRule(localContext, 18, HaloParser.RULE_schemaField);
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 185;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 186;
-        this.match(HaloParser.T__1);
-        this.state = 187;
+        this.state = 160;
+        this.name();
+        this.state = 161;
+        this.match(HaloParser.T__18);
+        this.state = 162;
         this.typeRef();
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  toolDecl() {
-    let localContext = new ToolDeclContext(this.context, this.state);
-    this.enterRule(localContext, 22, HaloParser.RULE_toolDecl);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 189;
-        this.match(HaloParser.T__6);
-        this.state = 190;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 191;
-        this.match(HaloParser.T__1);
-        this.state = 192;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 193;
-        this.match(HaloParser.T__3);
-        this.state = 195;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if ((_la & ~31) === 0 && (1 << _la & 4194178) !== 0 || (_la - 46 & ~31) === 0 && (1 << _la - 46 & 27) !== 0) {
-          {
-            this.state = 194;
-            this.toolArgs();
-          }
-        }
-        this.state = 197;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  toolArgs() {
-    let localContext = new ToolArgsContext(this.context, this.state);
-    this.enterRule(localContext, 24, HaloParser.RULE_toolArgs);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 199;
-        this.toolArg();
-        this.state = 204;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 200;
-              this.match(HaloParser.T__5);
-              this.state = 201;
-              this.toolArg();
-            }
-          }
-          this.state = 206;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  toolArg() {
-    let localContext = new ToolArgContext(this.context, this.state);
-    this.enterRule(localContext, 26, HaloParser.RULE_toolArg);
-    try {
-      this.state = 219;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 11, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 207;
-            this.match(HaloParser.STRING);
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 208;
-            this.match(HaloParser.NUMBER);
-          }
-          break;
-        case 3:
-          this.enterOuterAlt(localContext, 3);
-          {
-            this.state = 209;
-            this.match(HaloParser.DURATION);
-          }
-          break;
-        case 4:
-          this.enterOuterAlt(localContext, 4);
-          {
-            this.state = 210;
-            this.dottedId();
-          }
-          break;
-        case 5:
-          this.enterOuterAlt(localContext, 5);
-          {
-            this.state = 211;
-            this.idOrKeyword();
-            this.state = 212;
-            this.match(HaloParser.T__1);
-            this.state = 217;
-            this.errorHandler.sync(this);
-            switch (this.tokenStream.LA(1)) {
-              case HaloParser.STRING:
-                {
-                  this.state = 213;
-                  this.match(HaloParser.STRING);
-                }
-                break;
-              case HaloParser.NUMBER:
-                {
-                  this.state = 214;
-                  this.match(HaloParser.NUMBER);
-                }
-                break;
-              case HaloParser.DURATION:
-                {
-                  this.state = 215;
-                  this.match(HaloParser.DURATION);
-                }
-                break;
-              case HaloParser.T__0:
-              case HaloParser.T__6:
-              case HaloParser.T__7:
-              case HaloParser.T__8:
-              case HaloParser.T__9:
-              case HaloParser.T__10:
-              case HaloParser.T__11:
-              case HaloParser.T__12:
-              case HaloParser.T__13:
-              case HaloParser.T__14:
-              case HaloParser.T__15:
-              case HaloParser.T__16:
-              case HaloParser.T__17:
-              case HaloParser.T__18:
-              case HaloParser.T__19:
-              case HaloParser.T__20:
-              case HaloParser.IDENTIFIER:
-                {
-                  this.state = 216;
-                  this.dottedId();
-                }
-                break;
-              default:
-                throw new NoViableAltException(this);
-            }
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  storeDecl() {
-    let localContext = new StoreDeclContext(this.context, this.state);
-    this.enterRule(localContext, 28, HaloParser.RULE_storeDecl);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 221;
-        this.match(HaloParser.T__8);
-        this.state = 222;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 223;
-        this.match(HaloParser.T__1);
-        this.state = 224;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 225;
-        this.match(HaloParser.T__3);
-        this.state = 227;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if ((_la & ~31) === 0 && (1 << _la & 4194178) !== 0 || (_la - 47 & ~31) === 0 && (1 << _la - 47 & 13) !== 0) {
-          {
-            this.state = 226;
-            this.storeArgs();
-          }
-        }
-        this.state = 229;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  storeArgs() {
-    let localContext = new StoreArgsContext(this.context, this.state);
-    this.enterRule(localContext, 30, HaloParser.RULE_storeArgs);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 231;
-        this.storeArg();
-        this.state = 236;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 232;
-              this.match(HaloParser.T__5);
-              this.state = 233;
-              this.storeArg();
-            }
-          }
-          this.state = 238;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  storeArg() {
-    let localContext = new StoreArgContext(this.context, this.state);
-    this.enterRule(localContext, 32, HaloParser.RULE_storeArg);
-    try {
-      this.state = 249;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 15, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 239;
-            this.match(HaloParser.STRING);
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 240;
-            this.match(HaloParser.NUMBER);
-          }
-          break;
-        case 3:
-          this.enterOuterAlt(localContext, 3);
-          {
-            this.state = 241;
-            this.dottedId();
-          }
-          break;
-        case 4:
-          this.enterOuterAlt(localContext, 4);
-          {
-            this.state = 242;
-            this.idOrKeyword();
-            this.state = 243;
-            this.match(HaloParser.T__1);
-            this.state = 247;
-            this.errorHandler.sync(this);
-            switch (this.tokenStream.LA(1)) {
-              case HaloParser.STRING:
-                {
-                  this.state = 244;
-                  this.match(HaloParser.STRING);
-                }
-                break;
-              case HaloParser.NUMBER:
-                {
-                  this.state = 245;
-                  this.match(HaloParser.NUMBER);
-                }
-                break;
-              case HaloParser.T__0:
-              case HaloParser.T__6:
-              case HaloParser.T__7:
-              case HaloParser.T__8:
-              case HaloParser.T__9:
-              case HaloParser.T__10:
-              case HaloParser.T__11:
-              case HaloParser.T__12:
-              case HaloParser.T__13:
-              case HaloParser.T__14:
-              case HaloParser.T__15:
-              case HaloParser.T__16:
-              case HaloParser.T__17:
-              case HaloParser.T__18:
-              case HaloParser.T__19:
-              case HaloParser.T__20:
-              case HaloParser.IDENTIFIER:
-                {
-                  this.state = 246;
-                  this.dottedId();
-                }
-                break;
-              default:
-                throw new NoViableAltException(this);
-            }
-          }
-          break;
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -27369,78 +27322,77 @@ class HaloParser extends Parser {
   }
   agentDecl() {
     let localContext = new AgentDeclContext(this.context, this.state);
-    this.enterRule(localContext, 34, HaloParser.RULE_agentDecl);
+    this.enterRule(localContext, 20, HaloParser.RULE_agentDecl);
     let _la;
     try {
+      let alternative;
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 254;
+        this.state = 167;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        while (_la === 26) {
+        while (_la === 28) {
           {
             {
-              this.state = 251;
+              this.state = 164;
               this.directive();
             }
           }
-          this.state = 256;
+          this.state = 169;
           this.errorHandler.sync(this);
           _la = this.tokenStream.LA(1);
         }
-        this.state = 257;
-        this.match(HaloParser.T__7);
-        this.state = 258;
+        this.state = 170;
+        this.match(HaloParser.T__4);
+        this.state = 171;
         this.match(HaloParser.IDENTIFIER);
-        this.state = 259;
-        this.match(HaloParser.T__22);
-        this.state = 260;
-        this.modelConfig();
-        this.state = 261;
-        this.match(HaloParser.T__23);
-        this.state = 263;
+        this.state = 172;
+        this.match(HaloParser.T__25);
+        this.state = 173;
+        this.modelRef();
+        this.state = 178;
+        this.errorHandler.sync(this);
+        alternative = this.interpreter.adaptivePredict(this.tokenStream, 10, this.context);
+        while (alternative !== 2 && alternative !== ATN.INVALID_ALT_NUMBER) {
+          if (alternative === 1) {
+            {
+              {
+                this.state = 174;
+                this.match(HaloParser.T__23);
+                this.state = 175;
+                this.modelParam();
+              }
+            }
+          }
+          this.state = 180;
+          this.errorHandler.sync(this);
+          alternative = this.interpreter.adaptivePredict(this.tokenStream, 10, this.context);
+        }
+        this.state = 182;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        if (_la === 12 || _la === 13) {
+        if (_la === 24) {
           {
-            this.state = 262;
-            this.agentModifiers();
+            this.state = 181;
+            this.match(HaloParser.T__23);
           }
         }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  agentModifiers() {
-    let localContext = new AgentModifiersContext(this.context, this.state);
-    this.enterRule(localContext, 36, HaloParser.RULE_agentModifiers);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 266;
+        this.state = 184;
+        this.match(HaloParser.T__26);
+        this.state = 188;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        do {
+        while ((_la & ~31) === 0 && (1 << _la & 896) !== 0) {
           {
             {
-              this.state = 265;
+              this.state = 185;
               this.agentModifier();
             }
           }
-          this.state = 268;
+          this.state = 190;
           this.errorHandler.sync(this);
           _la = this.tokenStream.LA(1);
-        } while (_la === 12 || _la === 13);
+        }
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -27454,29 +27406,32 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  agentModifier() {
-    let localContext = new AgentModifierContext(this.context, this.state);
-    this.enterRule(localContext, 38, HaloParser.RULE_agentModifier);
+  modelRef() {
+    let localContext = new ModelRefContext(this.context, this.state);
+    this.enterRule(localContext, 22, HaloParser.RULE_modelRef);
     try {
-      this.state = 274;
+      this.state = 194;
       this.errorHandler.sync(this);
       switch (this.tokenStream.LA(1)) {
-        case HaloParser.T__11:
+        case HaloParser.MODEL_REF:
           this.enterOuterAlt(localContext, 1);
           {
-            this.state = 270;
-            this.match(HaloParser.T__11);
-            this.state = 271;
-            this.equipsList();
+            this.state = 191;
+            this.match(HaloParser.MODEL_REF);
           }
           break;
-        case HaloParser.T__12:
+        case HaloParser.STRING:
           this.enterOuterAlt(localContext, 2);
           {
-            this.state = 272;
-            this.match(HaloParser.T__12);
-            this.state = 273;
-            this.requiresList();
+            this.state = 192;
+            this.match(HaloParser.STRING);
+          }
+          break;
+        case HaloParser.IDENTIFIER:
+          this.enterOuterAlt(localContext, 3);
+          {
+            this.state = 193;
+            this.dottedId();
           }
           break;
         default:
@@ -27494,172 +27449,17 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  equipsList() {
-    let localContext = new EquipsListContext(this.context, this.state);
-    this.enterRule(localContext, 40, HaloParser.RULE_equipsList);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 276;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 281;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 277;
-              this.match(HaloParser.T__5);
-              this.state = 278;
-              this.match(HaloParser.IDENTIFIER);
-            }
-          }
-          this.state = 283;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  requiresList() {
-    let localContext = new RequiresListContext(this.context, this.state);
-    this.enterRule(localContext, 42, HaloParser.RULE_requiresList);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 284;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 289;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 285;
-              this.match(HaloParser.T__5);
-              this.state = 286;
-              this.match(HaloParser.IDENTIFIER);
-            }
-          }
-          this.state = 291;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  modelConfig() {
-    let localContext = new ModelConfigContext(this.context, this.state);
-    this.enterRule(localContext, 44, HaloParser.RULE_modelConfig);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 292;
-        this.modelId();
-        this.state = 297;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 293;
-              this.match(HaloParser.T__5);
-              this.state = 294;
-              this.modelParam();
-            }
-          }
-          this.state = 299;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  modelId() {
-    let localContext = new ModelIdContext(this.context, this.state);
-    this.enterRule(localContext, 46, HaloParser.RULE_modelId);
-    try {
-      this.state = 303;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 23, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 300;
-            this.match(HaloParser.MODEL_REF);
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 301;
-            this.dottedId();
-          }
-          break;
-        case 3:
-          this.enterOuterAlt(localContext, 3);
-          {
-            this.state = 302;
-            this.match(HaloParser.IDENTIFIER);
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
   modelParam() {
     let localContext = new ModelParamContext(this.context, this.state);
-    this.enterRule(localContext, 48, HaloParser.RULE_modelParam);
+    this.enterRule(localContext, 24, HaloParser.RULE_modelParam);
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 305;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 306;
-        this.match(HaloParser.T__1);
-        this.state = 307;
+        this.state = 196;
+        this.name();
+        this.state = 197;
+        this.match(HaloParser.T__18);
+        this.state = 198;
         this.value();
       }
     } catch (re) {
@@ -27674,52 +27474,84 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  pipelineDecl() {
-    let localContext = new PipelineDeclContext(this.context, this.state);
-    this.enterRule(localContext, 50, HaloParser.RULE_pipelineDecl);
+  agentModifier() {
+    let localContext = new AgentModifierContext(this.context, this.state);
+    this.enterRule(localContext, 26, HaloParser.RULE_agentModifier);
     let _la;
     try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 312;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 26) {
+      this.state = 220;
+      this.errorHandler.sync(this);
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.T__6:
+          localContext = new EquipsModifierContext(localContext);
+          this.enterOuterAlt(localContext, 1);
           {
-            {
-              this.state = 309;
-              this.directive();
+            this.state = 200;
+            this.match(HaloParser.T__6);
+            this.state = 201;
+            this.match(HaloParser.IDENTIFIER);
+            this.state = 206;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            while (_la === 24) {
+              {
+                {
+                  this.state = 202;
+                  this.match(HaloParser.T__23);
+                  this.state = 203;
+                  this.match(HaloParser.IDENTIFIER);
+                }
+              }
+              this.state = 208;
+              this.errorHandler.sync(this);
+              _la = this.tokenStream.LA(1);
             }
           }
-          this.state = 314;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-        this.state = 315;
-        this.match(HaloParser.T__9);
-        this.state = 316;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 317;
-        this.match(HaloParser.T__3);
-        this.state = 319;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if (_la === 47) {
+          break;
+        case HaloParser.T__7:
+          localContext = new RequiresModifierContext(localContext);
+          this.enterOuterAlt(localContext, 2);
           {
-            this.state = 318;
-            this.paramList();
+            this.state = 209;
+            this.match(HaloParser.T__7);
+            this.state = 210;
+            this.match(HaloParser.IDENTIFIER);
+            this.state = 215;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            while (_la === 24) {
+              {
+                {
+                  this.state = 211;
+                  this.match(HaloParser.T__23);
+                  this.state = 212;
+                  this.match(HaloParser.IDENTIFIER);
+                }
+              }
+              this.state = 217;
+              this.errorHandler.sync(this);
+              _la = this.tokenStream.LA(1);
+            }
           }
-        }
-        this.state = 321;
-        this.match(HaloParser.T__4);
-        this.state = 322;
-        this.match(HaloParser.T__24);
-        this.state = 323;
-        this.typeRef();
-        this.state = 324;
-        this.match(HaloParser.T__1);
-        this.state = 325;
-        this.pipeline();
+          break;
+        case HaloParser.T__8:
+          localContext = new SystemModifierContext(localContext);
+          this.enterOuterAlt(localContext, 3);
+          {
+            this.state = 218;
+            this.match(HaloParser.T__8);
+            this.state = 219;
+            _la = this.tokenStream.LA(1);
+            if (!(_la === 56 || _la === 57)) {
+              this.errorHandler.recoverInline(this);
+            } else {
+              this.errorHandler.reportMatch(this);
+              this.consume();
+            }
+          }
+          break;
+        default:
+          throw new NoViableAltException(this);
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -27735,127 +27567,165 @@ class HaloParser extends Parser {
   }
   directive() {
     let localContext = new DirectiveContext(this.context, this.state);
-    this.enterRule(localContext, 52, HaloParser.RULE_directive);
+    this.enterRule(localContext, 28, HaloParser.RULE_directive);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 327;
-        this.match(HaloParser.T__25);
-        this.state = 328;
-        this.directiveName();
-        this.state = 330;
+        this.state = 222;
+        this.match(HaloParser.T__27);
+        this.state = 223;
+        this.name();
+        this.state = 236;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        if (_la === 4) {
+        if (_la === 21) {
           {
-            this.state = 329;
-            this.directiveValue();
-          }
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  directiveName() {
-    let localContext = new DirectiveNameContext(this.context, this.state);
-    this.enterRule(localContext, 54, HaloParser.RULE_directiveName);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 332;
-        _la = this.tokenStream.LA(1);
-        if (!((_la & ~31) === 0 && (1 << _la & 4063232) !== 0)) {
-          this.errorHandler.recoverInline(this);
-        } else {
-          this.errorHandler.reportMatch(this);
-          this.consume();
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  directiveValue() {
-    let localContext = new DirectiveValueContext(this.context, this.state);
-    this.enterRule(localContext, 56, HaloParser.RULE_directiveValue);
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 334;
-        this.match(HaloParser.T__3);
-        this.state = 335;
-        this.directiveArgs();
-        this.state = 336;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  directiveArgs() {
-    let localContext = new DirectiveArgsContext(this.context, this.state);
-    this.enterRule(localContext, 58, HaloParser.RULE_directiveArgs);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 338;
-        _la = this.tokenStream.LA(1);
-        if (!((_la - 46 & ~31) === 0 && (1 << _la - 46 & 31) !== 0)) {
-          this.errorHandler.recoverInline(this);
-        } else {
-          this.errorHandler.reportMatch(this);
-          this.consume();
-        }
-        this.state = 343;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 339;
-              this.match(HaloParser.T__5);
-              this.state = 340;
-              _la = this.tokenStream.LA(1);
-              if (!((_la - 46 & ~31) === 0 && (1 << _la - 46 & 31) !== 0)) {
-                this.errorHandler.recoverInline(this);
-              } else {
-                this.errorHandler.reportMatch(this);
-                this.consume();
+            this.state = 224;
+            this.match(HaloParser.T__20);
+            this.state = 233;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if ((_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+              {
+                this.state = 225;
+                this.directiveArg();
+                this.state = 230;
+                this.errorHandler.sync(this);
+                _la = this.tokenStream.LA(1);
+                while (_la === 24) {
+                  {
+                    {
+                      this.state = 226;
+                      this.match(HaloParser.T__23);
+                      this.state = 227;
+                      this.directiveArg();
+                    }
+                  }
+                  this.state = 232;
+                  this.errorHandler.sync(this);
+                  _la = this.tokenStream.LA(1);
+                }
               }
             }
+            this.state = 235;
+            this.match(HaloParser.T__21);
           }
-          this.state = 345;
+        }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  directiveArg() {
+    let localContext = new DirectiveArgContext(this.context, this.state);
+    this.enterRule(localContext, 30, HaloParser.RULE_directiveArg);
+    try {
+      this.state = 241;
+      this.errorHandler.sync(this);
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 238;
+            this.literal();
+          }
+          break;
+        case HaloParser.MODEL_REF:
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 239;
+            this.match(HaloParser.MODEL_REF);
+          }
+          break;
+        case HaloParser.IDENTIFIER:
+          this.enterOuterAlt(localContext, 3);
+          {
+            this.state = 240;
+            this.dottedId();
+          }
+          break;
+        default:
+          throw new NoViableAltException(this);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  pipelineDecl() {
+    let localContext = new PipelineDeclContext(this.context, this.state);
+    this.enterRule(localContext, 32, HaloParser.RULE_pipelineDecl);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 246;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        while (_la === 28) {
+          {
+            {
+              this.state = 243;
+              this.directive();
+            }
+          }
+          this.state = 248;
           this.errorHandler.sync(this);
           _la = this.tokenStream.LA(1);
         }
+        this.state = 249;
+        this.match(HaloParser.T__5);
+        this.state = 250;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 251;
+        this.match(HaloParser.T__20);
+        this.state = 253;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if (_la === 55) {
+          {
+            this.state = 252;
+            this.paramList();
+          }
+        }
+        this.state = 255;
+        this.match(HaloParser.T__21);
+        this.state = 258;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if (_la === 29) {
+          {
+            this.state = 256;
+            this.match(HaloParser.T__28);
+            this.state = 257;
+            this.typeRef();
+          }
+        }
+        this.state = 260;
+        this.match(HaloParser.T__18);
+        this.state = 261;
+        this.pipeline();
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -27871,28 +27741,40 @@ class HaloParser extends Parser {
   }
   paramList() {
     let localContext = new ParamListContext(this.context, this.state);
-    this.enterRule(localContext, 60, HaloParser.RULE_paramList);
+    this.enterRule(localContext, 34, HaloParser.RULE_paramList);
     let _la;
     try {
+      let alternative;
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 346;
+        this.state = 263;
         this.param();
-        this.state = 351;
+        this.state = 268;
         this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
+        alternative = this.interpreter.adaptivePredict(this.tokenStream, 24, this.context);
+        while (alternative !== 2 && alternative !== ATN.INVALID_ALT_NUMBER) {
+          if (alternative === 1) {
             {
-              this.state = 347;
-              this.match(HaloParser.T__5);
-              this.state = 348;
-              this.param();
+              {
+                this.state = 264;
+                this.match(HaloParser.T__23);
+                this.state = 265;
+                this.param();
+              }
             }
           }
-          this.state = 353;
+          this.state = 270;
           this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
+          alternative = this.interpreter.adaptivePredict(this.tokenStream, 24, this.context);
+        }
+        this.state = 272;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if (_la === 24) {
+          {
+            this.state = 271;
+            this.match(HaloParser.T__23);
+          }
         }
       }
     } catch (re) {
@@ -27909,15 +27791,15 @@ class HaloParser extends Parser {
   }
   param() {
     let localContext = new ParamContext(this.context, this.state);
-    this.enterRule(localContext, 62, HaloParser.RULE_param);
+    this.enterRule(localContext, 36, HaloParser.RULE_param);
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 354;
+        this.state = 274;
         this.match(HaloParser.IDENTIFIER);
-        this.state = 355;
-        this.match(HaloParser.T__1);
-        this.state = 356;
+        this.state = 275;
+        this.match(HaloParser.T__18);
+        this.state = 276;
         this.typeRef();
       }
     } catch (re) {
@@ -27934,63 +27816,41 @@ class HaloParser extends Parser {
   }
   typeRef() {
     let localContext = new TypeRefContext(this.context, this.state);
-    this.enterRule(localContext, 64, HaloParser.RULE_typeRef);
+    this.enterRule(localContext, 38, HaloParser.RULE_typeRef);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 358;
-        this.typeName();
-        this.state = 363;
+        this.state = 278;
+        this.dottedId();
+        this.state = 290;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        if (_la === 27) {
+        if (_la === 30) {
           {
-            this.state = 359;
-            this.match(HaloParser.T__26);
-            this.state = 360;
-            this.typeName();
-            this.state = 361;
-            this.match(HaloParser.T__27);
-          }
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  typeName() {
-    let localContext = new TypeNameContext(this.context, this.state);
-    this.enterRule(localContext, 66, HaloParser.RULE_typeName);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 365;
-        this.idOrKeyword();
-        this.state = 370;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 22) {
-          {
-            {
-              this.state = 366;
-              this.match(HaloParser.T__21);
-              this.state = 367;
-              this.idOrKeyword();
+            this.state = 279;
+            this.match(HaloParser.T__29);
+            this.state = 280;
+            this.typeRef();
+            this.state = 285;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            while (_la === 24) {
+              {
+                {
+                  this.state = 281;
+                  this.match(HaloParser.T__23);
+                  this.state = 282;
+                  this.typeRef();
+                }
+              }
+              this.state = 287;
+              this.errorHandler.sync(this);
+              _la = this.tokenStream.LA(1);
             }
+            this.state = 288;
+            this.match(HaloParser.T__30);
           }
-          this.state = 372;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
         }
       }
     } catch (re) {
@@ -28007,112 +27867,62 @@ class HaloParser extends Parser {
   }
   pipeline() {
     let localContext = new PipelineContext(this.context, this.state);
-    this.enterRule(localContext, 68, HaloParser.RULE_pipeline);
+    this.enterRule(localContext, 40, HaloParser.RULE_pipeline);
     let _la;
     try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 374;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        do {
-          {
-            {
-              this.state = 373;
-              this.pipelineStage();
-            }
-          }
-          this.state = 376;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        } while (_la === 16 || (_la - 40 & ~31) === 0 && (1 << _la - 40 & 3775) !== 0);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  pipelineStage() {
-    let localContext = new PipelineStageContext(this.context, this.state);
-    this.enterRule(localContext, 70, HaloParser.RULE_pipelineStage);
-    try {
-      this.state = 394;
+      this.state = 304;
       this.errorHandler.sync(this);
       switch (this.tokenStream.LA(1)) {
-        case HaloParser.PIPE:
+        case HaloParser.T__9:
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.IDENTIFIER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
           this.enterOuterAlt(localContext, 1);
           {
-            this.state = 378;
-            this.match(HaloParser.PIPE);
-            this.state = 379;
-            this.callExpr();
-          }
-          break;
-        case HaloParser.GATE:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 380;
-            this.match(HaloParser.GATE);
-            this.state = 381;
-            this.condition();
-          }
-          break;
-        case HaloParser.INTERRUPT:
-          this.enterOuterAlt(localContext, 3);
-          {
-            this.state = 382;
-            this.match(HaloParser.INTERRUPT);
-            this.state = 383;
-            this.yieldExpr();
-          }
-          break;
-        case HaloParser.FANOUT:
-          this.enterOuterAlt(localContext, 4);
-          {
-            this.state = 384;
-            this.match(HaloParser.FANOUT);
-            this.state = 385;
-            this.match(HaloParser.T__28);
-            this.state = 386;
-            this.fanoutStages();
-            this.state = 387;
-            this.match(HaloParser.T__29);
-          }
-          break;
-        case HaloParser.LISTEN:
-          this.enterOuterAlt(localContext, 5);
-          {
-            this.state = 389;
-            this.match(HaloParser.LISTEN);
-            this.state = 390;
-            this.listenExpr();
+            this.state = 292;
+            this.expression();
+            this.state = 296;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            while ((_la - 44 & ~31) === 0 && (1 << _la - 44 & 63) !== 0) {
+              {
+                {
+                  this.state = 293;
+                  this.pipelineOp();
+                }
+              }
+              this.state = 298;
+              this.errorHandler.sync(this);
+              _la = this.tokenStream.LA(1);
+            }
           }
           break;
         case HaloParser.LOOP:
-          this.enterOuterAlt(localContext, 6);
+        case HaloParser.FANOUT:
+        case HaloParser.INTERRUPT:
+        case HaloParser.GATE:
+        case HaloParser.LISTEN:
+        case HaloParser.PIPE:
+          this.enterOuterAlt(localContext, 2);
           {
-            this.state = 391;
-            this.match(HaloParser.LOOP);
-            this.state = 392;
-            this.loopExpr();
-          }
-          break;
-        case HaloParser.T__15:
-        case HaloParser.IDENTIFIER:
-        case HaloParser.STRING:
-        case HaloParser.NUMBER:
-        case HaloParser.BOOL:
-          this.enterOuterAlt(localContext, 7);
-          {
-            this.state = 393;
-            this.expression();
+            this.state = 300;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            do {
+              {
+                {
+                  this.state = 299;
+                  this.pipelineOp();
+                }
+              }
+              this.state = 302;
+              this.errorHandler.sync(this);
+              _la = this.tokenStream.LA(1);
+            } while ((_la - 44 & ~31) === 0 && (1 << _la - 44 & 63) !== 0);
           }
           break;
         default:
@@ -28130,28 +27940,304 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  condition() {
-    let localContext = new ConditionContext(this.context, this.state);
-    this.enterRule(localContext, 72, HaloParser.RULE_condition);
+  pipelineOp() {
+    let localContext = new PipelineOpContext(this.context, this.state);
+    this.enterRule(localContext, 42, HaloParser.RULE_pipelineOp);
     let _la;
     try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 396;
-        this.match(HaloParser.T__3);
-        this.state = 397;
-        this.conditionExpr();
-        this.state = 398;
-        this.match(HaloParser.T__4);
-        this.state = 400;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if (_la === 31) {
+      let alternative;
+      this.state = 400;
+      this.errorHandler.sync(this);
+      switch (this.interpreter.adaptivePredict(this.tokenStream, 46, this.context)) {
+        case 1:
+          localContext = new PipeOpContext(localContext);
+          this.enterOuterAlt(localContext, 1);
           {
-            this.state = 399;
-            this.match(HaloParser.T__30);
+            this.state = 306;
+            this.match(HaloParser.PIPE);
+            this.state = 307;
+            this.callExpr();
+            this.state = 309;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 308;
+                this.binding();
+              }
+            }
           }
-        }
+          break;
+        case 2:
+          localContext = new GateOpContext(localContext);
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 311;
+            this.match(HaloParser.GATE);
+            this.state = 312;
+            this.match(HaloParser.T__20);
+            this.state = 313;
+            this.condExpr();
+            this.state = 314;
+            this.match(HaloParser.T__21);
+            this.state = 316;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 32) {
+              {
+                this.state = 315;
+                this.match(HaloParser.T__31);
+              }
+            }
+          }
+          break;
+        case 3:
+          localContext = new BranchOpContext(localContext);
+          this.enterOuterAlt(localContext, 3);
+          {
+            this.state = 318;
+            this.match(HaloParser.GATE);
+            this.state = 319;
+            this.match(HaloParser.T__22);
+            this.state = 320;
+            this.branchArm();
+            this.state = 325;
+            this.errorHandler.sync(this);
+            alternative = this.interpreter.adaptivePredict(this.tokenStream, 33, this.context);
+            while (alternative !== 2 && alternative !== ATN.INVALID_ALT_NUMBER) {
+              if (alternative === 1) {
+                {
+                  {
+                    this.state = 321;
+                    this.match(HaloParser.T__23);
+                    this.state = 322;
+                    this.branchArm();
+                  }
+                }
+              }
+              this.state = 327;
+              this.errorHandler.sync(this);
+              alternative = this.interpreter.adaptivePredict(this.tokenStream, 33, this.context);
+            }
+            this.state = 329;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 24) {
+              {
+                this.state = 328;
+                this.match(HaloParser.T__23);
+              }
+            }
+            this.state = 331;
+            this.match(HaloParser.T__24);
+            this.state = 333;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 332;
+                this.binding();
+              }
+            }
+          }
+          break;
+        case 4:
+          localContext = new InterruptOpContext(localContext);
+          this.enterOuterAlt(localContext, 4);
+          {
+            this.state = 335;
+            this.match(HaloParser.INTERRUPT);
+            this.state = 336;
+            this.match(HaloParser.T__10);
+            this.state = 337;
+            this.match(HaloParser.T__20);
+            this.state = 339;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if ((_la & ~31) === 0 && (1 << _la & 67371006) !== 0 || (_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+              {
+                this.state = 338;
+                this.callArgs();
+              }
+            }
+            this.state = 341;
+            this.match(HaloParser.T__21);
+            this.state = 343;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 342;
+                this.binding();
+              }
+            }
+          }
+          break;
+        case 5:
+          localContext = new FanoutOpContext(localContext);
+          this.enterOuterAlt(localContext, 5);
+          {
+            this.state = 345;
+            this.match(HaloParser.FANOUT);
+            this.state = 346;
+            this.match(HaloParser.T__22);
+            this.state = 347;
+            this.fanoutItem();
+            this.state = 352;
+            this.errorHandler.sync(this);
+            alternative = this.interpreter.adaptivePredict(this.tokenStream, 38, this.context);
+            while (alternative !== 2 && alternative !== ATN.INVALID_ALT_NUMBER) {
+              if (alternative === 1) {
+                {
+                  {
+                    this.state = 348;
+                    this.match(HaloParser.T__23);
+                    this.state = 349;
+                    this.fanoutItem();
+                  }
+                }
+              }
+              this.state = 354;
+              this.errorHandler.sync(this);
+              alternative = this.interpreter.adaptivePredict(this.tokenStream, 38, this.context);
+            }
+            this.state = 356;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 24) {
+              {
+                this.state = 355;
+                this.match(HaloParser.T__23);
+              }
+            }
+            this.state = 358;
+            this.match(HaloParser.T__24);
+            this.state = 360;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 359;
+                this.binding();
+              }
+            }
+          }
+          break;
+        case 6:
+          localContext = new EachOpContext(localContext);
+          this.enterOuterAlt(localContext, 6);
+          {
+            this.state = 362;
+            this.match(HaloParser.FANOUT);
+            this.state = 363;
+            this.match(HaloParser.T__14);
+            this.state = 364;
+            this.match(HaloParser.T__20);
+            this.state = 365;
+            this.match(HaloParser.IDENTIFIER);
+            this.state = 366;
+            this.match(HaloParser.T__15);
+            this.state = 367;
+            this.callValue();
+            this.state = 370;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 24) {
+              {
+                this.state = 368;
+                this.match(HaloParser.T__23);
+                this.state = 369;
+                this.callArgs();
+              }
+            }
+            this.state = 372;
+            this.match(HaloParser.T__21);
+            this.state = 373;
+            this.match(HaloParser.T__31);
+            this.state = 374;
+            this.callExpr();
+            this.state = 376;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 375;
+                this.binding();
+              }
+            }
+          }
+          break;
+        case 7:
+          localContext = new ListenOpContext(localContext);
+          this.enterOuterAlt(localContext, 7);
+          {
+            this.state = 378;
+            this.match(HaloParser.LISTEN);
+            this.state = 379;
+            this.match(HaloParser.T__11);
+            this.state = 380;
+            this.match(HaloParser.T__20);
+            this.state = 381;
+            this.callValue();
+            this.state = 382;
+            this.match(HaloParser.T__21);
+            this.state = 384;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 383;
+                this.binding();
+              }
+            }
+          }
+          break;
+        case 8:
+          localContext = new LoopOpContext(localContext);
+          this.enterOuterAlt(localContext, 8);
+          {
+            this.state = 386;
+            this.match(HaloParser.LOOP);
+            this.state = 387;
+            this.match(HaloParser.T__12);
+            this.state = 388;
+            this.match(HaloParser.T__20);
+            this.state = 389;
+            this.match(HaloParser.IDENTIFIER);
+            this.state = 390;
+            this.match(HaloParser.T__23);
+            this.state = 391;
+            _la = this.tokenStream.LA(1);
+            if (!(_la === 56 || _la === 57)) {
+              this.errorHandler.recoverInline(this);
+            } else {
+              this.errorHandler.reportMatch(this);
+              this.consume();
+            }
+            this.state = 394;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 24) {
+              {
+                this.state = 392;
+                this.match(HaloParser.T__23);
+                this.state = 393;
+                this.callArgs();
+              }
+            }
+            this.state = 396;
+            this.match(HaloParser.T__21);
+            this.state = 398;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 397;
+                this.binding();
+              }
+            }
+          }
+          break;
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -28165,24 +28251,213 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  conditionExpr() {
-    let localContext = new ConditionExprContext(this.context, this.state);
-    this.enterRule(localContext, 74, HaloParser.RULE_conditionExpr);
-    let _la;
+  binding() {
+    let localContext = new BindingContext(this.context, this.state);
+    this.enterRule(localContext, 44, HaloParser.RULE_binding);
     try {
       this.enterOuterAlt(localContext, 1);
       {
         this.state = 402;
-        this.expression();
-        this.state = 406;
+        this.match(HaloParser.T__13);
+        this.state = 403;
+        this.name();
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  branchArm() {
+    let localContext = new BranchArmContext(this.context, this.state);
+    this.enterRule(localContext, 46, HaloParser.RULE_branchArm);
+    try {
+      this.state = 414;
+      this.errorHandler.sync(this);
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.T__20:
+          localContext = new CondArmContext(localContext);
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 405;
+            this.match(HaloParser.T__20);
+            this.state = 406;
+            this.condExpr();
+            this.state = 407;
+            this.match(HaloParser.T__21);
+            this.state = 408;
+            this.match(HaloParser.T__31);
+            this.state = 409;
+            this.callExpr();
+          }
+          break;
+        case HaloParser.T__16:
+          localContext = new ElseArmContext(localContext);
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 411;
+            this.match(HaloParser.T__16);
+            this.state = 412;
+            this.match(HaloParser.T__31);
+            this.state = 413;
+            this.callExpr();
+          }
+          break;
+        default:
+          throw new NoViableAltException(this);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  fanoutItem() {
+    let localContext = new FanoutItemContext(this.context, this.state);
+    this.enterRule(localContext, 48, HaloParser.RULE_fanoutItem);
+    let _la;
+    try {
+      this.state = 424;
+      this.errorHandler.sync(this);
+      switch (this.interpreter.adaptivePredict(this.tokenStream, 50, this.context)) {
+        case 1:
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 416;
+            this.callExpr();
+            this.state = 418;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 417;
+                this.binding();
+              }
+            }
+          }
+          break;
+        case 2:
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 420;
+            this.match(HaloParser.IDENTIFIER);
+            this.state = 422;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 14) {
+              {
+                this.state = 421;
+                this.binding();
+              }
+            }
+          }
+          break;
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  callExpr() {
+    let localContext = new CallExprContext(this.context, this.state);
+    this.enterRule(localContext, 50, HaloParser.RULE_callExpr);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 426;
+        this.match(HaloParser.IDENTIFIER);
+        this.state = 429;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        if ((_la - 27 & ~31) === 0 && (1 << _la - 27 & 483) !== 0) {
+        if (_la === 18) {
           {
-            this.state = 403;
-            this.comparisonOp();
-            this.state = 404;
-            this.expression();
+            this.state = 427;
+            this.match(HaloParser.T__17);
+            this.state = 428;
+            this.name();
+          }
+        }
+        this.state = 431;
+        this.match(HaloParser.T__20);
+        this.state = 433;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if ((_la & ~31) === 0 && (1 << _la & 67371006) !== 0 || (_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+          {
+            this.state = 432;
+            this.callArgs();
+          }
+        }
+        this.state = 435;
+        this.match(HaloParser.T__21);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  callArgs() {
+    let localContext = new CallArgsContext(this.context, this.state);
+    this.enterRule(localContext, 52, HaloParser.RULE_callArgs);
+    let _la;
+    try {
+      let alternative;
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 437;
+        this.callArg();
+        this.state = 442;
+        this.errorHandler.sync(this);
+        alternative = this.interpreter.adaptivePredict(this.tokenStream, 53, this.context);
+        while (alternative !== 2 && alternative !== ATN.INVALID_ALT_NUMBER) {
+          if (alternative === 1) {
+            {
+              {
+                this.state = 438;
+                this.match(HaloParser.T__23);
+                this.state = 439;
+                this.callArg();
+              }
+            }
+          }
+          this.state = 444;
+          this.errorHandler.sync(this);
+          alternative = this.interpreter.adaptivePredict(this.tokenStream, 53, this.context);
+        }
+        this.state = 446;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if (_la === 24) {
+          {
+            this.state = 445;
+            this.match(HaloParser.T__23);
           }
         }
       }
@@ -28198,16 +28473,227 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  comparisonOp() {
-    let localContext = new ComparisonOpContext(this.context, this.state);
-    this.enterRule(localContext, 76, HaloParser.RULE_comparisonOp);
+  callArg() {
+    let localContext = new CallArgContext(this.context, this.state);
+    this.enterRule(localContext, 54, HaloParser.RULE_callArg);
+    try {
+      this.state = 453;
+      this.errorHandler.sync(this);
+      switch (this.interpreter.adaptivePredict(this.tokenStream, 55, this.context)) {
+        case 1:
+          localContext = new NamedArgContext(localContext);
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 448;
+            this.name();
+            this.state = 449;
+            this.match(HaloParser.T__18);
+            this.state = 450;
+            this.callValue();
+          }
+          break;
+        case 2:
+          localContext = new PositionalArgContext(localContext);
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 452;
+            this.callValue();
+          }
+          break;
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  callValue() {
+    let localContext = new CallValueContext(this.context, this.state);
+    this.enterRule(localContext, 56, HaloParser.RULE_callValue);
+    try {
+      this.state = 460;
+      this.errorHandler.sync(this);
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 455;
+            this.literal();
+          }
+          break;
+        case HaloParser.MODEL_REF:
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 456;
+            this.match(HaloParser.MODEL_REF);
+          }
+          break;
+        case HaloParser.T__9:
+          this.enterOuterAlt(localContext, 3);
+          {
+            this.state = 457;
+            this.contextRef();
+          }
+          break;
+        case HaloParser.T__25:
+          this.enterOuterAlt(localContext, 4);
+          {
+            this.state = 458;
+            this.listValue();
+          }
+          break;
+        case HaloParser.IDENTIFIER:
+          this.enterOuterAlt(localContext, 5);
+          {
+            this.state = 459;
+            this.dottedId();
+          }
+          break;
+        default:
+          throw new NoViableAltException(this);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  listValue() {
+    let localContext = new ListValueContext(this.context, this.state);
+    this.enterRule(localContext, 58, HaloParser.RULE_listValue);
+    let _la;
+    try {
+      let alternative;
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 462;
+        this.match(HaloParser.T__25);
+        this.state = 474;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if (_la === 10 || _la === 26 || (_la - 50 & ~31) === 0 && (1 << _la - 50 & 255) !== 0) {
+          {
+            this.state = 463;
+            this.callValue();
+            this.state = 468;
+            this.errorHandler.sync(this);
+            alternative = this.interpreter.adaptivePredict(this.tokenStream, 57, this.context);
+            while (alternative !== 2 && alternative !== ATN.INVALID_ALT_NUMBER) {
+              if (alternative === 1) {
+                {
+                  {
+                    this.state = 464;
+                    this.match(HaloParser.T__23);
+                    this.state = 465;
+                    this.callValue();
+                  }
+                }
+              }
+              this.state = 470;
+              this.errorHandler.sync(this);
+              alternative = this.interpreter.adaptivePredict(this.tokenStream, 57, this.context);
+            }
+            this.state = 472;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 24) {
+              {
+                this.state = 471;
+                this.match(HaloParser.T__23);
+              }
+            }
+          }
+        }
+        this.state = 476;
+        this.match(HaloParser.T__26);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  value() {
+    let localContext = new ValueContext(this.context, this.state);
+    this.enterRule(localContext, 60, HaloParser.RULE_value);
+    try {
+      this.state = 481;
+      this.errorHandler.sync(this);
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 478;
+            this.literal();
+          }
+          break;
+        case HaloParser.MODEL_REF:
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 479;
+            this.match(HaloParser.MODEL_REF);
+          }
+          break;
+        case HaloParser.IDENTIFIER:
+          this.enterOuterAlt(localContext, 3);
+          {
+            this.state = 480;
+            this.dottedId();
+          }
+          break;
+        default:
+          throw new NoViableAltException(this);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  literal() {
+    let localContext = new LiteralContext(this.context, this.state);
+    this.enterRule(localContext, 62, HaloParser.RULE_literal);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
-        this.state = 408;
+        this.state = 483;
         _la = this.tokenStream.LA(1);
-        if (!((_la - 27 & ~31) === 0 && (1 << _la - 27 & 483) !== 0)) {
+        if (!((_la - 50 & ~31) === 0 && (1 << _la - 50 & 207) !== 0)) {
           this.errorHandler.recoverInline(this);
         } else {
           this.errorHandler.reportMatch(this);
@@ -28226,376 +28712,37 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  fanoutStages() {
-    let localContext = new FanoutStagesContext(this.context, this.state);
-    this.enterRule(localContext, 78, HaloParser.RULE_fanoutStages);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 410;
-        this.fanoutStage();
-        this.state = 415;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 411;
-              this.match(HaloParser.T__5);
-              this.state = 412;
-              this.fanoutStage();
-            }
-          }
-          this.state = 417;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  fanoutStage() {
-    let localContext = new FanoutStageContext(this.context, this.state);
-    this.enterRule(localContext, 80, HaloParser.RULE_fanoutStage);
-    try {
-      this.state = 420;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 36, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 418;
-            this.callExpr();
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 419;
-            this.match(HaloParser.IDENTIFIER);
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  yieldExpr() {
-    let localContext = new YieldExprContext(this.context, this.state);
-    this.enterRule(localContext, 82, HaloParser.RULE_yieldExpr);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 422;
-        this.match(HaloParser.T__14);
-        this.state = 423;
-        this.match(HaloParser.T__3);
-        this.state = 425;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if ((_la & ~31) === 0 && (1 << _la & 12582786) !== 0 || (_la - 46 & ~31) === 0 && (1 << _la - 46 & 63) !== 0) {
-          {
-            this.state = 424;
-            this.yieldArgs();
-          }
-        }
-        this.state = 427;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  yieldArgs() {
-    let localContext = new YieldArgsContext(this.context, this.state);
-    this.enterRule(localContext, 84, HaloParser.RULE_yieldArgs);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 429;
-        this.yieldArg();
-        this.state = 434;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 430;
-              this.match(HaloParser.T__5);
-              this.state = 431;
-              this.yieldArg();
-            }
-          }
-          this.state = 436;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  yieldArg() {
-    let localContext = new YieldArgContext(this.context, this.state);
-    this.enterRule(localContext, 86, HaloParser.RULE_yieldArg);
-    try {
-      this.state = 442;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 39, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 437;
-            this.idOrKeyword();
-            this.state = 438;
-            this.match(HaloParser.T__1);
-            this.state = 439;
-            this.yieldArgValue();
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 441;
-            this.callValue();
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  yieldArgValue() {
-    let localContext = new YieldArgValueContext(this.context, this.state);
-    this.enterRule(localContext, 88, HaloParser.RULE_yieldArgValue);
-    let _la;
-    try {
-      this.state = 456;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 41, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 444;
-            this.callValue();
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 445;
-            this.match(HaloParser.T__22);
-            this.state = 446;
-            this.callValue();
-            this.state = 451;
-            this.errorHandler.sync(this);
-            _la = this.tokenStream.LA(1);
-            while (_la === 6) {
-              {
-                {
-                  this.state = 447;
-                  this.match(HaloParser.T__5);
-                  this.state = 448;
-                  this.callValue();
-                }
-              }
-              this.state = 453;
-              this.errorHandler.sync(this);
-              _la = this.tokenStream.LA(1);
-            }
-            this.state = 454;
-            this.match(HaloParser.T__23);
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  listenExpr() {
-    let localContext = new ListenExprContext(this.context, this.state);
-    this.enterRule(localContext, 90, HaloParser.RULE_listenExpr);
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 458;
-        this.match(HaloParser.T__13);
-        this.state = 459;
-        this.match(HaloParser.T__3);
-        this.state = 460;
-        this.listenTarget();
-        this.state = 461;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  listenTarget() {
-    let localContext = new ListenTargetContext(this.context, this.state);
-    this.enterRule(localContext, 92, HaloParser.RULE_listenTarget);
-    try {
-      this.state = 465;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 42, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 463;
-            this.dottedId();
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 464;
-            this.contextRef();
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  loopExpr() {
-    let localContext = new LoopExprContext(this.context, this.state);
-    this.enterRule(localContext, 94, HaloParser.RULE_loopExpr);
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 467;
-        this.match(HaloParser.T__35);
-        this.state = 468;
-        this.match(HaloParser.T__3);
-        this.state = 469;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 470;
-        this.match(HaloParser.T__5);
-        this.state = 471;
-        this.match(HaloParser.STRING);
-        this.state = 472;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
   expression() {
     let localContext = new ExpressionContext(this.context, this.state);
-    this.enterRule(localContext, 96, HaloParser.RULE_expression);
+    this.enterRule(localContext, 64, HaloParser.RULE_expression);
     try {
-      this.state = 479;
+      this.state = 488;
       this.errorHandler.sync(this);
       switch (this.tokenStream.LA(1)) {
-        case HaloParser.IDENTIFIER:
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
           this.enterOuterAlt(localContext, 1);
           {
-            this.state = 474;
-            this.match(HaloParser.IDENTIFIER);
+            this.state = 485;
+            this.literal();
           }
           break;
-        case HaloParser.STRING:
+        case HaloParser.T__9:
           this.enterOuterAlt(localContext, 2);
           {
-            this.state = 475;
-            this.match(HaloParser.STRING);
+            this.state = 486;
+            this.contextRef();
           }
           break;
-        case HaloParser.NUMBER:
+        case HaloParser.IDENTIFIER:
           this.enterOuterAlt(localContext, 3);
           {
-            this.state = 476;
-            this.match(HaloParser.NUMBER);
-          }
-          break;
-        case HaloParser.BOOL:
-          this.enterOuterAlt(localContext, 4);
-          {
-            this.state = 477;
-            this.match(HaloParser.BOOL);
-          }
-          break;
-        case HaloParser.T__15:
-          this.enterOuterAlt(localContext, 5);
-          {
-            this.state = 478;
-            this.contextRef();
+            this.state = 487;
+            this.dottedId();
           }
           break;
         default:
@@ -28613,64 +28760,25 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  callExpr() {
-    let localContext = new CallExprContext(this.context, this.state);
-    this.enterRule(localContext, 98, HaloParser.RULE_callExpr);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 481;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 482;
-        this.match(HaloParser.T__21);
-        this.state = 483;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 484;
-        this.match(HaloParser.T__3);
-        this.state = 486;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if ((_la & ~31) === 0 && (1 << _la & 12582786) !== 0 || (_la - 46 & ~31) === 0 && (1 << _la - 46 & 63) !== 0) {
-          {
-            this.state = 485;
-            this.callArgs();
-          }
-        }
-        this.state = 488;
-        this.match(HaloParser.T__4);
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  callArgs() {
-    let localContext = new CallArgsContext(this.context, this.state);
-    this.enterRule(localContext, 100, HaloParser.RULE_callArgs);
+  contextRef() {
+    let localContext = new ContextRefContext(this.context, this.state);
+    this.enterRule(localContext, 66, HaloParser.RULE_contextRef);
     let _la;
     try {
       this.enterOuterAlt(localContext, 1);
       {
         this.state = 490;
-        this.callArg();
+        this.match(HaloParser.T__9);
         this.state = 495;
         this.errorHandler.sync(this);
         _la = this.tokenStream.LA(1);
-        while (_la === 6) {
+        while (_la === 18) {
           {
             {
               this.state = 491;
-              this.match(HaloParser.T__5);
+              this.match(HaloParser.T__17);
               this.state = 492;
-              this.callArg();
+              this.name();
             }
           }
           this.state = 497;
@@ -28690,31 +28798,14 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  callArg() {
-    let localContext = new CallArgContext(this.context, this.state);
-    this.enterRule(localContext, 102, HaloParser.RULE_callArg);
+  condExpr() {
+    let localContext = new CondExprContext(this.context, this.state);
+    this.enterRule(localContext, 68, HaloParser.RULE_condExpr);
     try {
-      this.state = 503;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 46, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 498;
-            this.idOrKeyword();
-            this.state = 499;
-            this.match(HaloParser.T__1);
-            this.state = 500;
-            this.callValue();
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 502;
-            this.callValue();
-          }
-          break;
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 498;
+        this.orExpr();
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -28728,244 +28819,241 @@ class HaloParser extends Parser {
     }
     return localContext;
   }
-  callValue() {
-    let localContext = new CallValueContext(this.context, this.state);
-    this.enterRule(localContext, 104, HaloParser.RULE_callValue);
+  orExpr() {
+    let localContext = new OrExprContext(this.context, this.state);
+    this.enterRule(localContext, 70, HaloParser.RULE_orExpr);
+    let _la;
     try {
-      this.state = 516;
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 500;
+        this.andExpr();
+        this.state = 505;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        while (_la === 33) {
+          {
+            {
+              this.state = 501;
+              this.match(HaloParser.T__32);
+              this.state = 502;
+              this.andExpr();
+            }
+          }
+          this.state = 507;
+          this.errorHandler.sync(this);
+          _la = this.tokenStream.LA(1);
+        }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  andExpr() {
+    let localContext = new AndExprContext(this.context, this.state);
+    this.enterRule(localContext, 72, HaloParser.RULE_andExpr);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 508;
+        this.notExpr();
+        this.state = 513;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        while (_la === 34) {
+          {
+            {
+              this.state = 509;
+              this.match(HaloParser.T__33);
+              this.state = 510;
+              this.notExpr();
+            }
+          }
+          this.state = 515;
+          this.errorHandler.sync(this);
+          _la = this.tokenStream.LA(1);
+        }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  notExpr() {
+    let localContext = new NotExprContext(this.context, this.state);
+    this.enterRule(localContext, 74, HaloParser.RULE_notExpr);
+    try {
+      this.state = 519;
       this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 47, this.context)) {
-        case 1:
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.T__34:
+          localContext = new NegationContext(localContext);
           this.enterOuterAlt(localContext, 1);
           {
-            this.state = 505;
-            this.match(HaloParser.STRING);
+            this.state = 516;
+            this.match(HaloParser.T__34);
+            this.state = 517;
+            this.notExpr();
           }
           break;
-        case 2:
+        case HaloParser.T__9:
+        case HaloParser.T__20:
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.IDENTIFIER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
+          localContext = new ComparisonExprContext(localContext);
           this.enterOuterAlt(localContext, 2);
           {
-            this.state = 506;
-            this.match(HaloParser.NUMBER);
+            this.state = 518;
+            this.comparison();
           }
           break;
-        case 3:
+        default:
+          throw new NoViableAltException(this);
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  comparison() {
+    let localContext = new ComparisonContext(this.context, this.state);
+    this.enterRule(localContext, 76, HaloParser.RULE_comparison);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 521;
+        this.operand();
+        this.state = 525;
+        this.errorHandler.sync(this);
+        _la = this.tokenStream.LA(1);
+        if ((_la - 30 & ~31) === 0 && (1 << _la - 30 & 963) !== 0) {
+          {
+            this.state = 522;
+            this.compOp();
+            this.state = 523;
+            this.operand();
+          }
+        }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  compOp() {
+    let localContext = new CompOpContext(this.context, this.state);
+    this.enterRule(localContext, 78, HaloParser.RULE_compOp);
+    let _la;
+    try {
+      this.enterOuterAlt(localContext, 1);
+      {
+        this.state = 527;
+        _la = this.tokenStream.LA(1);
+        if (!((_la - 30 & ~31) === 0 && (1 << _la - 30 & 963) !== 0)) {
+          this.errorHandler.recoverInline(this);
+        } else {
+          this.errorHandler.reportMatch(this);
+          this.consume();
+        }
+      }
+    } catch (re) {
+      if (re instanceof RecognitionException) {
+        this.errorHandler.reportError(this, re);
+        this.errorHandler.recover(this, re);
+      } else {
+        throw re;
+      }
+    } finally {
+      this.exitRule();
+    }
+    return localContext;
+  }
+  operand() {
+    let localContext = new OperandContext(this.context, this.state);
+    this.enterRule(localContext, 80, HaloParser.RULE_operand);
+    try {
+      this.state = 536;
+      this.errorHandler.sync(this);
+      switch (this.tokenStream.LA(1)) {
+        case HaloParser.T__20:
+          localContext = new ParenOperandContext(localContext);
+          this.enterOuterAlt(localContext, 1);
+          {
+            this.state = 529;
+            this.match(HaloParser.T__20);
+            this.state = 530;
+            this.orExpr();
+            this.state = 531;
+            this.match(HaloParser.T__21);
+          }
+          break;
+        case HaloParser.BOOL:
+        case HaloParser.NULL:
+        case HaloParser.DURATION:
+        case HaloParser.NUMBER:
+        case HaloParser.TRIPLE_STRING:
+        case HaloParser.STRING:
+          localContext = new LiteralOperandContext(localContext);
+          this.enterOuterAlt(localContext, 2);
+          {
+            this.state = 533;
+            this.literal();
+          }
+          break;
+        case HaloParser.T__9:
+          localContext = new ContextOperandContext(localContext);
           this.enterOuterAlt(localContext, 3);
           {
-            this.state = 507;
-            this.match(HaloParser.BOOL);
-          }
-          break;
-        case 4:
-          this.enterOuterAlt(localContext, 4);
-          {
-            this.state = 508;
-            this.match(HaloParser.DURATION);
-          }
-          break;
-        case 5:
-          this.enterOuterAlt(localContext, 5);
-          {
-            this.state = 509;
-            this.match(HaloParser.MODEL_REF);
-          }
-          break;
-        case 6:
-          this.enterOuterAlt(localContext, 6);
-          {
-            this.state = 510;
+            this.state = 534;
             this.contextRef();
           }
           break;
-        case 7:
-          this.enterOuterAlt(localContext, 7);
-          {
-            this.state = 511;
-            this.match(HaloParser.T__22);
-            this.state = 512;
-            this.callItems();
-            this.state = 513;
-            this.match(HaloParser.T__23);
-          }
-          break;
-        case 8:
-          this.enterOuterAlt(localContext, 8);
-          {
-            this.state = 515;
-            this.dottedId();
-          }
-          break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  callItems() {
-    let localContext = new CallItemsContext(this.context, this.state);
-    this.enterRule(localContext, 106, HaloParser.RULE_callItems);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 518;
-        this.callValue();
-        this.state = 523;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        while (_la === 6) {
-          {
-            {
-              this.state = 519;
-              this.match(HaloParser.T__5);
-              this.state = 520;
-              this.callValue();
-            }
-          }
-          this.state = 525;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  value() {
-    let localContext = new ValueContext(this.context, this.state);
-    this.enterRule(localContext, 108, HaloParser.RULE_value);
-    try {
-      this.state = 532;
-      this.errorHandler.sync(this);
-      switch (this.interpreter.adaptivePredict(this.tokenStream, 49, this.context)) {
-        case 1:
-          this.enterOuterAlt(localContext, 1);
-          {
-            this.state = 526;
-            this.match(HaloParser.STRING);
-          }
-          break;
-        case 2:
-          this.enterOuterAlt(localContext, 2);
-          {
-            this.state = 527;
-            this.match(HaloParser.NUMBER);
-          }
-          break;
-        case 3:
-          this.enterOuterAlt(localContext, 3);
-          {
-            this.state = 528;
-            this.match(HaloParser.BOOL);
-          }
-          break;
-        case 4:
+        case HaloParser.IDENTIFIER:
+          localContext = new RefOperandContext(localContext);
           this.enterOuterAlt(localContext, 4);
           {
-            this.state = 529;
-            this.idOrKeyword();
-          }
-          break;
-        case 5:
-          this.enterOuterAlt(localContext, 5);
-          {
-            this.state = 530;
-            this.match(HaloParser.MODEL_REF);
-          }
-          break;
-        case 6:
-          this.enterOuterAlt(localContext, 6);
-          {
-            this.state = 531;
+            this.state = 535;
             this.dottedId();
           }
           break;
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  contextRef() {
-    let localContext = new ContextRefContext(this.context, this.state);
-    this.enterRule(localContext, 110, HaloParser.RULE_contextRef);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 534;
-        this.match(HaloParser.T__15);
-        this.state = 535;
-        this.match(HaloParser.T__21);
-        this.state = 536;
-        this.match(HaloParser.IDENTIFIER);
-        this.state = 538;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        if (_la === 22) {
-          {
-            this.state = 537;
-            this.contextTail();
-          }
-        }
-      }
-    } catch (re) {
-      if (re instanceof RecognitionException) {
-        this.errorHandler.reportError(this, re);
-        this.errorHandler.recover(this, re);
-      } else {
-        throw re;
-      }
-    } finally {
-      this.exitRule();
-    }
-    return localContext;
-  }
-  contextTail() {
-    let localContext = new ContextTailContext(this.context, this.state);
-    this.enterRule(localContext, 112, HaloParser.RULE_contextTail);
-    let _la;
-    try {
-      this.enterOuterAlt(localContext, 1);
-      {
-        this.state = 542;
-        this.errorHandler.sync(this);
-        _la = this.tokenStream.LA(1);
-        do {
-          {
-            {
-              this.state = 540;
-              this.match(HaloParser.T__21);
-              this.state = 541;
-              this.match(HaloParser.IDENTIFIER);
-            }
-          }
-          this.state = 544;
-          this.errorHandler.sync(this);
-          _la = this.tokenStream.LA(1);
-        } while (_la === 22);
+        default:
+          throw new NoViableAltException(this);
       }
     } catch (re) {
       if (re instanceof RecognitionException) {
@@ -28982,8 +29070,8 @@ class HaloParser extends Parser {
   static _serializedATN = [
     4,
     1,
-    51,
-    547,
+    57,
+    539,
     2,
     0,
     7,
@@ -29148,82 +29236,18 @@ class HaloParser extends Parser {
     40,
     7,
     40,
-    2,
-    41,
-    7,
-    41,
-    2,
-    42,
-    7,
-    42,
-    2,
-    43,
-    7,
-    43,
-    2,
-    44,
-    7,
-    44,
-    2,
-    45,
-    7,
-    45,
-    2,
-    46,
-    7,
-    46,
-    2,
-    47,
-    7,
-    47,
-    2,
-    48,
-    7,
-    48,
-    2,
-    49,
-    7,
-    49,
-    2,
-    50,
-    7,
-    50,
-    2,
-    51,
-    7,
-    51,
-    2,
-    52,
-    7,
-    52,
-    2,
-    53,
-    7,
-    53,
-    2,
-    54,
-    7,
-    54,
-    2,
-    55,
-    7,
-    55,
-    2,
-    56,
-    7,
-    56,
     1,
     0,
     5,
     0,
-    116,
+    84,
     8,
     0,
     10,
     0,
     12,
     0,
-    119,
+    87,
     9,
     0,
     1,
@@ -29244,7 +29268,7 @@ class HaloParser extends Parser {
     1,
     3,
     1,
-    129,
+    97,
     8,
     1,
     1,
@@ -29252,40 +29276,29 @@ class HaloParser extends Parser {
     1,
     2,
     1,
-    2,
+    3,
     1,
-    2,
+    3,
     1,
-    2,
-    1,
-    2,
+    3,
     5,
-    2,
-    137,
+    3,
+    104,
     8,
-    2,
+    3,
     10,
-    2,
+    3,
     12,
-    2,
-    140,
+    3,
+    107,
     9,
-    2,
-    1,
     3,
     1,
-    3,
+    4,
     1,
-    3,
-    3,
-    3,
-    145,
-    8,
-    3,
+    4,
     1,
-    3,
-    1,
-    3,
+    4,
     1,
     4,
     1,
@@ -29294,93 +29307,173 @@ class HaloParser extends Parser {
     4,
     5,
     4,
+    115,
+    8,
+    4,
+    10,
+    4,
+    12,
+    4,
+    118,
+    9,
+    4,
+    1,
+    5,
+    1,
+    5,
+    1,
+    5,
+    3,
+    5,
+    123,
+    8,
+    5,
+    1,
+    5,
+    1,
+    5,
+    1,
+    6,
+    1,
+    6,
+    1,
+    6,
+    1,
+    6,
+    1,
+    6,
+    1,
+    6,
+    3,
+    6,
+    133,
+    8,
+    6,
+    1,
+    6,
+    1,
+    6,
+    1,
+    7,
+    1,
+    7,
+    1,
+    7,
+    1,
+    7,
+    1,
+    7,
+    1,
+    7,
+    3,
+    7,
+    143,
+    8,
+    7,
+    1,
+    7,
+    1,
+    7,
+    1,
+    8,
+    1,
+    8,
+    1,
+    8,
+    1,
+    8,
+    1,
+    8,
+    3,
+    8,
     152,
     8,
-    4,
+    8,
+    5,
+    8,
+    154,
+    8,
+    8,
     10,
-    4,
+    8,
     12,
-    4,
-    155,
+    8,
+    157,
     9,
-    4,
+    8,
     1,
-    5,
+    8,
     1,
-    5,
+    8,
     1,
-    5,
+    9,
     1,
-    5,
+    9,
     1,
-    5,
+    9,
     1,
+    9,
+    1,
+    10,
     5,
+    10,
+    166,
+    8,
+    10,
+    10,
+    10,
+    12,
+    10,
+    169,
+    9,
+    10,
+    1,
+    10,
+    1,
+    10,
+    1,
+    10,
+    1,
+    10,
+    1,
+    10,
+    1,
+    10,
+    5,
+    10,
+    177,
+    8,
+    10,
+    10,
+    10,
+    12,
+    10,
+    180,
+    9,
+    10,
+    1,
+    10,
     3,
-    5,
-    163,
-    8,
-    5,
-    1,
-    6,
-    1,
-    6,
-    1,
-    7,
-    1,
-    7,
-    1,
-    7,
-    5,
-    7,
-    170,
-    8,
-    7,
     10,
-    7,
+    183,
+    8,
+    10,
+    1,
+    10,
+    1,
+    10,
+    5,
+    10,
+    187,
+    8,
+    10,
+    10,
+    10,
     12,
-    7,
-    173,
-    9,
-    7,
-    1,
-    8,
-    1,
-    8,
-    1,
-    8,
-    1,
-    8,
-    1,
-    8,
-    1,
-    9,
-    5,
-    9,
-    181,
-    8,
+    10,
+    190,
     9,
     10,
-    9,
-    12,
-    9,
-    184,
-    9,
-    9,
-    1,
-    10,
-    1,
-    10,
-    1,
-    10,
-    1,
-    10,
-    1,
-    11,
-    1,
-    11,
-    1,
-    11,
     1,
     11,
     1,
@@ -29389,32 +29482,36 @@ class HaloParser extends Parser {
     11,
     3,
     11,
-    196,
+    195,
     8,
     11,
     1,
-    11,
-    1,
-    11,
-    1,
     12,
     1,
     12,
     1,
     12,
+    1,
+    12,
+    1,
+    13,
+    1,
+    13,
+    1,
+    13,
+    1,
+    13,
     5,
-    12,
-    203,
+    13,
+    205,
     8,
-    12,
+    13,
     10,
+    13,
     12,
-    12,
-    12,
-    206,
+    13,
+    208,
     9,
-    12,
-    1,
     13,
     1,
     13,
@@ -29424,137 +29521,172 @@ class HaloParser extends Parser {
     13,
     1,
     13,
-    1,
-    13,
-    1,
-    13,
-    1,
-    13,
-    1,
-    13,
-    1,
-    13,
-    3,
-    13,
-    218,
-    8,
-    13,
-    3,
-    13,
-    220,
-    8,
-    13,
-    1,
-    14,
-    1,
-    14,
-    1,
-    14,
-    1,
-    14,
-    1,
-    14,
-    1,
-    14,
-    3,
-    14,
-    228,
-    8,
-    14,
-    1,
-    14,
-    1,
-    14,
-    1,
-    15,
-    1,
-    15,
-    1,
-    15,
     5,
+    13,
+    214,
+    8,
+    13,
+    10,
+    13,
+    12,
+    13,
+    217,
+    9,
+    13,
+    1,
+    13,
+    1,
+    13,
+    3,
+    13,
+    221,
+    8,
+    13,
+    1,
+    14,
+    1,
+    14,
+    1,
+    14,
+    1,
+    14,
+    1,
+    14,
+    1,
+    14,
+    5,
+    14,
+    229,
+    8,
+    14,
+    10,
+    14,
+    12,
+    14,
+    232,
+    9,
+    14,
+    3,
+    14,
+    234,
+    8,
+    14,
+    1,
+    14,
+    3,
+    14,
+    237,
+    8,
+    14,
+    1,
     15,
-    235,
+    1,
+    15,
+    1,
+    15,
+    3,
+    15,
+    242,
     8,
     15,
+    1,
+    16,
+    5,
+    16,
+    245,
+    8,
+    16,
     10,
-    15,
+    16,
     12,
-    15,
-    238,
-    9,
-    15,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
-    1,
-    16,
-    3,
     16,
     248,
-    8,
+    9,
+    16,
+    1,
+    16,
+    1,
+    16,
+    1,
+    16,
+    1,
     16,
     3,
     16,
-    250,
+    254,
     8,
     16,
+    1,
+    16,
+    1,
+    16,
+    1,
+    16,
+    3,
+    16,
+    259,
+    8,
+    16,
+    1,
+    16,
+    1,
+    16,
+    1,
+    16,
+    1,
+    17,
+    1,
+    17,
     1,
     17,
     5,
     17,
-    253,
-    8,
-    17,
-    10,
-    17,
-    12,
-    17,
-    256,
-    9,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    1,
-    17,
-    3,
-    17,
-    264,
-    8,
-    17,
-    1,
-    18,
-    4,
-    18,
     267,
     8,
-    18,
-    11,
-    18,
+    17,
+    10,
+    17,
     12,
+    17,
+    270,
+    9,
+    17,
+    1,
+    17,
+    3,
+    17,
+    273,
+    8,
+    17,
+    1,
     18,
-    268,
+    1,
+    18,
+    1,
+    18,
+    1,
+    18,
     1,
     19,
     1,
+    19,
+    1,
+    19,
+    1,
+    19,
+    1,
+    19,
+    5,
+    19,
+    284,
+    8,
+    19,
+    10,
+    19,
+    12,
+    19,
+    287,
+    9,
     19,
     1,
     19,
@@ -29562,4191 +29694,4200 @@ class HaloParser extends Parser {
     19,
     3,
     19,
-    275,
-    8,
-    19,
-    1,
-    20,
-    1,
-    20,
-    1,
-    20,
-    5,
-    20,
-    280,
-    8,
-    20,
-    10,
-    20,
-    12,
-    20,
-    283,
-    9,
-    20,
-    1,
-    21,
-    1,
-    21,
-    1,
-    21,
-    5,
-    21,
-    288,
-    8,
-    21,
-    10,
-    21,
-    12,
-    21,
     291,
+    8,
+    19,
+    1,
+    20,
+    1,
+    20,
+    5,
+    20,
+    295,
+    8,
+    20,
+    10,
+    20,
+    12,
+    20,
+    298,
+    9,
+    20,
+    1,
+    20,
+    4,
+    20,
+    301,
+    8,
+    20,
+    11,
+    20,
+    12,
+    20,
+    302,
+    3,
+    20,
+    305,
+    8,
+    20,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
+    310,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
+    317,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    5,
+    21,
+    324,
+    8,
+    21,
+    10,
+    21,
+    12,
+    21,
+    327,
     9,
     21,
     1,
-    22,
-    1,
-    22,
-    1,
-    22,
-    5,
-    22,
-    296,
-    8,
-    22,
-    10,
-    22,
-    12,
-    22,
-    299,
-    9,
-    22,
-    1,
-    23,
-    1,
-    23,
-    1,
-    23,
+    21,
     3,
-    23,
-    304,
+    21,
+    330,
     8,
-    23,
+    21,
     1,
-    24,
+    21,
     1,
-    24,
-    1,
-    24,
-    1,
-    24,
-    1,
-    25,
-    5,
-    25,
-    311,
-    8,
-    25,
-    10,
-    25,
-    12,
-    25,
-    314,
-    9,
-    25,
-    1,
-    25,
-    1,
-    25,
-    1,
-    25,
-    1,
-    25,
+    21,
     3,
-    25,
-    320,
+    21,
+    334,
     8,
-    25,
+    21,
     1,
-    25,
+    21,
     1,
-    25,
+    21,
     1,
-    25,
+    21,
     1,
-    25,
-    1,
-    25,
-    1,
-    25,
-    1,
-    26,
-    1,
-    26,
-    1,
-    26,
+    21,
     3,
-    26,
-    331,
+    21,
+    340,
     8,
-    26,
+    21,
     1,
-    27,
+    21,
     1,
-    27,
-    1,
-    28,
-    1,
-    28,
-    1,
-    28,
-    1,
-    28,
-    1,
-    29,
-    1,
-    29,
-    1,
-    29,
-    5,
-    29,
-    342,
-    8,
-    29,
-    10,
-    29,
-    12,
-    29,
-    345,
-    9,
-    29,
-    1,
-    30,
-    1,
-    30,
-    1,
-    30,
-    5,
-    30,
-    350,
-    8,
-    30,
-    10,
-    30,
-    12,
-    30,
-    353,
-    9,
-    30,
-    1,
-    31,
-    1,
-    31,
-    1,
-    31,
-    1,
-    31,
-    1,
-    32,
-    1,
-    32,
-    1,
-    32,
-    1,
-    32,
-    1,
-    32,
+    21,
     3,
-    32,
-    364,
+    21,
+    344,
     8,
-    32,
+    21,
     1,
-    33,
+    21,
     1,
-    33,
+    21,
     1,
-    33,
+    21,
+    1,
+    21,
+    1,
+    21,
     5,
-    33,
-    369,
+    21,
+    351,
     8,
-    33,
+    21,
     10,
-    33,
+    21,
     12,
-    33,
-    372,
+    21,
+    354,
     9,
-    33,
+    21,
     1,
-    34,
-    4,
-    34,
-    375,
-    8,
-    34,
-    11,
-    34,
-    12,
-    34,
-    376,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
-    1,
-    35,
+    21,
     3,
-    35,
+    21,
+    357,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
+    361,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
+    371,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
+    377,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
+    385,
+    8,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    1,
+    21,
+    3,
+    21,
     395,
     8,
-    35,
+    21,
     1,
-    36,
+    21,
     1,
-    36,
-    1,
-    36,
-    1,
-    36,
+    21,
     3,
-    36,
+    21,
+    399,
+    8,
+    21,
+    3,
+    21,
     401,
     8,
-    36,
+    21,
     1,
-    37,
+    22,
     1,
-    37,
+    22,
     1,
-    37,
+    22,
     1,
-    37,
+    23,
+    1,
+    23,
+    1,
+    23,
+    1,
+    23,
+    1,
+    23,
+    1,
+    23,
+    1,
+    23,
+    1,
+    23,
+    1,
+    23,
     3,
-    37,
-    407,
+    23,
+    415,
     8,
-    37,
+    23,
     1,
-    38,
+    24,
     1,
-    38,
+    24,
+    3,
+    24,
+    419,
+    8,
+    24,
     1,
-    39,
+    24,
     1,
-    39,
+    24,
+    3,
+    24,
+    423,
+    8,
+    24,
+    3,
+    24,
+    425,
+    8,
+    24,
     1,
-    39,
+    25,
+    1,
+    25,
+    1,
+    25,
+    3,
+    25,
+    430,
+    8,
+    25,
+    1,
+    25,
+    1,
+    25,
+    3,
+    25,
+    434,
+    8,
+    25,
+    1,
+    25,
+    1,
+    25,
+    1,
+    26,
+    1,
+    26,
+    1,
+    26,
     5,
-    39,
-    414,
+    26,
+    441,
     8,
-    39,
+    26,
     10,
-    39,
+    26,
     12,
-    39,
-    417,
+    26,
+    444,
     9,
-    39,
+    26,
     1,
-    40,
-    1,
-    40,
+    26,
     3,
-    40,
-    421,
+    26,
+    447,
     8,
-    40,
+    26,
     1,
-    41,
+    27,
     1,
-    41,
+    27,
     1,
-    41,
+    27,
+    1,
+    27,
+    1,
+    27,
     3,
-    41,
-    426,
+    27,
+    454,
     8,
-    41,
+    27,
     1,
-    41,
+    28,
     1,
-    41,
+    28,
     1,
-    42,
+    28,
     1,
-    42,
+    28,
     1,
-    42,
+    28,
+    3,
+    28,
+    461,
+    8,
+    28,
+    1,
+    29,
+    1,
+    29,
+    1,
+    29,
+    1,
+    29,
     5,
-    42,
-    433,
+    29,
+    467,
     8,
-    42,
+    29,
     10,
-    42,
+    29,
     12,
-    42,
-    436,
+    29,
+    470,
     9,
-    42,
+    29,
     1,
-    43,
-    1,
-    43,
-    1,
-    43,
-    1,
-    43,
-    1,
-    43,
+    29,
     3,
-    43,
-    443,
+    29,
+    473,
     8,
-    43,
+    29,
+    3,
+    29,
+    475,
+    8,
+    29,
     1,
-    44,
+    29,
     1,
-    44,
+    29,
     1,
-    44,
+    30,
     1,
-    44,
+    30,
     1,
-    44,
+    30,
+    3,
+    30,
+    482,
+    8,
+    30,
+    1,
+    31,
+    1,
+    31,
+    1,
+    32,
+    1,
+    32,
+    1,
+    32,
+    3,
+    32,
+    489,
+    8,
+    32,
+    1,
+    33,
+    1,
+    33,
+    1,
+    33,
     5,
-    44,
-    450,
-    8,
-    44,
-    10,
-    44,
-    12,
-    44,
-    453,
-    9,
-    44,
-    1,
-    44,
-    1,
-    44,
-    3,
-    44,
-    457,
-    8,
-    44,
-    1,
-    45,
-    1,
-    45,
-    1,
-    45,
-    1,
-    45,
-    1,
-    45,
-    1,
-    46,
-    1,
-    46,
-    3,
-    46,
-    466,
-    8,
-    46,
-    1,
-    47,
-    1,
-    47,
-    1,
-    47,
-    1,
-    47,
-    1,
-    47,
-    1,
-    47,
-    1,
-    47,
-    1,
-    48,
-    1,
-    48,
-    1,
-    48,
-    1,
-    48,
-    1,
-    48,
-    3,
-    48,
-    480,
-    8,
-    48,
-    1,
-    49,
-    1,
-    49,
-    1,
-    49,
-    1,
-    49,
-    1,
-    49,
-    3,
-    49,
-    487,
-    8,
-    49,
-    1,
-    49,
-    1,
-    49,
-    1,
-    50,
-    1,
-    50,
-    1,
-    50,
-    5,
-    50,
+    33,
     494,
     8,
-    50,
+    33,
     10,
-    50,
+    33,
     12,
-    50,
+    33,
     497,
     9,
-    50,
+    33,
     1,
-    51,
+    34,
     1,
-    51,
+    34,
     1,
-    51,
+    35,
     1,
-    51,
+    35,
     1,
-    51,
-    3,
-    51,
+    35,
+    5,
+    35,
     504,
     8,
-    51,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    1,
-    52,
-    3,
-    52,
-    517,
-    8,
-    52,
-    1,
-    53,
-    1,
-    53,
-    1,
-    53,
-    5,
-    53,
-    522,
-    8,
-    53,
-    10,
-    53,
-    12,
-    53,
-    525,
-    9,
-    53,
-    1,
-    54,
-    1,
-    54,
-    1,
-    54,
-    1,
-    54,
-    1,
-    54,
-    1,
-    54,
-    3,
-    54,
-    533,
-    8,
-    54,
-    1,
-    55,
-    1,
-    55,
-    1,
-    55,
-    1,
-    55,
-    3,
-    55,
-    539,
-    8,
-    55,
-    1,
-    56,
-    1,
-    56,
-    4,
-    56,
-    543,
-    8,
-    56,
-    11,
-    56,
-    12,
-    56,
-    544,
-    1,
-    56,
-    0,
-    0,
-    57,
-    0,
-    2,
-    4,
-    6,
-    8,
-    10,
-    12,
-    14,
-    16,
-    18,
-    20,
-    22,
-    24,
-    26,
-    28,
-    30,
-    32,
-    34,
-    36,
-    38,
-    40,
-    42,
-    44,
-    46,
-    48,
-    50,
-    52,
-    54,
-    56,
-    58,
-    60,
-    62,
-    64,
-    66,
-    68,
-    70,
-    72,
-    74,
-    76,
-    78,
-    80,
-    82,
-    84,
-    86,
-    88,
-    90,
-    92,
-    94,
-    96,
-    98,
-    100,
-    102,
-    104,
-    106,
-    108,
-    110,
-    112,
-    0,
-    4,
-    3,
-    0,
-    1,
-    1,
-    7,
-    21,
-    47,
-    47,
-    1,
-    0,
-    17,
-    21,
-    1,
-    0,
-    46,
-    50,
-    2,
-    0,
-    27,
-    28,
-    32,
     35,
-    576,
-    0,
-    117,
-    1,
-    0,
-    0,
-    0,
-    2,
-    128,
-    1,
-    0,
-    0,
-    0,
-    4,
-    130,
-    1,
-    0,
-    0,
-    0,
-    6,
-    141,
-    1,
-    0,
-    0,
-    0,
-    8,
-    148,
-    1,
-    0,
-    0,
-    0,
     10,
-    162,
-    1,
-    0,
-    0,
-    0,
+    35,
     12,
-    164,
-    1,
-    0,
-    0,
-    0,
-    14,
-    166,
-    1,
-    0,
-    0,
-    0,
-    16,
-    174,
-    1,
-    0,
-    0,
-    0,
-    18,
-    182,
-    1,
-    0,
-    0,
-    0,
-    20,
-    185,
-    1,
-    0,
-    0,
-    0,
-    22,
-    189,
-    1,
-    0,
-    0,
-    0,
-    24,
-    199,
-    1,
-    0,
-    0,
-    0,
-    26,
-    219,
-    1,
-    0,
-    0,
-    0,
-    28,
-    221,
-    1,
-    0,
-    0,
-    0,
-    30,
-    231,
-    1,
-    0,
-    0,
-    0,
-    32,
-    249,
-    1,
-    0,
-    0,
-    0,
-    34,
-    254,
-    1,
-    0,
-    0,
-    0,
-    36,
-    266,
-    1,
-    0,
-    0,
-    0,
-    38,
-    274,
-    1,
-    0,
-    0,
-    0,
-    40,
-    276,
-    1,
-    0,
-    0,
-    0,
-    42,
-    284,
-    1,
-    0,
-    0,
-    0,
-    44,
-    292,
-    1,
-    0,
-    0,
-    0,
-    46,
-    303,
-    1,
-    0,
-    0,
-    0,
-    48,
-    305,
-    1,
-    0,
-    0,
-    0,
-    50,
-    312,
-    1,
-    0,
-    0,
-    0,
-    52,
-    327,
-    1,
-    0,
-    0,
-    0,
-    54,
-    332,
-    1,
-    0,
-    0,
-    0,
-    56,
-    334,
-    1,
-    0,
-    0,
-    0,
-    58,
-    338,
-    1,
-    0,
-    0,
-    0,
-    60,
-    346,
-    1,
-    0,
-    0,
-    0,
-    62,
-    354,
-    1,
-    0,
-    0,
-    0,
-    64,
-    358,
-    1,
-    0,
-    0,
-    0,
-    66,
-    365,
-    1,
-    0,
-    0,
-    0,
-    68,
-    374,
-    1,
-    0,
-    0,
-    0,
-    70,
-    394,
-    1,
-    0,
-    0,
-    0,
-    72,
-    396,
-    1,
-    0,
-    0,
-    0,
-    74,
-    402,
-    1,
-    0,
-    0,
-    0,
-    76,
-    408,
-    1,
-    0,
-    0,
-    0,
-    78,
-    410,
-    1,
-    0,
-    0,
-    0,
-    80,
-    420,
-    1,
-    0,
-    0,
-    0,
-    82,
-    422,
-    1,
-    0,
-    0,
-    0,
-    84,
-    429,
-    1,
-    0,
-    0,
-    0,
-    86,
-    442,
-    1,
-    0,
-    0,
-    0,
-    88,
-    456,
-    1,
-    0,
-    0,
-    0,
-    90,
-    458,
-    1,
-    0,
-    0,
-    0,
-    92,
-    465,
-    1,
-    0,
-    0,
-    0,
-    94,
-    467,
-    1,
-    0,
-    0,
-    0,
-    96,
-    479,
-    1,
-    0,
-    0,
-    0,
-    98,
-    481,
-    1,
-    0,
-    0,
-    0,
-    100,
-    490,
-    1,
-    0,
-    0,
-    0,
-    102,
-    503,
-    1,
-    0,
-    0,
-    0,
-    104,
-    516,
-    1,
-    0,
-    0,
-    0,
-    106,
-    518,
-    1,
-    0,
-    0,
-    0,
-    108,
-    532,
-    1,
-    0,
-    0,
-    0,
-    110,
-    534,
-    1,
-    0,
-    0,
-    0,
-    112,
-    542,
-    1,
-    0,
-    0,
-    0,
-    114,
-    116,
-    3,
-    2,
-    1,
-    0,
-    115,
-    114,
-    1,
-    0,
-    0,
-    0,
-    116,
-    119,
-    1,
-    0,
-    0,
-    0,
-    117,
-    115,
-    1,
-    0,
-    0,
-    0,
-    117,
-    118,
-    1,
-    0,
-    0,
-    0,
-    118,
-    120,
-    1,
-    0,
-    0,
-    0,
-    119,
-    117,
-    1,
-    0,
-    0,
-    0,
-    120,
-    121,
-    5,
-    0,
-    0,
-    1,
-    121,
-    1,
-    1,
-    0,
-    0,
-    0,
-    122,
-    129,
-    3,
-    4,
-    2,
-    0,
-    123,
-    129,
-    3,
-    22,
-    11,
-    0,
-    124,
-    129,
-    3,
-    28,
-    14,
-    0,
-    125,
-    129,
-    3,
-    34,
-    17,
-    0,
-    126,
-    129,
-    3,
-    50,
-    25,
-    0,
-    127,
-    129,
-    3,
-    16,
-    8,
-    0,
-    128,
-    122,
-    1,
-    0,
-    0,
-    0,
-    128,
-    123,
-    1,
-    0,
-    0,
-    0,
-    128,
-    124,
-    1,
-    0,
-    0,
-    0,
-    128,
-    125,
-    1,
-    0,
-    0,
-    0,
-    128,
-    126,
-    1,
-    0,
-    0,
-    0,
-    128,
-    127,
-    1,
-    0,
-    0,
-    0,
-    129,
-    3,
-    1,
-    0,
-    0,
-    0,
-    130,
-    131,
-    5,
-    1,
-    0,
-    0,
-    131,
-    132,
-    5,
-    47,
-    0,
-    0,
-    132,
-    133,
-    5,
-    2,
-    0,
-    0,
-    133,
-    138,
-    3,
-    6,
-    3,
-    0,
-    134,
-    135,
-    5,
-    3,
-    0,
-    0,
-    135,
-    137,
-    3,
-    6,
-    3,
-    0,
-    136,
-    134,
-    1,
-    0,
-    0,
-    0,
-    137,
-    140,
-    1,
-    0,
-    0,
-    0,
-    138,
-    136,
-    1,
-    0,
-    0,
-    0,
-    138,
-    139,
-    1,
-    0,
-    0,
-    0,
-    139,
-    5,
-    1,
-    0,
-    0,
-    0,
-    140,
-    138,
-    1,
-    0,
-    0,
-    0,
-    141,
-    142,
-    5,
-    47,
-    0,
-    0,
-    142,
-    144,
-    5,
-    4,
-    0,
-    0,
-    143,
-    145,
-    3,
-    8,
-    4,
-    0,
-    144,
-    143,
-    1,
-    0,
-    0,
-    0,
-    144,
-    145,
-    1,
-    0,
-    0,
-    0,
-    145,
-    146,
-    1,
-    0,
-    0,
-    0,
-    146,
-    147,
-    5,
-    5,
-    0,
-    0,
-    147,
-    7,
-    1,
-    0,
-    0,
-    0,
-    148,
-    153,
-    3,
-    10,
-    5,
-    0,
-    149,
-    150,
-    5,
-    6,
-    0,
-    0,
-    150,
-    152,
-    3,
-    10,
-    5,
-    0,
-    151,
-    149,
-    1,
-    0,
-    0,
-    0,
-    152,
-    155,
-    1,
-    0,
-    0,
-    0,
-    153,
-    151,
-    1,
-    0,
-    0,
-    0,
-    153,
-    154,
-    1,
-    0,
-    0,
-    0,
-    154,
+    35,
+    507,
     9,
-    1,
-    0,
-    0,
-    0,
-    155,
-    153,
-    1,
-    0,
-    0,
-    0,
-    156,
-    163,
-    5,
-    48,
-    0,
-    0,
-    157,
-    163,
-    3,
-    14,
-    7,
-    0,
-    158,
-    163,
-    5,
-    47,
-    0,
-    0,
-    159,
-    163,
-    5,
-    49,
-    0,
-    0,
-    160,
-    163,
-    5,
-    50,
-    0,
-    0,
-    161,
-    163,
-    5,
-    46,
-    0,
-    0,
-    162,
-    156,
-    1,
-    0,
-    0,
-    0,
-    162,
-    157,
-    1,
-    0,
-    0,
-    0,
-    162,
-    158,
-    1,
-    0,
-    0,
-    0,
-    162,
-    159,
-    1,
-    0,
-    0,
-    0,
-    162,
-    160,
-    1,
-    0,
-    0,
-    0,
-    162,
-    161,
-    1,
-    0,
-    0,
-    0,
-    163,
-    11,
-    1,
-    0,
-    0,
-    0,
-    164,
-    165,
-    7,
-    0,
-    0,
-    0,
-    165,
-    13,
-    1,
-    0,
-    0,
-    0,
-    166,
-    171,
-    3,
-    12,
-    6,
-    0,
-    167,
-    168,
-    5,
-    22,
-    0,
-    0,
-    168,
-    170,
-    3,
-    12,
-    6,
-    0,
-    169,
-    167,
-    1,
-    0,
-    0,
-    0,
-    170,
-    173,
-    1,
-    0,
-    0,
-    0,
-    171,
-    169,
-    1,
-    0,
-    0,
-    0,
-    171,
-    172,
-    1,
-    0,
-    0,
-    0,
-    172,
-    15,
-    1,
-    0,
-    0,
-    0,
-    173,
-    171,
-    1,
-    0,
-    0,
-    0,
-    174,
-    175,
-    5,
-    11,
-    0,
-    0,
-    175,
-    176,
-    5,
-    47,
-    0,
-    0,
-    176,
-    177,
-    5,
-    2,
-    0,
-    0,
-    177,
-    178,
-    3,
-    18,
-    9,
-    0,
-    178,
-    17,
-    1,
-    0,
-    0,
-    0,
-    179,
-    181,
-    3,
-    20,
-    10,
-    0,
-    180,
-    179,
-    1,
-    0,
-    0,
-    0,
-    181,
-    184,
-    1,
-    0,
-    0,
-    0,
-    182,
-    180,
-    1,
-    0,
-    0,
-    0,
-    182,
-    183,
-    1,
-    0,
-    0,
-    0,
-    183,
-    19,
-    1,
-    0,
-    0,
-    0,
-    184,
-    182,
-    1,
-    0,
-    0,
-    0,
-    185,
-    186,
-    5,
-    47,
-    0,
-    0,
-    186,
-    187,
-    5,
-    2,
-    0,
-    0,
-    187,
-    188,
-    3,
-    64,
-    32,
-    0,
-    188,
-    21,
-    1,
-    0,
-    0,
-    0,
-    189,
-    190,
-    5,
-    7,
-    0,
-    0,
-    190,
-    191,
-    5,
-    47,
-    0,
-    0,
-    191,
-    192,
-    5,
-    2,
-    0,
-    0,
-    192,
-    193,
-    5,
-    47,
-    0,
-    0,
-    193,
-    195,
-    5,
-    4,
-    0,
-    0,
-    194,
-    196,
-    3,
-    24,
-    12,
-    0,
-    195,
-    194,
-    1,
-    0,
-    0,
-    0,
-    195,
-    196,
-    1,
-    0,
-    0,
-    0,
-    196,
-    197,
-    1,
-    0,
-    0,
-    0,
-    197,
-    198,
-    5,
-    5,
-    0,
-    0,
-    198,
-    23,
-    1,
-    0,
-    0,
-    0,
-    199,
-    204,
-    3,
-    26,
-    13,
-    0,
-    200,
-    201,
-    5,
-    6,
-    0,
-    0,
-    201,
-    203,
-    3,
-    26,
-    13,
-    0,
-    202,
-    200,
-    1,
-    0,
-    0,
-    0,
-    203,
-    206,
-    1,
-    0,
-    0,
-    0,
-    204,
-    202,
-    1,
-    0,
-    0,
-    0,
-    204,
-    205,
-    1,
-    0,
-    0,
-    0,
-    205,
-    25,
-    1,
-    0,
-    0,
-    0,
-    206,
-    204,
-    1,
-    0,
-    0,
-    0,
-    207,
-    220,
-    5,
-    49,
-    0,
-    0,
-    208,
-    220,
-    5,
-    50,
-    0,
-    0,
-    209,
-    220,
-    5,
-    46,
-    0,
-    0,
-    210,
-    220,
-    3,
-    14,
-    7,
-    0,
-    211,
-    212,
-    3,
-    12,
-    6,
-    0,
-    212,
-    217,
-    5,
-    2,
-    0,
-    0,
-    213,
-    218,
-    5,
-    49,
-    0,
-    0,
-    214,
-    218,
-    5,
-    50,
-    0,
-    0,
-    215,
-    218,
-    5,
-    46,
-    0,
-    0,
-    216,
-    218,
-    3,
-    14,
-    7,
-    0,
-    217,
-    213,
-    1,
-    0,
-    0,
-    0,
-    217,
-    214,
-    1,
-    0,
-    0,
-    0,
-    217,
-    215,
-    1,
-    0,
-    0,
-    0,
-    217,
-    216,
-    1,
-    0,
-    0,
-    0,
-    218,
-    220,
-    1,
-    0,
-    0,
-    0,
-    219,
-    207,
-    1,
-    0,
-    0,
-    0,
-    219,
-    208,
-    1,
-    0,
-    0,
-    0,
-    219,
-    209,
-    1,
-    0,
-    0,
-    0,
-    219,
-    210,
-    1,
-    0,
-    0,
-    0,
-    219,
-    211,
-    1,
-    0,
-    0,
-    0,
-    220,
-    27,
-    1,
-    0,
-    0,
-    0,
-    221,
-    222,
-    5,
-    9,
-    0,
-    0,
-    222,
-    223,
-    5,
-    47,
-    0,
-    0,
-    223,
-    224,
-    5,
-    2,
-    0,
-    0,
-    224,
-    225,
-    5,
-    47,
-    0,
-    0,
-    225,
-    227,
-    5,
-    4,
-    0,
-    0,
-    226,
-    228,
-    3,
-    30,
-    15,
-    0,
-    227,
-    226,
-    1,
-    0,
-    0,
-    0,
-    227,
-    228,
-    1,
-    0,
-    0,
-    0,
-    228,
-    229,
-    1,
-    0,
-    0,
-    0,
-    229,
-    230,
-    5,
-    5,
-    0,
-    0,
-    230,
-    29,
-    1,
-    0,
-    0,
-    0,
-    231,
-    236,
-    3,
-    32,
-    16,
-    0,
-    232,
-    233,
-    5,
-    6,
-    0,
-    0,
-    233,
-    235,
-    3,
-    32,
-    16,
-    0,
-    234,
-    232,
-    1,
-    0,
-    0,
-    0,
-    235,
-    238,
-    1,
-    0,
-    0,
-    0,
-    236,
-    234,
-    1,
-    0,
-    0,
-    0,
-    236,
-    237,
-    1,
-    0,
-    0,
-    0,
-    237,
-    31,
-    1,
-    0,
-    0,
-    0,
-    238,
-    236,
-    1,
-    0,
-    0,
-    0,
-    239,
-    250,
-    5,
-    49,
-    0,
-    0,
-    240,
-    250,
-    5,
-    50,
-    0,
-    0,
-    241,
-    250,
-    3,
-    14,
-    7,
-    0,
-    242,
-    243,
-    3,
-    12,
-    6,
-    0,
-    243,
-    247,
-    5,
-    2,
-    0,
-    0,
-    244,
-    248,
-    5,
-    49,
-    0,
-    0,
-    245,
-    248,
-    5,
-    50,
-    0,
-    0,
-    246,
-    248,
-    3,
-    14,
-    7,
-    0,
-    247,
-    244,
-    1,
-    0,
-    0,
-    0,
-    247,
-    245,
-    1,
-    0,
-    0,
-    0,
-    247,
-    246,
-    1,
-    0,
-    0,
-    0,
-    248,
-    250,
-    1,
-    0,
-    0,
-    0,
-    249,
-    239,
-    1,
-    0,
-    0,
-    0,
-    249,
-    240,
-    1,
-    0,
-    0,
-    0,
-    249,
-    241,
-    1,
-    0,
-    0,
-    0,
-    249,
-    242,
-    1,
-    0,
-    0,
-    0,
-    250,
-    33,
-    1,
-    0,
-    0,
-    0,
-    251,
-    253,
-    3,
-    52,
-    26,
-    0,
-    252,
-    251,
-    1,
-    0,
-    0,
-    0,
-    253,
-    256,
-    1,
-    0,
-    0,
-    0,
-    254,
-    252,
-    1,
-    0,
-    0,
-    0,
-    254,
-    255,
-    1,
-    0,
-    0,
-    0,
-    255,
-    257,
-    1,
-    0,
-    0,
-    0,
-    256,
-    254,
-    1,
-    0,
-    0,
-    0,
-    257,
-    258,
-    5,
-    8,
-    0,
-    0,
-    258,
-    259,
-    5,
-    47,
-    0,
-    0,
-    259,
-    260,
-    5,
-    23,
-    0,
-    0,
-    260,
-    261,
-    3,
-    44,
-    22,
-    0,
-    261,
-    263,
-    5,
-    24,
-    0,
-    0,
-    262,
-    264,
-    3,
-    36,
-    18,
-    0,
-    263,
-    262,
-    1,
-    0,
-    0,
-    0,
-    263,
-    264,
-    1,
-    0,
-    0,
-    0,
-    264,
     35,
     1,
-    0,
-    0,
-    0,
-    265,
-    267,
-    3,
-    38,
-    19,
-    0,
-    266,
-    265,
+    36,
     1,
-    0,
-    0,
-    0,
-    267,
-    268,
+    36,
     1,
-    0,
-    0,
-    0,
-    268,
-    266,
+    36,
+    5,
+    36,
+    512,
+    8,
+    36,
+    10,
+    36,
+    12,
+    36,
+    515,
+    9,
+    36,
     1,
-    0,
-    0,
-    0,
-    268,
-    269,
-    1,
-    0,
-    0,
-    0,
-    269,
     37,
     1,
-    0,
-    0,
-    0,
-    270,
-    271,
-    5,
-    12,
-    0,
-    0,
-    271,
-    275,
-    3,
-    40,
-    20,
-    0,
-    272,
-    273,
-    5,
-    13,
-    0,
-    0,
-    273,
-    275,
-    3,
-    42,
-    21,
-    0,
-    274,
-    270,
+    37,
     1,
-    0,
-    0,
-    0,
-    274,
-    272,
+    37,
+    3,
+    37,
+    520,
+    8,
+    37,
     1,
-    0,
-    0,
-    0,
-    275,
+    38,
+    1,
+    38,
+    1,
+    38,
+    1,
+    38,
+    3,
+    38,
+    526,
+    8,
+    38,
+    1,
     39,
     1,
-    0,
-    0,
-    0,
-    276,
-    281,
-    5,
-    47,
-    0,
-    0,
-    277,
-    278,
-    5,
-    6,
-    0,
-    0,
-    278,
-    280,
-    5,
-    47,
-    0,
-    0,
-    279,
-    277,
+    39,
     1,
-    0,
-    0,
-    0,
-    280,
-    283,
+    40,
     1,
-    0,
-    0,
-    0,
-    281,
-    279,
+    40,
     1,
-    0,
-    0,
-    0,
-    281,
-    282,
+    40,
     1,
+    40,
+    1,
+    40,
+    1,
+    40,
+    1,
+    40,
+    3,
+    40,
+    537,
+    8,
+    40,
+    1,
+    40,
     0,
     0,
-    0,
-    282,
     41,
-    1,
     0,
-    0,
-    0,
-    283,
-    281,
-    1,
-    0,
-    0,
-    0,
-    284,
-    289,
-    5,
-    47,
-    0,
-    0,
-    285,
-    286,
-    5,
-    6,
-    0,
-    0,
-    286,
-    288,
-    5,
-    47,
-    0,
-    0,
-    287,
-    285,
-    1,
-    0,
-    0,
-    0,
-    288,
-    291,
-    1,
-    0,
-    0,
-    0,
-    289,
-    287,
-    1,
-    0,
-    0,
-    0,
-    289,
-    290,
-    1,
-    0,
-    0,
-    0,
-    290,
-    43,
-    1,
-    0,
-    0,
-    0,
-    291,
-    289,
-    1,
-    0,
-    0,
-    0,
-    292,
-    297,
-    3,
-    46,
-    23,
-    0,
-    293,
-    294,
-    5,
-    6,
-    0,
-    0,
-    294,
-    296,
-    3,
-    48,
-    24,
-    0,
-    295,
-    293,
-    1,
-    0,
-    0,
-    0,
-    296,
-    299,
-    1,
-    0,
-    0,
-    0,
-    297,
-    295,
-    1,
-    0,
-    0,
-    0,
-    297,
-    298,
-    1,
-    0,
-    0,
-    0,
-    298,
-    45,
-    1,
-    0,
-    0,
-    0,
-    299,
-    297,
-    1,
-    0,
-    0,
-    0,
-    300,
-    304,
-    5,
-    48,
-    0,
-    0,
-    301,
-    304,
-    3,
-    14,
-    7,
-    0,
-    302,
-    304,
-    5,
-    47,
-    0,
-    0,
-    303,
-    300,
-    1,
-    0,
-    0,
-    0,
-    303,
-    301,
-    1,
-    0,
-    0,
-    0,
-    303,
-    302,
-    1,
-    0,
-    0,
-    0,
-    304,
-    47,
-    1,
-    0,
-    0,
-    0,
-    305,
-    306,
-    5,
-    47,
-    0,
-    0,
-    306,
-    307,
-    5,
     2,
-    0,
-    0,
-    307,
-    308,
-    3,
-    108,
-    54,
-    0,
-    308,
-    49,
-    1,
-    0,
-    0,
-    0,
-    309,
-    311,
-    3,
-    52,
-    26,
-    0,
-    310,
-    309,
-    1,
-    0,
-    0,
-    0,
-    311,
-    314,
-    1,
-    0,
-    0,
-    0,
-    312,
-    310,
-    1,
-    0,
-    0,
-    0,
-    312,
-    313,
-    1,
-    0,
-    0,
-    0,
-    313,
-    315,
-    1,
-    0,
-    0,
-    0,
-    314,
-    312,
-    1,
-    0,
-    0,
-    0,
-    315,
-    316,
-    5,
-    10,
-    0,
-    0,
-    316,
-    317,
-    5,
-    47,
-    0,
-    0,
-    317,
-    319,
-    5,
     4,
-    0,
-    0,
-    318,
-    320,
-    3,
-    60,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16,
+    18,
+    20,
+    22,
+    24,
+    26,
+    28,
     30,
-    0,
-    319,
-    318,
-    1,
-    0,
-    0,
-    0,
-    319,
-    320,
-    1,
-    0,
-    0,
-    0,
-    320,
-    321,
-    1,
-    0,
-    0,
-    0,
-    321,
-    322,
-    5,
-    5,
-    0,
-    0,
-    322,
-    323,
-    5,
-    25,
-    0,
-    0,
-    323,
-    324,
-    3,
-    64,
     32,
+    34,
+    36,
+    38,
+    40,
+    42,
+    44,
+    46,
+    48,
+    50,
+    52,
+    54,
+    56,
+    58,
+    60,
+    62,
+    64,
+    66,
+    68,
+    70,
+    72,
+    74,
+    76,
+    78,
+    80,
     0,
-    324,
-    325,
-    5,
+    4,
     2,
     0,
-    0,
-    325,
-    326,
-    3,
-    68,
-    34,
-    0,
-    326,
-    51,
     1,
-    0,
-    0,
-    0,
-    327,
-    328,
-    5,
-    26,
-    0,
-    0,
-    328,
-    330,
-    3,
-    54,
-    27,
-    0,
-    329,
-    331,
-    3,
-    56,
-    28,
-    0,
-    330,
-    329,
-    1,
-    0,
-    0,
-    0,
-    330,
-    331,
-    1,
-    0,
-    0,
-    0,
-    331,
-    53,
-    1,
-    0,
-    0,
-    0,
-    332,
-    333,
-    7,
-    1,
-    0,
-    0,
-    333,
+    17,
+    55,
     55,
     1,
     0,
-    0,
-    0,
-    334,
-    335,
-    5,
-    4,
-    0,
-    0,
-    335,
-    336,
-    3,
-    58,
-    29,
-    0,
-    336,
-    337,
-    5,
-    5,
-    0,
-    0,
-    337,
+    56,
     57,
-    1,
-    0,
-    0,
-    0,
-    338,
-    343,
-    7,
     2,
     0,
-    0,
-    339,
-    340,
-    5,
-    6,
-    0,
-    0,
-    340,
-    342,
-    7,
+    50,
+    53,
+    56,
+    57,
     2,
     0,
-    0,
-    341,
-    339,
-    1,
-    0,
-    0,
-    0,
-    342,
-    345,
-    1,
-    0,
-    0,
-    0,
-    343,
-    341,
-    1,
-    0,
-    0,
-    0,
-    343,
-    344,
-    1,
-    0,
-    0,
-    0,
-    344,
-    59,
-    1,
-    0,
-    0,
-    0,
-    345,
-    343,
-    1,
-    0,
-    0,
-    0,
-    346,
-    351,
-    3,
-    62,
-    31,
-    0,
-    347,
-    348,
-    5,
-    6,
-    0,
-    0,
-    348,
-    350,
-    3,
-    62,
-    31,
-    0,
-    349,
-    347,
-    1,
-    0,
-    0,
-    0,
-    350,
-    353,
-    1,
-    0,
-    0,
-    0,
-    351,
-    349,
-    1,
-    0,
-    0,
-    0,
-    351,
-    352,
-    1,
-    0,
-    0,
-    0,
-    352,
-    61,
-    1,
-    0,
-    0,
-    0,
-    353,
-    351,
-    1,
-    0,
-    0,
-    0,
-    354,
-    355,
-    5,
-    47,
-    0,
-    0,
-    355,
-    356,
-    5,
-    2,
-    0,
-    0,
-    356,
-    357,
-    3,
-    64,
-    32,
-    0,
-    357,
-    63,
-    1,
-    0,
-    0,
-    0,
-    358,
-    363,
-    3,
-    66,
-    33,
-    0,
-    359,
-    360,
-    5,
-    27,
-    0,
-    0,
-    360,
-    361,
-    3,
-    66,
-    33,
-    0,
-    361,
-    362,
-    5,
-    28,
-    0,
-    0,
-    362,
-    364,
-    1,
-    0,
-    0,
-    0,
-    363,
-    359,
-    1,
-    0,
-    0,
-    0,
-    363,
-    364,
-    1,
-    0,
-    0,
-    0,
-    364,
-    65,
-    1,
-    0,
-    0,
-    0,
-    365,
-    370,
-    3,
-    12,
-    6,
-    0,
-    366,
-    367,
-    5,
-    22,
-    0,
-    0,
-    367,
-    369,
-    3,
-    12,
-    6,
-    0,
-    368,
-    366,
-    1,
-    0,
-    0,
-    0,
-    369,
-    372,
-    1,
-    0,
-    0,
-    0,
-    370,
-    368,
-    1,
-    0,
-    0,
-    0,
-    370,
-    371,
-    1,
-    0,
-    0,
-    0,
-    371,
-    67,
-    1,
-    0,
-    0,
-    0,
-    372,
-    370,
-    1,
-    0,
-    0,
-    0,
-    373,
-    375,
-    3,
-    70,
-    35,
-    0,
-    374,
-    373,
-    1,
-    0,
-    0,
-    0,
-    375,
-    376,
-    1,
-    0,
-    0,
-    0,
-    376,
-    374,
-    1,
-    0,
-    0,
-    0,
-    376,
-    377,
-    1,
-    0,
-    0,
-    0,
-    377,
-    69,
-    1,
-    0,
-    0,
-    0,
-    378,
-    379,
-    5,
-    45,
-    0,
-    0,
-    379,
-    395,
-    3,
-    98,
-    49,
-    0,
-    380,
-    381,
-    5,
-    43,
-    0,
-    0,
-    381,
-    395,
-    3,
-    72,
-    36,
-    0,
-    382,
-    383,
-    5,
-    42,
-    0,
-    0,
-    383,
-    395,
-    3,
-    82,
-    41,
-    0,
-    384,
-    385,
-    5,
-    41,
-    0,
-    0,
-    385,
-    386,
-    5,
-    29,
-    0,
-    0,
-    386,
-    387,
-    3,
-    78,
-    39,
-    0,
-    387,
-    388,
-    5,
     30,
-    0,
-    0,
-    388,
-    395,
-    1,
-    0,
-    0,
-    0,
-    389,
-    390,
-    5,
-    44,
-    0,
-    0,
-    390,
-    395,
-    3,
-    90,
-    45,
-    0,
-    391,
-    392,
-    5,
-    40,
-    0,
-    0,
-    392,
-    395,
-    3,
-    94,
-    47,
-    0,
-    393,
-    395,
-    3,
-    96,
-    48,
-    0,
-    394,
-    378,
-    1,
-    0,
-    0,
-    0,
-    394,
-    380,
-    1,
-    0,
-    0,
-    0,
-    394,
-    382,
-    1,
-    0,
-    0,
-    0,
-    394,
-    384,
-    1,
-    0,
-    0,
-    0,
-    394,
-    389,
-    1,
-    0,
-    0,
-    0,
-    394,
-    391,
-    1,
-    0,
-    0,
-    0,
-    394,
-    393,
-    1,
-    0,
-    0,
-    0,
-    395,
-    71,
-    1,
-    0,
-    0,
-    0,
-    396,
-    397,
-    5,
-    4,
-    0,
-    0,
-    397,
-    398,
-    3,
-    74,
-    37,
-    0,
-    398,
-    400,
-    5,
-    5,
-    0,
-    0,
-    399,
-    401,
-    5,
     31,
+    36,
+    39,
+    585,
     0,
-    0,
-    400,
-    399,
-    1,
-    0,
-    0,
-    0,
-    400,
-    401,
-    1,
-    0,
-    0,
-    0,
-    401,
-    73,
-    1,
-    0,
-    0,
-    0,
-    402,
-    406,
-    3,
-    96,
-    48,
-    0,
-    403,
-    404,
-    3,
-    76,
-    38,
-    0,
-    404,
-    405,
-    3,
-    96,
-    48,
-    0,
-    405,
-    407,
-    1,
-    0,
-    0,
-    0,
-    406,
-    403,
-    1,
-    0,
-    0,
-    0,
-    406,
-    407,
-    1,
-    0,
-    0,
-    0,
-    407,
-    75,
-    1,
-    0,
-    0,
-    0,
-    408,
-    409,
-    7,
-    3,
-    0,
-    0,
-    409,
-    77,
-    1,
-    0,
-    0,
-    0,
-    410,
-    415,
-    3,
-    80,
-    40,
-    0,
-    411,
-    412,
-    5,
-    6,
-    0,
-    0,
-    412,
-    414,
-    3,
-    80,
-    40,
-    0,
-    413,
-    411,
-    1,
-    0,
-    0,
-    0,
-    414,
-    417,
-    1,
-    0,
-    0,
-    0,
-    415,
-    413,
-    1,
-    0,
-    0,
-    0,
-    415,
-    416,
-    1,
-    0,
-    0,
-    0,
-    416,
-    79,
-    1,
-    0,
-    0,
-    0,
-    417,
-    415,
-    1,
-    0,
-    0,
-    0,
-    418,
-    421,
-    3,
-    98,
-    49,
-    0,
-    419,
-    421,
-    5,
-    47,
-    0,
-    0,
-    420,
-    418,
-    1,
-    0,
-    0,
-    0,
-    420,
-    419,
-    1,
-    0,
-    0,
-    0,
-    421,
-    81,
-    1,
-    0,
-    0,
-    0,
-    422,
-    423,
-    5,
-    15,
-    0,
-    0,
-    423,
-    425,
-    5,
-    4,
-    0,
-    0,
-    424,
-    426,
-    3,
-    84,
-    42,
-    0,
-    425,
-    424,
-    1,
-    0,
-    0,
-    0,
-    425,
-    426,
-    1,
-    0,
-    0,
-    0,
-    426,
-    427,
-    1,
-    0,
-    0,
-    0,
-    427,
-    428,
-    5,
-    5,
-    0,
-    0,
-    428,
-    83,
-    1,
-    0,
-    0,
-    0,
-    429,
-    434,
-    3,
-    86,
-    43,
-    0,
-    430,
-    431,
-    5,
-    6,
-    0,
-    0,
-    431,
-    433,
-    3,
-    86,
-    43,
-    0,
-    432,
-    430,
-    1,
-    0,
-    0,
-    0,
-    433,
-    436,
-    1,
-    0,
-    0,
-    0,
-    434,
-    432,
-    1,
-    0,
-    0,
-    0,
-    434,
-    435,
-    1,
-    0,
-    0,
-    0,
-    435,
     85,
     1,
     0,
     0,
     0,
-    436,
-    434,
-    1,
-    0,
-    0,
-    0,
-    437,
-    438,
-    3,
-    12,
-    6,
-    0,
-    438,
-    439,
-    5,
     2,
-    0,
-    0,
-    439,
-    440,
-    3,
-    88,
-    44,
-    0,
-    440,
-    443,
+    96,
     1,
     0,
     0,
     0,
-    441,
-    443,
-    3,
-    104,
-    52,
+    4,
+    98,
+    1,
     0,
-    442,
+    0,
+    0,
+    6,
+    100,
+    1,
+    0,
+    0,
+    0,
+    8,
+    108,
+    1,
+    0,
+    0,
+    0,
+    10,
+    119,
+    1,
+    0,
+    0,
+    0,
+    12,
+    126,
+    1,
+    0,
+    0,
+    0,
+    14,
+    136,
+    1,
+    0,
+    0,
+    0,
+    16,
+    146,
+    1,
+    0,
+    0,
+    0,
+    18,
+    160,
+    1,
+    0,
+    0,
+    0,
+    20,
+    167,
+    1,
+    0,
+    0,
+    0,
+    22,
+    194,
+    1,
+    0,
+    0,
+    0,
+    24,
+    196,
+    1,
+    0,
+    0,
+    0,
+    26,
+    220,
+    1,
+    0,
+    0,
+    0,
+    28,
+    222,
+    1,
+    0,
+    0,
+    0,
+    30,
+    241,
+    1,
+    0,
+    0,
+    0,
+    32,
+    246,
+    1,
+    0,
+    0,
+    0,
+    34,
+    263,
+    1,
+    0,
+    0,
+    0,
+    36,
+    274,
+    1,
+    0,
+    0,
+    0,
+    38,
+    278,
+    1,
+    0,
+    0,
+    0,
+    40,
+    304,
+    1,
+    0,
+    0,
+    0,
+    42,
+    400,
+    1,
+    0,
+    0,
+    0,
+    44,
+    402,
+    1,
+    0,
+    0,
+    0,
+    46,
+    414,
+    1,
+    0,
+    0,
+    0,
+    48,
+    424,
+    1,
+    0,
+    0,
+    0,
+    50,
+    426,
+    1,
+    0,
+    0,
+    0,
+    52,
     437,
     1,
     0,
     0,
     0,
-    442,
-    441,
+    54,
+    453,
     1,
     0,
     0,
     0,
-    443,
+    56,
+    460,
+    1,
+    0,
+    0,
+    0,
+    58,
+    462,
+    1,
+    0,
+    0,
+    0,
+    60,
+    481,
+    1,
+    0,
+    0,
+    0,
+    62,
+    483,
+    1,
+    0,
+    0,
+    0,
+    64,
+    488,
+    1,
+    0,
+    0,
+    0,
+    66,
+    490,
+    1,
+    0,
+    0,
+    0,
+    68,
+    498,
+    1,
+    0,
+    0,
+    0,
+    70,
+    500,
+    1,
+    0,
+    0,
+    0,
+    72,
+    508,
+    1,
+    0,
+    0,
+    0,
+    74,
+    519,
+    1,
+    0,
+    0,
+    0,
+    76,
+    521,
+    1,
+    0,
+    0,
+    0,
+    78,
+    527,
+    1,
+    0,
+    0,
+    0,
+    80,
+    536,
+    1,
+    0,
+    0,
+    0,
+    82,
+    84,
+    3,
+    2,
+    1,
+    0,
+    83,
+    82,
+    1,
+    0,
+    0,
+    0,
+    84,
     87,
     1,
     0,
     0,
     0,
-    444,
-    457,
-    3,
-    104,
-    52,
+    85,
+    83,
+    1,
     0,
-    445,
-    446,
+    0,
+    0,
+    85,
+    86,
+    1,
+    0,
+    0,
+    0,
+    86,
+    88,
+    1,
+    0,
+    0,
+    0,
+    87,
+    85,
+    1,
+    0,
+    0,
+    0,
+    88,
+    89,
     5,
-    23,
     0,
     0,
-    446,
-    451,
-    3,
-    104,
-    52,
-    0,
-    447,
-    448,
-    5,
-    6,
-    0,
-    0,
-    448,
-    450,
-    3,
-    104,
-    52,
-    0,
-    449,
-    447,
     1,
-    0,
-    0,
-    0,
-    450,
-    453,
-    1,
-    0,
-    0,
-    0,
-    451,
-    449,
-    1,
-    0,
-    0,
-    0,
-    451,
-    452,
-    1,
-    0,
-    0,
-    0,
-    452,
-    454,
-    1,
-    0,
-    0,
-    0,
-    453,
-    451,
-    1,
-    0,
-    0,
-    0,
-    454,
-    455,
-    5,
-    24,
-    0,
-    0,
-    455,
-    457,
-    1,
-    0,
-    0,
-    0,
-    456,
-    444,
-    1,
-    0,
-    0,
-    0,
-    456,
-    445,
-    1,
-    0,
-    0,
-    0,
-    457,
     89,
     1,
+    1,
     0,
     0,
     0,
-    458,
-    459,
-    5,
-    14,
-    0,
-    0,
-    459,
-    460,
-    5,
+    90,
+    97,
+    3,
+    8,
     4,
     0,
-    0,
-    460,
-    461,
+    91,
+    97,
     3,
+    12,
+    6,
+    0,
     92,
-    46,
+    97,
+    3,
+    14,
+    7,
     0,
-    461,
-    462,
-    5,
-    5,
+    93,
+    97,
+    3,
+    16,
+    8,
+    0,
+    94,
+    97,
+    3,
+    20,
+    10,
+    0,
+    95,
+    97,
+    3,
+    32,
+    16,
+    0,
+    96,
+    90,
+    1,
     0,
     0,
-    462,
+    0,
+    96,
     91,
     1,
     0,
     0,
     0,
-    463,
-    466,
-    3,
-    14,
-    7,
-    0,
-    464,
-    466,
-    3,
-    110,
-    55,
-    0,
-    465,
-    463,
+    96,
+    92,
     1,
     0,
     0,
     0,
-    465,
-    464,
-    1,
-    0,
-    0,
-    0,
-    466,
+    96,
     93,
     1,
     0,
     0,
     0,
-    467,
-    468,
-    5,
-    36,
+    96,
+    94,
+    1,
     0,
     0,
-    468,
-    469,
-    5,
-    4,
     0,
-    0,
-    469,
-    470,
-    5,
-    47,
-    0,
-    0,
-    470,
-    471,
-    5,
-    6,
-    0,
-    0,
-    471,
-    472,
-    5,
-    49,
-    0,
-    0,
-    472,
-    473,
-    5,
-    5,
-    0,
-    0,
-    473,
+    96,
     95,
     1,
     0,
     0,
     0,
-    474,
-    480,
+    97,
+    3,
+    1,
+    0,
+    0,
+    0,
+    98,
+    99,
+    7,
+    0,
+    0,
+    0,
+    99,
     5,
-    47,
+    1,
     0,
     0,
-    475,
-    480,
+    0,
+    100,
+    105,
+    5,
+    55,
+    0,
+    0,
+    101,
+    102,
+    5,
+    18,
+    0,
+    0,
+    102,
+    104,
+    3,
+    4,
+    2,
+    0,
+    103,
+    101,
+    1,
+    0,
+    0,
+    0,
+    104,
+    107,
+    1,
+    0,
+    0,
+    0,
+    105,
+    103,
+    1,
+    0,
+    0,
+    0,
+    105,
+    106,
+    1,
+    0,
+    0,
+    0,
+    106,
+    7,
+    1,
+    0,
+    0,
+    0,
+    107,
+    105,
+    1,
+    0,
+    0,
+    0,
+    108,
+    109,
+    5,
+    1,
+    0,
+    0,
+    109,
+    110,
+    5,
+    55,
+    0,
+    0,
+    110,
+    111,
+    5,
+    19,
+    0,
+    0,
+    111,
+    116,
+    3,
+    10,
+    5,
+    0,
+    112,
+    113,
+    5,
+    20,
+    0,
+    0,
+    113,
+    115,
+    3,
+    10,
+    5,
+    0,
+    114,
+    112,
+    1,
+    0,
+    0,
+    0,
+    115,
+    118,
+    1,
+    0,
+    0,
+    0,
+    116,
+    114,
+    1,
+    0,
+    0,
+    0,
+    116,
+    117,
+    1,
+    0,
+    0,
+    0,
+    117,
+    9,
+    1,
+    0,
+    0,
+    0,
+    118,
+    116,
+    1,
+    0,
+    0,
+    0,
+    119,
+    120,
+    5,
+    55,
+    0,
+    0,
+    120,
+    122,
+    5,
+    21,
+    0,
+    0,
+    121,
+    123,
+    3,
+    52,
+    26,
+    0,
+    122,
+    121,
+    1,
+    0,
+    0,
+    0,
+    122,
+    123,
+    1,
+    0,
+    0,
+    0,
+    123,
+    124,
+    1,
+    0,
+    0,
+    0,
+    124,
+    125,
+    5,
+    22,
+    0,
+    0,
+    125,
+    11,
+    1,
+    0,
+    0,
+    0,
+    126,
+    127,
+    5,
+    2,
+    0,
+    0,
+    127,
+    128,
+    5,
+    55,
+    0,
+    0,
+    128,
+    129,
+    5,
+    19,
+    0,
+    0,
+    129,
+    130,
+    5,
+    55,
+    0,
+    0,
+    130,
+    132,
+    5,
+    21,
+    0,
+    0,
+    131,
+    133,
+    3,
+    52,
+    26,
+    0,
+    132,
+    131,
+    1,
+    0,
+    0,
+    0,
+    132,
+    133,
+    1,
+    0,
+    0,
+    0,
+    133,
+    134,
+    1,
+    0,
+    0,
+    0,
+    134,
+    135,
+    5,
+    22,
+    0,
+    0,
+    135,
+    13,
+    1,
+    0,
+    0,
+    0,
+    136,
+    137,
+    5,
+    3,
+    0,
+    0,
+    137,
+    138,
+    5,
+    55,
+    0,
+    0,
+    138,
+    139,
+    5,
+    19,
+    0,
+    0,
+    139,
+    140,
+    5,
+    55,
+    0,
+    0,
+    140,
+    142,
+    5,
+    21,
+    0,
+    0,
+    141,
+    143,
+    3,
+    52,
+    26,
+    0,
+    142,
+    141,
+    1,
+    0,
+    0,
+    0,
+    142,
+    143,
+    1,
+    0,
+    0,
+    0,
+    143,
+    144,
+    1,
+    0,
+    0,
+    0,
+    144,
+    145,
+    5,
+    22,
+    0,
+    0,
+    145,
+    15,
+    1,
+    0,
+    0,
+    0,
+    146,
+    147,
+    5,
+    4,
+    0,
+    0,
+    147,
+    148,
+    5,
+    55,
+    0,
+    0,
+    148,
+    155,
+    5,
+    23,
+    0,
+    0,
+    149,
+    151,
+    3,
+    18,
+    9,
+    0,
+    150,
+    152,
+    5,
+    24,
+    0,
+    0,
+    151,
+    150,
+    1,
+    0,
+    0,
+    0,
+    151,
+    152,
+    1,
+    0,
+    0,
+    0,
+    152,
+    154,
+    1,
+    0,
+    0,
+    0,
+    153,
+    149,
+    1,
+    0,
+    0,
+    0,
+    154,
+    157,
+    1,
+    0,
+    0,
+    0,
+    155,
+    153,
+    1,
+    0,
+    0,
+    0,
+    155,
+    156,
+    1,
+    0,
+    0,
+    0,
+    156,
+    158,
+    1,
+    0,
+    0,
+    0,
+    157,
+    155,
+    1,
+    0,
+    0,
+    0,
+    158,
+    159,
+    5,
+    25,
+    0,
+    0,
+    159,
+    17,
+    1,
+    0,
+    0,
+    0,
+    160,
+    161,
+    3,
+    4,
+    2,
+    0,
+    161,
+    162,
+    5,
+    19,
+    0,
+    0,
+    162,
+    163,
+    3,
+    38,
+    19,
+    0,
+    163,
+    19,
+    1,
+    0,
+    0,
+    0,
+    164,
+    166,
+    3,
+    28,
+    14,
+    0,
+    165,
+    164,
+    1,
+    0,
+    0,
+    0,
+    166,
+    169,
+    1,
+    0,
+    0,
+    0,
+    167,
+    165,
+    1,
+    0,
+    0,
+    0,
+    167,
+    168,
+    1,
+    0,
+    0,
+    0,
+    168,
+    170,
+    1,
+    0,
+    0,
+    0,
+    169,
+    167,
+    1,
+    0,
+    0,
+    0,
+    170,
+    171,
+    5,
+    5,
+    0,
+    0,
+    171,
+    172,
+    5,
+    55,
+    0,
+    0,
+    172,
+    173,
+    5,
+    26,
+    0,
+    0,
+    173,
+    178,
+    3,
+    22,
+    11,
+    0,
+    174,
+    175,
+    5,
+    24,
+    0,
+    0,
+    175,
+    177,
+    3,
+    24,
+    12,
+    0,
+    176,
+    174,
+    1,
+    0,
+    0,
+    0,
+    177,
+    180,
+    1,
+    0,
+    0,
+    0,
+    178,
+    176,
+    1,
+    0,
+    0,
+    0,
+    178,
+    179,
+    1,
+    0,
+    0,
+    0,
+    179,
+    182,
+    1,
+    0,
+    0,
+    0,
+    180,
+    178,
+    1,
+    0,
+    0,
+    0,
+    181,
+    183,
+    5,
+    24,
+    0,
+    0,
+    182,
+    181,
+    1,
+    0,
+    0,
+    0,
+    182,
+    183,
+    1,
+    0,
+    0,
+    0,
+    183,
+    184,
+    1,
+    0,
+    0,
+    0,
+    184,
+    188,
+    5,
+    27,
+    0,
+    0,
+    185,
+    187,
+    3,
+    26,
+    13,
+    0,
+    186,
+    185,
+    1,
+    0,
+    0,
+    0,
+    187,
+    190,
+    1,
+    0,
+    0,
+    0,
+    188,
+    186,
+    1,
+    0,
+    0,
+    0,
+    188,
+    189,
+    1,
+    0,
+    0,
+    0,
+    189,
+    21,
+    1,
+    0,
+    0,
+    0,
+    190,
+    188,
+    1,
+    0,
+    0,
+    0,
+    191,
+    195,
+    5,
+    54,
+    0,
+    0,
+    192,
+    195,
+    5,
+    57,
+    0,
+    0,
+    193,
+    195,
+    3,
+    6,
+    3,
+    0,
+    194,
+    191,
+    1,
+    0,
+    0,
+    0,
+    194,
+    192,
+    1,
+    0,
+    0,
+    0,
+    194,
+    193,
+    1,
+    0,
+    0,
+    0,
+    195,
+    23,
+    1,
+    0,
+    0,
+    0,
+    196,
+    197,
+    3,
+    4,
+    2,
+    0,
+    197,
+    198,
+    5,
+    19,
+    0,
+    0,
+    198,
+    199,
+    3,
+    60,
+    30,
+    0,
+    199,
+    25,
+    1,
+    0,
+    0,
+    0,
+    200,
+    201,
+    5,
+    7,
+    0,
+    0,
+    201,
+    206,
+    5,
+    55,
+    0,
+    0,
+    202,
+    203,
+    5,
+    24,
+    0,
+    0,
+    203,
+    205,
+    5,
+    55,
+    0,
+    0,
+    204,
+    202,
+    1,
+    0,
+    0,
+    0,
+    205,
+    208,
+    1,
+    0,
+    0,
+    0,
+    206,
+    204,
+    1,
+    0,
+    0,
+    0,
+    206,
+    207,
+    1,
+    0,
+    0,
+    0,
+    207,
+    221,
+    1,
+    0,
+    0,
+    0,
+    208,
+    206,
+    1,
+    0,
+    0,
+    0,
+    209,
+    210,
+    5,
+    8,
+    0,
+    0,
+    210,
+    215,
+    5,
+    55,
+    0,
+    0,
+    211,
+    212,
+    5,
+    24,
+    0,
+    0,
+    212,
+    214,
+    5,
+    55,
+    0,
+    0,
+    213,
+    211,
+    1,
+    0,
+    0,
+    0,
+    214,
+    217,
+    1,
+    0,
+    0,
+    0,
+    215,
+    213,
+    1,
+    0,
+    0,
+    0,
+    215,
+    216,
+    1,
+    0,
+    0,
+    0,
+    216,
+    221,
+    1,
+    0,
+    0,
+    0,
+    217,
+    215,
+    1,
+    0,
+    0,
+    0,
+    218,
+    219,
+    5,
+    9,
+    0,
+    0,
+    219,
+    221,
+    7,
+    1,
+    0,
+    0,
+    220,
+    200,
+    1,
+    0,
+    0,
+    0,
+    220,
+    209,
+    1,
+    0,
+    0,
+    0,
+    220,
+    218,
+    1,
+    0,
+    0,
+    0,
+    221,
+    27,
+    1,
+    0,
+    0,
+    0,
+    222,
+    223,
+    5,
+    28,
+    0,
+    0,
+    223,
+    236,
+    3,
+    4,
+    2,
+    0,
+    224,
+    233,
+    5,
+    21,
+    0,
+    0,
+    225,
+    230,
+    3,
+    30,
+    15,
+    0,
+    226,
+    227,
+    5,
+    24,
+    0,
+    0,
+    227,
+    229,
+    3,
+    30,
+    15,
+    0,
+    228,
+    226,
+    1,
+    0,
+    0,
+    0,
+    229,
+    232,
+    1,
+    0,
+    0,
+    0,
+    230,
+    228,
+    1,
+    0,
+    0,
+    0,
+    230,
+    231,
+    1,
+    0,
+    0,
+    0,
+    231,
+    234,
+    1,
+    0,
+    0,
+    0,
+    232,
+    230,
+    1,
+    0,
+    0,
+    0,
+    233,
+    225,
+    1,
+    0,
+    0,
+    0,
+    233,
+    234,
+    1,
+    0,
+    0,
+    0,
+    234,
+    235,
+    1,
+    0,
+    0,
+    0,
+    235,
+    237,
+    5,
+    22,
+    0,
+    0,
+    236,
+    224,
+    1,
+    0,
+    0,
+    0,
+    236,
+    237,
+    1,
+    0,
+    0,
+    0,
+    237,
+    29,
+    1,
+    0,
+    0,
+    0,
+    238,
+    242,
+    3,
+    62,
+    31,
+    0,
+    239,
+    242,
+    5,
+    54,
+    0,
+    0,
+    240,
+    242,
+    3,
+    6,
+    3,
+    0,
+    241,
+    238,
+    1,
+    0,
+    0,
+    0,
+    241,
+    239,
+    1,
+    0,
+    0,
+    0,
+    241,
+    240,
+    1,
+    0,
+    0,
+    0,
+    242,
+    31,
+    1,
+    0,
+    0,
+    0,
+    243,
+    245,
+    3,
+    28,
+    14,
+    0,
+    244,
+    243,
+    1,
+    0,
+    0,
+    0,
+    245,
+    248,
+    1,
+    0,
+    0,
+    0,
+    246,
+    244,
+    1,
+    0,
+    0,
+    0,
+    246,
+    247,
+    1,
+    0,
+    0,
+    0,
+    247,
+    249,
+    1,
+    0,
+    0,
+    0,
+    248,
+    246,
+    1,
+    0,
+    0,
+    0,
+    249,
+    250,
+    5,
+    6,
+    0,
+    0,
+    250,
+    251,
+    5,
+    55,
+    0,
+    0,
+    251,
+    253,
+    5,
+    21,
+    0,
+    0,
+    252,
+    254,
+    3,
+    34,
+    17,
+    0,
+    253,
+    252,
+    1,
+    0,
+    0,
+    0,
+    253,
+    254,
+    1,
+    0,
+    0,
+    0,
+    254,
+    255,
+    1,
+    0,
+    0,
+    0,
+    255,
+    258,
+    5,
+    22,
+    0,
+    0,
+    256,
+    257,
+    5,
+    29,
+    0,
+    0,
+    257,
+    259,
+    3,
+    38,
+    19,
+    0,
+    258,
+    256,
+    1,
+    0,
+    0,
+    0,
+    258,
+    259,
+    1,
+    0,
+    0,
+    0,
+    259,
+    260,
+    1,
+    0,
+    0,
+    0,
+    260,
+    261,
+    5,
+    19,
+    0,
+    0,
+    261,
+    262,
+    3,
+    40,
+    20,
+    0,
+    262,
+    33,
+    1,
+    0,
+    0,
+    0,
+    263,
+    268,
+    3,
+    36,
+    18,
+    0,
+    264,
+    265,
+    5,
+    24,
+    0,
+    0,
+    265,
+    267,
+    3,
+    36,
+    18,
+    0,
+    266,
+    264,
+    1,
+    0,
+    0,
+    0,
+    267,
+    270,
+    1,
+    0,
+    0,
+    0,
+    268,
+    266,
+    1,
+    0,
+    0,
+    0,
+    268,
+    269,
+    1,
+    0,
+    0,
+    0,
+    269,
+    272,
+    1,
+    0,
+    0,
+    0,
+    270,
+    268,
+    1,
+    0,
+    0,
+    0,
+    271,
+    273,
+    5,
+    24,
+    0,
+    0,
+    272,
+    271,
+    1,
+    0,
+    0,
+    0,
+    272,
+    273,
+    1,
+    0,
+    0,
+    0,
+    273,
+    35,
+    1,
+    0,
+    0,
+    0,
+    274,
+    275,
+    5,
+    55,
+    0,
+    0,
+    275,
+    276,
+    5,
+    19,
+    0,
+    0,
+    276,
+    277,
+    3,
+    38,
+    19,
+    0,
+    277,
+    37,
+    1,
+    0,
+    0,
+    0,
+    278,
+    290,
+    3,
+    6,
+    3,
+    0,
+    279,
+    280,
+    5,
+    30,
+    0,
+    0,
+    280,
+    285,
+    3,
+    38,
+    19,
+    0,
+    281,
+    282,
+    5,
+    24,
+    0,
+    0,
+    282,
+    284,
+    3,
+    38,
+    19,
+    0,
+    283,
+    281,
+    1,
+    0,
+    0,
+    0,
+    284,
+    287,
+    1,
+    0,
+    0,
+    0,
+    285,
+    283,
+    1,
+    0,
+    0,
+    0,
+    285,
+    286,
+    1,
+    0,
+    0,
+    0,
+    286,
+    288,
+    1,
+    0,
+    0,
+    0,
+    287,
+    285,
+    1,
+    0,
+    0,
+    0,
+    288,
+    289,
+    5,
+    31,
+    0,
+    0,
+    289,
+    291,
+    1,
+    0,
+    0,
+    0,
+    290,
+    279,
+    1,
+    0,
+    0,
+    0,
+    290,
+    291,
+    1,
+    0,
+    0,
+    0,
+    291,
+    39,
+    1,
+    0,
+    0,
+    0,
+    292,
+    296,
+    3,
+    64,
+    32,
+    0,
+    293,
+    295,
+    3,
+    42,
+    21,
+    0,
+    294,
+    293,
+    1,
+    0,
+    0,
+    0,
+    295,
+    298,
+    1,
+    0,
+    0,
+    0,
+    296,
+    294,
+    1,
+    0,
+    0,
+    0,
+    296,
+    297,
+    1,
+    0,
+    0,
+    0,
+    297,
+    305,
+    1,
+    0,
+    0,
+    0,
+    298,
+    296,
+    1,
+    0,
+    0,
+    0,
+    299,
+    301,
+    3,
+    42,
+    21,
+    0,
+    300,
+    299,
+    1,
+    0,
+    0,
+    0,
+    301,
+    302,
+    1,
+    0,
+    0,
+    0,
+    302,
+    300,
+    1,
+    0,
+    0,
+    0,
+    302,
+    303,
+    1,
+    0,
+    0,
+    0,
+    303,
+    305,
+    1,
+    0,
+    0,
+    0,
+    304,
+    292,
+    1,
+    0,
+    0,
+    0,
+    304,
+    300,
+    1,
+    0,
+    0,
+    0,
+    305,
+    41,
+    1,
+    0,
+    0,
+    0,
+    306,
+    307,
     5,
     49,
     0,
     0,
-    476,
-    480,
-    5,
-    50,
-    0,
-    0,
-    477,
-    480,
-    5,
-    51,
-    0,
-    0,
-    478,
-    480,
+    307,
+    309,
     3,
-    110,
-    55,
+    50,
+    25,
     0,
-    479,
-    474,
+    308,
+    310,
+    3,
+    44,
+    22,
+    0,
+    309,
+    308,
     1,
     0,
     0,
     0,
-    479,
+    309,
+    310,
+    1,
+    0,
+    0,
+    0,
+    310,
+    401,
+    1,
+    0,
+    0,
+    0,
+    311,
+    312,
+    5,
+    47,
+    0,
+    0,
+    312,
+    313,
+    5,
+    21,
+    0,
+    0,
+    313,
+    314,
+    3,
+    68,
+    34,
+    0,
+    314,
+    316,
+    5,
+    22,
+    0,
+    0,
+    315,
+    317,
+    5,
+    32,
+    0,
+    0,
+    316,
+    315,
+    1,
+    0,
+    0,
+    0,
+    316,
+    317,
+    1,
+    0,
+    0,
+    0,
+    317,
+    401,
+    1,
+    0,
+    0,
+    0,
+    318,
+    319,
+    5,
+    47,
+    0,
+    0,
+    319,
+    320,
+    5,
+    23,
+    0,
+    0,
+    320,
+    325,
+    3,
+    46,
+    23,
+    0,
+    321,
+    322,
+    5,
+    24,
+    0,
+    0,
+    322,
+    324,
+    3,
+    46,
+    23,
+    0,
+    323,
+    321,
+    1,
+    0,
+    0,
+    0,
+    324,
+    327,
+    1,
+    0,
+    0,
+    0,
+    325,
+    323,
+    1,
+    0,
+    0,
+    0,
+    325,
+    326,
+    1,
+    0,
+    0,
+    0,
+    326,
+    329,
+    1,
+    0,
+    0,
+    0,
+    327,
+    325,
+    1,
+    0,
+    0,
+    0,
+    328,
+    330,
+    5,
+    24,
+    0,
+    0,
+    329,
+    328,
+    1,
+    0,
+    0,
+    0,
+    329,
+    330,
+    1,
+    0,
+    0,
+    0,
+    330,
+    331,
+    1,
+    0,
+    0,
+    0,
+    331,
+    333,
+    5,
+    25,
+    0,
+    0,
+    332,
+    334,
+    3,
+    44,
+    22,
+    0,
+    333,
+    332,
+    1,
+    0,
+    0,
+    0,
+    333,
+    334,
+    1,
+    0,
+    0,
+    0,
+    334,
+    401,
+    1,
+    0,
+    0,
+    0,
+    335,
+    336,
+    5,
+    46,
+    0,
+    0,
+    336,
+    337,
+    5,
+    11,
+    0,
+    0,
+    337,
+    339,
+    5,
+    21,
+    0,
+    0,
+    338,
+    340,
+    3,
+    52,
+    26,
+    0,
+    339,
+    338,
+    1,
+    0,
+    0,
+    0,
+    339,
+    340,
+    1,
+    0,
+    0,
+    0,
+    340,
+    341,
+    1,
+    0,
+    0,
+    0,
+    341,
+    343,
+    5,
+    22,
+    0,
+    0,
+    342,
+    344,
+    3,
+    44,
+    22,
+    0,
+    343,
+    342,
+    1,
+    0,
+    0,
+    0,
+    343,
+    344,
+    1,
+    0,
+    0,
+    0,
+    344,
+    401,
+    1,
+    0,
+    0,
+    0,
+    345,
+    346,
+    5,
+    45,
+    0,
+    0,
+    346,
+    347,
+    5,
+    23,
+    0,
+    0,
+    347,
+    352,
+    3,
+    48,
+    24,
+    0,
+    348,
+    349,
+    5,
+    24,
+    0,
+    0,
+    349,
+    351,
+    3,
+    48,
+    24,
+    0,
+    350,
+    348,
+    1,
+    0,
+    0,
+    0,
+    351,
+    354,
+    1,
+    0,
+    0,
+    0,
+    352,
+    350,
+    1,
+    0,
+    0,
+    0,
+    352,
+    353,
+    1,
+    0,
+    0,
+    0,
+    353,
+    356,
+    1,
+    0,
+    0,
+    0,
+    354,
+    352,
+    1,
+    0,
+    0,
+    0,
+    355,
+    357,
+    5,
+    24,
+    0,
+    0,
+    356,
+    355,
+    1,
+    0,
+    0,
+    0,
+    356,
+    357,
+    1,
+    0,
+    0,
+    0,
+    357,
+    358,
+    1,
+    0,
+    0,
+    0,
+    358,
+    360,
+    5,
+    25,
+    0,
+    0,
+    359,
+    361,
+    3,
+    44,
+    22,
+    0,
+    360,
+    359,
+    1,
+    0,
+    0,
+    0,
+    360,
+    361,
+    1,
+    0,
+    0,
+    0,
+    361,
+    401,
+    1,
+    0,
+    0,
+    0,
+    362,
+    363,
+    5,
+    45,
+    0,
+    0,
+    363,
+    364,
+    5,
+    15,
+    0,
+    0,
+    364,
+    365,
+    5,
+    21,
+    0,
+    0,
+    365,
+    366,
+    5,
+    55,
+    0,
+    0,
+    366,
+    367,
+    5,
+    16,
+    0,
+    0,
+    367,
+    370,
+    3,
+    56,
+    28,
+    0,
+    368,
+    369,
+    5,
+    24,
+    0,
+    0,
+    369,
+    371,
+    3,
+    52,
+    26,
+    0,
+    370,
+    368,
+    1,
+    0,
+    0,
+    0,
+    370,
+    371,
+    1,
+    0,
+    0,
+    0,
+    371,
+    372,
+    1,
+    0,
+    0,
+    0,
+    372,
+    373,
+    5,
+    22,
+    0,
+    0,
+    373,
+    374,
+    5,
+    32,
+    0,
+    0,
+    374,
+    376,
+    3,
+    50,
+    25,
+    0,
+    375,
+    377,
+    3,
+    44,
+    22,
+    0,
+    376,
+    375,
+    1,
+    0,
+    0,
+    0,
+    376,
+    377,
+    1,
+    0,
+    0,
+    0,
+    377,
+    401,
+    1,
+    0,
+    0,
+    0,
+    378,
+    379,
+    5,
+    48,
+    0,
+    0,
+    379,
+    380,
+    5,
+    12,
+    0,
+    0,
+    380,
+    381,
+    5,
+    21,
+    0,
+    0,
+    381,
+    382,
+    3,
+    56,
+    28,
+    0,
+    382,
+    384,
+    5,
+    22,
+    0,
+    0,
+    383,
+    385,
+    3,
+    44,
+    22,
+    0,
+    384,
+    383,
+    1,
+    0,
+    0,
+    0,
+    384,
+    385,
+    1,
+    0,
+    0,
+    0,
+    385,
+    401,
+    1,
+    0,
+    0,
+    0,
+    386,
+    387,
+    5,
+    44,
+    0,
+    0,
+    387,
+    388,
+    5,
+    13,
+    0,
+    0,
+    388,
+    389,
+    5,
+    21,
+    0,
+    0,
+    389,
+    390,
+    5,
+    55,
+    0,
+    0,
+    390,
+    391,
+    5,
+    24,
+    0,
+    0,
+    391,
+    394,
+    7,
+    1,
+    0,
+    0,
+    392,
+    393,
+    5,
+    24,
+    0,
+    0,
+    393,
+    395,
+    3,
+    52,
+    26,
+    0,
+    394,
+    392,
+    1,
+    0,
+    0,
+    0,
+    394,
+    395,
+    1,
+    0,
+    0,
+    0,
+    395,
+    396,
+    1,
+    0,
+    0,
+    0,
+    396,
+    398,
+    5,
+    22,
+    0,
+    0,
+    397,
+    399,
+    3,
+    44,
+    22,
+    0,
+    398,
+    397,
+    1,
+    0,
+    0,
+    0,
+    398,
+    399,
+    1,
+    0,
+    0,
+    0,
+    399,
+    401,
+    1,
+    0,
+    0,
+    0,
+    400,
+    306,
+    1,
+    0,
+    0,
+    0,
+    400,
+    311,
+    1,
+    0,
+    0,
+    0,
+    400,
+    318,
+    1,
+    0,
+    0,
+    0,
+    400,
+    335,
+    1,
+    0,
+    0,
+    0,
+    400,
+    345,
+    1,
+    0,
+    0,
+    0,
+    400,
+    362,
+    1,
+    0,
+    0,
+    0,
+    400,
+    378,
+    1,
+    0,
+    0,
+    0,
+    400,
+    386,
+    1,
+    0,
+    0,
+    0,
+    401,
+    43,
+    1,
+    0,
+    0,
+    0,
+    402,
+    403,
+    5,
+    14,
+    0,
+    0,
+    403,
+    404,
+    3,
+    4,
+    2,
+    0,
+    404,
+    45,
+    1,
+    0,
+    0,
+    0,
+    405,
+    406,
+    5,
+    21,
+    0,
+    0,
+    406,
+    407,
+    3,
+    68,
+    34,
+    0,
+    407,
+    408,
+    5,
+    22,
+    0,
+    0,
+    408,
+    409,
+    5,
+    32,
+    0,
+    0,
+    409,
+    410,
+    3,
+    50,
+    25,
+    0,
+    410,
+    415,
+    1,
+    0,
+    0,
+    0,
+    411,
+    412,
+    5,
+    17,
+    0,
+    0,
+    412,
+    413,
+    5,
+    32,
+    0,
+    0,
+    413,
+    415,
+    3,
+    50,
+    25,
+    0,
+    414,
+    405,
+    1,
+    0,
+    0,
+    0,
+    414,
+    411,
+    1,
+    0,
+    0,
+    0,
+    415,
+    47,
+    1,
+    0,
+    0,
+    0,
+    416,
+    418,
+    3,
+    50,
+    25,
+    0,
+    417,
+    419,
+    3,
+    44,
+    22,
+    0,
+    418,
+    417,
+    1,
+    0,
+    0,
+    0,
+    418,
+    419,
+    1,
+    0,
+    0,
+    0,
+    419,
+    425,
+    1,
+    0,
+    0,
+    0,
+    420,
+    422,
+    5,
+    55,
+    0,
+    0,
+    421,
+    423,
+    3,
+    44,
+    22,
+    0,
+    422,
+    421,
+    1,
+    0,
+    0,
+    0,
+    422,
+    423,
+    1,
+    0,
+    0,
+    0,
+    423,
+    425,
+    1,
+    0,
+    0,
+    0,
+    424,
+    416,
+    1,
+    0,
+    0,
+    0,
+    424,
+    420,
+    1,
+    0,
+    0,
+    0,
+    425,
+    49,
+    1,
+    0,
+    0,
+    0,
+    426,
+    429,
+    5,
+    55,
+    0,
+    0,
+    427,
+    428,
+    5,
+    18,
+    0,
+    0,
+    428,
+    430,
+    3,
+    4,
+    2,
+    0,
+    429,
+    427,
+    1,
+    0,
+    0,
+    0,
+    429,
+    430,
+    1,
+    0,
+    0,
+    0,
+    430,
+    431,
+    1,
+    0,
+    0,
+    0,
+    431,
+    433,
+    5,
+    21,
+    0,
+    0,
+    432,
+    434,
+    3,
+    52,
+    26,
+    0,
+    433,
+    432,
+    1,
+    0,
+    0,
+    0,
+    433,
+    434,
+    1,
+    0,
+    0,
+    0,
+    434,
+    435,
+    1,
+    0,
+    0,
+    0,
+    435,
+    436,
+    5,
+    22,
+    0,
+    0,
+    436,
+    51,
+    1,
+    0,
+    0,
+    0,
+    437,
+    442,
+    3,
+    54,
+    27,
+    0,
+    438,
+    439,
+    5,
+    24,
+    0,
+    0,
+    439,
+    441,
+    3,
+    54,
+    27,
+    0,
+    440,
+    438,
+    1,
+    0,
+    0,
+    0,
+    441,
+    444,
+    1,
+    0,
+    0,
+    0,
+    442,
+    440,
+    1,
+    0,
+    0,
+    0,
+    442,
+    443,
+    1,
+    0,
+    0,
+    0,
+    443,
+    446,
+    1,
+    0,
+    0,
+    0,
+    444,
+    442,
+    1,
+    0,
+    0,
+    0,
+    445,
+    447,
+    5,
+    24,
+    0,
+    0,
+    446,
+    445,
+    1,
+    0,
+    0,
+    0,
+    446,
+    447,
+    1,
+    0,
+    0,
+    0,
+    447,
+    53,
+    1,
+    0,
+    0,
+    0,
+    448,
+    449,
+    3,
+    4,
+    2,
+    0,
+    449,
+    450,
+    5,
+    19,
+    0,
+    0,
+    450,
+    451,
+    3,
+    56,
+    28,
+    0,
+    451,
+    454,
+    1,
+    0,
+    0,
+    0,
+    452,
+    454,
+    3,
+    56,
+    28,
+    0,
+    453,
+    448,
+    1,
+    0,
+    0,
+    0,
+    453,
+    452,
+    1,
+    0,
+    0,
+    0,
+    454,
+    55,
+    1,
+    0,
+    0,
+    0,
+    455,
+    461,
+    3,
+    62,
+    31,
+    0,
+    456,
+    461,
+    5,
+    54,
+    0,
+    0,
+    457,
+    461,
+    3,
+    66,
+    33,
+    0,
+    458,
+    461,
+    3,
+    58,
+    29,
+    0,
+    459,
+    461,
+    3,
+    6,
+    3,
+    0,
+    460,
+    455,
+    1,
+    0,
+    0,
+    0,
+    460,
+    456,
+    1,
+    0,
+    0,
+    0,
+    460,
+    457,
+    1,
+    0,
+    0,
+    0,
+    460,
+    458,
+    1,
+    0,
+    0,
+    0,
+    460,
+    459,
+    1,
+    0,
+    0,
+    0,
+    461,
+    57,
+    1,
+    0,
+    0,
+    0,
+    462,
+    474,
+    5,
+    26,
+    0,
+    0,
+    463,
+    468,
+    3,
+    56,
+    28,
+    0,
+    464,
+    465,
+    5,
+    24,
+    0,
+    0,
+    465,
+    467,
+    3,
+    56,
+    28,
+    0,
+    466,
+    464,
+    1,
+    0,
+    0,
+    0,
+    467,
+    470,
+    1,
+    0,
+    0,
+    0,
+    468,
+    466,
+    1,
+    0,
+    0,
+    0,
+    468,
+    469,
+    1,
+    0,
+    0,
+    0,
+    469,
+    472,
+    1,
+    0,
+    0,
+    0,
+    470,
+    468,
+    1,
+    0,
+    0,
+    0,
+    471,
+    473,
+    5,
+    24,
+    0,
+    0,
+    472,
+    471,
+    1,
+    0,
+    0,
+    0,
+    472,
+    473,
+    1,
+    0,
+    0,
+    0,
+    473,
     475,
     1,
     0,
     0,
     0,
-    479,
+    474,
+    463,
+    1,
+    0,
+    0,
+    0,
+    474,
+    475,
+    1,
+    0,
+    0,
+    0,
+    475,
     476,
     1,
     0,
     0,
     0,
-    479,
+    476,
     477,
+    5,
+    27,
+    0,
+    0,
+    477,
+    59,
     1,
     0,
     0,
+    0,
+    478,
+    482,
+    3,
+    62,
+    31,
     0,
     479,
-    478,
-    1,
-    0,
+    482,
+    5,
+    54,
     0,
     0,
     480,
-    97,
+    482,
+    3,
+    6,
+    3,
+    0,
+    481,
+    478,
     1,
     0,
     0,
     0,
     481,
-    482,
-    5,
-    47,
+    479,
+    1,
     0,
     0,
+    0,
+    481,
+    480,
+    1,
+    0,
+    0,
+    0,
     482,
-    483,
-    5,
-    22,
+    61,
+    1,
+    0,
     0,
     0,
     483,
     484,
-    5,
-    47,
+    7,
+    2,
     0,
     0,
     484,
-    486,
-    5,
-    4,
+    63,
+    1,
+    0,
     0,
     0,
     485,
-    487,
+    489,
     3,
-    100,
-    50,
+    62,
+    31,
     0,
     486,
+    489,
+    3,
+    66,
+    33,
+    0,
+    487,
+    489,
+    3,
+    6,
+    3,
+    0,
+    488,
     485,
     1,
     0,
     0,
     0,
+    488,
     486,
-    487,
-    1,
-    0,
-    0,
-    0,
-    487,
-    488,
     1,
     0,
     0,
     0,
     488,
-    489,
-    5,
-    5,
+    487,
+    1,
     0,
     0,
+    0,
     489,
-    99,
+    65,
     1,
     0,
     0,
     0,
     490,
     495,
-    3,
-    102,
-    51,
+    5,
+    10,
+    0,
     0,
     491,
     492,
     5,
-    6,
+    18,
     0,
     0,
     492,
     494,
     3,
-    102,
-    51,
-    0,
-    493,
-    491,
-    1,
-    0,
-    0,
-    0,
-    494,
-    497,
-    1,
-    0,
-    0,
-    0,
-    495,
-    493,
-    1,
-    0,
-    0,
-    0,
-    495,
-    496,
-    1,
-    0,
-    0,
-    0,
-    496,
-    101,
-    1,
-    0,
-    0,
-    0,
-    497,
-    495,
-    1,
-    0,
-    0,
-    0,
-    498,
-    499,
-    3,
-    12,
-    6,
-    0,
-    499,
-    500,
-    5,
+    4,
     2,
     0,
+    493,
+    491,
+    1,
+    0,
+    0,
+    0,
+    494,
+    497,
+    1,
+    0,
+    0,
+    0,
+    495,
+    493,
+    1,
+    0,
+    0,
+    0,
+    495,
+    496,
+    1,
+    0,
+    0,
+    0,
+    496,
+    67,
+    1,
+    0,
+    0,
+    0,
+    497,
+    495,
+    1,
+    0,
+    0,
+    0,
+    498,
+    499,
+    3,
+    70,
+    35,
+    0,
+    499,
+    69,
+    1,
+    0,
+    0,
     0,
     500,
-    501,
+    505,
     3,
-    104,
-    52,
+    72,
+    36,
     0,
     501,
-    504,
-    1,
-    0,
+    502,
+    5,
+    33,
     0,
     0,
     502,
     504,
     3,
-    104,
-    52,
+    72,
+    36,
     0,
     503,
-    498,
-    1,
-    0,
-    0,
-    0,
-    503,
-    502,
+    501,
     1,
     0,
     0,
     0,
     504,
-    103,
-    1,
-    0,
-    0,
-    0,
-    505,
-    517,
-    5,
-    49,
-    0,
-    0,
-    506,
-    517,
-    5,
-    50,
-    0,
-    0,
-    507,
-    517,
-    5,
-    51,
-    0,
-    0,
-    508,
-    517,
-    5,
-    46,
-    0,
-    0,
-    509,
-    517,
-    5,
-    48,
-    0,
-    0,
-    510,
-    517,
-    3,
-    110,
-    55,
-    0,
-    511,
-    512,
-    5,
-    23,
-    0,
-    0,
-    512,
-    513,
-    3,
-    106,
-    53,
-    0,
-    513,
-    514,
-    5,
-    24,
-    0,
-    0,
-    514,
-    517,
-    1,
-    0,
-    0,
-    0,
-    515,
-    517,
-    3,
-    14,
-    7,
-    0,
-    516,
-    505,
-    1,
-    0,
-    0,
-    0,
-    516,
-    506,
-    1,
-    0,
-    0,
-    0,
-    516,
     507,
     1,
     0,
     0,
     0,
-    516,
-    508,
+    505,
+    503,
     1,
     0,
     0,
     0,
-    516,
+    505,
+    506,
+    1,
+    0,
+    0,
+    0,
+    506,
+    71,
+    1,
+    0,
+    0,
+    0,
+    507,
+    505,
+    1,
+    0,
+    0,
+    0,
+    508,
+    513,
+    3,
+    74,
+    37,
+    0,
+    509,
+    510,
+    5,
+    34,
+    0,
+    0,
+    510,
+    512,
+    3,
+    74,
+    37,
+    0,
+    511,
     509,
     1,
     0,
     0,
     0,
-    516,
-    510,
-    1,
-    0,
-    0,
-    0,
-    516,
-    511,
-    1,
-    0,
-    0,
-    0,
-    516,
+    512,
     515,
     1,
     0,
     0,
     0,
-    517,
-    105,
+    513,
+    511,
     1,
     0,
     0,
+    0,
+    513,
+    514,
+    1,
+    0,
+    0,
+    0,
+    514,
+    73,
+    1,
+    0,
+    0,
+    0,
+    515,
+    513,
+    1,
+    0,
+    0,
+    0,
+    516,
+    517,
+    5,
+    35,
+    0,
+    0,
+    517,
+    520,
+    3,
+    74,
+    37,
     0,
     518,
-    523,
+    520,
     3,
-    104,
-    52,
+    76,
+    38,
     0,
     519,
-    520,
-    5,
-    6,
-    0,
-    0,
-    520,
-    522,
-    3,
-    104,
-    52,
-    0,
-    521,
-    519,
+    516,
     1,
     0,
     0,
     0,
-    522,
+    519,
+    518,
+    1,
+    0,
+    0,
+    0,
+    520,
+    75,
+    1,
+    0,
+    0,
+    0,
+    521,
     525,
-    1,
+    3,
+    80,
+    40,
     0,
-    0,
-    0,
+    522,
     523,
-    521,
-    1,
-    0,
-    0,
+    3,
+    78,
+    39,
     0,
     523,
     524,
-    1,
-    0,
-    0,
+    3,
+    80,
+    40,
     0,
     524,
-    107,
+    526,
     1,
     0,
     0,
     0,
     525,
-    523,
+    522,
+    1,
+    0,
+    0,
+    0,
+    525,
+    526,
     1,
     0,
     0,
     0,
     526,
-    533,
-    5,
-    49,
+    77,
+    1,
+    0,
     0,
     0,
     527,
-    533,
-    5,
-    50,
-    0,
-    0,
     528,
-    533,
-    5,
-    51,
-    0,
-    0,
-    529,
-    533,
-    3,
-    12,
-    6,
-    0,
-    530,
-    533,
-    5,
-    48,
-    0,
-    0,
-    531,
-    533,
-    3,
-    14,
     7,
-    0,
-    532,
-    526,
-    1,
+    3,
     0,
     0,
-    0,
-    532,
-    527,
-    1,
-    0,
-    0,
-    0,
-    532,
     528,
+    79,
     1,
     0,
     0,
     0,
-    532,
     529,
-    1,
-    0,
-    0,
-    0,
-    532,
     530,
-    1,
+    5,
+    21,
     0,
+    0,
+    530,
+    531,
+    3,
+    70,
+    35,
+    0,
+    531,
+    532,
+    5,
+    22,
     0,
     0,
     532,
-    531,
+    537,
     1,
     0,
     0,
     0,
     533,
-    109,
-    1,
-    0,
-    0,
+    537,
+    3,
+    62,
+    31,
     0,
     534,
-    535,
-    5,
-    16,
-    0,
-    0,
-    535,
-    536,
-    5,
-    22,
-    0,
-    0,
-    536,
-    538,
-    5,
-    47,
-    0,
-    0,
     537,
-    539,
     3,
-    112,
-    56,
+    66,
+    33,
     0,
-    538,
+    535,
     537,
+    3,
+    6,
+    3,
+    0,
+    536,
+    529,
     1,
     0,
     0,
     0,
-    538,
-    539,
+    536,
+    533,
     1,
     0,
     0,
     0,
-    539,
-    111,
+    536,
+    534,
     1,
     0,
     0,
     0,
-    540,
-    541,
-    5,
-    22,
-    0,
-    0,
-    541,
-    543,
-    5,
-    47,
-    0,
-    0,
-    542,
-    540,
+    536,
+    535,
     1,
     0,
     0,
     0,
-    543,
-    544,
+    537,
+    81,
     1,
     0,
     0,
     0,
-    544,
-    542,
-    1,
-    0,
-    0,
-    0,
-    544,
-    545,
-    1,
-    0,
-    0,
-    0,
-    545,
-    113,
-    1,
-    0,
-    0,
-    0,
-    52,
-    117,
-    128,
-    138,
-    144,
-    153,
-    162,
-    171,
+    68,
+    85,
+    96,
+    105,
+    116,
+    122,
+    132,
+    142,
+    151,
+    155,
+    167,
+    178,
     182,
-    195,
-    204,
-    217,
-    219,
-    227,
+    188,
+    194,
+    206,
+    215,
+    220,
+    230,
+    233,
     236,
-    247,
-    249,
-    254,
-    263,
+    241,
+    246,
+    253,
+    258,
     268,
-    274,
-    281,
-    289,
-    297,
-    303,
-    312,
-    319,
-    330,
+    272,
+    285,
+    290,
+    296,
+    302,
+    304,
+    309,
+    316,
+    325,
+    329,
+    333,
+    339,
     343,
-    351,
-    363,
+    352,
+    356,
+    360,
     370,
     376,
+    384,
     394,
+    398,
     400,
-    406,
-    415,
-    420,
-    425,
-    434,
+    414,
+    418,
+    422,
+    424,
+    429,
+    433,
     442,
-    451,
-    456,
-    465,
-    479,
-    486,
+    446,
+    453,
+    460,
+    468,
+    472,
+    474,
+    481,
+    488,
     495,
-    503,
-    516,
-    523,
-    532,
-    538,
-    544
+    505,
+    513,
+    519,
+    525,
+    536
   ];
   static __ATN;
   static get _ATN() {
@@ -33778,16 +33919,6 @@ class ProgramContext extends ParserRuleContext {
   get ruleIndex() {
     return HaloParser.RULE_program;
   }
-  enterRule(listener) {
-    if (listener.enterProgram) {
-      listener.enterProgram(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitProgram) {
-      listener.exitProgram(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitProgram) {
       return visitor.visitProgram(this);
@@ -33810,31 +33941,65 @@ class DeclarationContext extends ParserRuleContext {
   storeDecl() {
     return this.getRuleContext(0, StoreDeclContext);
   }
+  schemaDecl() {
+    return this.getRuleContext(0, SchemaDeclContext);
+  }
   agentDecl() {
     return this.getRuleContext(0, AgentDeclContext);
   }
   pipelineDecl() {
     return this.getRuleContext(0, PipelineDeclContext);
   }
-  schemaDecl() {
-    return this.getRuleContext(0, SchemaDeclContext);
-  }
   get ruleIndex() {
     return HaloParser.RULE_declaration;
-  }
-  enterRule(listener) {
-    if (listener.enterDeclaration) {
-      listener.enterDeclaration(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitDeclaration) {
-      listener.exitDeclaration(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitDeclaration) {
       return visitor.visitDeclaration(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class NameContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  IDENTIFIER() {
+    return this.getToken(HaloParser.IDENTIFIER, 0);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_name;
+  }
+  accept(visitor) {
+    if (visitor.visitName) {
+      return visitor.visitName(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class DottedIdContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  IDENTIFIER() {
+    return this.getToken(HaloParser.IDENTIFIER, 0);
+  }
+  name(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(NameContext);
+    }
+    return this.getRuleContext(i, NameContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_dottedId;
+  }
+  accept(visitor) {
+    if (visitor.visitDottedId) {
+      return visitor.visitDottedId(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -33857,16 +34022,6 @@ class PolicyDeclContext extends ParserRuleContext {
   get ruleIndex() {
     return HaloParser.RULE_policyDecl;
   }
-  enterRule(listener) {
-    if (listener.enterPolicyDecl) {
-      listener.enterPolicyDecl(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitPolicyDecl) {
-      listener.exitPolicyDecl(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitPolicyDecl) {
       return visitor.visitPolicyDecl(this);
@@ -33883,258 +34038,15 @@ class PolicyRuleContext extends ParserRuleContext {
   IDENTIFIER() {
     return this.getToken(HaloParser.IDENTIFIER, 0);
   }
-  policyArgs() {
-    return this.getRuleContext(0, PolicyArgsContext);
+  callArgs() {
+    return this.getRuleContext(0, CallArgsContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_policyRule;
   }
-  enterRule(listener) {
-    if (listener.enterPolicyRule) {
-      listener.enterPolicyRule(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitPolicyRule) {
-      listener.exitPolicyRule(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitPolicyRule) {
       return visitor.visitPolicyRule(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class PolicyArgsContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  policyArg(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(PolicyArgContext);
-    }
-    return this.getRuleContext(i, PolicyArgContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_policyArgs;
-  }
-  enterRule(listener) {
-    if (listener.enterPolicyArgs) {
-      listener.enterPolicyArgs(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitPolicyArgs) {
-      listener.exitPolicyArgs(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitPolicyArgs) {
-      return visitor.visitPolicyArgs(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class PolicyArgContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  MODEL_REF() {
-    return this.getToken(HaloParser.MODEL_REF, 0);
-  }
-  dottedId() {
-    return this.getRuleContext(0, DottedIdContext);
-  }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
-  }
-  NUMBER() {
-    return this.getToken(HaloParser.NUMBER, 0);
-  }
-  DURATION() {
-    return this.getToken(HaloParser.DURATION, 0);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_policyArg;
-  }
-  enterRule(listener) {
-    if (listener.enterPolicyArg) {
-      listener.enterPolicyArg(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitPolicyArg) {
-      listener.exitPolicyArg(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitPolicyArg) {
-      return visitor.visitPolicyArg(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class IdOrKeywordContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_idOrKeyword;
-  }
-  enterRule(listener) {
-    if (listener.enterIdOrKeyword) {
-      listener.enterIdOrKeyword(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitIdOrKeyword) {
-      listener.exitIdOrKeyword(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitIdOrKeyword) {
-      return visitor.visitIdOrKeyword(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class DottedIdContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  idOrKeyword(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(IdOrKeywordContext);
-    }
-    return this.getRuleContext(i, IdOrKeywordContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_dottedId;
-  }
-  enterRule(listener) {
-    if (listener.enterDottedId) {
-      listener.enterDottedId(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitDottedId) {
-      listener.exitDottedId(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitDottedId) {
-      return visitor.visitDottedId(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class SchemaDeclContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  schemaFields() {
-    return this.getRuleContext(0, SchemaFieldsContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_schemaDecl;
-  }
-  enterRule(listener) {
-    if (listener.enterSchemaDecl) {
-      listener.enterSchemaDecl(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitSchemaDecl) {
-      listener.exitSchemaDecl(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitSchemaDecl) {
-      return visitor.visitSchemaDecl(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class SchemaFieldsContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  schemaField(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(SchemaFieldContext);
-    }
-    return this.getRuleContext(i, SchemaFieldContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_schemaFields;
-  }
-  enterRule(listener) {
-    if (listener.enterSchemaFields) {
-      listener.enterSchemaFields(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitSchemaFields) {
-      listener.exitSchemaFields(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitSchemaFields) {
-      return visitor.visitSchemaFields(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class SchemaFieldContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  typeRef() {
-    return this.getRuleContext(0, TypeRefContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_schemaField;
-  }
-  enterRule(listener) {
-    if (listener.enterSchemaField) {
-      listener.enterSchemaField(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitSchemaField) {
-      listener.exitSchemaField(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitSchemaField) {
-      return visitor.visitSchemaField(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -34152,98 +34064,15 @@ class ToolDeclContext extends ParserRuleContext {
       return this.getToken(HaloParser.IDENTIFIER, i);
     }
   }
-  toolArgs() {
-    return this.getRuleContext(0, ToolArgsContext);
+  callArgs() {
+    return this.getRuleContext(0, CallArgsContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_toolDecl;
   }
-  enterRule(listener) {
-    if (listener.enterToolDecl) {
-      listener.enterToolDecl(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitToolDecl) {
-      listener.exitToolDecl(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitToolDecl) {
       return visitor.visitToolDecl(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ToolArgsContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  toolArg(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(ToolArgContext);
-    }
-    return this.getRuleContext(i, ToolArgContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_toolArgs;
-  }
-  enterRule(listener) {
-    if (listener.enterToolArgs) {
-      listener.enterToolArgs(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitToolArgs) {
-      listener.exitToolArgs(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitToolArgs) {
-      return visitor.visitToolArgs(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ToolArgContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
-  }
-  NUMBER() {
-    return this.getToken(HaloParser.NUMBER, 0);
-  }
-  DURATION() {
-    return this.getToken(HaloParser.DURATION, 0);
-  }
-  dottedId() {
-    return this.getRuleContext(0, DottedIdContext);
-  }
-  idOrKeyword() {
-    return this.getRuleContext(0, IdOrKeywordContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_toolArg;
-  }
-  enterRule(listener) {
-    if (listener.enterToolArg) {
-      listener.enterToolArg(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitToolArg) {
-      listener.exitToolArg(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitToolArg) {
-      return visitor.visitToolArg(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -34261,21 +34090,11 @@ class StoreDeclContext extends ParserRuleContext {
       return this.getToken(HaloParser.IDENTIFIER, i);
     }
   }
-  storeArgs() {
-    return this.getRuleContext(0, StoreArgsContext);
+  callArgs() {
+    return this.getRuleContext(0, CallArgsContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_storeDecl;
-  }
-  enterRule(listener) {
-    if (listener.enterStoreDecl) {
-      listener.enterStoreDecl(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitStoreDecl) {
-      listener.exitStoreDecl(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitStoreDecl) {
@@ -34286,70 +34105,47 @@ class StoreDeclContext extends ParserRuleContext {
   }
 }
 
-class StoreArgsContext extends ParserRuleContext {
+class SchemaDeclContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  storeArg(i) {
+  IDENTIFIER() {
+    return this.getToken(HaloParser.IDENTIFIER, 0);
+  }
+  schemaField(i) {
     if (i === undefined) {
-      return this.getRuleContexts(StoreArgContext);
+      return this.getRuleContexts(SchemaFieldContext);
     }
-    return this.getRuleContext(i, StoreArgContext);
+    return this.getRuleContext(i, SchemaFieldContext);
   }
   get ruleIndex() {
-    return HaloParser.RULE_storeArgs;
-  }
-  enterRule(listener) {
-    if (listener.enterStoreArgs) {
-      listener.enterStoreArgs(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitStoreArgs) {
-      listener.exitStoreArgs(this);
-    }
+    return HaloParser.RULE_schemaDecl;
   }
   accept(visitor) {
-    if (visitor.visitStoreArgs) {
-      return visitor.visitStoreArgs(this);
+    if (visitor.visitSchemaDecl) {
+      return visitor.visitSchemaDecl(this);
     } else {
       return visitor.visitChildren(this);
     }
   }
 }
 
-class StoreArgContext extends ParserRuleContext {
+class SchemaFieldContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
+  name() {
+    return this.getRuleContext(0, NameContext);
   }
-  NUMBER() {
-    return this.getToken(HaloParser.NUMBER, 0);
-  }
-  dottedId() {
-    return this.getRuleContext(0, DottedIdContext);
-  }
-  idOrKeyword() {
-    return this.getRuleContext(0, IdOrKeywordContext);
+  typeRef() {
+    return this.getRuleContext(0, TypeRefContext);
   }
   get ruleIndex() {
-    return HaloParser.RULE_storeArg;
-  }
-  enterRule(listener) {
-    if (listener.enterStoreArg) {
-      listener.enterStoreArg(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitStoreArg) {
-      listener.exitStoreArg(this);
-    }
+    return HaloParser.RULE_schemaField;
   }
   accept(visitor) {
-    if (visitor.visitStoreArg) {
-      return visitor.visitStoreArg(this);
+    if (visitor.visitSchemaField) {
+      return visitor.visitSchemaField(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -34363,8 +34159,8 @@ class AgentDeclContext extends ParserRuleContext {
   IDENTIFIER() {
     return this.getToken(HaloParser.IDENTIFIER, 0);
   }
-  modelConfig() {
-    return this.getRuleContext(0, ModelConfigContext);
+  modelRef() {
+    return this.getRuleContext(0, ModelRefContext);
   }
   directive(i) {
     if (i === undefined) {
@@ -34372,21 +34168,20 @@ class AgentDeclContext extends ParserRuleContext {
     }
     return this.getRuleContext(i, DirectiveContext);
   }
-  agentModifiers() {
-    return this.getRuleContext(0, AgentModifiersContext);
+  modelParam(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(ModelParamContext);
+    }
+    return this.getRuleContext(i, ModelParamContext);
+  }
+  agentModifier(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(AgentModifierContext);
+    }
+    return this.getRuleContext(i, AgentModifierContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_agentDecl;
-  }
-  enterRule(listener) {
-    if (listener.enterAgentDecl) {
-      listener.enterAgentDecl(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitAgentDecl) {
-      listener.exitAgentDecl(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitAgentDecl) {
@@ -34397,200 +34192,25 @@ class AgentDeclContext extends ParserRuleContext {
   }
 }
 
-class AgentModifiersContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  agentModifier(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(AgentModifierContext);
-    }
-    return this.getRuleContext(i, AgentModifierContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_agentModifiers;
-  }
-  enterRule(listener) {
-    if (listener.enterAgentModifiers) {
-      listener.enterAgentModifiers(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitAgentModifiers) {
-      listener.exitAgentModifiers(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitAgentModifiers) {
-      return visitor.visitAgentModifiers(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class AgentModifierContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  equipsList() {
-    return this.getRuleContext(0, EquipsListContext);
-  }
-  requiresList() {
-    return this.getRuleContext(0, RequiresListContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_agentModifier;
-  }
-  enterRule(listener) {
-    if (listener.enterAgentModifier) {
-      listener.enterAgentModifier(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitAgentModifier) {
-      listener.exitAgentModifier(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitAgentModifier) {
-      return visitor.visitAgentModifier(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class EquipsListContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.IDENTIFIER);
-    } else {
-      return this.getToken(HaloParser.IDENTIFIER, i);
-    }
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_equipsList;
-  }
-  enterRule(listener) {
-    if (listener.enterEquipsList) {
-      listener.enterEquipsList(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitEquipsList) {
-      listener.exitEquipsList(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitEquipsList) {
-      return visitor.visitEquipsList(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class RequiresListContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.IDENTIFIER);
-    } else {
-      return this.getToken(HaloParser.IDENTIFIER, i);
-    }
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_requiresList;
-  }
-  enterRule(listener) {
-    if (listener.enterRequiresList) {
-      listener.enterRequiresList(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitRequiresList) {
-      listener.exitRequiresList(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitRequiresList) {
-      return visitor.visitRequiresList(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ModelConfigContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  modelId() {
-    return this.getRuleContext(0, ModelIdContext);
-  }
-  modelParam(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(ModelParamContext);
-    }
-    return this.getRuleContext(i, ModelParamContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_modelConfig;
-  }
-  enterRule(listener) {
-    if (listener.enterModelConfig) {
-      listener.enterModelConfig(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitModelConfig) {
-      listener.exitModelConfig(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitModelConfig) {
-      return visitor.visitModelConfig(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ModelIdContext extends ParserRuleContext {
+class ModelRefContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
   MODEL_REF() {
     return this.getToken(HaloParser.MODEL_REF, 0);
   }
+  STRING() {
+    return this.getToken(HaloParser.STRING, 0);
+  }
   dottedId() {
     return this.getRuleContext(0, DottedIdContext);
   }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
   get ruleIndex() {
-    return HaloParser.RULE_modelId;
-  }
-  enterRule(listener) {
-    if (listener.enterModelId) {
-      listener.enterModelId(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitModelId) {
-      listener.exitModelId(this);
-    }
+    return HaloParser.RULE_modelRef;
   }
   accept(visitor) {
-    if (visitor.visitModelId) {
-      return visitor.visitModelId(this);
+    if (visitor.visitModelRef) {
+      return visitor.visitModelRef(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -34601,8 +34221,8 @@ class ModelParamContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
+  name() {
+    return this.getRuleContext(0, NameContext);
   }
   value() {
     return this.getRuleContext(0, ValueContext);
@@ -34610,19 +34230,133 @@ class ModelParamContext extends ParserRuleContext {
   get ruleIndex() {
     return HaloParser.RULE_modelParam;
   }
-  enterRule(listener) {
-    if (listener.enterModelParam) {
-      listener.enterModelParam(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitModelParam) {
-      listener.exitModelParam(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitModelParam) {
       return visitor.visitModelParam(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class AgentModifierContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_agentModifier;
+  }
+  copyFrom(ctx) {
+    super.copyFrom(ctx);
+  }
+}
+
+class RequiresModifierContext extends AgentModifierContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  IDENTIFIER(i) {
+    if (i === undefined) {
+      return this.getTokens(HaloParser.IDENTIFIER);
+    } else {
+      return this.getToken(HaloParser.IDENTIFIER, i);
+    }
+  }
+  accept(visitor) {
+    if (visitor.visitRequiresModifier) {
+      return visitor.visitRequiresModifier(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class SystemModifierContext extends AgentModifierContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  STRING() {
+    return this.getToken(HaloParser.STRING, 0);
+  }
+  TRIPLE_STRING() {
+    return this.getToken(HaloParser.TRIPLE_STRING, 0);
+  }
+  accept(visitor) {
+    if (visitor.visitSystemModifier) {
+      return visitor.visitSystemModifier(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class EquipsModifierContext extends AgentModifierContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  IDENTIFIER(i) {
+    if (i === undefined) {
+      return this.getTokens(HaloParser.IDENTIFIER);
+    } else {
+      return this.getToken(HaloParser.IDENTIFIER, i);
+    }
+  }
+  accept(visitor) {
+    if (visitor.visitEquipsModifier) {
+      return visitor.visitEquipsModifier(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class DirectiveContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  name() {
+    return this.getRuleContext(0, NameContext);
+  }
+  directiveArg(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(DirectiveArgContext);
+    }
+    return this.getRuleContext(i, DirectiveArgContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_directive;
+  }
+  accept(visitor) {
+    if (visitor.visitDirective) {
+      return visitor.visitDirective(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class DirectiveArgContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  literal() {
+    return this.getRuleContext(0, LiteralContext);
+  }
+  MODEL_REF() {
+    return this.getToken(HaloParser.MODEL_REF, 0);
+  }
+  dottedId() {
+    return this.getRuleContext(0, DottedIdContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_directiveArg;
+  }
+  accept(visitor) {
+    if (visitor.visitDirectiveArg) {
+      return visitor.visitDirectiveArg(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -34636,9 +34370,6 @@ class PipelineDeclContext extends ParserRuleContext {
   IDENTIFIER() {
     return this.getToken(HaloParser.IDENTIFIER, 0);
   }
-  typeRef() {
-    return this.getRuleContext(0, TypeRefContext);
-  }
   pipeline() {
     return this.getRuleContext(0, PipelineContext);
   }
@@ -34651,170 +34382,15 @@ class PipelineDeclContext extends ParserRuleContext {
   paramList() {
     return this.getRuleContext(0, ParamListContext);
   }
+  typeRef() {
+    return this.getRuleContext(0, TypeRefContext);
+  }
   get ruleIndex() {
     return HaloParser.RULE_pipelineDecl;
-  }
-  enterRule(listener) {
-    if (listener.enterPipelineDecl) {
-      listener.enterPipelineDecl(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitPipelineDecl) {
-      listener.exitPipelineDecl(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitPipelineDecl) {
       return visitor.visitPipelineDecl(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class DirectiveContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  directiveName() {
-    return this.getRuleContext(0, DirectiveNameContext);
-  }
-  directiveValue() {
-    return this.getRuleContext(0, DirectiveValueContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_directive;
-  }
-  enterRule(listener) {
-    if (listener.enterDirective) {
-      listener.enterDirective(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitDirective) {
-      listener.exitDirective(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitDirective) {
-      return visitor.visitDirective(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class DirectiveNameContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_directiveName;
-  }
-  enterRule(listener) {
-    if (listener.enterDirectiveName) {
-      listener.enterDirectiveName(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitDirectiveName) {
-      listener.exitDirectiveName(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitDirectiveName) {
-      return visitor.visitDirectiveName(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class DirectiveValueContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  directiveArgs() {
-    return this.getRuleContext(0, DirectiveArgsContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_directiveValue;
-  }
-  enterRule(listener) {
-    if (listener.enterDirectiveValue) {
-      listener.enterDirectiveValue(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitDirectiveValue) {
-      listener.exitDirectiveValue(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitDirectiveValue) {
-      return visitor.visitDirectiveValue(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class DirectiveArgsContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.IDENTIFIER);
-    } else {
-      return this.getToken(HaloParser.IDENTIFIER, i);
-    }
-  }
-  NUMBER(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.NUMBER);
-    } else {
-      return this.getToken(HaloParser.NUMBER, i);
-    }
-  }
-  STRING(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.STRING);
-    } else {
-      return this.getToken(HaloParser.STRING, i);
-    }
-  }
-  MODEL_REF(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.MODEL_REF);
-    } else {
-      return this.getToken(HaloParser.MODEL_REF, i);
-    }
-  }
-  DURATION(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.DURATION);
-    } else {
-      return this.getToken(HaloParser.DURATION, i);
-    }
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_directiveArgs;
-  }
-  enterRule(listener) {
-    if (listener.enterDirectiveArgs) {
-      listener.enterDirectiveArgs(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitDirectiveArgs) {
-      listener.exitDirectiveArgs(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitDirectiveArgs) {
-      return visitor.visitDirectiveArgs(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -34833,16 +34409,6 @@ class ParamListContext extends ParserRuleContext {
   }
   get ruleIndex() {
     return HaloParser.RULE_paramList;
-  }
-  enterRule(listener) {
-    if (listener.enterParamList) {
-      listener.enterParamList(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitParamList) {
-      listener.exitParamList(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitParamList) {
@@ -34866,16 +34432,6 @@ class ParamContext extends ParserRuleContext {
   get ruleIndex() {
     return HaloParser.RULE_param;
   }
-  enterRule(listener) {
-    if (listener.enterParam) {
-      listener.enterParam(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitParam) {
-      listener.exitParam(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitParam) {
       return visitor.visitParam(this);
@@ -34889,24 +34445,17 @@ class TypeRefContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  typeName(i) {
+  dottedId() {
+    return this.getRuleContext(0, DottedIdContext);
+  }
+  typeRef(i) {
     if (i === undefined) {
-      return this.getRuleContexts(TypeNameContext);
+      return this.getRuleContexts(TypeRefContext);
     }
-    return this.getRuleContext(i, TypeNameContext);
+    return this.getRuleContext(i, TypeRefContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_typeRef;
-  }
-  enterRule(listener) {
-    if (listener.enterTypeRef) {
-      listener.enterTypeRef(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitTypeRef) {
-      listener.exitTypeRef(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitTypeRef) {
@@ -34917,60 +34466,21 @@ class TypeRefContext extends ParserRuleContext {
   }
 }
 
-class TypeNameContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  idOrKeyword(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(IdOrKeywordContext);
-    }
-    return this.getRuleContext(i, IdOrKeywordContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_typeName;
-  }
-  enterRule(listener) {
-    if (listener.enterTypeName) {
-      listener.enterTypeName(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitTypeName) {
-      listener.exitTypeName(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitTypeName) {
-      return visitor.visitTypeName(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
 class PipelineContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  pipelineStage(i) {
+  expression() {
+    return this.getRuleContext(0, ExpressionContext);
+  }
+  pipelineOp(i) {
     if (i === undefined) {
-      return this.getRuleContexts(PipelineStageContext);
+      return this.getRuleContexts(PipelineOpContext);
     }
-    return this.getRuleContext(i, PipelineStageContext);
+    return this.getRuleContext(i, PipelineOpContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_pipeline;
-  }
-  enterRule(listener) {
-    if (listener.enterPipeline) {
-      listener.enterPipeline(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitPipeline) {
-      listener.exitPipeline(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitPipeline) {
@@ -34981,9 +34491,71 @@ class PipelineContext extends ParserRuleContext {
   }
 }
 
-class PipelineStageContext extends ParserRuleContext {
+class PipelineOpContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_pipelineOp;
+  }
+  copyFrom(ctx) {
+    super.copyFrom(ctx);
+  }
+}
+
+class FanoutOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  FANOUT() {
+    return this.getToken(HaloParser.FANOUT, 0);
+  }
+  fanoutItem(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(FanoutItemContext);
+    }
+    return this.getRuleContext(i, FanoutItemContext);
+  }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
+  }
+  accept(visitor) {
+    if (visitor.visitFanoutOp) {
+      return visitor.visitFanoutOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class ListenOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  LISTEN() {
+    return this.getToken(HaloParser.LISTEN, 0);
+  }
+  callValue() {
+    return this.getRuleContext(0, CallValueContext);
+  }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
+  }
+  accept(visitor) {
+    if (visitor.visitListenOp) {
+      return visitor.visitListenOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class PipeOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
   }
   PIPE() {
     return this.getToken(HaloParser.PIPE, 0);
@@ -34991,471 +34563,238 @@ class PipelineStageContext extends ParserRuleContext {
   callExpr() {
     return this.getRuleContext(0, CallExprContext);
   }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
+  }
+  accept(visitor) {
+    if (visitor.visitPipeOp) {
+      return visitor.visitPipeOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class GateOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
   GATE() {
     return this.getToken(HaloParser.GATE, 0);
   }
-  condition() {
-    return this.getRuleContext(0, ConditionContext);
+  condExpr() {
+    return this.getRuleContext(0, CondExprContext);
   }
-  INTERRUPT() {
-    return this.getToken(HaloParser.INTERRUPT, 0);
+  accept(visitor) {
+    if (visitor.visitGateOp) {
+      return visitor.visitGateOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
   }
-  yieldExpr() {
-    return this.getRuleContext(0, YieldExprContext);
+}
+
+class EachOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
   }
   FANOUT() {
     return this.getToken(HaloParser.FANOUT, 0);
   }
-  fanoutStages() {
-    return this.getRuleContext(0, FanoutStagesContext);
+  IDENTIFIER() {
+    return this.getToken(HaloParser.IDENTIFIER, 0);
   }
-  LISTEN() {
-    return this.getToken(HaloParser.LISTEN, 0);
+  callValue() {
+    return this.getRuleContext(0, CallValueContext);
   }
-  listenExpr() {
-    return this.getRuleContext(0, ListenExprContext);
+  callExpr() {
+    return this.getRuleContext(0, CallExprContext);
+  }
+  callArgs() {
+    return this.getRuleContext(0, CallArgsContext);
+  }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
+  }
+  accept(visitor) {
+    if (visitor.visitEachOp) {
+      return visitor.visitEachOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class InterruptOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  INTERRUPT() {
+    return this.getToken(HaloParser.INTERRUPT, 0);
+  }
+  callArgs() {
+    return this.getRuleContext(0, CallArgsContext);
+  }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
+  }
+  accept(visitor) {
+    if (visitor.visitInterruptOp) {
+      return visitor.visitInterruptOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class LoopOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
   }
   LOOP() {
     return this.getToken(HaloParser.LOOP, 0);
   }
-  loopExpr() {
-    return this.getRuleContext(0, LoopExprContext);
+  IDENTIFIER() {
+    return this.getToken(HaloParser.IDENTIFIER, 0);
   }
-  expression() {
-    return this.getRuleContext(0, ExpressionContext);
+  STRING() {
+    return this.getToken(HaloParser.STRING, 0);
   }
-  get ruleIndex() {
-    return HaloParser.RULE_pipelineStage;
+  TRIPLE_STRING() {
+    return this.getToken(HaloParser.TRIPLE_STRING, 0);
   }
-  enterRule(listener) {
-    if (listener.enterPipelineStage) {
-      listener.enterPipelineStage(this);
-    }
+  callArgs() {
+    return this.getRuleContext(0, CallArgsContext);
   }
-  exitRule(listener) {
-    if (listener.exitPipelineStage) {
-      listener.exitPipelineStage(this);
-    }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
   }
   accept(visitor) {
-    if (visitor.visitPipelineStage) {
-      return visitor.visitPipelineStage(this);
+    if (visitor.visitLoopOp) {
+      return visitor.visitLoopOp(this);
     } else {
       return visitor.visitChildren(this);
     }
   }
 }
 
-class ConditionContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
+class BranchOpContext extends PipelineOpContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
   }
-  conditionExpr() {
-    return this.getRuleContext(0, ConditionExprContext);
+  GATE() {
+    return this.getToken(HaloParser.GATE, 0);
   }
-  get ruleIndex() {
-    return HaloParser.RULE_condition;
-  }
-  enterRule(listener) {
-    if (listener.enterCondition) {
-      listener.enterCondition(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitCondition) {
-      listener.exitCondition(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitCondition) {
-      return visitor.visitCondition(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ConditionExprContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  expression(i) {
+  branchArm(i) {
     if (i === undefined) {
-      return this.getRuleContexts(ExpressionContext);
+      return this.getRuleContexts(BranchArmContext);
     }
-    return this.getRuleContext(i, ExpressionContext);
+    return this.getRuleContext(i, BranchArmContext);
   }
-  comparisonOp() {
-    return this.getRuleContext(0, ComparisonOpContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_conditionExpr;
-  }
-  enterRule(listener) {
-    if (listener.enterConditionExpr) {
-      listener.enterConditionExpr(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitConditionExpr) {
-      listener.exitConditionExpr(this);
-    }
+  binding() {
+    return this.getRuleContext(0, BindingContext);
   }
   accept(visitor) {
-    if (visitor.visitConditionExpr) {
-      return visitor.visitConditionExpr(this);
+    if (visitor.visitBranchOp) {
+      return visitor.visitBranchOp(this);
     } else {
       return visitor.visitChildren(this);
     }
   }
 }
 
-class ComparisonOpContext extends ParserRuleContext {
+class BindingContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  name() {
+    return this.getRuleContext(0, NameContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_binding;
+  }
+  accept(visitor) {
+    if (visitor.visitBinding) {
+      return visitor.visitBinding(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class BranchArmContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
   get ruleIndex() {
-    return HaloParser.RULE_comparisonOp;
+    return HaloParser.RULE_branchArm;
   }
-  enterRule(listener) {
-    if (listener.enterComparisonOp) {
-      listener.enterComparisonOp(this);
-    }
+  copyFrom(ctx) {
+    super.copyFrom(ctx);
   }
-  exitRule(listener) {
-    if (listener.exitComparisonOp) {
-      listener.exitComparisonOp(this);
-    }
+}
+
+class CondArmContext extends BranchArmContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  condExpr() {
+    return this.getRuleContext(0, CondExprContext);
+  }
+  callExpr() {
+    return this.getRuleContext(0, CallExprContext);
   }
   accept(visitor) {
-    if (visitor.visitComparisonOp) {
-      return visitor.visitComparisonOp(this);
+    if (visitor.visitCondArm) {
+      return visitor.visitCondArm(this);
     } else {
       return visitor.visitChildren(this);
     }
   }
 }
 
-class FanoutStagesContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
+class ElseArmContext extends BranchArmContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
   }
-  fanoutStage(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(FanoutStageContext);
-    }
-    return this.getRuleContext(i, FanoutStageContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_fanoutStages;
-  }
-  enterRule(listener) {
-    if (listener.enterFanoutStages) {
-      listener.enterFanoutStages(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitFanoutStages) {
-      listener.exitFanoutStages(this);
-    }
+  callExpr() {
+    return this.getRuleContext(0, CallExprContext);
   }
   accept(visitor) {
-    if (visitor.visitFanoutStages) {
-      return visitor.visitFanoutStages(this);
+    if (visitor.visitElseArm) {
+      return visitor.visitElseArm(this);
     } else {
       return visitor.visitChildren(this);
     }
   }
 }
 
-class FanoutStageContext extends ParserRuleContext {
+class FanoutItemContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
   callExpr() {
     return this.getRuleContext(0, CallExprContext);
   }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_fanoutStage;
-  }
-  enterRule(listener) {
-    if (listener.enterFanoutStage) {
-      listener.enterFanoutStage(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitFanoutStage) {
-      listener.exitFanoutStage(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitFanoutStage) {
-      return visitor.visitFanoutStage(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class YieldExprContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  yieldArgs() {
-    return this.getRuleContext(0, YieldArgsContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_yieldExpr;
-  }
-  enterRule(listener) {
-    if (listener.enterYieldExpr) {
-      listener.enterYieldExpr(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitYieldExpr) {
-      listener.exitYieldExpr(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitYieldExpr) {
-      return visitor.visitYieldExpr(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class YieldArgsContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  yieldArg(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(YieldArgContext);
-    }
-    return this.getRuleContext(i, YieldArgContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_yieldArgs;
-  }
-  enterRule(listener) {
-    if (listener.enterYieldArgs) {
-      listener.enterYieldArgs(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitYieldArgs) {
-      listener.exitYieldArgs(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitYieldArgs) {
-      return visitor.visitYieldArgs(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class YieldArgContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  idOrKeyword() {
-    return this.getRuleContext(0, IdOrKeywordContext);
-  }
-  yieldArgValue() {
-    return this.getRuleContext(0, YieldArgValueContext);
-  }
-  callValue() {
-    return this.getRuleContext(0, CallValueContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_yieldArg;
-  }
-  enterRule(listener) {
-    if (listener.enterYieldArg) {
-      listener.enterYieldArg(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitYieldArg) {
-      listener.exitYieldArg(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitYieldArg) {
-      return visitor.visitYieldArg(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class YieldArgValueContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  callValue(i) {
-    if (i === undefined) {
-      return this.getRuleContexts(CallValueContext);
-    }
-    return this.getRuleContext(i, CallValueContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_yieldArgValue;
-  }
-  enterRule(listener) {
-    if (listener.enterYieldArgValue) {
-      listener.enterYieldArgValue(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitYieldArgValue) {
-      listener.exitYieldArgValue(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitYieldArgValue) {
-      return visitor.visitYieldArgValue(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ListenExprContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  listenTarget() {
-    return this.getRuleContext(0, ListenTargetContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_listenExpr;
-  }
-  enterRule(listener) {
-    if (listener.enterListenExpr) {
-      listener.enterListenExpr(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitListenExpr) {
-      listener.exitListenExpr(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitListenExpr) {
-      return visitor.visitListenExpr(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ListenTargetContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  dottedId() {
-    return this.getRuleContext(0, DottedIdContext);
-  }
-  contextRef() {
-    return this.getRuleContext(0, ContextRefContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_listenTarget;
-  }
-  enterRule(listener) {
-    if (listener.enterListenTarget) {
-      listener.enterListenTarget(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitListenTarget) {
-      listener.exitListenTarget(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitListenTarget) {
-      return visitor.visitListenTarget(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class LoopExprContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
+  binding() {
+    return this.getRuleContext(0, BindingContext);
   }
   IDENTIFIER() {
     return this.getToken(HaloParser.IDENTIFIER, 0);
   }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
-  }
   get ruleIndex() {
-    return HaloParser.RULE_loopExpr;
-  }
-  enterRule(listener) {
-    if (listener.enterLoopExpr) {
-      listener.enterLoopExpr(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitLoopExpr) {
-      listener.exitLoopExpr(this);
-    }
+    return HaloParser.RULE_fanoutItem;
   }
   accept(visitor) {
-    if (visitor.visitLoopExpr) {
-      return visitor.visitLoopExpr(this);
-    } else {
-      return visitor.visitChildren(this);
-    }
-  }
-}
-
-class ExpressionContext extends ParserRuleContext {
-  constructor(parent, invokingState) {
-    super(parent, invokingState);
-  }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
-  }
-  NUMBER() {
-    return this.getToken(HaloParser.NUMBER, 0);
-  }
-  BOOL() {
-    return this.getToken(HaloParser.BOOL, 0);
-  }
-  contextRef() {
-    return this.getRuleContext(0, ContextRefContext);
-  }
-  get ruleIndex() {
-    return HaloParser.RULE_expression;
-  }
-  enterRule(listener) {
-    if (listener.enterExpression) {
-      listener.enterExpression(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitExpression) {
-      listener.exitExpression(this);
-    }
-  }
-  accept(visitor) {
-    if (visitor.visitExpression) {
-      return visitor.visitExpression(this);
+    if (visitor.visitFanoutItem) {
+      return visitor.visitFanoutItem(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -35466,28 +34805,17 @@ class CallExprContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  IDENTIFIER(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.IDENTIFIER);
-    } else {
-      return this.getToken(HaloParser.IDENTIFIER, i);
-    }
+  IDENTIFIER() {
+    return this.getToken(HaloParser.IDENTIFIER, 0);
+  }
+  name() {
+    return this.getRuleContext(0, NameContext);
   }
   callArgs() {
     return this.getRuleContext(0, CallArgsContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_callExpr;
-  }
-  enterRule(listener) {
-    if (listener.enterCallExpr) {
-      listener.enterCallExpr(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitCallExpr) {
-      listener.exitCallExpr(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitCallExpr) {
@@ -35511,16 +34839,6 @@ class CallArgsContext extends ParserRuleContext {
   get ruleIndex() {
     return HaloParser.RULE_callArgs;
   }
-  enterRule(listener) {
-    if (listener.enterCallArgs) {
-      listener.enterCallArgs(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitCallArgs) {
-      listener.exitCallArgs(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitCallArgs) {
       return visitor.visitCallArgs(this);
@@ -35529,33 +34847,49 @@ class CallArgsContext extends ParserRuleContext {
     }
   }
 }
-
 class CallArgContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  idOrKeyword() {
-    return this.getRuleContext(0, IdOrKeywordContext);
+  get ruleIndex() {
+    return HaloParser.RULE_callArg;
+  }
+  copyFrom(ctx) {
+    super.copyFrom(ctx);
+  }
+}
+
+class NamedArgContext extends CallArgContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  name() {
+    return this.getRuleContext(0, NameContext);
   }
   callValue() {
     return this.getRuleContext(0, CallValueContext);
   }
-  get ruleIndex() {
-    return HaloParser.RULE_callArg;
-  }
-  enterRule(listener) {
-    if (listener.enterCallArg) {
-      listener.enterCallArg(this);
+  accept(visitor) {
+    if (visitor.visitNamedArg) {
+      return visitor.visitNamedArg(this);
+    } else {
+      return visitor.visitChildren(this);
     }
   }
-  exitRule(listener) {
-    if (listener.exitCallArg) {
-      listener.exitCallArg(this);
-    }
+}
+
+class PositionalArgContext extends CallArgContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  callValue() {
+    return this.getRuleContext(0, CallValueContext);
   }
   accept(visitor) {
-    if (visitor.visitCallArg) {
-      return visitor.visitCallArg(this);
+    if (visitor.visitPositionalArg) {
+      return visitor.visitPositionalArg(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -35566,17 +34900,8 @@ class CallValueContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
-  }
-  NUMBER() {
-    return this.getToken(HaloParser.NUMBER, 0);
-  }
-  BOOL() {
-    return this.getToken(HaloParser.BOOL, 0);
-  }
-  DURATION() {
-    return this.getToken(HaloParser.DURATION, 0);
+  literal() {
+    return this.getRuleContext(0, LiteralContext);
   }
   MODEL_REF() {
     return this.getToken(HaloParser.MODEL_REF, 0);
@@ -35584,24 +34909,14 @@ class CallValueContext extends ParserRuleContext {
   contextRef() {
     return this.getRuleContext(0, ContextRefContext);
   }
-  callItems() {
-    return this.getRuleContext(0, CallItemsContext);
+  listValue() {
+    return this.getRuleContext(0, ListValueContext);
   }
   dottedId() {
     return this.getRuleContext(0, DottedIdContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_callValue;
-  }
-  enterRule(listener) {
-    if (listener.enterCallValue) {
-      listener.enterCallValue(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitCallValue) {
-      listener.exitCallValue(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitCallValue) {
@@ -35612,7 +34927,7 @@ class CallValueContext extends ParserRuleContext {
   }
 }
 
-class CallItemsContext extends ParserRuleContext {
+class ListValueContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
@@ -35623,21 +34938,11 @@ class CallItemsContext extends ParserRuleContext {
     return this.getRuleContext(i, CallValueContext);
   }
   get ruleIndex() {
-    return HaloParser.RULE_callItems;
-  }
-  enterRule(listener) {
-    if (listener.enterCallItems) {
-      listener.enterCallItems(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitCallItems) {
-      listener.exitCallItems(this);
-    }
+    return HaloParser.RULE_listValue;
   }
   accept(visitor) {
-    if (visitor.visitCallItems) {
-      return visitor.visitCallItems(this);
+    if (visitor.visitListValue) {
+      return visitor.visitListValue(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -35648,17 +34953,8 @@ class ValueContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  STRING() {
-    return this.getToken(HaloParser.STRING, 0);
-  }
-  NUMBER() {
-    return this.getToken(HaloParser.NUMBER, 0);
-  }
-  BOOL() {
-    return this.getToken(HaloParser.BOOL, 0);
-  }
-  idOrKeyword() {
-    return this.getRuleContext(0, IdOrKeywordContext);
+  literal() {
+    return this.getRuleContext(0, LiteralContext);
   }
   MODEL_REF() {
     return this.getToken(HaloParser.MODEL_REF, 0);
@@ -35669,19 +34965,68 @@ class ValueContext extends ParserRuleContext {
   get ruleIndex() {
     return HaloParser.RULE_value;
   }
-  enterRule(listener) {
-    if (listener.enterValue) {
-      listener.enterValue(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitValue) {
-      listener.exitValue(this);
-    }
-  }
   accept(visitor) {
     if (visitor.visitValue) {
       return visitor.visitValue(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class LiteralContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  STRING() {
+    return this.getToken(HaloParser.STRING, 0);
+  }
+  TRIPLE_STRING() {
+    return this.getToken(HaloParser.TRIPLE_STRING, 0);
+  }
+  NUMBER() {
+    return this.getToken(HaloParser.NUMBER, 0);
+  }
+  DURATION() {
+    return this.getToken(HaloParser.DURATION, 0);
+  }
+  BOOL() {
+    return this.getToken(HaloParser.BOOL, 0);
+  }
+  NULL() {
+    return this.getToken(HaloParser.NULL, 0);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_literal;
+  }
+  accept(visitor) {
+    if (visitor.visitLiteral) {
+      return visitor.visitLiteral(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class ExpressionContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  literal() {
+    return this.getRuleContext(0, LiteralContext);
+  }
+  contextRef() {
+    return this.getRuleContext(0, ContextRefContext);
+  }
+  dottedId() {
+    return this.getRuleContext(0, DottedIdContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_expression;
+  }
+  accept(visitor) {
+    if (visitor.visitExpression) {
+      return visitor.visitExpression(this);
     } else {
       return visitor.visitChildren(this);
     }
@@ -35692,24 +35037,14 @@ class ContextRefContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  IDENTIFIER() {
-    return this.getToken(HaloParser.IDENTIFIER, 0);
-  }
-  contextTail() {
-    return this.getRuleContext(0, ContextTailContext);
+  name(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(NameContext);
+    }
+    return this.getRuleContext(i, NameContext);
   }
   get ruleIndex() {
     return HaloParser.RULE_contextRef;
-  }
-  enterRule(listener) {
-    if (listener.enterContextRef) {
-      listener.enterContextRef(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitContextRef) {
-      listener.exitContextRef(this);
-    }
   }
   accept(visitor) {
     if (visitor.visitContextRef) {
@@ -35720,548 +35055,1131 @@ class ContextRefContext extends ParserRuleContext {
   }
 }
 
-class ContextTailContext extends ParserRuleContext {
+class CondExprContext extends ParserRuleContext {
   constructor(parent, invokingState) {
     super(parent, invokingState);
   }
-  IDENTIFIER(i) {
-    if (i === undefined) {
-      return this.getTokens(HaloParser.IDENTIFIER);
-    } else {
-      return this.getToken(HaloParser.IDENTIFIER, i);
-    }
+  orExpr() {
+    return this.getRuleContext(0, OrExprContext);
   }
   get ruleIndex() {
-    return HaloParser.RULE_contextTail;
-  }
-  enterRule(listener) {
-    if (listener.enterContextTail) {
-      listener.enterContextTail(this);
-    }
-  }
-  exitRule(listener) {
-    if (listener.exitContextTail) {
-      listener.exitContextTail(this);
-    }
+    return HaloParser.RULE_condExpr;
   }
   accept(visitor) {
-    if (visitor.visitContextTail) {
-      return visitor.visitContextTail(this);
+    if (visitor.visitCondExpr) {
+      return visitor.visitCondExpr(this);
     } else {
       return visitor.visitChildren(this);
     }
   }
 }
 
-// src/parser/grammars/HaloVisitor.ts
-class HaloVisitor extends AbstractParseTreeVisitor {
-  visitProgram;
-  visitDeclaration;
-  visitPolicyDecl;
-  visitPolicyRule;
-  visitPolicyArgs;
-  visitPolicyArg;
-  visitIdOrKeyword;
-  visitDottedId;
-  visitSchemaDecl;
-  visitSchemaFields;
-  visitSchemaField;
-  visitToolDecl;
-  visitToolArgs;
-  visitToolArg;
-  visitStoreDecl;
-  visitStoreArgs;
-  visitStoreArg;
-  visitAgentDecl;
-  visitAgentModifiers;
-  visitAgentModifier;
-  visitEquipsList;
-  visitRequiresList;
-  visitModelConfig;
-  visitModelId;
-  visitModelParam;
-  visitPipelineDecl;
-  visitDirective;
-  visitDirectiveName;
-  visitDirectiveValue;
-  visitDirectiveArgs;
-  visitParamList;
-  visitParam;
-  visitTypeRef;
-  visitTypeName;
-  visitPipeline;
-  visitPipelineStage;
-  visitCondition;
-  visitConditionExpr;
-  visitComparisonOp;
-  visitFanoutStages;
-  visitFanoutStage;
-  visitYieldExpr;
-  visitYieldArgs;
-  visitYieldArg;
-  visitYieldArgValue;
-  visitListenExpr;
-  visitListenTarget;
-  visitLoopExpr;
-  visitExpression;
-  visitCallExpr;
-  visitCallArgs;
-  visitCallArg;
-  visitCallValue;
-  visitCallItems;
-  visitValue;
-  visitContextRef;
-  visitContextTail;
-}
-
-// src/errors.ts
-class LanglyError extends Error {
-  code;
-  constructor(message, code) {
-    super(message);
-    this.code = code;
-    this.name = "LanglyError";
+class OrExprContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
   }
-}
-
-class ParseError extends LanglyError {
-  constructor(message) {
-    super(message, "PARSE_ERROR");
-    this.name = "ParseError";
-  }
-}
-
-// src/parser/index.ts
-class CollectingErrorListener extends BaseErrorListener {
-  errors = [];
-  syntaxError(recognizer, offendingSymbol, line, charPositionInLine, msg, e) {
-    const symbol = offendingSymbol;
-    const tokenText = symbol?.text ?? "<missing>";
-    this.errors.push(`[${line}:${charPositionInLine}] ${msg} near "${tokenText}"`);
-  }
-}
-
-class HaloAstBuilder extends HaloVisitor {
-  result = {
-    agents: [],
-    pipelines: [],
-    policies: [],
-    tools: [],
-    stores: [],
-    schemas: [],
-    errors: []
-  };
-  visitProgram = (ctx) => {
-    if (ctx.declaration()) {
-      for (const decl of ctx.declaration()) {
-        this.visitDeclaration(decl);
-      }
+  andExpr(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(AndExprContext);
     }
-    return this.result;
-  };
-  visitDeclaration = (ctx) => {
-    if (ctx.agentDecl())
-      this.result.agents.push(this.visitAgentDecl(ctx.agentDecl()));
-    else if (ctx.pipelineDecl())
-      this.result.pipelines.push(this.visitPipelineDecl(ctx.pipelineDecl()));
-    else if (ctx.policyDecl())
-      this.result.policies.push(this.visitPolicyDecl(ctx.policyDecl()));
-    else if (ctx.toolDecl())
-      this.result.tools.push(this.visitToolDecl(ctx.toolDecl()));
-    else if (ctx.storeDecl())
-      this.result.stores.push(this.visitStoreDecl(ctx.storeDecl()));
-    else if (ctx.schemaDecl())
-      this.result.schemas.push(this.visitSchemaDecl(ctx.schemaDecl()));
-  };
-  visitSchemaDecl = (ctx) => {
-    const name = ctx.IDENTIFIER().getText();
-    const fieldsCtx = ctx.schemaFields();
-    const fields = fieldsCtx ? fieldsCtx.schemaField().map((f) => ({
-      name: f.IDENTIFIER().getText(),
-      type: f.typeRef().getText()
-    })) : [];
-    return { name, fields };
-  };
-  visitPolicyDecl = (ctx) => {
-    const name = ctx.IDENTIFIER().getText();
-    const rules = ctx.policyRule().map((r) => {
-      const ruleName = r.IDENTIFIER().getText();
-      const argsCtx = r.policyArgs();
-      const args = argsCtx ? argsCtx.policyArg().map((a) => a.getText().replace(/^["']|["']$/g, "")) : [];
-      return { name: ruleName, args };
+    return this.getRuleContext(i, AndExprContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_orExpr;
+  }
+  accept(visitor) {
+    if (visitor.visitOrExpr) {
+      return visitor.visitOrExpr(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class AndExprContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  notExpr(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(NotExprContext);
+    }
+    return this.getRuleContext(i, NotExprContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_andExpr;
+  }
+  accept(visitor) {
+    if (visitor.visitAndExpr) {
+      return visitor.visitAndExpr(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class NotExprContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_notExpr;
+  }
+  copyFrom(ctx) {
+    super.copyFrom(ctx);
+  }
+}
+
+class NegationContext extends NotExprContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  notExpr() {
+    return this.getRuleContext(0, NotExprContext);
+  }
+  accept(visitor) {
+    if (visitor.visitNegation) {
+      return visitor.visitNegation(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class ComparisonExprContext extends NotExprContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  comparison() {
+    return this.getRuleContext(0, ComparisonContext);
+  }
+  accept(visitor) {
+    if (visitor.visitComparisonExpr) {
+      return visitor.visitComparisonExpr(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class ComparisonContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  operand(i) {
+    if (i === undefined) {
+      return this.getRuleContexts(OperandContext);
+    }
+    return this.getRuleContext(i, OperandContext);
+  }
+  compOp() {
+    return this.getRuleContext(0, CompOpContext);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_comparison;
+  }
+  accept(visitor) {
+    if (visitor.visitComparison) {
+      return visitor.visitComparison(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class CompOpContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_compOp;
+  }
+  accept(visitor) {
+    if (visitor.visitCompOp) {
+      return visitor.visitCompOp(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class OperandContext extends ParserRuleContext {
+  constructor(parent, invokingState) {
+    super(parent, invokingState);
+  }
+  get ruleIndex() {
+    return HaloParser.RULE_operand;
+  }
+  copyFrom(ctx) {
+    super.copyFrom(ctx);
+  }
+}
+
+class LiteralOperandContext extends OperandContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  literal() {
+    return this.getRuleContext(0, LiteralContext);
+  }
+  accept(visitor) {
+    if (visitor.visitLiteralOperand) {
+      return visitor.visitLiteralOperand(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class ParenOperandContext extends OperandContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  orExpr() {
+    return this.getRuleContext(0, OrExprContext);
+  }
+  accept(visitor) {
+    if (visitor.visitParenOperand) {
+      return visitor.visitParenOperand(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class ContextOperandContext extends OperandContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  contextRef() {
+    return this.getRuleContext(0, ContextRefContext);
+  }
+  accept(visitor) {
+    if (visitor.visitContextOperand) {
+      return visitor.visitContextOperand(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+class RefOperandContext extends OperandContext {
+  constructor(ctx) {
+    super(ctx.parent, ctx.invokingState);
+    super.copyFrom(ctx);
+  }
+  dottedId() {
+    return this.getRuleContext(0, DottedIdContext);
+  }
+  accept(visitor) {
+    if (visitor.visitRefOperand) {
+      return visitor.visitRefOperand(this);
+    } else {
+      return visitor.visitChildren(this);
+    }
+  }
+}
+
+// src/parser/builtins.ts
+var DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct"];
+var SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any"];
+var SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick"];
+var SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "TriggerWebhook", "Notify"];
+var TOOL_PROVIDERS = ["REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "GitHub", "Linear", "Figma"];
+var BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection", "PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "Markdown"];
+var REDACT_CATEGORIES = ["PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress"];
+var ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate"];
+var REQUIRE_CHECKS = ["JSON", "XML", "Citation"];
+var UNENFORCED_RULES = ["Tone", "Anonymize", "MaxDensity"];
+var CONTEXT_NAMESPACES = ["data", "input", "meta", "trace", "current"];
+function includes(list, value) {
+  return list.includes(value);
+}
+function parseDuration(d) {
+  const m = d.trim().match(/^(\d+)(ms|s|m|h|d)$/);
+  if (!m)
+    return NaN;
+  const unit = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2]];
+  return Number(m[1]) * unit;
+}
+
+// src/parser/validate.ts
+function validate(ast, options = {}) {
+  return new Validator(ast, options).run();
+}
+
+class Validator {
+  ast;
+  options;
+  diags = [];
+  agents;
+  tools;
+  policies;
+  pipelines;
+  constructor(ast, options) {
+    this.ast = ast;
+    this.options = options;
+    this.agents = new Map(ast.agents.map((m) => [m.name, m]));
+    this.tools = new Map([...ast.tools, ...ast.stores].map((t) => [t.name, t]));
+    this.policies = new Map(ast.policies.map((g) => [g.name, g]));
+    this.pipelines = new Map(ast.pipelines.map((s) => [s.name, s]));
+  }
+  isDeclaredName(name) {
+    return this.agents.has(name) || this.tools.has(name) || this.policies.has(name) || this.pipelines.has(name);
+  }
+  add(severity, message, loc) {
+    this.diags.push({ severity, message, ...loc ? { line: loc.line, column: loc.column } : {} });
+  }
+  run() {
+    this.checkDuplicates();
+    for (const g of this.ast.policies)
+      this.checkPolicy(g);
+    for (const t of this.tools.values()) {
+      const known = includes(TOOL_PROVIDERS, t.provider) || this.options.toolProviders?.includes(t.provider);
+      if (!known)
+        this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
+    }
+    for (const m of this.ast.agents)
+      this.checkAgent(m);
+    for (const sc of this.ast.schemas)
+      this.checkSchema(sc);
+    for (const s of this.ast.pipelines)
+      this.checkPipeline(s);
+    const seen = new Set;
+    this.diags = this.diags.filter((d) => {
+      const key = `${d.severity}|${d.line}|${d.message}`;
+      return !seen.has(key) && !!seen.add(key);
     });
-    return { name, rules };
-  };
-  visitToolDecl = (ctx) => {
-    const name = ctx.IDENTIFIER(0).getText();
-    const provider = ctx.IDENTIFIER(1).getText();
-    const argsCtx = ctx.toolArgs();
-    const args = argsCtx ? argsCtx.toolArg().map((a) => a.getText().replace(/^["']|["']$/g, "")) : [];
-    return { name, provider, args };
-  };
-  visitStoreDecl = (ctx) => {
-    const name = ctx.IDENTIFIER(0).getText();
-    const provider = ctx.IDENTIFIER(1).getText();
-    const argsCtx = ctx.storeArgs();
-    const args = argsCtx ? argsCtx.storeArg().map((a) => a.getText().replace(/^["']|["']$/g, "")) : [];
-    return { name, provider, args };
-  };
-  visitAgentDecl = (ctx) => {
-    const name = ctx.IDENTIFIER().getText();
-    const directives = ctx.directive().map((d) => this.visitDirective(d));
-    const configCtx = ctx.modelConfig();
-    const modelId = configCtx.modelId().getText();
-    const params = {};
-    for (const p of configCtx.modelParam()) {
-      params[p.IDENTIFIER().getText()] = p.value().getText();
+    return this.diags.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
+  }
+  checkDuplicates() {
+    const seen = new Map;
+    const decls = [
+      ...this.ast.policies.map((d) => ["policy", d.name, d.loc]),
+      ...this.ast.tools.map((d) => ["tool", d.name, d.loc]),
+      ...this.ast.stores.map((d) => ["store", d.name, d.loc]),
+      ...this.ast.schemas.map((d) => ["schema", d.name, d.loc]),
+      ...this.ast.agents.map((d) => ["agent", d.name, d.loc]),
+      ...this.ast.pipelines.map((d) => ["pipeline", d.name, d.loc])
+    ];
+    for (const [kind, name, loc] of decls) {
+      if (name === "System" || name === "Env")
+        this.add("error", `"${name}" is reserved and cannot be declared`, loc);
+      const prev = seen.get(name);
+      if (prev)
+        this.add("error", `Duplicate declaration "${name}" (already declared as ${prev})`, loc);
+      else
+        seen.set(name, kind);
     }
-    let equips = [];
-    let requires = [];
-    const mods = ctx.agentModifiers();
-    if (mods) {
-      for (const m2 of mods.agentModifier()) {
-        if (m2.equipsList())
-          equips.push(...m2.equipsList().IDENTIFIER().map((id) => id.getText()));
-        if (m2.requiresList())
-          requires.push(...m2.requiresList().IDENTIFIER().map((id) => id.getText()));
+  }
+  checkPolicy(g) {
+    for (const rule of g.rules) {
+      if (includes(UNENFORCED_RULES, rule.name)) {
+        this.add("warning", `Policy "${g.name}": ${rule.name}(...) is not enforced by the runtime yet`, g.loc);
+      } else if (!includes(ENFORCED_RULES, rule.name)) {
+        this.add("warning", `Policy "${g.name}": unknown rule ${rule.name}(...) is ignored`, g.loc);
+      } else if (rule.name === "Block" || rule.name === "Redact") {
+        const known = rule.name === "Block" ? BLOCK_CATEGORIES : REDACT_CATEGORIES;
+        for (const cat of rule.args) {
+          if (!known.includes(cat))
+            this.add("warning", `Policy "${g.name}": ${rule.name}(${cat}) is not a detectable category and is not enforced`, g.loc);
+        }
+      } else if (rule.name === "Require" && !rule.args.every((a) => includes(REQUIRE_CHECKS, a))) {
+        this.add("warning", `Policy "${g.name}": Require(${rule.args.join(", ")}) is not enforced; only Require(${REQUIRE_CHECKS.join(" | ")}) is checked`, g.loc);
+      } else if (rule.name === "Validate" && rule.args.length !== 3) {
+        this.add("error", `Policy "${g.name}": Validate needs a field, an operator, and a value, e.g. Validate("amount", "<=", "context.data.limit")`, g.loc);
+      } else if (rule.name === "Enforce" && !rule.args.every((a) => a.toUpperCase() === "JSON")) {
+        this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
+      } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
+        this.add("error", `Policy "${g.name}": ${rule.name} needs a numeric limit`, g.loc);
       }
     }
-    return { name, modelId, params, equips, requires, directives };
-  };
-  visitDirective = (ctx) => {
-    const name = ctx.directiveName().getText();
-    const valueCtx = ctx.directiveValue();
-    let value = "";
-    if (valueCtx) {
-      const argsCtx = valueCtx.directiveArgs();
-      if (argsCtx) {
-        value = argsCtx.getText();
-      }
+  }
+  checkAgent(m) {
+    for (const r of m.requires ?? []) {
+      if (!this.policies.has(r))
+        this.add("error", `Agent "${m.name}" requires undefined policy "${r}"`, m.loc);
     }
-    return { name, value };
-  };
-  visitPipelineDecl = (ctx) => {
-    const name = ctx.IDENTIFIER().getText();
-    const directives = ctx.directive().map((d) => this.visitDirective(d));
-    const paramsCtx = ctx.paramList();
-    const params = paramsCtx ? paramsCtx.param().map((p) => ({
-      name: p.IDENTIFIER().getText(),
-      type: p.typeRef().getText()
-    })) : [];
-    const returnType = ctx.typeRef().getText();
-    const pipelineCtx = ctx.pipeline();
-    const pipeline = [];
-    for (const st of pipelineCtx.pipelineStage()) {
-      pipeline.push(this.visitPipelineStage(st));
+    for (const e of m.equips ?? []) {
+      if (!this.tools.has(e))
+        this.add("error", `Agent "${m.name}" equips undefined tool "${e}"`, m.loc);
     }
-    return { name, params, returnType, pipeline, directives };
-  };
-  visitPipelineStage = (ctx) => {
-    if (ctx.PIPE() && ctx.callExpr()) {
-      return this.visitCallExpr(ctx.callExpr());
-    } else if (ctx.GATE() && ctx.condition()) {
-      return this.visitCondition(ctx.condition());
-    } else if (ctx.FANOUT() && ctx.fanoutStages()) {
-      return this.visitFanoutStages(ctx.fanoutStages());
-    } else if (ctx.INTERRUPT() && ctx.yieldExpr()) {
-      return this.visitYieldExpr(ctx.yieldExpr());
-    } else if (ctx.LISTEN() && ctx.listenExpr()) {
-      return this.visitListenExpr(ctx.listenExpr());
-    } else if (ctx.LOOP() && ctx.loopExpr()) {
-      return this.visitLoopExpr(ctx.loopExpr());
-    } else if (ctx.expression()) {
-      return this.visitExpression(ctx.expression());
+    if (this.options.canHandleModel && !this.options.canHandleModel(m.modelId)) {
+      this.add("warning", `Agent "${m.name}": no adapter handles model "${m.modelId}"`, m.loc);
     }
-    throw new ParseError("Unknown pipeline stage");
-  };
-  visitCallExpr = (ctx) => {
-    const callee = ctx.IDENTIFIER(0).getText();
-    const method = ctx.IDENTIFIER(1).getText();
-    const argsCtx = ctx.callArgs();
-    const args = [];
-    const namedArgs = {};
-    if (argsCtx) {
-      for (const arg of argsCtx.callArg()) {
-        if (arg.idOrKeyword()) {
-          namedArgs[arg.idOrKeyword().getText()] = arg.callValue().getText().replace(/^["']|["']$/g, "");
-        } else {
-          args.push(arg.callValue().getText().replace(/^["']|["']$/g, ""));
+    for (const d of m.directives ?? []) {
+      this.checkDirective(d, m.loc, "agent");
+      if (d.name === "shadow") {
+        const target = d.value;
+        if (target === m.name)
+          this.add("error", `Agent "${m.name}" cannot shadow itself`, m.loc);
+        else if (!this.agents.has(target) && !/[-/]/.test(target)) {
+          this.add("warning", `@shadow(${target}) on "${m.name}": "${target}" is not a defined agent or model, so it will never run`, m.loc);
         }
       }
     }
-    return { kind: "call", callee, method, args, namedArgs };
-  };
-  visitCondition = (ctx) => {
-    return { kind: "gate", condition: ctx.conditionExpr().getText() };
-  };
-  visitFanoutStages = (ctx) => {
-    const stages = [];
-    for (const fs of ctx.fanoutStage()) {
-      if (fs.callExpr()) {
-        stages.push(this.visitCallExpr(fs.callExpr()));
-      } else if (fs.IDENTIFIER()) {
-        stages.push({ kind: "expression", value: fs.IDENTIFIER().getText() });
+  }
+  checkDirective(d, loc, on) {
+    if (!includes(DIRECTIVES, d.name)) {
+      this.add("warning", `Unknown directive @${d.name} is ignored`, loc);
+      return;
+    }
+    const args = d.value ? d.value.split(/\s*,\s*/) : [];
+    if (d.name === "timeout" && !(args.length === 1 && parseDuration(args[0]) > 0)) {
+      this.add("error", `@timeout needs one duration, e.g. @timeout(30s)`, loc);
+    }
+    if (d.name === "retry") {
+      const [count, delay] = args;
+      if (!count || !/^\d+$/.test(count) || delay !== undefined && !(parseDuration(delay) >= 0)) {
+        this.add("error", `@retry needs a count and optional delay, e.g. @retry(3, 2s)`, loc);
       }
     }
-    return { kind: "fanout", stages };
-  };
-  visitYieldExpr = (ctx) => {
-    const argsCtx = ctx.yieldArgs();
-    const args = argsCtx ? argsCtx.yieldArg().map((a) => a.getText()) : [];
-    return { kind: "interrupt", callee: "yield", args };
-  };
-  visitListenExpr = (ctx) => {
-    return { kind: "listen", target: ctx.listenTarget().getText() };
-  };
-  visitLoopExpr = (ctx) => {
-    return {
-      kind: "loop",
-      target: ctx.IDENTIFIER().getText(),
-      condition: ctx.STRING().getText().replace(/^["']|["']$/g, "")
-    };
-  };
-  visitExpression = (ctx) => {
-    return { kind: "expression", value: ctx.getText() };
-  };
+    if (d.name === "shadow" && args.length !== 1)
+      this.add("error", `@shadow needs exactly one target`, loc);
+    if (d.name === "shadow" && on === "pipeline")
+      this.add("warning", `@shadow only applies to agents`, loc);
+    if (d.name === "checkpoint" && on === "agent")
+      this.add("warning", `@checkpoint only applies to pipelines`, loc);
+  }
+  checkSchema(sc) {
+    const names = new Set;
+    for (const f of sc.fields) {
+      if (names.has(f.name))
+        this.add("error", `Schema "${sc.name}": duplicate field "${f.name}"`, sc.loc);
+      names.add(f.name);
+      for (const t of f.type.split(/[<>,\s]+/).filter(Boolean)) {
+        if (!includes(SCHEMA_TYPES, t) && !this.ast.schemas.some((x) => x.name === t)) {
+          this.add("warning", `Schema "${sc.name}": field "${f.name}" has unknown type "${t}" (use ${SCHEMA_TYPES.join(", ")}, or another schema)`, sc.loc);
+        }
+      }
+    }
+  }
+  checkPipeline(s) {
+    for (const d of s.directives)
+      this.checkDirective(d, s.loc, "pipeline");
+    const params = new Set(s.params.map((p) => p.name));
+    const data = new Set(params);
+    s.pipeline.forEach((stage, i) => {
+      if (stage.kind === "expression") {
+        if (stage.expr.kind === "ref" && !params.has(stage.expr.path[0])) {
+          this.add("error", `Pipeline "${s.name}": undefined variable "${stage.expr.path[0]}"`, stage.loc);
+        } else if (stage.expr.kind === "context") {
+          this.checkContextRef(stage.expr.path, s, data, stage.loc);
+        }
+        if (i !== 0)
+          this.add("error", `Pipeline "${s.name}": an expression can only start a pipeline`, stage.loc);
+        return;
+      }
+      this.checkStage(stage, s, params, data);
+      for (const key of producedKeys(stage))
+        data.add(key);
+    });
+  }
+  checkStage(stage, s, params, data) {
+    switch (stage.kind) {
+      case "call":
+        this.checkCall(stage, s, params, data);
+        break;
+      case "fanout":
+        for (const sub of stage.stages)
+          this.checkCall(sub, s, params, data);
+        break;
+      case "branch":
+        stage.arms.forEach((arm, i) => {
+          if (arm.expr)
+            this.checkCond(arm.expr, s, params, data, stage.loc);
+          else if (i !== stage.arms.length - 1)
+            this.add("error", `Pipeline "${s.name}": the else arm must come last in a branch`, arm.call.loc);
+          this.checkCall(arm.call, s, params, data);
+        });
+        break;
+      case "each": {
+        this.checkValue(stage.list, s, params, data, stage.loc);
+        if (params.has(stage.item) || this.isDeclaredName(stage.item)) {
+          this.add("error", `Pipeline "${s.name}": each(${stage.item} in ...) reuses the name "${stage.item}"; pick a new loop variable`, stage.loc);
+        }
+        for (const o of stage.options) {
+          if (o.name !== "concurrency")
+            this.add("warning", `Pipeline "${s.name}": each(...) has no option "${o.name ?? "(positional)"}" (only concurrency: n)`, stage.loc);
+        }
+        this.checkCall(stage.call, s, params, new Set([...data, stage.item, "index"]));
+        break;
+      }
+      case "gate":
+        this.checkCond(stage.expr, s, params, data, stage.loc);
+        break;
+      case "loop":
+        if (!this.agents.has(stage.target))
+          this.add("error", `Pipeline "${s.name}": loop(${stage.target}, ...) needs an agent to retry with, but "${stage.target}" is not an agent`, stage.loc);
+        for (const e of stage.conditionErrors ?? [])
+          this.add("error", `Pipeline "${s.name}": loop condition "${stage.condition}" is not valid: ${e}`, stage.loc);
+        if (stage.expr)
+          this.checkCond(stage.expr, s, params, data, stage.loc);
+        for (const o of stage.options) {
+          if (o.name !== "max")
+            this.add("warning", `Pipeline "${s.name}": loop(...) has no option "${o.name ?? "(positional)"}" (only max: n)`, stage.loc);
+        }
+        break;
+      case "interrupt":
+        this.checkArgs(stage.argList, s, params, data, stage.loc);
+        break;
+      case "listen":
+        if (stage.targetValue.kind === "context")
+          this.checkContextRef(stage.targetValue.path, s, data, stage.loc);
+        break;
+    }
+  }
+  checkCall(call, s, params, data) {
+    const where = `Pipeline "${s.name}"`;
+    const target = `${call.callee}${call.method ? "." + call.method : ""}`;
+    this.checkArgs(call.argList, s, params, data, call.loc);
+    if (call.callee === "System") {
+      const known = includes(SYSTEM_METHODS, call.method) || includes(SYSTEM_EVENTS, call.method) || this.options.systemMethods?.includes(call.method);
+      if (!known)
+        this.add("error", `${where}: unknown System method "${call.method}"`, call.loc);
+      return;
+    }
+    if (!call.method) {
+      if (!this.pipelines.has(call.callee))
+        this.add("error", `${where}: "${call.callee}(...)" is not a defined pipeline`, call.loc);
+      else if (call.callee === s.name)
+        this.add("warning", `${where}: calls itself recursively`, call.loc);
+      return;
+    }
+    const agent = this.agents.get(call.callee);
+    if (agent) {
+      const toolArg = call.argList.find((a) => a.name === "tool");
+      if (toolArg) {
+        const toolName = toolArg.value.kind === "ref" ? toolArg.value.path.join(".") : undefined;
+        if (!toolName || !this.tools.has(toolName)) {
+          this.add("error", `${where}: ${target} uses undefined tool "${toolName ?? "?"}"`, call.loc);
+        } else if (!agent.equips?.includes(toolName)) {
+          this.add("error", `${where}: agent "${agent.name}" is not equipped with tool "${toolName}" (add \`equips ${toolName}\`)`, call.loc);
+        }
+      }
+      return;
+    }
+    if (this.tools.has(call.callee))
+      return;
+    if (call.implicit && this.pipelines.has(call.callee))
+      return;
+    this.add("error", `${where}: unknown callee "${call.callee}" in ${target}(...)`, call.loc);
+  }
+  checkArgs(args, s, params, data, loc) {
+    for (const a of args)
+      this.checkValue(a.value, s, params, data, loc);
+  }
+  checkValue(v, s, params, data, loc) {
+    if (v.kind === "context")
+      this.checkContextRef(v.path, s, data, loc);
+    else if (v.kind === "list")
+      for (const item of v.items)
+        this.checkValue(item, s, params, data, loc);
+    else if (v.kind === "string")
+      this.checkTemplate(v.value, s, params, data, loc);
+  }
+  checkTemplate(text, s, params, data, loc) {
+    for (const [, expr] of text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) {
+      const path = expr.split(".");
+      if (path[0] === "context") {
+        this.checkContextRef(path.slice(1), s, data, loc);
+      } else if (path[0] !== "current" && !params.has(path[0]) && !data.has(path[0]) && path[0] !== "Env") {
+        this.add("warning", `Pipeline "${s.name}": template {{${expr}}} does not match a parameter or an earlier result`, loc);
+      }
+    }
+  }
+  checkCond(c, s, params, data, loc) {
+    switch (c.kind) {
+      case "or":
+      case "and":
+        for (const t of c.terms)
+          this.checkCond(t, s, params, data, loc);
+        break;
+      case "not":
+        this.checkCond(c.expr, s, params, data, loc);
+        break;
+      case "compare":
+        this.checkCond(c.left, s, params, data, loc);
+        this.checkCond(c.right, s, params, data, loc);
+        break;
+      case "value":
+        if (c.value.kind === "context")
+          this.checkContextRef(c.value.path, s, data, loc);
+        else if (c.value.kind === "ref" && !params.has(c.value.path[0]) && !data.has(c.value.path[0])) {
+          this.add("warning", `Pipeline "${s.name}": "${c.value.path.join(".")}" in a gate is not a parameter or result; it compares as a string`, loc);
+        }
+        break;
+    }
+  }
+  checkContextRef(path, s, data, loc) {
+    const [ns, key] = path;
+    if (ns === undefined)
+      return;
+    if (!includes(CONTEXT_NAMESPACES, ns)) {
+      this.add("warning", `Pipeline "${s.name}": context.${ns} is not a context namespace (use ${CONTEXT_NAMESPACES.map((n) => "context." + n).join(", ")})`, loc);
+      return;
+    }
+    if (key === undefined)
+      return;
+    if (ns === "data" && !data.has(key)) {
+      this.add("warning", `Pipeline "${s.name}": context.data.${key} is never set before it is read (bind a result with \`as ${key}\`)`, loc);
+    }
+    if (ns === "input" && !s.params.some((p) => p.name === key)) {
+      this.add("warning", `Pipeline "${s.name}": context.input.${key} is not a parameter of this pipeline`, loc);
+    }
+  }
 }
-function parse(source) {
-  const chars = CharStream.fromString(source);
-  const lexer = new HaloLexer(chars);
-  const tokens = new CommonTokenStream(lexer);
-  const parser = new HaloParser(tokens);
-  const errorListener = new CollectingErrorListener;
+function producedKeys(stage) {
+  switch (stage.kind) {
+    case "call":
+      return [...callKeys(stage), ...stage.bind ? [stage.bind] : []];
+    case "fanout":
+      return [...stage.stages.flatMap((s) => [...callKeys(s), ...s.bind ? [s.bind] : []]), ...stage.bind ? [stage.bind] : []];
+    case "branch":
+      return [...stage.arms.flatMap((a) => callKeys(a.call)), ...stage.bind ? [stage.bind] : []];
+    case "each":
+      return [...callKeys(stage.call), ...stage.bind ? [stage.bind] : []];
+    case "loop":
+      return [stage.target, ...stage.bind ? [stage.bind] : []];
+    case "listen":
+      return [stage.target.split(".")[0], ...stage.bind ? [stage.bind] : []];
+    case "interrupt":
+      return ["yield", ...stage.bind ? [stage.bind] : []];
+    default:
+      return [];
+  }
+}
+function callKeys(call) {
+  if (call.callee === "System")
+    return [];
+  return call.method ? [call.callee, call.method] : [call.callee];
+}
+// src/parser/index.ts
+class CollectingErrorListener extends BaseErrorListener {
+  errors = [];
+  syntaxError(_recognizer, offendingSymbol, line, charPositionInLine, msg, _e) {
+    const near = offendingSymbol?.text;
+    const suffix = near != null && near !== "<EOF>" ? ` near "${near}"` : "";
+    this.errors.push(`[${line}:${charPositionInLine}] ${msg}${suffix}`);
+  }
+}
+function makeParser(source) {
+  const input = CharStream.fromString(source);
+  const lexer = new HaloLexer(input);
+  const listener = new CollectingErrorListener;
   lexer.removeErrorListeners();
-  lexer.addErrorListener(errorListener);
+  lexer.addErrorListener(listener);
+  const parser = new HaloParser(new CommonTokenStream(lexer));
   parser.removeErrorListeners();
-  parser.addErrorListener(errorListener);
-  const tree = parser.program();
-  if (errorListener.errors.length > 0) {
+  parser.addErrorListener(listener);
+  return { input, parser, listener };
+}
+var empty = (errors) => ({ policies: [], tools: [], stores: [], schemas: [], agents: [], pipelines: [], errors });
+function parse(source) {
+  const { input, parser, listener } = makeParser(source);
+  const program = parser.program();
+  if (listener.errors.length > 0)
+    return empty(listener.errors);
+  const result = empty([]);
+  const walker = new Walker(input);
+  for (const decl of program.declaration()) {
+    const p = decl.policyDecl();
+    const t = decl.toolDecl();
+    const st = decl.storeDecl();
+    const sc = decl.schemaDecl();
+    const a = decl.agentDecl();
+    const pl = decl.pipelineDecl();
+    if (p)
+      result.policies.push(walker.policy(p));
+    else if (t)
+      result.tools.push(walker.tool(t));
+    else if (st)
+      result.stores.push(walker.tool(st));
+    else if (sc)
+      result.schemas.push(walker.schema(sc));
+    else if (a)
+      result.agents.push(walker.agent(a));
+    else if (pl)
+      result.pipelines.push(walker.pipeline(pl));
+  }
+  return result;
+}
+function parseCondition(text) {
+  const { input, parser, listener } = makeParser(text);
+  const ctx = parser.condExpr();
+  if (!listener.errors.length && parser.getCurrentToken().type !== HaloParser.EOF)
+    listener.errors.push(`unexpected "${parser.getCurrentToken().text}"`);
+  if (listener.errors.length)
+    return { errors: listener.errors };
+  return { expr: new Walker(input).condition(ctx), errors: [] };
+}
+
+class Walker {
+  input;
+  constructor(input) {
+    this.input = input;
+  }
+  loc(ctx) {
+    return { line: ctx.start?.line ?? 0, column: ctx.start?.column ?? 0 };
+  }
+  sourceText(ctx) {
+    if (!ctx.start || !ctx.stop)
+      return ctx.getText();
+    return this.input.getTextFromRange(ctx.start.start, ctx.stop.stop);
+  }
+  policy(ctx) {
+    const rules = ctx.policyRule().map((r) => ({
+      name: r.IDENTIFIER().getText(),
+      args: this.args(r.callArgs()).map((a) => a.name ? `${a.name}: ${render(a.value)}` : render(a.value))
+    }));
     return {
-      agents: [],
-      pipelines: [],
-      policies: [],
-      tools: [],
-      stores: [],
-      schemas: [],
-      errors: errorListener.errors
+      name: ctx.IDENTIFIER().getText(),
+      rules,
+      rawRules: rules.map((r) => `${r.name}(${r.args.join(", ")})`),
+      loc: this.loc(ctx)
     };
   }
-  const builder = new HaloAstBuilder;
-  const ast = builder.visitProgram(tree);
-  ast.errors = errorListener.errors;
-  return ast;
+  schema(ctx) {
+    return {
+      name: ctx.IDENTIFIER().getText(),
+      fields: ctx.schemaField().map((f) => ({ name: f.name().getText(), type: typeText(f.typeRef()) })),
+      loc: this.loc(ctx)
+    };
+  }
+  tool(ctx) {
+    const ids = ctx.IDENTIFIER();
+    const argList = this.args(ctx.callArgs());
+    return {
+      name: ids[0].getText(),
+      provider: ids[1].getText(),
+      ...renderArgs(argList),
+      argList,
+      loc: this.loc(ctx)
+    };
+  }
+  agent(ctx) {
+    const params = {};
+    for (const p of ctx.modelParam())
+      params[p.name().getText()] = render(this.value(p.value()));
+    const ref = ctx.modelRef();
+    const str = ref.STRING();
+    const modelId = str ? unquote(str.getText()) : ref.getText();
+    const agent = { name: ctx.IDENTIFIER().getText(), modelId, params, directives: this.directives(ctx.directive()), loc: this.loc(ctx) };
+    for (const mod of ctx.agentModifier()) {
+      if (mod instanceof EquipsModifierContext) {
+        agent.equips = [...agent.equips ?? [], ...mod.IDENTIFIER().map((i) => i.getText())];
+      } else if (mod instanceof RequiresModifierContext) {
+        agent.requires = [...agent.requires ?? [], ...mod.IDENTIFIER().map((i) => i.getText())];
+      } else if (mod instanceof SystemModifierContext) {
+        const triple = mod.TRIPLE_STRING();
+        agent.system = triple ? dedent(triple.getText().slice(3, -3)) : unquote(mod.STRING().getText());
+      }
+    }
+    return agent;
+  }
+  directives(list) {
+    return list.map((d) => ({
+      name: d.name().getText(),
+      value: d.directiveArg().map((a) => {
+        const lit = a.literal();
+        if (lit)
+          return render(this.literal(lit));
+        return a.getText();
+      }).join(", ")
+    }));
+  }
+  pipeline(ctx) {
+    const pipelineCtx = ctx.pipeline();
+    const pipeline = [];
+    const head = pipelineCtx.expression();
+    if (head) {
+      const expr = this.expression(head);
+      pipeline.push({ kind: "expression", value: render(expr), expr, loc: this.loc(head) });
+    }
+    for (const op of pipelineCtx.pipelineOp())
+      pipeline.push(this.pipelineOp(op));
+    return {
+      name: ctx.IDENTIFIER().getText(),
+      params: (ctx.paramList()?.param() ?? []).map((p) => ({ name: p.IDENTIFIER().getText(), type: typeText(p.typeRef()) })),
+      returnType: ctx.typeRef() ? typeText(ctx.typeRef()) : "",
+      pipeline,
+      directives: this.directives(ctx.directive()),
+      loc: this.loc(ctx)
+    };
+  }
+  pipelineOp(ctx) {
+    const loc = this.loc(ctx);
+    if (ctx instanceof PipeOpContext) {
+      return { ...this.call(ctx.callExpr()), bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof GateOpContext) {
+      return { kind: "gate", condition: this.sourceText(ctx.condExpr()), expr: this.orExpr(ctx.condExpr().orExpr()), loc };
+    }
+    if (ctx instanceof InterruptOpContext) {
+      const argList = this.args(ctx.callArgs());
+      return { kind: "interrupt", callee: "yield", args: argList.map((a) => a.name ? `${a.name}: ${render(a.value)}` : render(a.value)), argList, bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof FanoutOpContext) {
+      const stages = ctx.fanoutItem().map((item) => {
+        const call = item.callExpr();
+        const bind = bindName(item.binding());
+        if (call)
+          return { ...this.call(call), bind };
+        return { kind: "call", callee: item.IDENTIFIER().getText(), method: "prompt", args: [], namedArgs: {}, argList: [], bind, implicit: true, loc: this.loc(item) };
+      });
+      return { kind: "fanout", stages, bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof BranchOpContext) {
+      const arms = ctx.branchArm().map((arm) => {
+        if (arm instanceof CondArmContext) {
+          return { condition: this.sourceText(arm.condExpr()), expr: this.orExpr(arm.condExpr().orExpr()), call: this.call(arm.callExpr()) };
+        }
+        return { call: this.call(arm.callExpr()) };
+      });
+      return { kind: "branch", arms, bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof EachOpContext) {
+      return {
+        kind: "each",
+        item: ctx.IDENTIFIER().getText(),
+        list: this.callValue(ctx.callValue()),
+        options: this.args(ctx.callArgs()),
+        call: this.call(ctx.callExpr()),
+        bind: bindName(ctx.binding()),
+        loc
+      };
+    }
+    if (ctx instanceof LoopOpContext) {
+      const raw = (ctx.STRING() ?? ctx.TRIPLE_STRING()).getText();
+      const condition = raw.startsWith('"""') ? raw.slice(3, -3).trim() : unquote(raw);
+      const parsed = parseCondition(condition);
+      return {
+        kind: "loop",
+        target: ctx.IDENTIFIER().getText(),
+        condition,
+        expr: parsed.expr,
+        conditionErrors: parsed.errors.length ? parsed.errors : undefined,
+        options: this.args(ctx.callArgs()),
+        bind: bindName(ctx.binding()),
+        loc
+      };
+    }
+    if (ctx instanceof ListenOpContext) {
+      const targetValue = this.callValue(ctx.callValue());
+      return { kind: "listen", target: render(targetValue), targetValue, bind: bindName(ctx.binding()), loc };
+    }
+    throw new Error(`Unhandled pipeline operator: ${ctx.getText()}`);
+  }
+  call(ctx) {
+    const argList = this.args(ctx.callArgs());
+    return {
+      kind: "call",
+      callee: ctx.IDENTIFIER().getText(),
+      method: ctx.name()?.getText() ?? "",
+      ...renderArgs(argList),
+      argList,
+      loc: this.loc(ctx)
+    };
+  }
+  args(ctx) {
+    if (!ctx)
+      return [];
+    return ctx.callArg().map((a) => a instanceof NamedArgContext ? { name: a.name().getText(), value: this.callValue(a.callValue()) } : { value: this.callValue(a.callValue()) });
+  }
+  callValue(ctx) {
+    const lit = ctx.literal();
+    if (lit)
+      return this.literal(lit);
+    const model = ctx.MODEL_REF();
+    if (model)
+      return { kind: "model", value: model.getText() };
+    const cref = ctx.contextRef();
+    if (cref)
+      return this.contextRef(cref);
+    const list = ctx.listValue();
+    if (list)
+      return { kind: "list", items: list.callValue().map((v) => this.callValue(v)) };
+    return this.dotted(ctx.dottedId());
+  }
+  value(ctx) {
+    const lit = ctx.literal();
+    if (lit)
+      return this.literal(lit);
+    const model = ctx.MODEL_REF();
+    if (model)
+      return { kind: "model", value: model.getText() };
+    return this.dotted(ctx.dottedId());
+  }
+  expression(ctx) {
+    const lit = ctx.literal();
+    if (lit)
+      return this.literal(lit);
+    const cref = ctx.contextRef();
+    if (cref)
+      return this.contextRef(cref);
+    return this.dotted(ctx.dottedId());
+  }
+  literal(ctx) {
+    const text = ctx.getText();
+    if (ctx.STRING())
+      return { kind: "string", value: unquote(text) };
+    if (ctx.TRIPLE_STRING())
+      return { kind: "string", value: dedent(text.slice(3, -3)) };
+    if (ctx.NUMBER())
+      return { kind: "number", value: Number(text), raw: text };
+    if (ctx.DURATION())
+      return { kind: "duration", ms: parseDuration(text), raw: text };
+    if (ctx.BOOL())
+      return { kind: "bool", value: text === "true" };
+    return { kind: "null" };
+  }
+  dotted(ctx) {
+    return { kind: "ref", path: [ctx.IDENTIFIER().getText(), ...ctx.name().map((n) => n.getText())] };
+  }
+  contextRef(ctx) {
+    return { kind: "context", path: ctx.name().map((n) => n.getText()) };
+  }
+  condition(ctx) {
+    return this.orExpr(ctx.orExpr());
+  }
+  orExpr(ctx) {
+    const terms = ctx.andExpr().map((a) => this.andExpr(a));
+    return terms.length === 1 ? terms[0] : { kind: "or", terms };
+  }
+  andExpr(ctx) {
+    const terms = ctx.notExpr().map((n) => this.notExpr(n));
+    return terms.length === 1 ? terms[0] : { kind: "and", terms };
+  }
+  notExpr(ctx) {
+    if (ctx instanceof NegationContext)
+      return { kind: "not", expr: this.notExpr(ctx.notExpr()) };
+    return this.comparison(ctx.comparison());
+  }
+  comparison(ctx) {
+    const [l, r] = ctx.operand();
+    const left = this.operand(l);
+    if (!r)
+      return left;
+    return { kind: "compare", op: ctx.compOp().getText(), left, right: this.operand(r) };
+  }
+  operand(ctx) {
+    if (ctx instanceof ParenOperandContext)
+      return this.orExpr(ctx.orExpr());
+    if (ctx instanceof LiteralOperandContext)
+      return { kind: "value", value: this.literal(ctx.literal()) };
+    if (ctx instanceof ContextOperandContext)
+      return { kind: "value", value: this.contextRef(ctx.contextRef()) };
+    return { kind: "value", value: this.dotted(ctx.dottedId()) };
+  }
+}
+function bindName(ctx) {
+  return ctx?.name().getText();
+}
+function render(v) {
+  switch (v.kind) {
+    case "string":
+      return v.value;
+    case "number":
+      return v.raw;
+    case "bool":
+      return String(v.value);
+    case "null":
+      return "null";
+    case "duration":
+      return v.raw;
+    case "model":
+      return v.value;
+    case "ref":
+      return v.path.join(".");
+    case "context":
+      return ["context", ...v.path].join(".");
+    case "list":
+      return `[${v.items.map(render).join(", ")}]`;
+  }
+}
+function renderArgs(argList) {
+  const args = [];
+  const namedArgs = {};
+  for (const a of argList) {
+    if (a.name)
+      namedArgs[a.name] = render(a.value);
+    else
+      args.push(render(a.value));
+  }
+  return { args, namedArgs };
+}
+var ESCAPES = { n: `
+`, t: "\t", r: "\r", "0": "\x00" };
+function unquote(s) {
+  return s.slice(1, -1).replace(/\\(.)/g, (_, c) => ESCAPES[c] ?? c);
+}
+function dedent(s) {
+  const lines = s.replace(/^[ \t]*\r?\n/, "").replace(/\r?\n[ \t]*$/, "").split(/\r?\n/);
+  const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)[0].length));
+  return lines.map((l) => l.slice(Number.isFinite(indent) ? indent : 0)).join(`
+`);
+}
+function typeText(ctx) {
+  const base = ctx.dottedId().getText();
+  const args = ctx.typeRef();
+  return args.length ? `${base}<${args.map(typeText).join(", ")}>` : base;
 }
 
 // src/lsp/diagnostics.ts
+function rangeAt(lines, line, character, length) {
+  const text = lines[line] ?? "";
+  const word = text.slice(character).match(/^[\w.@]+/)?.[0];
+  const len = length ?? (word?.length || Math.max(1, text.length - character));
+  return { start: { line, character }, end: { line, character: character + len } };
+}
 function getDiagnostics(sourceText) {
+  const lines = sourceText.split(`
+`);
   const ast = parse(sourceText);
-  const diagnostics = [];
-  for (const errStr of ast.errors) {
-    const match = errStr.match(/^\[(\d+):(\d+)\] (.+) near "(.+)"$/);
-    let range;
-    let message = errStr;
-    if (match) {
-      const line = parseInt(match[1] ?? "1", 10) - 1;
-      const charPos = parseInt(match[2] ?? "0", 10);
-      const msg = match[3] ?? "Syntax Error";
-      const token = match[4] ?? "";
-      message = msg;
-      range = {
-        start: { line, character: charPos },
-        end: { line, character: charPos + token.length }
-      };
-    } else {
-      range = {
-        start: { line: 0, character: 0 },
-        end: { line: 0, character: 0 }
-      };
-    }
-    diagnostics.push({
-      severity: import_vscode_languageserver.DiagnosticSeverity.Error,
-      range,
-      message,
-      source: "halo"
+  if (ast.errors.length) {
+    return ast.errors.map((err) => {
+      const m = err.match(/^\[(\d+):(\d+)\] (.+?)(?: near "(.*)")?$/s);
+      if (!m)
+        return { severity: import_vscode_languageserver.DiagnosticSeverity.Error, range: rangeAt(lines, 0, 0, 0), message: err, source: "halo" };
+      const line = Number(m[1]) - 1;
+      return { severity: import_vscode_languageserver.DiagnosticSeverity.Error, range: rangeAt(lines, line, Number(m[2]), m[4]?.length || undefined), message: m[3], source: "halo" };
     });
   }
-  return diagnostics;
+  return validate(ast).map((d) => ({
+    severity: d.severity === "error" ? import_vscode_languageserver.DiagnosticSeverity.Error : import_vscode_languageserver.DiagnosticSeverity.Warning,
+    range: d.line ? rangeAt(lines, d.line - 1, d.column ?? 0) : rangeAt(lines, 0, 0, 0),
+    message: d.message,
+    source: "halo"
+  }));
 }
 
 // src/lsp/completions.ts
 var import_vscode_languageserver2 = __toESM(require_main4(), 1);
+var KEYWORDS = [
+  ["agent", "Declare an agent: agent Name [model, temp: 0.2]"],
+  ["pipeline", "Declare a pipeline: pipeline Name(arg: Type) -> Type:"],
+  ["tool", "Declare a tool: tool Name : Provider(...)"],
+  ["store", 'Declare a store: store Name : VectorStore(namespace: "x")'],
+  ["policy", "Declare a policy: policy Name : Rule(...) & Rule(...)"],
+  ["schema", "Declare an output schema: schema Name { field: Type }"],
+  ["equips", "Give an agent tools it may use"],
+  ["requires", "Bind policies to an agent"],
+  ["system", "An agent's system prompt"],
+  ["yield", "|! yield(...): ask a human"],
+  ["listen", "~> listen(Source.Event): wait for an event"],
+  ["loop", '|<> loop(Agent, "condition"): retry the agent while the condition holds'],
+  ["each", "|* each(item in list) => Call(): one call per item"],
+  ["else", "The fallback arm of a branch"],
+  ["as", "Bind a result: ... as name → context.data.name"],
+  ["context", "context.current, context.input, context.data, context.meta"]
+];
 function getCompletions(sourceText, position) {
-  return [
-    {
-      label: "pipeline",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Define a new workflow pipeline"
-    },
-    {
-      label: "agent",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Declare an LLM agent agent"
-    },
-    {
-      label: "tool",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Declare a tool connector"
-    },
-    {
-      label: "schema",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Define a data schema"
-    },
-    {
-      label: "policy",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Define a safety rule"
-    },
-    {
-      label: "store",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Declare persistent store"
-    },
-    {
-      label: "yield",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Suspend execution"
-    },
-    {
-      label: "listen",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Wait for external signal"
-    },
-    {
-      label: "loop",
-      kind: import_vscode_languageserver2.CompletionItemKind.Keyword,
-      detail: "Cyclic control flow"
-    }
-  ];
+  const line = sourceText.split(`
+`)[position.line] ?? "";
+  const before = line.slice(0, position.character);
+  if (/System\.\w*$/.test(before)) {
+    return [...SYSTEM_METHODS, ...SYSTEM_EVENTS].map((m) => ({ label: m, kind: import_vscode_languageserver2.CompletionItemKind.Method, detail: `System.${m}` }));
+  }
+  if (/@\w*$/.test(before))
+    return DIRECTIVES.map((d) => ({ label: d, kind: import_vscode_languageserver2.CompletionItemKind.Keyword, detail: `@${d}` }));
+  if (/:\s*\w*$/.test(before) && /^\s*(tool|store)\b/.test(line)) {
+    return TOOL_PROVIDERS.map((p) => ({ label: p, kind: import_vscode_languageserver2.CompletionItemKind.Class, detail: "Tool provider" }));
+  }
+  if (/\b(Block|Redact)\(\s*\w*$/.test(before)) {
+    const list = /Block\(\s*\w*$/.test(before) ? BLOCK_CATEGORIES : REDACT_CATEGORIES;
+    return list.map((c) => ({ label: c, kind: import_vscode_languageserver2.CompletionItemKind.EnumMember }));
+  }
+  if (/^\s*policy\b/.test(line))
+    return ENFORCED_RULES.map((r) => ({ label: r, kind: import_vscode_languageserver2.CompletionItemKind.Function, detail: "Policy rule" }));
+  const items = KEYWORDS.map(([label, detail]) => ({ label, kind: import_vscode_languageserver2.CompletionItemKind.Keyword, detail }));
+  const ast = parse(sourceText);
+  for (const a of ast.agents)
+    items.push({ label: a.name, kind: import_vscode_languageserver2.CompletionItemKind.Class, detail: `agent [${a.modelId}]` });
+  for (const t of [...ast.tools, ...ast.stores])
+    items.push({ label: t.name, kind: import_vscode_languageserver2.CompletionItemKind.Interface, detail: `tool : ${t.provider}` });
+  for (const p of ast.policies)
+    items.push({ label: p.name, kind: import_vscode_languageserver2.CompletionItemKind.Constant, detail: "policy" });
+  for (const p of ast.pipelines)
+    items.push({ label: p.name, kind: import_vscode_languageserver2.CompletionItemKind.Function, detail: `pipeline (${p.params.map((x) => x.name).join(", ")})` });
+  for (const s of ast.schemas)
+    items.push({ label: s.name, kind: import_vscode_languageserver2.CompletionItemKind.Struct, detail: "schema" });
+  return items;
 }
 
 // src/lsp/hover.ts
-function getWordAtPosition(sourceText, position) {
-  const lines = sourceText.split(`
-`);
-  const line = lines[position.line];
-  if (!line)
-    return "";
-  const charPos = position.character;
-  let start = charPos;
-  while (start > 0 && /[\w]/.test(line.charAt(start - 1))) {
+var import_vscode_languageserver3 = __toESM(require_main4(), 1);
+var OPERATORS = {
+  "|>": "**Pipe**: run a call on the current value.",
+  "|?": "**Gate** `|? (cond)`: stop the run unless the condition holds.  \n**Branch** `|? { (cond) => A(), else => B() }`: run the first matching arm.",
+  "|!": "**Interrupt** `|! yield(...)`: ask a human. With no handler, the run pauses until `signal()` / `halo resume`.",
+  "|*": "**Fan-out** `|* { A(), B() }`: run calls in parallel.  \n**Each** `|* each(item in list) => Call()`: one call per item.",
+  "~>": "**Listen** `~> listen(Source.Event)`: wait for an external event.",
+  "|<>": '**Loop** `|<> loop(Agent, "cond", max: 3)`: while the condition holds, go back to the agent\'s stage.'
+};
+function wordAt(line, character) {
+  const op = line.slice(Math.max(0, character - 2), character + 3).match(/\|<>|\|>|\|\?|\|!|\|\*|~>/);
+  if (op)
+    return op[0];
+  let start = character;
+  while (start > 0 && /\w/.test(line.charAt(start - 1)))
     start--;
-  }
-  let end = charPos;
-  while (end < line.length && /[\w]/.test(line.charAt(end))) {
+  let end = character;
+  while (end < line.length && /\w/.test(line.charAt(end)))
     end++;
-  }
   return line.slice(start, end);
 }
-function extractDescription(sourceText, searchWord, type) {
-  const lines = sourceText.split(`
-`);
-  let targetLine = -1;
-  for (let i = 0;i < lines.length; i++) {
-    const line = lines[i];
-    if (line.includes(`${type} ${searchWord}`) || line.includes(`${type} ${searchWord}(`) || line.includes(`${type} ${searchWord} `) || line.includes(`${type} ${searchWord}:`) || line.includes(`${type} ${searchWord}[`)) {
-      targetLine = i;
-      break;
-    }
-  }
-  if (targetLine === -1)
-    return "";
-  const description = [];
-  for (let i = targetLine - 1;i >= 0; i--) {
-    const line = lines[i].trim();
-    if (line.startsWith("//")) {
-      const text = line.replace(/^\/\/\s*/, "").replace(/^=+\s*$/, "").trim();
-      if (text) {
-        description.unshift(text);
-      }
-    } else if (line === "") {
-      continue;
-    } else {
-      break;
-    }
-  }
-  return description.join(`
-`);
-}
 function getHover(sourceText, position) {
-  const word = getWordAtPosition(sourceText, position);
+  const word = wordAt(sourceText.split(`
+`)[position.line] ?? "", position.character);
   if (!word)
     return null;
+  const md = (value) => ({ contents: { kind: import_vscode_languageserver3.MarkupKind.Markdown, value } });
+  if (OPERATORS[word])
+    return md(OPERATORS[word]);
   const ast = parse(sourceText);
-  const tool = ast.tools.find((t) => t.name === word);
-  if (tool) {
-    const desc = extractDescription(sourceText, word, "tool");
-    return {
-      contents: {
-        kind: "markdown",
-        value: `\`\`\`halo
-tool ${tool.name}: ${tool.provider}(${tool.args.join(", ")})
-\`\`\`
-
-${desc ? desc : "*Tool Definition*"}`
-      }
-    };
-  }
-  const agent = ast.agents.find((m2) => m2.name === word);
+  const agent = ast.agents.find((a) => a.name === word);
   if (agent) {
-    const desc = extractDescription(sourceText, word, "agent");
-    return {
-      contents: {
-        kind: "markdown",
-        value: `\`\`\`halo
-mind ${agent.name} [${agent.modelId}]
-\`\`\`
+    const lines = [`**agent ${agent.name}** — \`${agent.modelId}\``];
+    const params = Object.entries(agent.params).map(([k, v]) => `${k}: ${v}`);
+    if (params.length)
+      lines.push(params.join(", "));
+    if (agent.system)
+      lines.push(`> ${agent.system.split(`
+`).join(`
+> `)}`);
+    if (agent.equips?.length)
+      lines.push(`equips ${agent.equips.join(", ")}`);
+    if (agent.requires?.length)
+      lines.push(`requires ${agent.requires.join(", ")}`);
+    return md(lines.join(`
 
-${desc ? desc : "*Agent Definition*"}`
-      }
-    };
+`));
   }
-  const pipeline = ast.pipelines.find((s) => s.name === word);
-  if (pipeline) {
-    const desc = extractDescription(sourceText, word, "pipeline");
-    const params = pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ");
-    return {
-      contents: {
-        kind: "markdown",
-        value: `\`\`\`halo
-stream ${pipeline.name}(${params}) -> ${pipeline.returnType}
-\`\`\`
+  const tool = [...ast.tools, ...ast.stores].find((t) => t.name === word);
+  if (tool)
+    return md(`**tool ${tool.name}** : \`${tool.provider}(${[...tool.args, ...Object.entries(tool.namedArgs).map(([k, v]) => `${k}: ${v}`)].join(", ")})\``);
+  const policy = ast.policies.find((p) => p.name === word);
+  if (policy)
+    return md(`**policy ${policy.name}**
 
-${desc ? desc : "*Pipeline Definition*"}`
-      }
-    };
+${policy.rules.map((r) => `- \`${r.name}(${r.args.join(", ")})\``).join(`
+`)}`);
+  const pipeline = ast.pipelines.find((p) => p.name === word);
+  if (pipeline) {
+    const sig = `${pipeline.name}(${pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ")})${pipeline.returnType ? ` -> ${pipeline.returnType}` : ""}`;
+    return md(`**pipeline** \`${sig}\` — ${pipeline.pipeline.length} stage(s)`);
   }
   const schema = ast.schemas.find((s) => s.name === word);
-  if (schema) {
-    const desc = extractDescription(sourceText, word, "schema");
-    return {
-      contents: {
-        kind: "markdown",
-        value: `\`\`\`halo
-struct ${schema.name}
-\`\`\`
+  if (schema)
+    return md(`**schema ${schema.name}**
 
-${desc ? desc : "*Data Structure*"}`
-      }
-    };
-  }
-  const policy = ast.policies.find((g) => g.name === word);
-  if (policy) {
-    const desc = extractDescription(sourceText, word, "policy");
-    return {
-      contents: {
-        kind: "markdown",
-        value: `\`\`\`halo
-guardrail ${policy.name}
-\`\`\`
-
-${desc ? desc : "*Policy Rule*"}`
-      }
-    };
-  }
+${schema.fields.map((f) => `- ${f.name}: \`${f.type}\``).join(`
+`)}`);
   return null;
 }
 

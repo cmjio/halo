@@ -4,7 +4,7 @@
 //          generate design tokens, produce an annotated mock
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy WCAG2x : Enforce("WCAG.JSON")
 policy BrandSystem : Enforce("DesignTokens.JSON")
 
@@ -13,10 +13,10 @@ tool FigmaAPI : POST("api.figma.com/v1", apiKey: Env.FIGMA_KEY)
 tool ChromeAudit : POST("lhci.google.com/api/audit")
 tool SlackDesign : POST("hooks.slack.com/services/design-team")
 
-// --- Memory ---
+// --- Store ---
 tool DesignTokens : VectorStore(Env.PINECONE_KEY, namespace: "design-system")
 
-// --- Minds ---
+// --- Agents ---
 agent Auditor [openai/gpt-4o, temp: 0.3]
   system """
     You are a WCAG accessibility auditor. Analyze screens for
@@ -41,7 +41,7 @@ agent MockArtist [openai/dall-e-3, temp: 0.8]
     comparisons. Use red overlays for issues, green for fixes.
   """
 
-// --- The Stream ---
+// --- The Pipeline ---
 pipeline AuditScreen(screen: Figma.Screen) -> Report:
   screen
     // Step 1: Automated accessibility audit

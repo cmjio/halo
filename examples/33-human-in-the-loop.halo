@@ -1,5 +1,5 @@
 tool Approvals : Slack("Env.SLACK_BOT_TOKEN")
-tool Notifier : Email("Env.RESEND_API_KEY")
+tool Notifier : Email("Env.RESEND_API_KEY", from: "approvals@example.com")
 
 agent Writer [openai/gpt-4, temp: 0.7]
 
@@ -7,7 +7,7 @@ pipeline DraftEmail(topic: String) -> Result:
   topic
     |> Writer.prompt("Draft a professional email about this topic: {{context.input.topic}}")
     
-    // Slack connector automatically embeds the runId in the message metadata
+    // Without a handler the run pauses here; resume it with signal(runId, ...) or `halo resume`
     |> Approvals.execute(
          channel: "#approvals",
          text: "Please review this draft: {{context.current}}",

@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { parse } from "../src/parser/index";
-import { LanglyRuntime } from "../src/runtime/runtime";
+import { HaloRuntime } from "../src/runtime/runtime";
 
 describe("Langly Features - Runtime", () => {
   // ── Gate Conditions ─────
@@ -17,7 +17,7 @@ pipeline TestGate(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "should not see this",
     });
     rt.load(ast);
@@ -40,7 +40,7 @@ pipeline TestGate(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "ran successfully",
     });
     rt.load(ast);
@@ -65,7 +65,7 @@ pipeline TestFanout(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "parallel result",
     });
     rt.load(ast);
@@ -95,7 +95,7 @@ pipeline TestNamed(x: String) -> Result:
       count: "42",
     });
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "named args work",
     });
     rt.load(ast);
@@ -118,7 +118,7 @@ pipeline TestContext(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "step result",
     });
     rt.load(ast);
@@ -140,7 +140,7 @@ pipeline TestGuard(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "hello damn world",
     });
     rt.load(ast);
@@ -161,7 +161,7 @@ pipeline TestGuard(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "one two three four",
     });
     rt.load(ast);
@@ -183,7 +183,7 @@ pipeline TestTimeout(x: String) -> Result:
     expect(ast.errors).toEqual([]);
 
     // Override executeCall to simulate slow operation
-    const rt = new LanglyRuntime();
+    const rt = new HaloRuntime();
     rt.load(ast);
 
     // The timeout should trigger since we have a 1s timeout and no actual delay
@@ -206,7 +206,7 @@ pipeline TestDeep(x: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime().mockAll({
+    const rt = new HaloRuntime().mockAll({
       "M.prompt": "test",
     });
     rt.load(ast);

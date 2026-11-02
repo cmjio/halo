@@ -1,6 +1,6 @@
 // ============================================================
 // STEP 9: Directives - Build/Runtime Modifiers
-// Learn: Use `@` directives to configure streams/minds
+// Learn: Use `@` directives to configure pipelines/agents
 // ============================================================
 
 policy NoProfanity : Block(Profanity)

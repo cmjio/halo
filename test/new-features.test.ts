@@ -199,7 +199,7 @@ pipeline Resilient(x: String) -> Result:
   x |> M.prompt("try")`);
     expect(ast.errors).toEqual([]);
     const s = ast.pipelines[0] as PipelineDeclaration;
-    expect(s.directives).toContainEqual({ name: "retry", value: "3,2s" });
+    expect(s.directives).toContainEqual({ name: "retry", value: "3, 2s" });
   });
 
   test("parses @checkpoint directive", () => {

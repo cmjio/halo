@@ -5,7 +5,7 @@
 //          to the right agent based on expertise
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy FairHousing   : Block(DiscriminatoryLanguage) & Block(SteeringLanguage)
 policy PII           : Redact(SSN) & Redact(CreditCard)
 policy CostGuard     : MaxSpend(1.50)
@@ -16,7 +16,7 @@ tool ZillowAPI     : REST("api.bridgedataoutput.com/api/v2/zestimates", apiKey: 
 tool CRM           : POST("api.followupboss.com/v1/events", apiKey: Env.FUB_KEY)
 tool AgentSlack    : POST("hooks.slack.com/services/listings-team")
 
-// --- Memory ---
+// --- Store ---
 tool MarketTrends   : VectorStore(Env.PINECONE_KEY, namespace: "market-comps")
 tool AgentExpertise  : VectorStore(Env.PINECONE_KEY, namespace: "agent-specialties")
 
@@ -29,9 +29,9 @@ schema ListingIntel {
   assigned_agent : String
 }
 
-// --- Minds ---
+// --- Agents ---
 agent MarketAnalyst [openai/gpt-4o-mini, temp: 0.1]
-  equips MarketTrends
+  equips MarketTrends, MLSAPI, ZillowAPI
   requires CostGuard
 
 agent Copywriter [anthropic/claude-sonnet-4, temp: 0.7]
@@ -41,7 +41,7 @@ agent LeadScorer [openai/gpt-4o-mini, temp: 0.0]
   equips AgentExpertise
   requires CostGuard
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(3m)
 @retry(2, 10s)
 pipeline ProcessListing(listing: MLSListing) -> ListingIntel:

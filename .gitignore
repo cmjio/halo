@@ -34,7 +34,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 # Zed extension build artifacts
-editors/zed/grammars/langly/src/
-editors/zed/grammars/langly/langly.wasm
-editors/zed/grammars/langly/stubs.o
-editors/zed/grammars/langly/parser.o
+editors/zed/grammars/halo/src/
+editors/zed/grammars/halo/halo.wasm
+editors/zed/grammars/halo/stubs.o
+editors/zed/grammars/halo/parser.o
+
+# Halo local state (vector store, checkpoints, paused runs, telemetry)
+.halo/

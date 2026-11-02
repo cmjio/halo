@@ -6,7 +6,7 @@
 //          rules with a single declarative pipeline.
 // ============================================================
 
-// --- Guardrails ---
+// --- Policies ---
 policy BiasProtection : Block(DiscriminatoryLanguage) & Block(AgeDiscrimination)
 policy CandidatePII   : Redact(SSN) & Redact(CreditCard) & Redact(Location)
 policy CostGuard      : MaxSpend(1.00)
@@ -16,7 +16,7 @@ tool ATSAPI        : REST("api.lever.co/v1/opportunities", apiKey: Env.LEVER_KEY
 tool CalendarAPI   : REST("www.googleapis.com/calendar/v3", apiKey: Env.GOOGLE_CAL_KEY)
 tool HRSlack       : POST("hooks.slack.com/services/hiring-team")
 
-// --- Memory ---
+// --- Store ---
 tool RoleRequirements : VectorStore(Env.PINECONE_KEY, namespace: "job-descriptions")
 tool PastHires        : VectorStore(Env.PINECONE_KEY, namespace: "successful-hires")
 
@@ -30,7 +30,7 @@ schema CandidateDecision {
   interview_slot   : String
 }
 
-// --- Minds ---
+// --- Agents ---
 agent Screener [openai/gpt-4o-mini, temp: 0.0]
   requires BiasProtection, CandidatePII, CostGuard
 
@@ -39,10 +39,10 @@ agent CultureAssessor [anthropic/claude-sonnet-4, temp: 0.2]
   requires BiasProtection, CandidatePII, CostGuard
 
 agent HiringCoordinator [openai/gpt-4o-mini, temp: 0.3]
-  equips RoleRequirements
+  equips RoleRequirements, CalendarAPI
   requires CostGuard
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(3m)
 @retry(2, 5s)
 pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision:

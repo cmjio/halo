@@ -1,86 +1,153 @@
 grammar Halo;
 
+// ============================================================
 // Parser rules
+// ============================================================
+
 program: declaration* EOF;
 
-declaration: policyDecl | toolDecl | storeDecl | agentDecl | pipelineDecl | schemaDecl;
+declaration: policyDecl | toolDecl | storeDecl | schemaDecl | agentDecl | pipelineDecl;
 
-// Policies
+// Identifiers plus soft keywords. Used wherever a name cannot be confused with
+// a declaration keyword: named-arg keys, method names, context path segments.
+name
+    : IDENTIFIER
+    | 'policy' | 'tool' | 'store' | 'schema' | 'agent' | 'pipeline'
+    | 'equips' | 'requires' | 'system' | 'context' | 'yield' | 'listen' | 'loop' | 'as'
+    | 'each' | 'in' | 'else'
+    ;
+
+dottedId: IDENTIFIER ('.' name)*;
+
+// ── Policies ──
 policyDecl: 'policy' IDENTIFIER ':' policyRule ('&' policyRule)*;
-policyRule: IDENTIFIER '(' policyArgs? ')';
-policyArgs: policyArg (',' policyArg)*;
-policyArg: MODEL_REF | dottedId | IDENTIFIER | STRING | NUMBER | DURATION;
-idOrKeyword: IDENTIFIER | 'tool' | 'agent' | 'store' | 'policy' | 'pipeline' | 'schema' | 'equips' | 'requires' | 'system' | 'listen' | 'yield' | 'context' | 'timeout' | 'shadow' | 'checkpoint' | 'retry' | 'correct';
-dottedId: idOrKeyword ('.' idOrKeyword)*;
 
-// Schemas
-schemaDecl: 'schema' IDENTIFIER '{' schemaFields '}' ;
-schemaFields: schemaField* ;
-schemaField: IDENTIFIER ':' typeRef ;
+policyRule: IDENTIFIER '(' callArgs? ')';
 
-// Tools
-toolDecl: 'tool' IDENTIFIER ':' IDENTIFIER '(' toolArgs? ')';
-toolArgs: toolArg (',' toolArg)*;
-toolArg: STRING | NUMBER | DURATION | dottedId | idOrKeyword ':' (STRING | NUMBER | DURATION | dottedId);
+// ── Tools & Stores ──
+toolDecl: 'tool' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')';
 
-// Stores
-storeDecl: 'store' IDENTIFIER ':' IDENTIFIER '(' storeArgs? ')';
-storeArgs: storeArg (',' storeArg)*;
-storeArg: STRING | NUMBER | dottedId | idOrKeyword ':' (STRING | NUMBER | dottedId);
+storeDecl: 'store' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')';
 
-// Agents
-agentDecl: directive* 'agent' IDENTIFIER '[' modelConfig ']' agentModifiers?;
-agentModifiers: agentModifier+;
-agentModifier: 'equips' equipsList | 'requires' requiresList | 'system' stringLiteral;
-stringLiteral: STRING | TRIPLE_STRING;
-equipsList: IDENTIFIER (',' IDENTIFIER)*;
-requiresList: IDENTIFIER (',' IDENTIFIER)*;
-modelConfig: modelId (',' modelParam)*;
-modelId: MODEL_REF | dottedId | IDENTIFIER;
-modelParam: IDENTIFIER ':' value;
+// ── Schemas ──
+schemaDecl: 'schema' IDENTIFIER '{' (schemaField ','?)* '}';
 
-// Pipelines
-pipelineDecl: directive* 'pipeline' IDENTIFIER '(' paramList? ')' '->' typeRef ':' pipeline;
-directive: '@' directiveName directiveValue?;
-directiveName: 'timeout' | 'shadow' | 'checkpoint' | 'retry' | 'correct';
-directiveValue: '(' directiveArgs ')';
-directiveArgs: (IDENTIFIER | NUMBER | STRING | MODEL_REF | DURATION) (',' (IDENTIFIER | NUMBER | STRING | MODEL_REF | DURATION))*;
-paramList: param (',' param)*;
+schemaField: name ':' typeRef;
+
+// ── Agents ──
+agentDecl: directive* 'agent' IDENTIFIER '[' modelRef (',' modelParam)* ','? ']' agentModifier*;
+
+modelRef: MODEL_REF | STRING | dottedId;
+
+modelParam: name ':' value;
+
+agentModifier
+    : 'equips' IDENTIFIER (',' IDENTIFIER)*      # equipsModifier
+    | 'requires' IDENTIFIER (',' IDENTIFIER)*    # requiresModifier
+    | 'system' (STRING | TRIPLE_STRING)          # systemModifier
+    ;
+
+// ── Directives ──
+directive: '@' name ('(' (directiveArg (',' directiveArg)*)? ')')?;
+
+directiveArg: literal | MODEL_REF | dottedId;
+
+// ── Pipelines ──
+pipelineDecl: directive* 'pipeline' IDENTIFIER '(' paramList? ')' ('->' typeRef)? ':' pipeline;
+
+paramList: param (',' param)* ','?;
+
 param: IDENTIFIER ':' typeRef;
-typeRef: typeName ('<' typeName '>')? ;
-typeName: idOrKeyword ('.' idOrKeyword)* ;
 
-// Pipeline
-pipeline: pipelineStage+;
-pipelineStage: PIPE callExpr | GATE condition | INTERRUPT yieldExpr | FANOUT '{' fanoutStages '}' | LISTEN listenExpr | LOOP loopExpr | expression;
-condition: '(' conditionExpr ')' '=>'?;
-conditionExpr: expression (comparisonOp expression)?;
-comparisonOp: '==' | '!=' | '>' | '<' | '>=' | '<=';
-fanoutStages: fanoutStage (',' fanoutStage)*;
-fanoutStage: callExpr | IDENTIFIER;
-yieldExpr: 'yield' '(' yieldArgs? ')';
-yieldArgs: yieldArg (',' yieldArg)*;
-yieldArg: idOrKeyword ':' yieldArgValue | callValue;
-yieldArgValue: callValue | '[' callValue (',' callValue)* ']';
-listenExpr: 'listen' '(' listenTarget ')';
-listenTarget: dottedId | contextRef;
-loopExpr: 'loop' '(' IDENTIFIER ',' STRING ')';
-expression: IDENTIFIER | STRING | NUMBER | BOOL | contextRef;
-callExpr: IDENTIFIER '.' IDENTIFIER '(' callArgs? ')';
-callArgs: callArg (',' callArg)*;
-callArg: idOrKeyword ':' callValue | callValue;
-callValue: STRING | NUMBER | BOOL | DURATION | MODEL_REF | contextRef | '[' callItems ']' | dottedId;
-callItems: callValue (',' callValue)*;
-value: STRING | NUMBER | BOOL | idOrKeyword | MODEL_REF | dottedId;
+// `String`, `UserProfile`, `Array<String>`, `Map<String, Number>`
+typeRef: dottedId ('<' typeRef (',' typeRef)* '>')?;
 
-// Context
-contextRef: 'context' '.' IDENTIFIER contextTail?;
-contextTail: ('.' IDENTIFIER)+;
+// ── Pipeline ──
+pipeline
+    : expression pipelineOp*
+    | pipelineOp+
+    ;
 
-// Lexer rules (order matters - more specific first)
+pipelineOp
+    : PIPE callExpr binding?                                     # pipeOp
+    | GATE '(' condExpr ')' '=>'?                                # gateOp
+    | GATE '{' branchArm (',' branchArm)* ','? '}' binding?      # branchOp
+    | INTERRUPT 'yield' '(' callArgs? ')' binding?               # interruptOp
+    | FANOUT '{' fanoutItem (',' fanoutItem)* ','? '}' binding?  # fanoutOp
+    | FANOUT 'each' '(' IDENTIFIER 'in' callValue (',' callArgs)? ')' '=>' callExpr binding?  # eachOp
+    | LISTEN 'listen' '(' callValue ')' binding?                 # listenOp
+    | LOOP 'loop' '(' IDENTIFIER ',' (STRING | TRIPLE_STRING) (',' callArgs)? ')' binding?  # loopOp
+    ;
+
+binding: 'as' name;
+
+// `|? { (cond) => Call(...), else => Call(...) }`: the first matching arm runs.
+branchArm
+    : '(' condExpr ')' '=>' callExpr    # condArm
+    | 'else' '=>' callExpr              # elseArm
+    ;
+
+fanoutItem: callExpr binding? | IDENTIFIER binding?;
+
+// `Agent.method(...)`, `Tool.method(...)`, `System.Print()`, or `OtherPipeline(...)`
+callExpr: IDENTIFIER ('.' name)? '(' callArgs? ')';
+
+callArgs: callArg (',' callArg)* ','?;
+
+callArg
+    : name ':' callValue    # namedArg
+    | callValue             # positionalArg
+    ;
+
+callValue
+    : literal
+    | MODEL_REF
+    | contextRef
+    | listValue
+    | dottedId
+    ;
+
+listValue: '[' (callValue (',' callValue)* ','?)? ']';
+
+value: literal | MODEL_REF | dottedId;
+
+literal: STRING | TRIPLE_STRING | NUMBER | DURATION | BOOL | NULL;
+
+expression: literal | contextRef | dottedId;
+
+contextRef: 'context' ('.' name)*;
+
+// ── Gate conditions ──
+condExpr: orExpr;
+
+orExpr: andExpr ('||' andExpr)*;
+
+andExpr: notExpr ('&&' notExpr)*;
+
+notExpr
+    : '!' notExpr          # negation
+    | comparison           # comparisonExpr
+    ;
+
+comparison: operand (compOp operand)?;
+
+compOp: '==' | '!=' | '>=' | '<=' | '>' | '<';
+
+operand
+    : '(' orExpr ')'       # parenOperand
+    | literal              # literalOperand
+    | contextRef           # contextOperand
+    | dottedId             # refOperand
+    ;
+
+// ============================================================
+// Lexer rules (order matters for equal-length matches)
+// ============================================================
+
 WS: [ \t]+ -> skip;
-NL: '\r'? '\n'+ -> skip;
-COMMENT: '//' ~[\r\n]* -> skip;
+NL: ('\r'? '\n')+ -> skip;
+LINE_COMMENT: '//' ~[\r\n]* -> skip;
+BLOCK_COMMENT: '/*' .*? '*/' -> skip;
 
 // Pipe operators
 LOOP: '|<>';
@@ -90,13 +157,22 @@ GATE: '|?';
 LISTEN: '~>';
 PIPE: '|>';
 
-DURATION: [0-9]+[smhd];
+BOOL: 'true' | 'false';
+NULL: 'null';
 
-// MODEL_REF must come AFTER IDENTIFIER
+DURATION: [0-9]+ ('ms' | [smhd]);
+
+NUMBER: '-'? [0-9]+ ('.' [0-9]+)?;
+
+// Model identifiers contain '-' or '/' (e.g. gemini-3-1-pro, openai/gpt-4o-mini,
+// together/meta-llama/Llama-3.1-8B-Instruct). Plain dotted names never match.
+MODEL_REF: [a-zA-Z_] [a-zA-Z0-9_.]* ([-/] [a-zA-Z0-9_.]+)+;
+
 IDENTIFIER: [a-zA-Z_] [a-zA-Z0-9_]*;
-MODEL_REF: '/'? [a-zA-Z_] [a-zA-Z0-9]* (('-' | '/') [a-zA-Z0-9_.]+)+;
 
 TRIPLE_STRING: '"""' .*? '"""';
-STRING: '"' (~["\\] | '\\'.)* '"' | '\'' (~['\\] | '\\'.)* '\'';
-NUMBER: '-'? [0-9]+ ('.' [0-9]+)?;
-BOOL: 'true' | 'false';
+
+STRING
+    : '"' (~["\\\r\n] | '\\' .)* '"'
+    | '\'' (~['\\\r\n] | '\\' .)* '\''
+    ;

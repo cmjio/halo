@@ -1,66 +1,60 @@
 # Guardrails & Safety
 
-When deploying LLMs to production, you cannot rely solely on the model's system prompt to enforce safety constraints. LLMs can be tricked via Prompt Injection, and they can easily hallucinate PII or exceed token limits.
-
-Halo enforces safety at the **runtime level** using the `policy` primitive.
-
-## Defining Policies
-
-A `policy` is a set of hard constraints evaluated before and after an agent executes. If a policy fails, the execution is blocked and the pipeline halts safely.
+A system prompt can be talked around, but policy rules can't. They run in the runtime, in code, on every call to an agent that `requires` them.
 
 ```halo
-// A deterministic budget policy
-policy QA_Budget : MaxSpend(5.00)
+policy Untrusted : Block(PromptInjection) & Redact(PII, APIKey)
+policy Budget    : MaxSpend(5.00)
+policy Shape     : Require(JSON) & MaxWords(400) & Block(Markdown)
 
-// A deterministic redaction policy
-policy Privacy : RedactPII()
+@correct(2)
+agent SupportBot [openai/gpt-4o-mini]
+  system "You answer customer questions. Reply with JSON."
+  requires Untrusted, Budget, Shape
 
-// An LLM-evaluated safety policy
-policy BrandSafe : Tone("Professional") & Block("HateSpeech")
+pipeline Answer(question: String) -> Result:
+  question |> SupportBot.answer()
 ```
 
-## Binding Policies to Agents
+On each `SupportBot` call:
 
-Policies are bound to an `agent` using the `requires` modifier. 
+1. **Budget.** If the run has already spent $5.00, the call fails before anything is sent.
+2. **Input.** Emails, phone numbers, SSNs, cards, and API keys in the prompt are replaced with `[REDACTED:…]`. A prompt-injection pattern fails the call.
+3. **Output.** The answer is redacted the same way. It must parse as JSON, stay under 400 words, and contain no Markdown. If it doesn't, `@correct(2)` sends the model its rejected answer and the reason, up to two more times. After that, the run throws a `PolicyViolation`.
+
+Every violation is added to `context.meta.violations` and emitted as a `violation` event. `halo run` prints each one.
+
+The full rule and category list is in [Policies](../../stdlib/policies.md). The detectors are pattern-based, so treat them as one layer of defense, not a guarantee.
+
+## What is not enforced
+
+`Tone(...)`, `Anonymize(...)`, `MaxDensity(...)`, `Require(Approver)`-style checks, and topic blocks like `Block(Competitors)` would each need a model to judge the content. The runtime **ignores** them, and `halo validate` warns about every one. Run `halo validate --strict` in CI to make those warnings fail the build.
+
+## Other safety features
+
+- **Secrets stay out of prompts.** `Env.X` works only in tool declarations, and `{{Env.X}}` is never filled in.
+- **Shell quoting.** Values inserted into `Bash` commands are shell-quoted.
+- **Read-only SQL.** `PostgreSQL` refuses writes unless the tool is declared with `readOnly: false`.
+- **Gates and approvals.** `|? (cond)` stops a run, and `|! yield` waits for a human (see [Human-in-the-Loop](./human-in-the-loop.md)).
+- **Audit trail.** `context.trace` is a SHA-256 hash chain of every stage. `verifyTrace(trace)` checks the chain, which catches an edited entry unless every later hash was recomputed too.
+
+## Custom checks
+
+Policies can't be extended from TypeScript. To add your own check, register a tool provider and call it in a stage after the agent:
+
+```ts
+runtime.registerToolProvider("CompetitorCheck", async ({ positional: [text] }) => {
+  if (/AcmeCorp|GlobalTech/.test(String(text))) throw new Error("Output mentions a competitor");
+  return text; // pass the text through unchanged
+});
+```
 
 ```halo
-agent CustomerSupportBot [openai/gpt-4o]
-  system "You are a customer support agent."
-  requires Privacy, BrandSafe, QA_Budget
+tool  NoCompetitors : CompetitorCheck()
+agent Marketer [anthropic/claude-haiku-4-5]
+
+pipeline Tagline(product: String) -> Result:
+  product |> Marketer.write_tagline() |> NoCompetitors.check()
 ```
 
-If the `CustomerSupportBot` attempts to generate a response containing a Social Security Number, the `Privacy` policy will intercept the payload at the runtime layer, apply the redaction algorithm, and pass the safe text forward. 
-
-If the agent has consumed $5.01 of API credits, the `QA_Budget` policy will instantly throw a `PolicyViolation` error, preventing further execution.
-
-## Writing Custom TypeScript Policies
-
-You are not limited to the built-in policies. You can write custom policies in TypeScript and register them with the Halo Runtime, just like tools.
-
-```typescript
-// 1. Write the custom policy
-class CompetitorMentionPolicy {
-  name = "BlockCompetitors";
-  
-  async validateOutbound(output: string): Promise<boolean> {
-    const competitors = ["AcmeCorp", "GlobalTech"];
-    const hasCompetitor = competitors.some(c => output.includes(c));
-    
-    if (hasCompetitor) {
-      throw new Error("PolicyViolation: Output mentions a competitor.");
-    }
-    return true;
-  }
-}
-
-// 2. Register it with the runtime
-runtime.policyRegistry.register(new CompetitorMentionPolicy());
-```
-
-Then use it in your Halo file:
-```halo
-policy StrictMarketing : BlockCompetitors()
-
-agent Marketer [anthropic/claude-3-5-sonnet]
-  requires StrictMarketing
-```
+`halo validate` warns that `CompetitorCheck` is an unknown provider. Pass `{ toolProviders: ["CompetitorCheck"] }` to `compile()` or `validate()` to tell it about the provider.

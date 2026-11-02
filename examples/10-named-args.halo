@@ -1,7 +1,7 @@
 // ============================================================
 // STEP 10: Named Arguments
 // ============================================================
-// LEARN: How to use named arguments in mind/tool calls
+// LEARN: How to use named arguments in agent/tool calls
 // WHY:   Named args make calls more readable and flexible
 // ============================================================
 

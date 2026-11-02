@@ -14,11 +14,11 @@ tool AmplitudeAPI    : POST("api.amplitude.com/1/export", apiKey: Env.AMPLITUDE_
 tool SlackResearch   : POST("hooks.slack.com/services/ux-research")
 tool NotionResearch  : POST("api.notion.com/v1/pages", apiKey: Env.NOTION_KEY)
 
-// --- Memory ---
+// --- Store ---
 tool PriorResearch   : VectorStore(Env.PINECONE_KEY, namespace: "interview-themes")
 tool UserSegments    : VectorStore(Env.PINECONE_KEY, namespace: "user-personas")
 
-// --- Minds ---
+// --- Agents ---
 // The thematic analyst identifies patterns across interviews
 @shadow(Analyst_Check)
 agent ThematicAnalyst [anthropic/claude-sonnet-4, temp: 0.2]
@@ -51,7 +51,7 @@ agent ReportSynthesizer [openai/gpt-4o-mini, temp: 0.4]
   """
   equips NotionResearch
 
-// --- The Stream ---
+// --- The Pipeline ---
 @timeout(15m)
 @retry(2, 10s)
 pipeline ResearchReport(study_id: String) -> Report:
@@ -60,23 +60,23 @@ pipeline ResearchReport(study_id: String) -> Report:
     |> ThematicAnalyst.load_transcripts(
          study_id,
          PriorResearch
-       )
+       ) as study
 
     // Step 2: Fan-out — parallel analysis: thematic + behavioral + persona
     |* {
          ThematicAnalyst.extract_themes(
-           context.data.transcripts,
+           context.data.study.transcripts,
            ["pain_point", "satisfaction", "feature_request", "workflow"]
-         ),
+         ) as themes,
          DataTrier.validate_metrics(
            AmplitudeAPI,
            context.data.study.user_segment,
            context.data.study.timeframe
-         ),
+         ) as metrics,
          ThematicAnalyst.segment_users(
-           context.data.transcripts.speakers,
+           context.data.study.speakers,
            UserSegments
-         )
+         ) as segments
        }
 
     // Step 3: Gate — need at least 2 themes to report on
@@ -86,7 +86,7 @@ pipeline ResearchReport(study_id: String) -> Report:
     |> DataTrier.correlate(
          context.data.themes.ranked,
          context.data.metrics.validation
-       )
+       ) as correlations
 
     // Step 5: Synthesize the full research report
     |> ReportSynthesizer.build_report(
@@ -94,7 +94,7 @@ pipeline ResearchReport(study_id: String) -> Report:
          context.data.correlations,
          context.data.segments,
          "evidence-backed"
-       )
+       ) as report
 
     // Step 6: Send draft to research team for review
     |> SlackResearch.post(
@@ -112,7 +112,7 @@ pipeline ResearchReport(study_id: String) -> Report:
        )
 
     // Step 8: Wait for researcher action
-    ~> listen(SlackResearch.Reaction)
+    ~> listen(SlackResearch.Reaction) as researcher
 
     // Step 9: Gate on approval
     |? (context.data.researcher.action == "approve")

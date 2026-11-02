@@ -1,7 +1,7 @@
 // ============================================================
 // STEP 3: Tools - External Integrations
-// Learn: Define tools (APIs, databases), equip minds with `equips`
-// Tools wrap external services for minds to call
+// Learn: Define tools (APIs, databases), equip agents with `equips`
+// Tools wrap external services for agents to call
 // ============================================================
 
 // Define a translation tool

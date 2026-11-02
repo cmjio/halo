@@ -12,11 +12,11 @@ agent Greeter [gemini-3-1-pro, temp: 0.7]
 
 pipeline ApprovedHello(name: String) -> Result:
   name
-    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.")
+    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.") as greeting
     // Interrupt: Pause for human approval
     |! yield(context.data.greeting)
-    // Listen for approval response
-    ~> listen(SlackApprovals.Reaction)
+    // Listen for approval response (the event is stored at context.data.reaction)
+    ~> listen(SlackApprovals.Reaction) as reaction
     // Gate: Only print if approved
-    |? (context.data.reaction == "approve")
+    |? (context.data.reaction.approved == true)
     |> System.Print()

@@ -1,259 +1,463 @@
-import { CharStream, CommonTokenStream, BaseErrorListener } from "antlr4ng";
-import { HaloLexer } from "./grammars/HaloLexer.js";
-import { HaloParser, ProgramContext, DeclarationContext, AgentDeclContext, PipelineDeclContext, PolicyDeclContext, ToolDeclContext, StoreDeclContext, SchemaDeclContext, DirectiveContext, ParamListContext, PipelineContext, PipelineStageContext, CallExprContext, ConditionContext, FanoutStagesContext, ExpressionContext, ListenExprContext, LoopExprContext, YieldExprContext } from "./grammars/HaloParser.js";
-import { HaloVisitor } from "./grammars/HaloVisitor.js";
-import type { ParseResult, Agent, PipelineDeclaration, PolicyDeclaration, ToolDeclaration, StoreDeclaration, SchemaDeclaration, Directive, PipelineStage, ExpressionStage, CallStage, GateStage, InterruptStage, FanOutStage, ListenStage, LoopStage, PipelineParam } from "./types.js";
-import { ParseError } from "../errors.js";
+import {
+  BaseErrorListener,
+  CharStream,
+  CommonTokenStream,
+  type ATNSimulator,
+  type ParserRuleContext,
+  type RecognitionException,
+  type Recognizer,
+  type Token,
+} from "antlr4ng";
+import { HaloLexer } from "./generated/HaloLexer.js";
+import {
+  HaloParser,
+  type AndExprContext,
+  type CallArgsContext,
+  type CallExprContext,
+  type CallValueContext,
+  type ComparisonContext,
+  type ContextRefContext,
+  type CondExprContext,
+  type DirectiveContext,
+  type DottedIdContext,
+  type ExpressionContext,
+  type PolicyDeclContext,
+  type LiteralContext,
+  type AgentDeclContext,
+  type NotExprContext,
+  type OperandContext,
+  type OrExprContext,
+  type PipelineOpContext,
+  type PipelineDeclContext,
+  type ToolDeclContext,
+  type StoreDeclContext,
+  type SchemaDeclContext,
+  type TypeRefContext,
+  type ValueContext,
+  type BindingContext,
+  EquipsModifierContext,
+  RequiresModifierContext,
+  SystemModifierContext,
+  LoopOpContext,
+  PipeOpContext,
+  GateOpContext,
+  InterruptOpContext,
+  FanoutOpContext,
+  BranchOpContext,
+  EachOpContext,
+  ElseArmContext,
+  CondArmContext,
+  ListenOpContext,
+  NamedArgContext,
+  NegationContext,
+  ParenOperandContext,
+  LiteralOperandContext,
+  ContextOperandContext,
+  RefOperandContext,
+} from "./generated/HaloParser.js";
+import type {
+  Arg,
+  CallStage,
+  CompareOp,
+  CondExpr,
+  Agent,
+  Directive,
+  PolicyDeclaration,
+  Loc,
+  ParseResult,
+  PipelineDeclaration,
+  PipelineStage,
+  SchemaDeclaration,
+  ToolDeclaration,
+  Value,
+} from "./types.js";
+
+export type * from "./types.js";
+export { validate, producedKeys, type Diagnostic, type ValidateOptions } from "./validate.js";
+export { parseDuration } from "./builtins.js";
+import { parseDuration } from "./builtins.js";
 
 class CollectingErrorListener extends BaseErrorListener {
   errors: string[] = [];
-  override syntaxError(recognizer: any, offendingSymbol: any, line: number, charPositionInLine: number, msg: string, e: any): void {
-    const symbol = offendingSymbol as { text?: string };
-    const tokenText = symbol?.text ?? "<missing>";
-    this.errors.push(`[${line}:${charPositionInLine}] ${msg} near "${tokenText}"`);
+
+  override syntaxError<S extends Token, T extends ATNSimulator>(
+    _recognizer: Recognizer<T>,
+    offendingSymbol: S | null,
+    line: number,
+    charPositionInLine: number,
+    msg: string,
+    _e: RecognitionException | null,
+  ): void {
+    const near = offendingSymbol?.text;
+    const suffix = near != null && near !== "<EOF>" ? ` near "${near}"` : "";
+    this.errors.push(`[${line}:${charPositionInLine}] ${msg}${suffix}`);
   }
 }
 
-class HaloAstBuilder extends HaloVisitor<any> {
-  result: ParseResult = {
-    agents: [],
-    pipelines: [],
-    policies: [],
-    tools: [],
-    stores: [],
-    schemas: [],
-    errors: []
-  };
-
-  override visitProgram = (ctx: ProgramContext) => {
-    if (ctx.declaration()) {
-      for (const decl of ctx.declaration()) {
-        this.visitDeclaration(decl);
-      }
-    }
-    return this.result;
-  };
-
-  override visitDeclaration = (ctx: DeclarationContext) => {
-    if (ctx.agentDecl()) this.result.agents.push(this.visitAgentDecl(ctx.agentDecl()!));
-    else if (ctx.pipelineDecl()) this.result.pipelines.push(this.visitPipelineDecl(ctx.pipelineDecl()!));
-    else if (ctx.policyDecl()) this.result.policies.push(this.visitPolicyDecl(ctx.policyDecl()!));
-    else if (ctx.toolDecl()) this.result.tools.push(this.visitToolDecl(ctx.toolDecl()!));
-    else if (ctx.storeDecl()) this.result.stores.push(this.visitStoreDecl(ctx.storeDecl()!));
-    else if (ctx.schemaDecl()) this.result.schemas.push(this.visitSchemaDecl(ctx.schemaDecl()!));
-  };
-
-  override visitSchemaDecl = (ctx: SchemaDeclContext): SchemaDeclaration => {
-    const name = ctx.IDENTIFIER().getText();
-    const fieldsCtx = ctx.schemaFields();
-    const fields = fieldsCtx ? fieldsCtx.schemaField().map(f => ({
-      name: f.IDENTIFIER().getText(),
-      type: f.typeRef().getText()
-    })) : [];
-    return { name, fields };
-  };
-
-  override visitPolicyDecl = (ctx: PolicyDeclContext): PolicyDeclaration => {
-    const name = ctx.IDENTIFIER().getText();
-    const rules = ctx.policyRule().map(r => {
-      const ruleName = r.IDENTIFIER().getText();
-      const argsCtx = r.policyArgs();
-      const args = argsCtx ? argsCtx.policyArg().map(a => a.getText().replace(/^["']|["']$/g, "")) : [];
-      return { name: ruleName, args };
-    });
-    return { name, rules };
-  };
-
-  override visitToolDecl = (ctx: ToolDeclContext): ToolDeclaration => {
-    const name = ctx.IDENTIFIER(0)!.getText();
-    const provider = ctx.IDENTIFIER(1)!.getText();
-    const argsCtx = ctx.toolArgs();
-    const args = argsCtx ? argsCtx.toolArg().map(a => a.getText().replace(/^["']|["']$/g, "")) : [];
-    return { name, provider, args };
-  };
-
-  override visitStoreDecl = (ctx: StoreDeclContext): StoreDeclaration => {
-    const name = ctx.IDENTIFIER(0)!.getText();
-    const provider = ctx.IDENTIFIER(1)!.getText();
-    const argsCtx = ctx.storeArgs();
-    const args = argsCtx ? argsCtx.storeArg().map(a => a.getText().replace(/^["']|["']$/g, "")) : [];
-    return { name, provider, args };
-  };
-
-  override visitAgentDecl = (ctx: AgentDeclContext): Agent => {
-    const name = ctx.IDENTIFIER().getText();
-    const directives = ctx.directive().map(d => this.visitDirective(d));
-    
-    const configCtx = ctx.modelConfig();
-    const modelId = configCtx.modelId().getText();
-    const params: Record<string, string> = {};
-    for (const p of configCtx.modelParam()) {
-      params[p.IDENTIFIER().getText()] = p.value().getText();
-    }
-
-    let equips: string[] = [];
-    let requires: string[] = [];
-    let system: string | undefined;
-    
-    const mods = ctx.agentModifiers();
-    if (mods) {
-      for (const m of mods.agentModifier()) {
-        if (m.equipsList()) equips.push(...m.equipsList()!.IDENTIFIER().map(id => id.getText()));
-        if (m.requiresList()) requires.push(...m.requiresList()!.IDENTIFIER().map(id => id.getText()));
-        if (m.stringLiteral()) {
-          const raw = m.stringLiteral()!.getText();
-          // Strip triple-quote or single/double-quote delimiters
-          system = raw.replace(/^"""|"""$/g, '').replace(/^["']|["']$/g, '').trim();
-        }
-      }
-    }
-
-    return { name, modelId, params, equips, requires, directives, system };
-  };
-
-
-  override visitDirective = (ctx: DirectiveContext): Directive => {
-    const name = ctx.directiveName().getText();
-    const valueCtx = ctx.directiveValue();
-    let value = "";
-    if (valueCtx) {
-      const argsCtx = valueCtx.directiveArgs();
-      if (argsCtx) {
-        value = argsCtx.getText();
-      }
-    }
-    return { name, value };
-  };
-
-  override visitPipelineDecl = (ctx: PipelineDeclContext): PipelineDeclaration => {
-    const name = ctx.IDENTIFIER().getText();
-    const directives = ctx.directive().map(d => this.visitDirective(d));
-    
-    const paramsCtx = ctx.paramList();
-    const params: PipelineParam[] = paramsCtx ? paramsCtx.param().map(p => ({
-      name: p.IDENTIFIER().getText(),
-      type: p.typeRef().getText()
-    })) : [];
-
-    const returnType = ctx.typeRef().getText();
-    
-    const pipelineCtx = ctx.pipeline();
-    const pipeline: PipelineStage[] = [];
-    for (const st of pipelineCtx.pipelineStage()) {
-      pipeline.push(this.visitPipelineStage(st));
-    }
-
-    return { name, params, returnType, pipeline, directives };
-  };
-
-  override visitPipelineStage = (ctx: PipelineStageContext): PipelineStage => {
-    if (ctx.PIPE() && ctx.callExpr()) {
-      return this.visitCallExpr(ctx.callExpr()!);
-    } else if (ctx.GATE() && ctx.condition()) {
-      return this.visitCondition(ctx.condition()!);
-    } else if (ctx.FANOUT() && ctx.fanoutStages()) {
-      return this.visitFanoutStages(ctx.fanoutStages()!);
-    } else if (ctx.INTERRUPT() && ctx.yieldExpr()) {
-      return this.visitYieldExpr(ctx.yieldExpr()!);
-    } else if (ctx.LISTEN() && ctx.listenExpr()) {
-      return this.visitListenExpr(ctx.listenExpr()!);
-    } else if (ctx.LOOP() && ctx.loopExpr()) {
-      return this.visitLoopExpr(ctx.loopExpr()!);
-    } else if (ctx.expression()) {
-      return this.visitExpression(ctx.expression()!);
-    }
-    throw new ParseError("Unknown pipeline stage");
-  };
-
-  override visitCallExpr = (ctx: CallExprContext): CallStage => {
-    const callee = ctx.IDENTIFIER(0)!.getText();
-    const method = ctx.IDENTIFIER(1)!.getText();
-    const argsCtx = ctx.callArgs();
-    const args: string[] = [];
-    const namedArgs: Record<string, string> = {};
-    
-    if (argsCtx) {
-      for (const arg of argsCtx.callArg()) {
-        if (arg.idOrKeyword()) {
-          namedArgs[arg.idOrKeyword()!.getText()] = arg.callValue().getText().replace(/^["']|["']$/g, "");
-        } else {
-          args.push(arg.callValue().getText().replace(/^["']|["']$/g, ""));
-        }
-      }
-    }
-
-    return { kind: "call", callee, method, args, namedArgs };
-  };
-
-  override visitCondition = (ctx: ConditionContext): GateStage => {
-    return { kind: "gate", condition: ctx.conditionExpr().getText() };
-  };
-
-  override visitFanoutStages = (ctx: FanoutStagesContext): FanOutStage => {
-    const stages: PipelineStage[] = [];
-    for (const fs of ctx.fanoutStage()) {
-      if (fs.callExpr()) {
-        stages.push(this.visitCallExpr(fs.callExpr()!));
-      } else if (fs.IDENTIFIER()) {
-        stages.push({ kind: "expression", value: fs.IDENTIFIER()!.getText() });
-      }
-    }
-    return { kind: "fanout", stages };
-  };
-
-  override visitYieldExpr = (ctx: YieldExprContext): InterruptStage => {
-    const argsCtx = ctx.yieldArgs();
-    const args: string[] = argsCtx ? argsCtx.yieldArg().map(a => a.getText()) : [];
-    return { kind: "interrupt", callee: "yield", args };
-  };
-
-  override visitListenExpr = (ctx: ListenExprContext): ListenStage => {
-    return { kind: "listen", target: ctx.listenTarget().getText() };
-  };
-
-  override visitLoopExpr = (ctx: LoopExprContext): LoopStage => {
-    return { 
-      kind: "loop", 
-      target: ctx.IDENTIFIER()!.getText(), 
-      condition: ctx.STRING()!.getText().replace(/^["']|["']$/g, "") 
-    };
-  };
-
-  override visitExpression = (ctx: ExpressionContext): ExpressionStage => {
-    return { kind: "expression", value: ctx.getText() };
-  };
+function makeParser(source: string) {
+  const input = CharStream.fromString(source);
+  const lexer = new HaloLexer(input);
+  const listener = new CollectingErrorListener();
+  lexer.removeErrorListeners();
+  lexer.addErrorListener(listener);
+  const parser = new HaloParser(new CommonTokenStream(lexer));
+  parser.removeErrorListeners();
+  parser.addErrorListener(listener);
+  return { input, parser, listener };
 }
+
+const empty = (errors: string[]): ParseResult => ({ policies: [], tools: [], stores: [], schemas: [], agents: [], pipelines: [], errors });
 
 export function parse(source: string): ParseResult {
-  const chars = CharStream.fromString(source);
-  const lexer = new HaloLexer(chars);
-  const tokens = new CommonTokenStream(lexer);
-  const parser = new HaloParser(tokens);
+  const { input, parser, listener } = makeParser(source);
+  const program = parser.program();
+  if (listener.errors.length > 0) return empty(listener.errors);
 
-  const errorListener = new CollectingErrorListener();
-  lexer.removeErrorListeners();
-  lexer.addErrorListener(errorListener);
-  parser.removeErrorListeners();
-  parser.addErrorListener(errorListener);
+  const result = empty([]);
+  const walker = new Walker(input);
+  for (const decl of program.declaration()) {
+    const p = decl.policyDecl();
+    const t = decl.toolDecl();
+    const st = decl.storeDecl();
+    const sc = decl.schemaDecl();
+    const a = decl.agentDecl();
+    const pl = decl.pipelineDecl();
+    if (p) result.policies.push(walker.policy(p));
+    else if (t) result.tools.push(walker.tool(t));
+    else if (st) result.stores.push(walker.tool(st));
+    else if (sc) result.schemas.push(walker.schema(sc));
+    else if (a) result.agents.push(walker.agent(a));
+    else if (pl) result.pipelines.push(walker.pipeline(pl));
+  }
+  return result;
+}
 
-  const tree = parser.program();
-  
-  if (errorListener.errors.length > 0) {
+/** Parse a condition written as a string, e.g. a loop's `"context.data.x.exitCode != 0"`. */
+export function parseCondition(text: string): { expr?: CondExpr; errors: string[] } {
+  const { input, parser, listener } = makeParser(text);
+  const ctx = parser.condExpr();
+  if (!listener.errors.length && parser.getCurrentToken().type !== HaloParser.EOF) listener.errors.push(`unexpected "${parser.getCurrentToken().text}"`);
+  if (listener.errors.length) return { errors: listener.errors };
+  return { expr: new Walker(input).condition(ctx), errors: [] };
+}
+
+// ── Tree walker ──
+
+class Walker {
+  constructor(private input: CharStream) {}
+
+  private loc(ctx: ParserRuleContext): Loc {
+    return { line: ctx.start?.line ?? 0, column: ctx.start?.column ?? 0 };
+  }
+
+  /** Original source text for a rule (preserves spacing). */
+  private sourceText(ctx: ParserRuleContext): string {
+    if (!ctx.start || !ctx.stop) return ctx.getText();
+    return this.input.getTextFromRange(ctx.start.start, ctx.stop.stop);
+  }
+
+  policy(ctx: PolicyDeclContext): PolicyDeclaration {
+    const rules = ctx.policyRule().map((r) => ({
+      name: r.IDENTIFIER().getText(),
+      args: this.args(r.callArgs()).map((a) => (a.name ? `${a.name}: ${render(a.value)}` : render(a.value))),
+    }));
     return {
-      agents: [],
-      pipelines: [],
-      policies: [],
-      tools: [],
-      stores: [],
-      schemas: [],
-      errors: errorListener.errors
+      name: ctx.IDENTIFIER().getText(),
+      rules,
+      rawRules: rules.map((r) => `${r.name}(${r.args.join(", ")})`),
+      loc: this.loc(ctx),
     };
   }
 
-  const builder = new HaloAstBuilder();
-  const ast = builder.visitProgram(tree);
-  ast.errors = errorListener.errors;
-  return ast;
+  schema(ctx: SchemaDeclContext): SchemaDeclaration {
+    return {
+      name: ctx.IDENTIFIER().getText(),
+      fields: ctx.schemaField().map((f) => ({ name: f.name().getText(), type: typeText(f.typeRef()) })),
+      loc: this.loc(ctx),
+    };
+  }
+
+  tool(ctx: ToolDeclContext | StoreDeclContext): ToolDeclaration {
+    const ids = ctx.IDENTIFIER();
+    const argList = this.args(ctx.callArgs());
+    return {
+      name: ids[0]!.getText(),
+      provider: ids[1]!.getText(),
+      ...renderArgs(argList),
+      argList,
+      loc: this.loc(ctx),
+    };
+  }
+
+  agent(ctx: AgentDeclContext): Agent {
+    const params: Record<string, string> = {};
+    for (const p of ctx.modelParam()) params[p.name().getText()] = render(this.value(p.value()));
+
+    const ref = ctx.modelRef();
+    const str = ref.STRING();
+    const modelId = str ? unquote(str.getText()) : ref.getText();
+
+    const agent: Agent = { name: ctx.IDENTIFIER().getText(), modelId, params, directives: this.directives(ctx.directive()), loc: this.loc(ctx) };
+    for (const mod of ctx.agentModifier()) {
+      if (mod instanceof EquipsModifierContext) {
+        agent.equips = [...(agent.equips ?? []), ...mod.IDENTIFIER().map((i) => i.getText())];
+      } else if (mod instanceof RequiresModifierContext) {
+        agent.requires = [...(agent.requires ?? []), ...mod.IDENTIFIER().map((i) => i.getText())];
+      } else if (mod instanceof SystemModifierContext) {
+        const triple = mod.TRIPLE_STRING();
+        agent.system = triple ? dedent(triple.getText().slice(3, -3)) : unquote(mod.STRING()!.getText());
+      }
+    }
+    return agent;
+  }
+
+  private directives(list: DirectiveContext[]): Directive[] {
+    return list.map((d) => ({
+      name: d.name().getText(),
+      value: d
+        .directiveArg()
+        .map((a) => {
+          const lit = a.literal();
+          if (lit) return render(this.literal(lit));
+          return a.getText();
+        })
+        .join(", "),
+    }));
+  }
+
+  pipeline(ctx: PipelineDeclContext): PipelineDeclaration {
+    const pipelineCtx = ctx.pipeline();
+    const pipeline: PipelineStage[] = [];
+    const head = pipelineCtx.expression();
+    if (head) {
+      const expr = this.expression(head);
+      pipeline.push({ kind: "expression", value: render(expr), expr, loc: this.loc(head) });
+    }
+    for (const op of pipelineCtx.pipelineOp()) pipeline.push(this.pipelineOp(op));
+
+    return {
+      name: ctx.IDENTIFIER().getText(),
+      params: (ctx.paramList()?.param() ?? []).map((p) => ({ name: p.IDENTIFIER().getText(), type: typeText(p.typeRef()) })),
+      returnType: ctx.typeRef() ? typeText(ctx.typeRef()!) : "",
+      pipeline,
+      directives: this.directives(ctx.directive()),
+      loc: this.loc(ctx),
+    };
+  }
+
+  private pipelineOp(ctx: PipelineOpContext): PipelineStage {
+    const loc = this.loc(ctx);
+    if (ctx instanceof PipeOpContext) {
+      return { ...this.call(ctx.callExpr()), bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof GateOpContext) {
+      return { kind: "gate", condition: this.sourceText(ctx.condExpr()), expr: this.orExpr(ctx.condExpr().orExpr()), loc };
+    }
+    if (ctx instanceof InterruptOpContext) {
+      const argList = this.args(ctx.callArgs());
+      return { kind: "interrupt", callee: "yield", args: argList.map((a) => (a.name ? `${a.name}: ${render(a.value)}` : render(a.value))), argList, bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof FanoutOpContext) {
+      const stages = ctx.fanoutItem().map((item): CallStage => {
+        const call = item.callExpr();
+        const bind = bindName(item.binding());
+        if (call) return { ...this.call(call), bind };
+        return { kind: "call", callee: item.IDENTIFIER()!.getText(), method: "prompt", args: [], namedArgs: {}, argList: [], bind, implicit: true, loc: this.loc(item) };
+      });
+      return { kind: "fanout", stages, bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof BranchOpContext) {
+      const arms = ctx.branchArm().map((arm) => {
+        if (arm instanceof CondArmContext) {
+          return { condition: this.sourceText(arm.condExpr()), expr: this.orExpr(arm.condExpr().orExpr()), call: this.call(arm.callExpr()) };
+        }
+        return { call: this.call((arm as ElseArmContext).callExpr()) };
+      });
+      return { kind: "branch", arms, bind: bindName(ctx.binding()), loc };
+    }
+    if (ctx instanceof EachOpContext) {
+      return {
+        kind: "each",
+        item: ctx.IDENTIFIER().getText(),
+        list: this.callValue(ctx.callValue()),
+        options: this.args(ctx.callArgs()),
+        call: this.call(ctx.callExpr()),
+        bind: bindName(ctx.binding()),
+        loc,
+      };
+    }
+    if (ctx instanceof LoopOpContext) {
+      const raw = (ctx.STRING() ?? ctx.TRIPLE_STRING())!.getText();
+      const condition = raw.startsWith('"""') ? raw.slice(3, -3).trim() : unquote(raw);
+      const parsed = parseCondition(condition);
+      return {
+        kind: "loop",
+        target: ctx.IDENTIFIER().getText(),
+        condition,
+        expr: parsed.expr,
+        conditionErrors: parsed.errors.length ? parsed.errors : undefined,
+        options: this.args(ctx.callArgs()),
+        bind: bindName(ctx.binding()),
+        loc,
+      };
+    }
+    if (ctx instanceof ListenOpContext) {
+      const targetValue = this.callValue(ctx.callValue());
+      return { kind: "listen", target: render(targetValue), targetValue, bind: bindName(ctx.binding()), loc };
+    }
+    throw new Error(`Unhandled pipeline operator: ${ctx.getText()}`);
+  }
+
+  private call(ctx: CallExprContext): CallStage {
+    const argList = this.args(ctx.callArgs());
+    return {
+      kind: "call",
+      callee: ctx.IDENTIFIER().getText(),
+      method: ctx.name()?.getText() ?? "",
+      ...renderArgs(argList),
+      argList,
+      loc: this.loc(ctx),
+    };
+  }
+
+  private args(ctx: CallArgsContext | null): Arg[] {
+    if (!ctx) return [];
+    return ctx.callArg().map((a) =>
+      a instanceof NamedArgContext
+        ? { name: a.name().getText(), value: this.callValue(a.callValue()) }
+        : { value: this.callValue((a as any).callValue() as CallValueContext) },
+    );
+  }
+
+  private callValue(ctx: CallValueContext): Value {
+    const lit = ctx.literal();
+    if (lit) return this.literal(lit);
+    const model = ctx.MODEL_REF();
+    if (model) return { kind: "model", value: model.getText() };
+    const cref = ctx.contextRef();
+    if (cref) return this.contextRef(cref);
+    const list = ctx.listValue();
+    if (list) return { kind: "list", items: list.callValue().map((v) => this.callValue(v)) };
+    return this.dotted(ctx.dottedId()!);
+  }
+
+  private value(ctx: ValueContext): Value {
+    const lit = ctx.literal();
+    if (lit) return this.literal(lit);
+    const model = ctx.MODEL_REF();
+    if (model) return { kind: "model", value: model.getText() };
+    return this.dotted(ctx.dottedId()!);
+  }
+
+  private expression(ctx: ExpressionContext): Value {
+    const lit = ctx.literal();
+    if (lit) return this.literal(lit);
+    const cref = ctx.contextRef();
+    if (cref) return this.contextRef(cref);
+    return this.dotted(ctx.dottedId()!);
+  }
+
+  private literal(ctx: LiteralContext): Value {
+    const text = ctx.getText();
+    if (ctx.STRING()) return { kind: "string", value: unquote(text) };
+    if (ctx.TRIPLE_STRING()) return { kind: "string", value: dedent(text.slice(3, -3)) };
+    if (ctx.NUMBER()) return { kind: "number", value: Number(text), raw: text };
+    if (ctx.DURATION()) return { kind: "duration", ms: parseDuration(text), raw: text };
+    if (ctx.BOOL()) return { kind: "bool", value: text === "true" };
+    return { kind: "null" };
+  }
+
+  private dotted(ctx: DottedIdContext): Value {
+    return { kind: "ref", path: [ctx.IDENTIFIER().getText(), ...ctx.name().map((n) => n.getText())] };
+  }
+
+  private contextRef(ctx: ContextRefContext): Value {
+    return { kind: "context", path: ctx.name().map((n) => n.getText()) };
+  }
+
+  // ── Conditions ──
+
+  condition(ctx: CondExprContext): CondExpr {
+    return this.orExpr(ctx.orExpr());
+  }
+
+  private orExpr(ctx: OrExprContext): CondExpr {
+    const terms = ctx.andExpr().map((a) => this.andExpr(a));
+    return terms.length === 1 ? terms[0]! : { kind: "or", terms };
+  }
+
+  private andExpr(ctx: AndExprContext): CondExpr {
+    const terms = ctx.notExpr().map((n) => this.notExpr(n));
+    return terms.length === 1 ? terms[0]! : { kind: "and", terms };
+  }
+
+  private notExpr(ctx: NotExprContext): CondExpr {
+    if (ctx instanceof NegationContext) return { kind: "not", expr: this.notExpr(ctx.notExpr()) };
+    return this.comparison((ctx as any).comparison() as ComparisonContext);
+  }
+
+  private comparison(ctx: ComparisonContext): CondExpr {
+    const [l, r] = ctx.operand();
+    const left = this.operand(l!);
+    if (!r) return left;
+    return { kind: "compare", op: ctx.compOp()!.getText() as CompareOp, left, right: this.operand(r) };
+  }
+
+  private operand(ctx: OperandContext): CondExpr {
+    if (ctx instanceof ParenOperandContext) return this.orExpr(ctx.orExpr());
+    if (ctx instanceof LiteralOperandContext) return { kind: "value", value: this.literal(ctx.literal()) };
+    if (ctx instanceof ContextOperandContext) return { kind: "value", value: this.contextRef(ctx.contextRef()) };
+    return { kind: "value", value: this.dotted((ctx as RefOperandContext).dottedId()) };
+  }
 }
 
-export * from './types.js';
+// ── Helpers ──
+
+function bindName(ctx: BindingContext | null): string | undefined {
+  return ctx?.name().getText();
+}
+
+/** Render a value back to its textual (string-compatible) form. */
+export function render(v: Value): string {
+  switch (v.kind) {
+    case "string": return v.value;
+    case "number": return v.raw;
+    case "bool": return String(v.value);
+    case "null": return "null";
+    case "duration": return v.raw;
+    case "model": return v.value;
+    case "ref": return v.path.join(".");
+    case "context": return ["context", ...v.path].join(".");
+    case "list": return `[${v.items.map(render).join(", ")}]`;
+  }
+}
+
+function renderArgs(argList: Arg[]): { args: string[]; namedArgs: Record<string, string> } {
+  const args: string[] = [];
+  const namedArgs: Record<string, string> = {};
+  for (const a of argList) {
+    if (a.name) namedArgs[a.name] = render(a.value);
+    else args.push(render(a.value));
+  }
+  return { args, namedArgs };
+}
+
+const ESCAPES: Record<string, string> = { n: "\n", t: "\t", r: "\r", "0": "\0" };
+
+function unquote(s: string): string {
+  return s.slice(1, -1).replace(/\\(.)/g, (_, c: string) => ESCAPES[c] ?? c);
+}
+
+/** Strip common leading indentation from a triple-quoted string. */
+function dedent(s: string): string {
+  const lines = s.replace(/^[ \t]*\r?\n/, "").replace(/\r?\n[ \t]*$/, "").split(/\r?\n/);
+  const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)![0].length));
+  return lines.map((l) => l.slice(Number.isFinite(indent) ? indent : 0)).join("\n");
+}
+
+/** Type text with normalized spacing: `Array<String>`, `Map<String, Number>`. */
+function typeText(ctx: TypeRefContext): string {
+  const base = ctx.dottedId().getText();
+  const args = ctx.typeRef();
+  return args.length ? `${base}<${args.map(typeText).join(", ")}>` : base;
+}

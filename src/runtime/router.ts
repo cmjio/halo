@@ -1,5 +1,3 @@
-import { LanglyError } from "../errors.js";
-
 /**
  * LLM Router
  * 
@@ -53,9 +51,11 @@ export interface RoutedRequest extends LLMRequest {
 
 export class LLMRouter {
   private config: RouterConfig;
-  private modelCache = new Map<string, ModelInfo[]>();
+  /** Routing only happens when a config was supplied; otherwise the requested model is used. */
+  private enabled: boolean;
   
-  constructor(config: RouterConfig = {}) {
+  constructor(config?: RouterConfig) {
+    this.enabled = config !== undefined && Object.keys(config).length > 0;
     this.config = {
       strategy: "balanced",
       ...config,
@@ -71,9 +71,10 @@ export class LLMRouter {
     promptTokens: number,
     estimatedOutputTokens: number,
     availableModels?: ModelInfo[],
+    isAvailable: (modelId: string) => boolean = () => true,
   ): Promise<{ model: string; estimatedCost: number; reason: string }> {
     // If no routing needed, return original model
-    if (this.config.strategy === undefined && !this.config.maxCostPer1kTokens) {
+    if (!this.enabled) {
       return {
         model: requestedModel,
         estimatedCost: 0,
@@ -82,10 +83,13 @@ export class LLMRouter {
     }
     
     // Fetch available models if not provided
-    const models = availableModels ?? await this.getAvailableModels();
+    const models = availableModels ?? this.listModels();
+    
+    // Only consider models that have an adapter and credentials
+    let candidates = models.filter(m => isAvailable(m.id));
     
     // Filter by capabilities if required
-    let candidates = this.filterByCapabilities(models);
+    candidates = this.filterByCapabilities(candidates);
     
     // Filter by provider preferences
     candidates = this.filterByProviderPreferences(candidates);
@@ -104,7 +108,7 @@ export class LLMRouter {
     );
     
     if (!selected) {
-      throw new LanglyError(`No suitable model found for request. Candidates: ${candidates.length}`, "ROUTING_FAILED");
+      throw new Error(`No suitable model found for request. Candidates: ${candidates.length}`);
     }
     
     const reason = this.getRoutingReason(selected, requestedModel);
@@ -116,8 +120,8 @@ export class LLMRouter {
     };
   }
   
-  /** Get all available models from all providers */
-  private async getAvailableModels(): Promise<ModelInfo[]> {
+  /** Models the router can choose from. */
+  listModels(): ModelInfo[] {
     // In production, this would fetch from provider APIs
     // For now, return a static list
     return [
@@ -170,7 +174,7 @@ export class LLMRouter {
     
     return models.filter(m => {
       const cost = this.estimateCost(m, promptTokens, outputTokens);
-      const costPer1k = (cost / (promptTokens + outputTokens)) * 1000;
+      const costPer1k = (cost / Math.max(1, promptTokens + outputTokens)) * 1000;
       return costPer1k <= this.config.maxCostPer1kTokens!;
     });
   }
@@ -205,9 +209,10 @@ export class LLMRouter {
           m.id.includes("opus") || m.id.includes("gpt-4") || m.id.includes("gemini-1.5-pro")
         ) ?? models[0];
       
-      case "local-first":
+      case "local-first": {
         const local = models.find(m => m.id.startsWith("ollama/"));
         return local ?? models[0];
+      }
       
       case "balanced":
       default:

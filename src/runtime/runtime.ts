@@ -1,317 +1,441 @@
 /**
- * Langly Runtime — executes a parsed AST.
+ * Halo Runtime — executes a parsed AST.
  *
  * Execution model:
- *   1. Register all `agent` and `pipeline` definitions.
- *   2. Maintain a `context` object that accumulates results from each stage.
- *   3. Use adapters to call different LLM providers.
- *   4. Use router to optimize model selection based on cost/performance.
+ *   1. Register all declarations (agents, tools, stores, policies, pipelines).
+ *   2. A pipeline runs its pipeline stage by stage. The flowing value is
+ *      `context.current`; each call's result is also stored under
+ *      `context.data.<Callee>.<method>` and, with `as name`, `context.data.<name>`.
+ *   3. Agents call LLMs through provider adapters (optionally via the router),
+ *      wrapped by policies and the @retry / @timeout / @shadow directives.
+ *   4. `context.meta` records cost, tokens, and calls; `context.trace` is a
+ *      SHA-256 hash chain of every stage touched.
+ *   5. `|! yield` and `~> listen` ask a registered handler. With no handler,
+ *      the run pauses (status "paused") and `signal(runId, ...)` resumes it.
  */
 
-import {
-  LanglyError,
-  PipelineNotFoundError,
-  AgentNotFoundError,
-  ToolNotFoundError,
-  AdapterNotFoundError,
-  PolicyViolation,
-  SchemaValidationError,
-  TimeoutError as LanglyTimeoutError,
-  ApiKeyMissingError,
-  ToolExecutionError,
-  ProviderNotFoundError,
-  UndefinedVariableError,
-  SignalMismatchError,
-  LoopTargetError,
-  MaxDepthExceededError,
-} from "../errors.js";
-
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type {
-  ParseResult,
-  Agent,
-  PipelineDeclaration,
-  PipelineStage,
+  BranchStage,
+  CallStage,
+  CondExpr,
+  Directive,
+  EachStage,
+  FanOutStage,
   PolicyDeclaration,
-  ToolDeclaration,
-  StoreDeclaration,
+  InterruptStage,
+  ListenStage,
   LoopStage,
+  Agent,
+  ParseResult,
+  PipelineStage,
+  PipelineDeclaration,
+  SchemaDeclaration,
+  ToolDeclaration,
+  Value,
 } from "../parser/types.js";
+import { SYSTEM_EVENTS, includes, parseDuration } from "../parser/builtins.js";
+import { render } from "../parser/index.js";
+import { AdapterRegistry, type LLMRequest, type ProviderAdapter } from "./adapter.js";
+import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
+import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
+import { LocalVectorStore } from "./vectors.js";
+import { BUILTIN_PROVIDERS, declArgs, type ToolProvider, type ToolServices } from "./tools.js";
+import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
+import { validateSchema } from "./schema.js";
+import { shellQuote } from "./integrations.js";
+import { formatValue, getPath, humanize, interpolate, isPlainObject, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
 
-import {
-  AdapterRegistry,
-  type ProviderAdapter,
-  type LLMRequest,
-  type LLMResponse,
-} from "./adapter.js";
+export * from "./errors.js";
+export type { Violation } from "./policies.js";
+export type { ToolProvider, ToolCall, ToolServices } from "./tools.js";
 
-import {
-  LLMRouter,
-  CostTracker,
-  type RouterConfig,
-} from "./router.js";
+// ── Public types ─────
 
-import { TelemetryDispatcher, SQLiteTelemetrySink, TelemetryEvent } from "./telemetry.js";
+export interface ContextSnapshot {
+  input: Record<string, unknown>;
+  data: Record<string, unknown>;
+  meta: RunMeta;
+  trace: TraceEntry[];
+}
 
-import {
-  ToolRegistry,
-  RestTool,
-  PostTool,
-  PostgreSQLTool,
-  VectorStoreTool,
-  SlackTool,
-  EmailTool,
-  GitHubTool,
-  BashTool,
-  FigmaTool,
-  LinearTool,
-  BrowserTool,
-  SearchTool
-} from "./tools.js";
+export interface InterruptRequest {
+  pipeline: string;
+  /** Message for the human, from `msg:`/`message:` or the first string arg. */
+  message?: string;
+  /** Where to ask, from `channel:`/`queue:` or a tool name arg. */
+  channel?: string;
+  /** List args, e.g. links or diffs to review. */
+  attachments: unknown[];
+  timeoutMs?: number;
+  args: unknown[];
+  named: Record<string, unknown>;
+  current: unknown;
+  context: ContextSnapshot;
+}
 
-import {
-  PolicyRegistry,
-  BlockPlugin,
-  MaxWordsPlugin,
-  MaxTokensPlugin,
-  MaxLatencyPlugin,
-  RedactPlugin,
-  LogViolationPlugin,
-  RequirePlugin,
-  MatchRegexPlugin,
-  ValidatePlugin,
-  createMaxSpendPlugin,
-  type PolicyPlugin,
-  type PolicyPhase,
-} from "./policies.js";
+export interface ListenRequest {
+  pipeline: string;
+  target: string;
+  current: unknown;
+  context: ContextSnapshot;
+}
 
-import {
-  StoreRegistry,
-  FileStorePlugin,
-  type StorePlugin
-} from "./store.js";
+export interface SystemCall {
+  method: string;
+  args: unknown[];
+  named: Record<string, unknown>;
+  current: unknown;
+  context: ContextSnapshot;
+}
 
-// ── Runtime configuration ─────
+export type InterruptHandler = (req: InterruptRequest) => unknown | Promise<unknown>;
+export type ListenHandler = (req: ListenRequest) => unknown | Promise<unknown>;
+export type SystemHandler = (call: SystemCall) => unknown | Promise<unknown>;
+
+export interface MockRequest {
+  target: string;
+  kind: "agent" | "tool" | "yield" | "listen";
+  prompt?: string;
+  system?: string;
+  args: unknown[];
+  named: Record<string, unknown>;
+  input: unknown;
+}
+
+/** A canned value, or a function computing one. */
+export type MockValue = unknown | ((req: MockRequest) => unknown | Promise<unknown>);
+
+export interface CallRecord {
+  pipeline: string;
+  stage: number;
+  target: string;
+  kind: "agent" | "tool" | "shadow";
+  model?: string;
+  latencyMs: number;
+  cost: number;
+  tokens?: { prompt: number; completion: number };
+  attempts: number;
+  mocked: boolean;
+}
+
+export interface ShadowRecord {
+  primary: string;
+  shadow: string;
+  output?: unknown;
+  error?: string;
+  latencyMs: number;
+}
+
+export interface RunMeta {
+  runId: string;
+  pipeline: string;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  cost: number;
+  tokens: { prompt: number; completion: number };
+  calls: CallRecord[];
+  violations: Violation[];
+  shadows: ShadowRecord[];
+  halted?: { stage: number; condition: string };
+  /** Set while the run waits at `|! yield` (`waitingFor: "yield"`) or `~> listen(T)` (`waitingFor: T`). */
+  paused?: { stage: number; waitingFor: string; message?: string };
+  checkpoint?: string;
+}
+
+export interface TraceEntry {
+  index: number;
+  stage: PipelineStage["kind"];
+  label: string;
+  at: string;
+  /** SHA-256 of the stage's output value. */
+  outputHash: string;
+  /** SHA-256 over (prev, index, stage, label, at, outputHash). */
+  hash: string;
+  prev: string;
+}
+
+export interface RunResult {
+  output: unknown;
+  /** halted: a gate closed. paused: waiting for `signal(runId, ...)`. */
+  status: "completed" | "halted" | "paused";
+  runId: string;
+  context: ContextSnapshot;
+}
+
+/** Everything needed to continue a run later: a @checkpoint file or a paused run. */
+export interface RunSnapshot {
+  version: 1;
+  pipeline: string;
+  /** Stage to run next; for a paused run, the yield/listen stage waiting for its response. */
+  nextStage: number;
+  waitingFor?: string;
+  input: Record<string, unknown>;
+  data: Record<string, unknown>;
+  meta: RunMeta;
+  trace: TraceEntry[];
+  current: unknown;
+}
+
+/** Where paused runs are kept until `signal()` resumes them. */
+export interface RunStore {
+  save(runId: string, snapshot: RunSnapshot): void | Promise<void>;
+  load(runId: string): RunSnapshot | undefined | Promise<RunSnapshot | undefined>;
+  delete(runId: string): void | Promise<void>;
+}
+
+/** Keeps paused runs in this process (the default). */
+export class MemoryRunStore implements RunStore {
+  private runs = new Map<string, string>();
+  save(runId: string, snapshot: RunSnapshot) {
+    this.runs.set(runId, JSON.stringify(snapshot));
+  }
+  load(runId: string) {
+    const json = this.runs.get(runId);
+    return json === undefined ? undefined : (JSON.parse(json) as RunSnapshot);
+  }
+  delete(runId: string) {
+    this.runs.delete(runId);
+  }
+}
+
+/** Keeps paused runs as JSON files, so another process (or `halo resume`) can continue them. */
+export class FileRunStore implements RunStore {
+  constructor(readonly dir = ".halo/runs") {}
+  private path(runId: string) {
+    if (!/^[\w-]+$/.test(runId)) throw new SignalError(`Invalid run id "${runId}"`, "RUN_NOT_FOUND");
+    return `${this.dir}/${runId}.json`;
+  }
+  async save(runId: string, snapshot: RunSnapshot) {
+    mkdirSync(this.dir, { recursive: true });
+    await Bun.write(this.path(runId), JSON.stringify(snapshot, null, 2));
+  }
+  async load(runId: string) {
+    const file = Bun.file(this.path(runId));
+    return (await file.exists()) ? ((await file.json()) as RunSnapshot) : undefined;
+  }
+  async delete(runId: string) {
+    await Bun.file(this.path(runId)).delete().catch(() => {});
+  }
+}
+
+export type RuntimeEvent =
+  | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number }
+  | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
+  | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean }
+  | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean }
+  | { type: "retry"; runId: string; target: string; attempt: number; error: string; delayMs: number }
+  | { type: "shadow"; runId: string; record: ShadowRecord }
+  | { type: "halt"; runId: string; pipeline: string; index: number; condition: string }
+  /** A branch stage chose an arm (`arm` is its index; -1 when none matched). */
+  | { type: "branch"; runId: string; pipeline: string; index: number; arm: number; condition?: string }
+  /** A loop's condition held, so the run jumps back to `to` (the agent's earlier stage). */
+  | { type: "loop"; runId: string; pipeline: string; index: number; to: number; iteration: number; condition: string }
+  /** An output policy rejected an agent's answer and `@correct` asked it to try again. */
+  | { type: "correction"; runId: string; pipeline: string; target: string; attempt: number; error: string }
+  /** Text from a model, in order (the whole answer as one chunk unless the adapter streams). */
+  | { type: "token"; runId: string; pipeline: string; target: string; text: string }
+  | { type: "paused"; pipeline: string; runId: string; index: number; waitingFor: string }
+  | { type: "checkpoint"; runId: string; path: string }
+  | ({ type: "violation"; runId: string } & Violation);
 
 export interface RuntimeConfig {
-  /** LLM API key (env var fallback: LANGLY_API_KEY) */
+  /** API key used for any provider without a more specific key. */
   apiKey?: string;
+  /** Per-provider keys, by adapter id (e.g. { anthropic: "...", openai: "..." }). */
+  apiKeys?: Record<string, string>;
+  /** Environment for `Env.*` and provider keys. Defaults to Bun.env. */
+  env?: Record<string, string | undefined>;
   /** Router configuration for model selection */
   router?: RouterConfig;
+  /** fetch implementation (for tests or proxies). */
+  fetch?: typeof fetch;
+  /** SQLite file for VectorStore tools. Defaults to .halo/vectors.sqlite */
+  vectorPath?: string;
+  /** Directory for @checkpoint snapshots. Defaults to .halo/checkpoints */
+  checkpointDir?: string;
+  /** Where paused runs wait for `signal()`. Defaults to an in-memory store. */
+  runStore?: RunStore;
+  onInterrupt?: InterruptHandler;
+  onListen?: ListenHandler;
+  /** Receives System.Publish / Distribute / ResolveIncident / TriggerWebhook / Notify. */
+  onSystemEvent?: (call: SystemCall) => unknown | Promise<unknown>;
+  /** Observe execution (stages, LLM calls, retries, ...). */
+  onEvent?: (event: RuntimeEvent) => void;
+  logger?: Pick<Console, "log" | "warn">;
 }
 
-// ── Pipeline Events ─────
+// ── Internals ─────
 
-export type StreamEvent =
-  | { type: "token"; text: string; stage: string }
-  | { type: "stage_start"; stage: string }
-  | { type: "stage_complete"; stage: string; result?: unknown }
-  | { type: "done"; result: unknown }
-  | { type: "error"; error: Error };
-
-// ── Persistence ─────
-export class SuspendedRun {
-  constructor(public runId: string, public state?: any) {}
-}
-
-export interface ExecutionStore {
-  save(runId: string, context: ExecutionContext): Promise<void>;
-  load(runId: string): Promise<ExecutionContext | null>;
-}
-
-export class InMemoryExecutionStore implements ExecutionStore {
-  private runs = new Map<string, ExecutionContext>();
-  async save(runId: string, context: ExecutionContext) { this.runs.set(runId, context); }
-  async load(runId: string) { return this.runs.get(runId) ?? null; }
-}
-
-/** Durable SQLite-backed execution store. Survives process restarts. */
-export class SQLiteExecutionStore implements ExecutionStore {
-  private db: import("bun:sqlite").Database;
-  private insertStmt: any;
-  private selectStmt: any;
-
-  constructor(dbPath: string = ".langly.db") {
-    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
-    this.db = new Database(dbPath);
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS execution_runs (
-        run_id TEXT PRIMARY KEY,
-        context_json TEXT NOT NULL,
-        status TEXT DEFAULT 'suspended',
-        created_at INTEGER DEFAULT (unixepoch()),
-        updated_at INTEGER DEFAULT (unixepoch())
-      )
-    `);
-    this.insertStmt = this.db.prepare(`
-      INSERT OR REPLACE INTO execution_runs (run_id, context_json, updated_at)
-      VALUES (?, ?, unixepoch())
-    `);
-    this.selectStmt = this.db.prepare(`SELECT context_json FROM execution_runs WHERE run_id = ?`);
-  }
-
-  async save(runId: string, context: ExecutionContext): Promise<void> {
-    // Strip non-serializable fields before persisting
-    const serializable = { ...context, _streamSink: undefined };
-    this.insertStmt.run(runId, JSON.stringify(serializable));
-  }
-
-  async load(runId: string): Promise<ExecutionContext | null> {
-    const row = this.selectStmt.get(runId) as { context_json: string } | undefined;
-    if (!row) return null;
-    return JSON.parse(row.context_json) as ExecutionContext;
-  }
-
-  close(): void {
-    this.db.close();
-  }
-}
-
-// ── Context ─────
-
-export interface ExecutionContext {
-  /** Input arguments to the pipeline */
+interface ExecutionContext {
+  pipeline: PipelineDeclaration;
   input: Record<string, unknown>;
-  /** Accumulated results from each pipeline stage */
   data: Record<string, unknown>;
-  /** Current pipeline result (passed to next stage) */
+  meta: RunMeta;
+  trace: TraceEntry[];
   current: unknown;
-  /** System metadata (token usage, latency, cost) */
-  meta: {
-    totalCost: number;
-    totalTokens: number;
-    lastLatency: number;
-    stageCount: number;
-    calls: Array<{ model: string; tokens: number; cost: number; latency: number }>;
-  };
-  /** Execution trace — ordered list of stages executed */
-  trace: Array<{ stage: string; timestamp: number; result?: string }>;
-  /** Unique ID for the run */
-  runId?: string;
-  /** Internal depth counter to prevent infinite loops */
-  _callDepth?: number;
-  /** Index of the current pipeline stage */
-  stageIndex?: number;
-  /** Name of the pipeline being executed */
-  streamName?: string;
-  /** The specific signal event name the pipeline is waiting for (if suspended by listen) */
-  targetSignal?: string;
-  /** Internal: pipeline event sink for streaming mode. Not part of the public API. */
-  _streamSink?: StreamEvent[];
+  stageIndex: number;
+  depth: number;
+  signal: AbortSignal;
+  shadowTasks: Promise<void>[];
+  /** How many times each loop stage (by index) has jumped back. */
+  loops: Record<number, number>;
+  /** The calling pipeline's context, for a called pipeline. */
+  parent?: ExecutionContext;
 }
 
-// ── Mock table ─────
+/** Thrown inside a run to pause it at a yield/listen with no handler. */
+class Pause {
+  constructor(readonly waitingFor: string, readonly message?: string) {}
+}
 
-interface MockTable {
-  responses: Record<string, string>;
+interface LLMOptions {
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+}
+
+/** Named args on an agent call that configure the request rather than the prompt. */
+const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system"]);
+const MAX_STREAM_DEPTH = 16;
+const GENESIS = "0".repeat(64);
+
+function sha256(...parts: string[]): string {
+  const h = new Bun.CryptoHasher("sha256");
+  for (const p of parts) h.update(p);
+  return h.digest("hex");
+}
+
+function safeJson(v: unknown): string {
+  try {
+    return JSON.stringify(v) ?? "undefined";
+  } catch {
+    return String(v);
+  }
+}
+
+function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  work.catch(() => {}); // the loser of the race must not surface as an unhandled rejection
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function childSignal(parent: AbortSignal): AbortController {
+  const c = new AbortController();
+  if (parent.aborted) c.abort(parent.reason);
+  else parent.addEventListener("abort", () => c.abort(parent.reason), { once: true });
+  return c;
+}
+
+function directiveArgs(d: Directive | undefined): string[] {
+  return d?.value ? d.value.split(/\s*,\s*/) : [];
+}
+
+function findDirective(list: Directive[] | undefined, name: string): Directive | undefined {
+  return list?.find((d) => d.name === name);
+}
+
+export function stageLabel(stage: PipelineStage): string {
+  switch (stage.kind) {
+    case "expression": return stage.value;
+    case "call": return stage.method ? `${stage.callee}.${stage.method}` : stage.callee;
+    case "gate": return `|? (${stage.condition})`;
+    case "fanout": return `|* { ${stage.stages.map(stageLabel).join(", ")} }`;
+    case "branch": return `|? { ${stage.arms.map((a) => `${a.condition === undefined ? "else" : `(${a.condition})`} => ${stageLabel(a.call)}`).join(", ")} }`;
+    case "each": return `|* each(${stage.item} in ${render(stage.list)}) => ${stageLabel(stage.call)}`;
+    case "interrupt": return "|! yield";
+    case "listen": return `~> listen(${stage.target})`;
+    case "loop": return `|<> loop(${stage.target}, "${stage.condition}")`;
+  }
+}
+
+/** Check that a trace is an unbroken hash chain. */
+export function verifyTrace(trace: TraceEntry[]): boolean {
+  let prev = GENESIS;
+  for (const t of trace) {
+    if (t.prev !== prev || t.hash !== sha256(t.prev, String(t.index), t.stage, t.label, t.at, t.outputHash)) return false;
+    prev = t.hash;
+  }
+  return true;
 }
 
 // ── Runtime ─────
 
-export class LanglyRuntime {
+export class HaloRuntime {
   private agents = new Map<string, Agent>();
   private pipelines = new Map<string, PipelineDeclaration>();
   private policies = new Map<string, PolicyDeclaration>();
   private tools = new Map<string, ToolDeclaration>();
-  private stores = new Map<string, StoreDeclaration>();
-  private schemas = new Map<string, any>();
+  private schemas = new Map<string, SchemaDeclaration>();
+  private listeners = new Set<(event: RuntimeEvent) => void>();
+  private guard = new PolicyEngine(this.policies);
+  private shadowMinds = new Map<string, Agent[]>();
+  private shadowModels = new Map<string, string[]>();
+
   private config: RuntimeConfig;
-  private mocks: MockTable | null = null;
+  private mocks: Record<string, MockValue> | null = null;
   private adapterRegistry = new AdapterRegistry();
+  private router: LLMRouter;
+  private routerEnabled: boolean;
   private costTracker = new CostTracker();
-  private store: ExecutionStore = new InMemoryExecutionStore();
-  public toolRegistry = new ToolRegistry();
-  public guardrailRegistry = new PolicyRegistry();
-  public memoryRegistry = new StoreRegistry();
-  public router: LLMRouter;
-  public telemetry = new TelemetryDispatcher();
-
-  public lastContext?: ExecutionContext;
-
-  /** Load-time validation warnings (non-fatal). */
-  public warnings: string[] = [];
-
-  /** Optional callback for shadow agent failures. Set this to opt into shadow error alerting. */
-  public onShadowError?: (agentName: string, error: Error) => void;
-
-  setExecutionStore(store: ExecutionStore): this {
-    this.store = store;
-    return this;
-  }
+  private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
+  private systems = new Map<string, SystemHandler>();
+  private vectorStore?: LocalVectorStore;
+  private sqlPool = new Map<string, InstanceType<typeof Bun.SQL>>();
+  private runStore: RunStore;
 
   constructor(config: RuntimeConfig = {}) {
     this.config = config;
+    this.runStore = config.runStore ?? new MemoryRunStore();
     this.router = new LLMRouter(config.router);
-
-    // Register built-in tools
-    this.toolRegistry
-      .register(new RestTool())
-      .register(new PostTool())
-      .register(new PostgreSQLTool())
-      .register(new VectorStoreTool())
-      .register(new SlackTool())
-      .register(new EmailTool())
-      .register(new GitHubTool())
-      .register(new BashTool())
-      .register(new FigmaTool())
-      .register(new LinearTool())
-      .register(new BrowserTool())
-      .register(new SearchTool());
-
-    // Register built-in policies
-    this.guardrailRegistry
-      .register(new BlockPlugin())
-      .register(new MaxWordsPlugin())
-      .register(new MaxTokensPlugin())
-      .register(new MaxLatencyPlugin())
-      .register(new RedactPlugin())
-      .register(new LogViolationPlugin())
-      .register(new RequirePlugin())
-      .register(new MatchRegexPlugin())
-      .register(new ValidatePlugin())
-      .register(createMaxSpendPlugin(() => this.costTracker.getTotalCost()));
-
-    // Register built-in store providers
-    this.memoryRegistry
-      .register(new FileStorePlugin());
-
-    // Add default SQLite sink
-    this.telemetry.addSink(new SQLiteTelemetrySink());
+    this.routerEnabled = config.router !== undefined;
   }
+
+  private get env(): Record<string, string | undefined> {
+    return this.config.env ?? Bun.env;
+  }
+
+  private get logger(): Pick<Console, "log" | "warn"> {
+    return this.config.logger ?? console;
+  }
+
+  private get fetch(): typeof fetch {
+    return this.config.fetch ?? fetch;
+  }
+
+  // ── Setup ──
 
   /** Load a parsed program into the runtime. */
   load(ast: ParseResult): this {
+    if (ast.errors.length > 0) throw new HaloError(`Cannot load a program with parse errors:\n  ${ast.errors.join("\n  ")}`);
     for (const m of ast.agents) this.agents.set(m.name, m);
     for (const s of ast.pipelines) this.pipelines.set(s.name, s);
     for (const g of ast.policies) this.policies.set(g.name, g);
-    for (const t of ast.tools) this.tools.set(t.name, t);
-    for (const m of ast.stores) this.stores.set(m.name, m);
-    if (ast.schemas) {
-      for (const s of ast.schemas) this.schemas.set(s.name, s);
-    }
-
-    // Load-time validation (non-fatal warnings)
-    this.warnings = [];
-    for (const s of ast.pipelines) {
-      if (s.returnType && s.returnType !== "Result" && s.returnType !== "String" && s.returnType !== "Number" && s.returnType !== "Boolean") {
-        if (!this.schemas.has(s.returnType)) {
-          this.warnings.push(`Pipeline "${s.name}" returns "${s.returnType}" but no schema "${s.returnType}" is declared`);
-        }
-      }
-    }
-    for (const m of ast.agents) {
-      if (m.directives) {
-        for (const d of m.directives) {
-          if (d.name === "shadow") {
-            const shadowName = d.value.replace(/^["'(]|["')]$/g, "");
-            if (!this.agents.has(shadowName)) {
-              this.warnings.push(`Agent "${m.name}" has @shadow(${shadowName}) but agent "${shadowName}" is not declared`);
-            }
-          }
-        }
-      }
-    }
-
+    for (const t of [...ast.tools, ...ast.stores]) this.tools.set(t.name, t);
+    for (const sc of ast.schemas) this.schemas.set(sc.name, sc);
+    this.indexShadows();
     return this;
+  }
+
+  /**
+   * `@shadow(Primary) agent Candidate` runs Candidate alongside every Primary call.
+   * `@shadow(openai/gpt-4o) agent M` runs the same prompt on that model alongside M.
+   */
+  private indexShadows(): void {
+    this.shadowMinds.clear();
+    this.shadowModels.clear();
+    for (const m of this.agents.values()) {
+      const target = findDirective(m.directives, "shadow")?.value;
+      if (!target || target === m.name) continue;
+      if (this.agents.has(target)) this.shadowMinds.set(target, [...(this.shadowMinds.get(target) ?? []), m]);
+      else if (/[-/]/.test(target)) this.shadowModels.set(m.name, [...(this.shadowModels.get(m.name) ?? []), target]);
+    }
   }
 
   /** Register a custom adapter */
@@ -320,1190 +444,1030 @@ export class LanglyRuntime {
     return this;
   }
 
-  /** Register a custom policy plugin */
-  registerGuardrail(plugin: PolicyPlugin): this {
-    this.guardrailRegistry.register(plugin);
+  /** Register a tool provider, usable as `tool Name : <name>(...)`. */
+  registerToolProvider(name: string, provider: ToolProvider): this {
+    this.providers.set(name, provider);
+    return this;
+  }
+
+  /** Register a `System.<name>(...)` method. A non-undefined return value replaces the pipeline value. */
+  registerSystem(name: string, handler: SystemHandler): this {
+    this.systems.set(name, handler);
+    return this;
+  }
+
+  /** Handle `|! yield(...)` (human-in-the-loop). */
+  onInterrupt(handler: InterruptHandler): this {
+    this.config.onInterrupt = handler;
+    return this;
+  }
+
+  /** Handle `~> listen(...)` (external events). */
+  onListen(handler: ListenHandler): this {
+    this.config.onListen = handler;
     return this;
   }
 
   /** Set the router configuration */
   setRouterConfig(config: RouterConfig): this {
     this.router = new LLMRouter(config);
+    this.routerEnabled = true;
     return this;
-  }
-
-  /** Install mock responses — ONLY for testing. */
-  mockAll(responses: Record<string, string>): this {
-    this.mocks = { responses };
-    return this;
-  }
-
-  /** Execute a named pipeline with the provided arguments. */
-  async execute(
-    streamName: string,
-    args: Record<string, unknown>,
-  ): Promise<unknown> {
-    const pipeline = this.pipelines.get(streamName);
-    if (!pipeline) throw new PipelineNotFoundError(streamName);
-
-    // Initialize execution context
-    const ctx: ExecutionContext = {
-      input: { ...args },
-      data: {},
-      current: Object.values(args)[0] ?? "",
-      meta: { totalCost: 0, totalTokens: 0, lastLatency: 0, stageCount: 0, calls: [] },
-      trace: [],
-      runId: crypto.randomUUID(),
-      stageIndex: 0,
-      streamName,
-    };
-    this.lastContext = ctx;
-    
-    this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "stream_start", stage: streamName, payload: args });
-
-    // Apply pipeline-level directives (timeout, retry)
-    const timeout = pipeline.directives.find(d => d.name === "timeout");
-    
-    let executeWithDirectives = async (): Promise<unknown> => {
-      return await this.executePipeline(pipeline.pipeline, ctx);
-    };
-
-    const retry = pipeline.directives.find(d => d.name === "retry");
-    if (retry) {
-      const argsStr = retry.value.replace(/^\(|\)$/g, "");
-      const [r, d] = argsStr.split(",").map(s => s.trim());
-      const maxRetries = parseInt(r ?? "0");
-      const delay = this.parseDuration(d ?? "0");
-      const baseExecute = executeWithDirectives;
-      executeWithDirectives = async () => {
-        let lastError;
-        for (let i = 0; i < maxRetries; i++) {
-          try {
-            return await baseExecute();
-          } catch (err: any) {
-            lastError = err;
-            // Don't retry deterministic failures — they won't improve on retry
-            if (
-              err instanceof PolicyViolation ||
-              err instanceof SchemaValidationError ||
-              err instanceof PipelineNotFoundError ||
-              err instanceof AgentNotFoundError ||
-              err instanceof ToolNotFoundError ||
-              err instanceof AdapterNotFoundError ||
-              err instanceof ApiKeyMissingError ||
-              err instanceof UndefinedVariableError ||
-              err instanceof LoopTargetError
-            ) {
-              throw err;
-            }
-            if (i < maxRetries - 1) {
-              await new Promise(r => setTimeout(r, delay));
-            }
-          }
-        }
-        throw lastError;
-      };
-    }
-
-    let result: unknown;
-    try {
-      if (timeout) {
-        result = await this.withTimeout(executeWithDirectives, timeout.value);
-      } else {
-        result = await executeWithDirectives();
-      }
-
-      if (pipeline.returnType && this.schemas.has(pipeline.returnType)) {
-        result = this.validateStruct(result, this.schemas.get(pipeline.returnType));
-      }
-
-      this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "stream_end", stage: streamName, payload: result });
-      return result;
-    } catch (err: any) {
-      this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "error", stage: streamName, payload: err.stack || err.message });
-      throw err;
-    }
-  }
-
-  /** Pipeline a named pipeline, yielding events as they happen. */
-  async *pipeline(
-    streamName: string,
-    args: Record<string, unknown>,
-  ): AsyncGenerator<StreamEvent> {
-    const pipelineDecl = this.pipelines.get(streamName);
-    if (!pipelineDecl) throw new PipelineNotFoundError(streamName);
-
-    const ctx: ExecutionContext = {
-      input: { ...args },
-      data: {},
-      current: Object.values(args)[0] ?? "",
-      meta: { totalCost: 0, totalTokens: 0, lastLatency: 0, stageCount: 0, calls: [] },
-      trace: [],
-      runId: crypto.randomUUID(),
-      stageIndex: 0,
-      streamName,
-      _streamSink: [],
-    };
-    this.lastContext = ctx;
-
-    // Event-driven notification: the sink signals the consumer when events arrive.
-    // This replaces the CPU-burning 1ms polling loop.
-    let notifyResolve: (() => void) | null = null;
-    const originalPush = ctx._streamSink!.push.bind(ctx._streamSink!);
-    ctx._streamSink!.push = (...items: StreamEvent[]) => {
-      const result = originalPush(...items);
-      if (notifyResolve) {
-        const resolve = notifyResolve;
-        notifyResolve = null;
-        resolve();
-      }
-      return result;
-    };
-
-    const waitForEvent = (): Promise<void> =>
-      new Promise(resolve => { notifyResolve = resolve; });
-
-    // Run pipeline in background
-    let pipelineDone = false;
-    let pipelineError: Error | null = null;
-    let pipelineResult: unknown;
-
-    this.executePipeline(pipelineDecl.pipeline, ctx)
-      .then(result => {
-        pipelineResult = result;
-        pipelineDone = true;
-        // Wake up the consumer if it's waiting
-        if (notifyResolve) notifyResolve();
-      })
-      .catch(err => {
-        pipelineError = err;
-        pipelineDone = true;
-        if (notifyResolve) notifyResolve();
-      });
-
-    // Yield events as they arrive — no busy-waiting
-    while (!pipelineDone) {
-      while (ctx._streamSink!.length > 0) {
-        yield ctx._streamSink!.shift()!;
-      }
-      if (!pipelineDone) {
-        await waitForEvent();
-      }
-    }
-
-    // Drain any remaining events
-    while (ctx._streamSink!.length > 0) {
-      yield ctx._streamSink!.shift()!;
-    }
-
-    // Validate schema if needed
-    if (!pipelineError && pipelineDecl.returnType && this.schemas.has(pipelineDecl.returnType)) {
-      try {
-        pipelineResult = this.validateStruct(pipelineResult, this.schemas.get(pipelineDecl.returnType));
-      } catch (err: any) {
-        pipelineError = err;
-      }
-    }
-
-    if (pipelineError) {
-      yield { type: "error", error: pipelineError };
-    } else {
-      yield { type: "done", result: pipelineResult };
-    }
-  }
-
-  private validateStruct(data: unknown, schemaDecl: any): unknown {
-    let parsedData = data;
-    if (typeof data === "string") {
-      try {
-        parsedData = JSON.parse(data);
-      } catch (e) {
-        throw new SchemaValidationError(schemaDecl.name, "Output is not valid JSON");
-      }
-    }
-
-    if (!parsedData || typeof parsedData !== "object") {
-      throw new SchemaValidationError(schemaDecl.name, `expected object matching '${schemaDecl.name}'`);
-    }
-
-    for (const field of schemaDecl.fields) {
-      if (!(field.name in (parsedData as Record<string, unknown>))) {
-        throw new SchemaValidationError(schemaDecl.name, `missing field '${field.name}' in '${schemaDecl.name}'`);
-      }
-
-      const val = (parsedData as Record<string, unknown>)[field.name];
-      const typeStr = field.type;
-
-      let valid = false;
-      if (typeStr === "String") valid = typeof val === "string";
-      else if (typeStr === "Number") valid = typeof val === "number";
-      else if (typeStr === "Boolean") valid = typeof val === "boolean";
-      else if (typeStr === "Array") valid = Array.isArray(val);
-      else {
-        // If it's a nested schema, we could recursively validate, but for now we just allow object
-        valid = typeof val === "object" && val !== null;
-      }
-
-      if (!valid) {
-        throw new SchemaValidationError(schemaDecl.name, `expected type '${typeStr}' for field '${field.name}'`);
-      }
-    }
-
-    return parsedData;
-  }
-
-  /** Signal a suspended execution to resume. */
-  async signal(runId: string, eventName: string, payload: unknown): Promise<unknown> {
-    const ctx = await this.store.load(runId);
-    if (!ctx) throw new LanglyError(`Run ${runId} not found`, "RUN_NOT_FOUND");
-    if (!ctx.streamName) throw new LanglyError("Pipeline name missing in context", "INVALID_CONTEXT");
-    
-    // Verify signal matches
-    if (ctx.targetSignal && ctx.targetSignal !== eventName) {
-      // If it's a generic "resume" signal and we didn't specify a strict target, we could allow it,
-      // but the listen node sets a strict target.
-      if (eventName !== "resume" || ctx.targetSignal !== "resume") {
-        throw new SignalMismatchError(ctx.targetSignal!, eventName);
-      }
-    }
-
-    const pipeline = this.pipelines.get(ctx.streamName);
-    if (!pipeline) throw new PipelineNotFoundError(ctx.streamName!);
-
-    ctx.current = payload;
-    ctx.stageIndex = (ctx.stageIndex ?? 0) + 1;
-    // Clear the target signal so it doesn't block future yields
-    ctx.targetSignal = undefined;
-    
-    this.lastContext = ctx;
-
-    return await this.executePipeline(pipeline.pipeline, ctx);
-  }
-
-  /** Execute a pipeline stage by stage. */
-  private async executePipeline(
-    stages: PipelineStage[],
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    ctx._callDepth = (ctx._callDepth ?? 0) + 1;
-    if (ctx._callDepth > 50) throw new MaxDepthExceededError(50);
-
-    while (ctx.stageIndex !== undefined && ctx.stageIndex < stages.length) {
-      const stage = stages[ctx.stageIndex];
-      if (!stage) break;
-      switch (stage.kind) {
-        case "expression": {
-          const exprName = `expression:${stage.value}`;
-          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_start", stage: exprName });
-          ctx.current = this.resolveExpression(stage, ctx);
-          // Store expression value in context.data so context.data.<name> works
-          if (stage.value && !stage.value.startsWith('"') && !stage.value.startsWith("'") && !stage.value.startsWith("context.")) {
-            ctx.data[stage.value] = ctx.current;
-          }
-          ctx.trace.push({ stage: exprName, timestamp: Date.now() });
-          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_complete", stage: exprName, result: ctx.current });
-          break;
-        }
-
-        case "call": {
-          const callName = `${stage.callee}.${stage.method}`;
-          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_start", stage: callName });
-          ctx.current = await this.executeCall(stage, ctx);
-          this.storeResult(ctx, stage);
-          ctx.trace.push({ stage: callName, timestamp: Date.now() });
-          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_complete", stage: callName, result: ctx.current });
-          break;
-        }
-
-        case "gate":
-          if (!this.evaluateCondition(stage.condition, ctx)) {
-            ctx.trace.push({ stage: `gate:${stage.condition}:false`, timestamp: Date.now() });
-            return ctx.current;
-          }
-          ctx.trace.push({ stage: `gate:${stage.condition}:true`, timestamp: Date.now() });
-          break;
-
-        case "fanout": {
-          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_start", stage: "fanout" });
-          ctx.current = await this.executeFanout(stage, ctx);
-          ctx.trace.push({ stage: `fanout`, timestamp: Date.now() });
-          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_complete", stage: "fanout", result: ctx.current });
-          break;
-        }
-
-        case "interrupt":
-          ctx.current = await this.executeInterrupt(stage, ctx);
-          ctx.trace.push({ stage: `interrupt`, timestamp: Date.now() });
-          break;
-
-        case "listen":
-          ctx.current = await this.executeListen(stage, ctx);
-          ctx.trace.push({ stage: `listen:${stage.target}`, timestamp: Date.now() });
-          break;
-
-        case "loop": {
-          const loopStage = stage as LoopStage;
-          if (this.evaluateCondition(loopStage.condition, ctx)) {
-            const targetIndex = stages.findIndex(s => s.kind === "call" && s.callee === loopStage.target);
-            if (targetIndex !== -1) {
-              ctx.stageIndex = targetIndex - 1;
-            } else {
-              throw new LoopTargetError(loopStage.target);
-            }
-          }
-          ctx.trace.push({ stage: `loop:${loopStage.target}`, timestamp: Date.now() });
-          break;
-        }
-      }
-
-      if (ctx.current instanceof SuspendedRun) {
-        await this.store.save(ctx.runId!, ctx);
-        return ctx.current;
-      }
-
-      if (ctx.streamName) {
-        const pipeline = this.pipelines.get(ctx.streamName);
-        if (pipeline && pipeline.directives.some(d => d.name === "checkpoint")) {
-          await this.store.save(ctx.runId!, ctx);
-        }
-      }
-
-      ctx.stageIndex++;
-    }
-    return ctx.current;
-  }
-
-  /** Store result in context for later reference. */
-  private storeResult(ctx: ExecutionContext, stage: { callee: string; method: string }): void {
-    const key = `${stage.callee}.${stage.method}`;
-    ctx.data[key] = ctx.current;
-    ctx.data[stage.callee] = ctx.current;
-    // Also store by method name for friendlier access (e.g., context.data.brief)
-    ctx.data[stage.method] = ctx.current;
-  }
-
-  /** Resolve an expression (identifier lookup in context/input). */
-  private resolveExpression(
-    stage: Extract<PipelineStage, { kind: "expression" }>,
-    ctx: ExecutionContext,
-  ): unknown {
-    const value = stage.value;
-
-    if (value.startsWith('"') && value.endsWith('"')) {
-      return value.slice(1, -1);
-    }
-    if (value.startsWith("'") && value.endsWith("'")) {
-      return value.slice(1, -1);
-    }
-
-    if (value in ctx.data) return ctx.data[value];
-    if (value in ctx.input) return ctx.input[value];
-
-    if (value.startsWith("context.")) {
-      return this.resolveContextRef(value, ctx);
-    }
-
-    throw new UndefinedVariableError(value);
-  }
-
-  /** Resolve a context reference like "context.data.agent.result" */
-  private resolveContextRef(ref: string, ctx: ExecutionContext): unknown {
-    const path = ref.replace(/^context\./, "");
-    const parts = path.split(".");
-    
-    let current: unknown = ctx;
-    for (const part of parts) {
-      if (current && typeof current === "object") {
-        current = (current as Record<string, unknown>)[part];
-      } else if (typeof current === "string") {
-        // Auto-parse JSON strings for deep traversal
-        try {
-          const parsed = JSON.parse(current);
-          if (parsed && typeof parsed === "object") {
-            current = (parsed as Record<string, unknown>)[part];
-          } else {
-            return undefined;
-          }
-        } catch {
-          return undefined;
-        }
-      } else {
-        return undefined;
-      }
-    }
-    return current;
-  }
-
-  /** Execute a call stage (agent method or system call). */
-  private async executeCall(
-    stage: Extract<PipelineStage, { kind: "call" }>,
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    ctx._callDepth = (ctx._callDepth ?? 0) + 1;
-    if (ctx._callDepth > 50) throw new MaxDepthExceededError(50);
-
-
-    // Built-in: System methods
-    if (stage.callee === "System") {
-      return this.executeSystemCall(stage, ctx);
-    }
-
-    // Check if it's a direct tool call
-    if (this.tools.has(stage.callee)) {
-      return this.executeToolCall(stage, ctx);
-    }
-
-    const stageName = `${stage.callee}.${stage.method}`;
-    this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "node_start", stage: stageName, payload: ctx.current });
-    const startTime = Date.now();
-
-    // Check if it's a Agent delegating to a tool (e.g. Analyst.fetch(tool: WeatherAPI))
-    // In mock mode, skip tool routing — the mock is for the agent.method key
-    if (stage.namedArgs?.tool && typeof stage.namedArgs.tool === "string") {
-      const mockKey = `${stage.callee}.${stage.method}`;
-      if (this.mocks?.responses[mockKey] !== undefined) {
-        // Mock mode: fall through to the LLM agent call path which handles mocks
-      } else if (this.tools.has(stage.namedArgs.tool)) {
-        // Production mode: call the tool first, then pass result to the agent
-        const toolName = stage.namedArgs.tool;
-        const toolStage = { ...stage, callee: toolName };
-        this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "tool_call", stage: toolName, payload: toolStage.namedArgs });
-        const toolResult = await this.executeToolCall(toolStage, ctx);
-        // Inject tool result into context so the agent can reference it
-        ctx.data[`${toolName}_result`] = toolResult;
-        // Now fall through to the LLM agent call with tool data in context
-      }
-    }
-
-    // LLM agent call
-    const agent = this.agents.get(stage.callee);
-    if (!agent) throw new AgentNotFoundError(stage.callee);
-
-    const promptText = this.buildPrompt(stage, ctx);
-
-    // Auto-load store context
-    let memoryContext = "";
-    const loadedMemories: { decl: any; plugin: StorePlugin; config: Record<string, unknown> }[] = [];
-    
-    if (agent.equips) {
-      for (const eq of agent.equips) {
-        let handled = false;
-        const storeDecl = this.stores.get(eq);
-        if (storeDecl) {
-          const plugin = this.memoryRegistry.get(storeDecl.provider);
-          if (plugin) {
-            // Store config resolution
-            const memConfig: Record<string, unknown> = {};
-            if (storeDecl.args) {
-              storeDecl.args.forEach((a, i) => memConfig[`arg${i}`] = a);
-            }
-            const history = await plugin.load(ctx, memConfig);
-            if (history) memoryContext += `\n[Historical Context from ${eq}]\n${history}\n[/Historical Context]\n\n`;
-            
-            loadedMemories.push({ decl: storeDecl, plugin, config: memConfig });
-            handled = true;
-          }
-        }
-
-        if (!handled) {
-          const toolDecl = this.tools.get(eq);
-          if (toolDecl) {
-            if (toolDecl.provider === "VectorStore") {
-              const vsTool = this.toolRegistry.get("VectorStore") as any;
-              if (vsTool && typeof vsTool.search === "function") {
-                let namespace = "default";
-                if (toolDecl.args) {
-                  for (const arg of toolDecl.args) {
-                    if (typeof arg === "string" && arg.startsWith("namespace:")) {
-                      namespace = arg.split(":", 2)[1]?.trim().replace(/^["']|["']$/g, '') || "default";
-                    }
-                  }
-                }
-                const query = String(ctx.current ?? "");
-                const results = vsTool.search(namespace, query, 3);
-                if (results && results.length > 0) {
-                  memoryContext += `\n[Retrieved Context from ${eq}]\n${results.join("\n---\n")}\n[/Retrieved Context]\n\n`;
-                }
-              }
-            } else {
-              // Inject info for other tools
-              const toolInfo = `Tool: ${eq}\nProvider: ${toolDecl.provider}\nDescription: Available for use via tool: ${eq} in named arguments.`;
-              memoryContext += `\n[Equipped Tool Info: ${eq}]\n${toolInfo}\n[/Equipped Tool Info]\n\n`;
-            }
-          }
-        }
-      }
-    }
-
-    let fullPromptText = memoryContext + promptText;
-
-    // ── Input Guardrails: scrub/block the prompt BEFORE it hits the LLM ──
-    fullPromptText = await this.applyGuardrails(agent, ctx, fullPromptText, undefined, "input");
-    ctx.trace.push({ stage: `input_guardrail:${stage.callee}.${stage.method}`, timestamp: Date.now() });
-
-    // Dispatch shadow agents asynchronously
-    const shadowDirectives = agent.directives?.filter(d => d.name === "shadow") ?? [];
-    for (const shadowDir of shadowDirectives) {
-      const shadowAgentName = shadowDir.value.replace(/^["'(]|["')]$/g, "");
-      const shadowAgent = this.agents.get(shadowAgentName);
-      if (shadowAgent) {
-        this.callLLM(shadowAgent, fullPromptText, ctx).then(shadowResult => {
-          console.log(`[Shadow] ${shadowAgentName} returned:`, shadowResult);
-        }).catch(err => {
-          if (this.onShadowError) {
-            this.onShadowError(shadowAgentName, err);
-          } else {
-            console.error(`[Shadow] ${shadowAgentName} failed:`, err);
-          }
-        });
-      }
-    }
-
-    // Determine self-correction budget from @correct(N) directive
-    const correctDirective = agent.directives?.find(d => d.name === "correct");
-    const maxCorrections = correctDirective
-      ? parseInt(correctDirective.value.replace(/^[("']|[)"']$/g, ""), 10)
-      : 0;
-
-    // Check mocks
-    let responseText: unknown;
-    if (this.mocks) {
-      const mockKey = `${stage.callee}.${stage.method}`;
-      if (this.mocks.responses[mockKey] !== undefined) {
-        const mockResponse = this.mocks.responses[mockKey];
-        // Simulate token streaming for mock mode
-        if (ctx._streamSink) {
-          const stageName = `${stage.callee}.${stage.method}`;
-          const words = mockResponse.split(/(?<=\s)/);
-          for (const word of words) {
-            ctx._streamSink.push({ type: "token", text: word, stage: stageName });
-          }
-        }
-        responseText = mockResponse;
-      }
-    }
-
-    let metrics: { duration: number; completionTokens: number } | undefined;
-
-    if (responseText === undefined) {
-      const result = await this.callLLM(agent, fullPromptText, ctx) as { text: string, metrics: any };
-      responseText = result.text;
-      metrics = result.metrics;
-    }
-
-    // Auto-save store interaction
-    for (const loaded of loadedMemories) {
-      await loaded.plugin.save(ctx, `User: ${promptText}\nAssistant: ${responseText}`, loaded.config);
-    }
-
-    // ── Output Guardrails with Self-Correction Loop ──
-    let correctionAttempts = 0;
-    let lastViolation: PolicyViolation | null = null;
-
-    while (true) {
-      try {
-        responseText = await this.applyGuardrails(agent, ctx, String(responseText), metrics, "output");
-        break; // Guardrails passed
-      } catch (err: unknown) {
-        if (!(err instanceof PolicyViolation) || correctionAttempts >= maxCorrections) {
-          throw err; // Not a policy violation, or exhausted correction budget
-        }
-
-        // Self-correction: retry the agent call with the violation feedback
-        correctionAttempts++;
-        lastViolation = err;
-        ctx.trace.push({
-          stage: `correction_attempt:${stage.callee}.${stage.method}:${correctionAttempts}`,
-          timestamp: Date.now(),
-          result: err.message,
-        });
-
-        this.telemetry.record({
-          runId: ctx.runId!,
-          timestamp: Date.now(),
-          type: "node_start",
-          stage: `${stageName}:correction:${correctionAttempts}`,
-          payload: { violation: err.message, attempt: correctionAttempts },
-        });
-
-        // Append the violation feedback to the prompt so the LLM can correct
-        const correctionPrompt = `${fullPromptText}\n\n[CORRECTION REQUIRED] Your previous response was rejected by a policy:\n"${err.message}"\nPlease fix your response to comply with this constraint.`;
-
-        if (this.mocks) {
-          // In mock mode, the mock always returns the same thing — can't self-correct
-          // Just rethrow after logging the attempt
-          throw err;
-        }
-
-        const correctionResult = await this.callLLM(agent, correctionPrompt, ctx) as { text: string, metrics: any };
-        responseText = correctionResult.text;
-        metrics = correctionResult.metrics;
-      }
-    }
-
-    const durationMs = Date.now() - startTime;
-    this.telemetry.record({ 
-      runId: ctx.runId!, 
-      timestamp: Date.now(), 
-      type: "node_end", 
-      stage: stageName, 
-      payload: responseText,
-      metrics: { durationMs, tokens: metrics?.completionTokens }
-    });
-
-    return responseText;
-  }
-
-  private interpolate(str: string, ctx: ExecutionContext): string {
-    const regex = new RegExp("\\{\\{context\\.([a-zA-Z0-9_.]+)\\}\\}", "g");
-    return str.replace(regex, (match, path) => {
-      const val = this.resolveContextRef(`context.${path}`, ctx);
-      return val !== undefined ? String(val) : match;
-    });
-  }
-
-  /** Build prompt from stage args and context. */
-  private buildPrompt(
-    stage: Extract<PipelineStage, { kind: "call" }>,
-    ctx: ExecutionContext,
-  ): string {
-    if (stage.namedArgs && Object.keys(stage.namedArgs).length > 0) {
-      const interpolatedArgs: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(stage.namedArgs)) {
-        interpolatedArgs[k] = typeof v === "string" ? this.interpolate(v, ctx) : v;
-      }
-      return JSON.stringify(interpolatedArgs);
-    }
-
-    if (stage.args && stage.args.length > 0) {
-      const resolved = stage.args.map(arg => {
-        if (typeof arg === "string") {
-          if (arg.startsWith("context.")) return this.resolveContextRef(arg, ctx);
-          return this.interpolate(arg, ctx);
-        }
-        return arg;
-      });
-      return resolved.join(" ");
-    }
-
-    return String(ctx.current ?? "");
-  }
-
-  /** Execute a System built-in call. */
-  private executeSystemCall(
-    stage: Extract<PipelineStage, { kind: "call" }>,
-    ctx: ExecutionContext,
-  ): unknown {
-    switch (stage.method) {
-      case "Print":
-        console.log(ctx.current);
-        return ctx.current;
-
-      case "ResolveIncident":
-        console.log("Resolved:", ctx.current);
-        return ctx.current;
-
-      default:
-        throw new LanglyError(`Unknown System.${stage.method}`, "UNKNOWN_SYSTEM_METHOD");
-    }
-  }
-
-  /** Execute a tool call via the registry. */
-  private async executeToolCall(
-    stage: Extract<PipelineStage, { kind: "call" }>,
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    const tool = this.tools.get(stage.callee);
-    if (!tool) throw new ToolNotFoundError(stage.callee);
-
-    const provider = tool.provider;
-    const toolConfig: Record<string, unknown> = {};
-
-    // Helper to resolve Env variables
-    const resolveEnv = (val: unknown) => {
-      if (typeof val === "string" && val.startsWith("Env.")) {
-        return Bun.env[val.replace("Env.", "")] ?? "";
-      }
-      return val;
-    };
-
-    // 1. Resolve arguments from the tool declaration itself
-    if (tool.args) {
-      tool.args.forEach((arg, i) => {
-        toolConfig[`arg${i}`] = resolveEnv(arg);
-      });
-      // Also provide the raw args array in config if tools expect it (like RestTool expects url in args[0])
-      toolConfig.__args = tool.args.map(resolveEnv);
-    }
-    if (tool.namedArgs) {
-      for (const [k, v] of Object.entries(tool.namedArgs)) {
-        toolConfig[k] = resolveEnv(v);
-      }
-    }
-
-    // 2. Override with arguments from the pipeline stage call
-    if (stage.namedArgs) {
-      for (const [k, v] of Object.entries(stage.namedArgs)) {
-         toolConfig[k] = typeof v === "string" ? resolveEnv(this.interpolate(v, ctx)) : v;
-      }
-    }
-
-    const toolPlugin = this.toolRegistry.get(provider);
-    if (!toolPlugin) throw new ProviderNotFoundError(provider);
-
-    // If __args exists, use it, otherwise use the declaration args directly
-    const execArgs = (toolConfig.__args as string[]) ?? tool.args.map(a => String(resolveEnv(a)));
-    return await toolPlugin.execute(execArgs, toolConfig, ctx);
-  }
-
-  /** Resolve API key from config or env. */
-  private resolveApiKey(config: Record<string, unknown>): string | undefined {
-    const keyName = config.apiKey as string;
-    if (keyName?.startsWith("Env.")) {
-      const envVar = keyName.replace("Env.", "");
-      return Bun.env[envVar];
-    }
-    return this.config.apiKey ?? Bun.env.LANGLY_API_KEY;
-  }
-
-  /** Build URL for tool calls. */
-  private buildToolUrl(baseUrl: string, config: Record<string, unknown>): string {
-    let url = baseUrl;
-    for (const [key, value] of Object.entries(config)) {
-      if (key !== "apiKey" && key !== "method") {
-        url = url.replace(`{{${key}}}`, String(value));
-      }
-    }
-    return url.startsWith("http") ? url : `https://${url}`;
-  }
-
-  /** Build request body for tool calls. */
-  private buildToolBody(config: Record<string, unknown>): Record<string, unknown> {
-    const body: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(config)) {
-      if (key !== "apiKey" && key !== "method") {
-        body[key] = value;
-      }
-    }
-    return body;
   }
 
   /**
-   * Apply policies to text, filtered by execution phase.
-   * - "input": runs policies with phase "input" or "both" (before LLM)
-   * - "output": runs policies with phase "output" or "both" (after LLM)
+   * Install mock responses — for testing. Keys are `Callee.method` or `Callee`
+   * for agents and tools, `*` for any agent, `yield` for interrupts, and the
+   * listen target (e.g. `Slack.Reaction`) for listeners.
    */
-  private async applyGuardrails(
-    agent: Agent,
-    ctx: ExecutionContext,
-    textToCheck: string,
-    metrics?: { duration: number; completionTokens: number },
-    phase: "input" | "output" = "output",
-  ): Promise<string> {
-    if (!agent.requires) return textToCheck;
-
-    let currentText = textToCheck;
-    for (const guardrailName of agent.requires) {
-      const policy = this.policies.get(guardrailName);
-      if (!policy) continue;
-
-      for (const rule of policy.rules) {
-        // Check if this plugin should run in the current phase
-        const plugin = this.guardrailRegistry.get(rule.name);
-        if (plugin) {
-          const pluginPhase = plugin.phase ?? "output";
-          const shouldRun =
-            pluginPhase === "both" ||
-            pluginPhase === phase;
-          if (!shouldRun) continue;
-        }
-
-        currentText = await this.applyGuardrailRule(rule, ctx, currentText, metrics);
-      }
-    }
-    return currentText;
-  }
-
-  /** Apply a single policy rule. */
-  private async applyGuardrailRule(
-    rule: { name: string; args: string[] },
-    ctx: ExecutionContext,
-    textToCheck: string,
-    metrics?: { duration: number; completionTokens: number }
-  ): Promise<string> {
-    const plugin = this.guardrailRegistry.get(rule.name);
-    if (!plugin) {
-      console.warn(`[Policy] Unknown rule: ${rule.name}`);
-      return textToCheck;
-    }
-    
-    const result = await plugin.apply(textToCheck, rule.args, ctx, metrics);
-    return result;
-  }
-
-  /** Evaluate a gate condition. */
-  private evaluateCondition(condition: string, ctx: ExecutionContext): boolean {
-    const comparison = condition.match(/^(.+?)\s*(==|!=|>|<|>=|<=)\s*(.+)$/);
-    if (comparison) {
-      const left = this.resolveConditionValue(comparison[1] ?? "", ctx);
-      const op = comparison[2] ?? "==";
-      const right = this.resolveConditionValue(comparison[3] ?? "", ctx);
-      return this.compare(left, op, right);
-    }
-    
-    const val = this.resolveConditionValue(condition, ctx);
-    return val === true || val === "true";
-  }
-
-  private resolveConditionValue(expr: string, ctx: ExecutionContext): unknown {
-    expr = expr.trim();
-    if (expr.startsWith("context.")) {
-      return this.resolveContextRef(expr, ctx);
-    }
-    // Also support checking raw input directly if not prefixed with context.input
-    if (ctx.input[expr] !== undefined) {
-      return ctx.input[expr];
-    }
-    return this.parseValue(expr);
-  }
-
-  /** Parse a value from string. */
-  private parseValue(s: string): unknown {
-    s = s.replace(/^["']|["']$/g, "");
-    if (s === "true") return true;
-    if (s === "false") return false;
-    if (s === "undefined") return undefined;
-    if (!isNaN(Number(s))) return Number(s);
-    return s;
-  }
-
-  /** Compare two values. */
-  private compare(l: unknown, op: string, r: unknown): boolean {
-    switch (op) {
-      case "==": return l == r;
-      case "!=": return l != r;
-      case ">": return Number(l) > Number(r);
-      case "<": return Number(l) < Number(r);
-      case ">=": return Number(l) >= Number(r);
-      case "<=": return Number(l) <= Number(r);
-      default: return false;
-    }
-  }
-
-  /** Execute fan-out (parallel execution). */
-  private async executeFanout(
-    stage: Extract<PipelineStage, { kind: "fanout" }>,
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    const results: unknown[] = [];
-    const maxConcurrent = 5;
-    // Collect per-branch data writes so we can merge them back safely
-    const branchDataSets: Record<string, unknown>[] = [];
-    
-    for (let i = 0; i < stage.stages.length; i += maxConcurrent) {
-      const chunk = stage.stages.slice(i, i + maxConcurrent);
-      const chunkPromises = chunk.map(async (subStage) => {
-        // Clone context for each branch to prevent shared-state race conditions.
-        // Each branch gets its own `data` object and `meta`, but reads from
-        // the same snapshot of `input` and `current`.
-        const branchCtx: ExecutionContext = {
-          input: ctx.input,               // read-only snapshot — safe to share
-          data: { ...ctx.data },           // shallow clone — branch writes here
-          current: ctx.current,            // read-only starting value
-          meta: { ...ctx.meta, calls: [...ctx.meta.calls] },
-          trace: [...ctx.trace],
-          runId: ctx.runId,
-          _callDepth: ctx._callDepth,
-          stageIndex: ctx.stageIndex,
-          streamName: ctx.streamName,
-          _streamSink: ctx._streamSink,    // shared sink is fine — events are append-only
-        };
-
-        let result: unknown;
-        if (subStage.kind === "call") {
-          result = await this.executeCall(subStage, branchCtx);
-        } else if (subStage.kind === "expression") {
-          result = this.resolveExpression(subStage, branchCtx);
-        }
-
-        // Collect the branch's data writes and meta for merging
-        branchDataSets.push(branchCtx.data);
-        // Merge cost/token metrics back to parent
-        ctx.meta.totalCost += branchCtx.meta.totalCost - ctx.meta.totalCost;
-        ctx.meta.totalTokens += branchCtx.meta.totalTokens - ctx.meta.totalTokens;
-        ctx.meta.calls.push(...branchCtx.meta.calls.slice(ctx.meta.calls.length));
-        ctx.trace.push(...branchCtx.trace.slice(ctx.trace.length));
-
-        return result;
-      });
-      
-      const chunkResults = await Promise.all(chunkPromises);
-      results.push(...chunkResults);
-    }
-
-    // Track method names to detect duplicates
-    const methodCounts = new Map<string, number>();
-    stage.stages.forEach((subStage) => {
-      if (subStage.kind === "call") {
-        const key = `${subStage.callee}.${subStage.method}`;
-        methodCounts.set(key, (methodCounts.get(key) ?? 0) + 1);
-      }
-    });
-
-    // Merge branch results into the parent context
-    stage.stages.forEach((subStage, index) => {
-      if (subStage.kind === "call") {
-        const baseKey = `${subStage.callee}.${subStage.method}`;
-        // Always store with index suffix
-        ctx.data[`${baseKey}_${index}`] = results[index];
-        // Also store without index if method name is unique in this fan-out
-        if (methodCounts.get(baseKey) === 1) {
-          ctx.data[baseKey] = results[index];
-          ctx.data[subStage.callee] = results[index];
-          ctx.data[subStage.method] = results[index];
-        }
-      }
-    });
-
-    // Also merge any data keys that branches wrote (e.g. storeResult writes)
-    for (const branchData of branchDataSets) {
-      for (const [key, value] of Object.entries(branchData)) {
-        if (!(key in ctx.data)) {
-          ctx.data[key] = value;
-        }
-      }
-    }
-
-    return results;
-  }
-
-  /** Execute interrupt (yield for human input). */
-  private async executeInterrupt(
-    stage: Extract<PipelineStage, { kind: "interrupt" }>,
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    console.log(`[Interrupt] Yielding:`, stage.args);
-    console.log(`[Interrupt] Context:`, ctx.current);
-    ctx.targetSignal = "resume"; // Internal generic yield
-    return new SuspendedRun(ctx.runId!, stage.args);
-  }
-
-  /** Execute listener (wait for external event). */
-  private async executeListen(
-    stage: Extract<PipelineStage, { kind: "listen" }>,
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    console.log(`[Listen] Waiting for:`, stage.target);
-    const target = stage.target.replace(/^["']|["']$/g, "");
-    ctx.targetSignal = target;
-    return new SuspendedRun(ctx.runId!, { target });
-  }
-
-  /** Execute with timeout. */
-  private async withTimeout(
-    fn: () => Promise<unknown>,
-    timeoutValue: string,
-  ): Promise<unknown> {
-    const ms = this.parseDuration(timeoutValue);
-    const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new LanglyTimeoutError(timeoutValue)), ms);
-    });
-    return Promise.race([fn(), timeout]);
-  }
-
-  /** Parse duration string like "5m", "30s", "1h" to milliseconds. */
-  private parseDuration(d: string): number {
-    const match = d.match(/^(\d+)([smhd])$/);
-    if (!match || match.length < 3) return 0;
-    const num = match[1];
-    const unit = match[2];
-    if (!num || !unit) return 0;
-    const n = parseInt(num);
-    switch (unit) {
-      case "s": return n * 1000;
-      case "m": return n * 60 * 1000;
-      case "h": return n * 60 * 60 * 1000;
-      case "d": return n * 24 * 60 * 60 * 1000;
-      default: return 0;
-    }
-  }
-
-  /** Call LLM using adapter system with router. */
-  private async callLLM(
-    agent: Agent,
-    prompt: string,
-    ctx: ExecutionContext,
-  ): Promise<unknown> {
-    const modelId = agent.modelId;
-    const apiKey = this.config.apiKey ?? Bun.env.LANGLY_API_KEY;
-    
-    if (!apiKey) {
-      throw new ApiKeyMissingError();
-    }
-
-    // Use router to select best model (if routing is configured)
-    let selectedModel = modelId;
-    let estimatedCost = 0;
-    
-    if (this.config.router) {
-      try {
-        const routingResult = await this.router.route(
-          modelId,
-          JSON.stringify(ctx.input).length, // Approximate input tokens
-          4096, // Estimated output tokens
-        );
-        selectedModel = routingResult.model;
-        estimatedCost = routingResult.estimatedCost;
-        console.log(`[Router] ${routingResult.reason}`);
-      } catch (e) {
-        console.log(`[Router] Failed to route, using original model: ${e}`);
-      }
-    }
-
-    // Find the adapter for this model
-    const adapter = this.adapterRegistry.findAdapter(selectedModel);
-    if (!adapter) {
-      throw new AdapterNotFoundError(selectedModel);
-    }
-
-    // Build request
-    const temperature = parseFloat(String(agent.params["temp"] ?? "0.7"));
-    const maxTokens = agent.params["max_tokens"] ? parseInt(agent.params["max_tokens"]) : undefined;
-    const topP = agent.params["top_p"] ? parseFloat(agent.params["top_p"]) : undefined;
-
-    // Build messages: prepend system prompt if agent declares one
-    const messages: Array<{ role: string; content: string }> = [];
-    if (agent.system) {
-      messages.push({ role: "system", content: agent.system });
-    }
-    messages.push({ role: "user", content: prompt });
-
-    const request: LLMRequest = {
-      model: selectedModel, // Adapter's transformRequest handles ID transformation
-      messages,
-      temperature,
-      maxTokens,
-      topP,
-      apiKey, // Pass API key for adapters that need it in the body
-    };
-
-    // Call the adapter
-    const startTime = Date.now();
-    const response = await this.callAdapter(adapter, request, apiKey, ctx);
-    const duration = Date.now() - startTime;
-    
-    // Track cost
-    if (response.usage) {
-      const actualCost = adapter.estimateCost
-        ? adapter.estimateCost(selectedModel, response.usage.promptTokens ?? 0, response.usage.completionTokens ?? 0)
-        : estimatedCost;
-      this.costTracker.recordUsage(selectedModel, actualCost);
-    }
-
-    // Populate context.meta with call metrics
-    const callCost = response.usage
-      ? (adapter.estimateCost
-          ? adapter.estimateCost(selectedModel, response.usage.promptTokens ?? 0, response.usage.completionTokens ?? 0)
-          : estimatedCost)
-      : 0;
-    const callTokens = (response.usage?.promptTokens ?? 0) + (response.usage?.completionTokens ?? 0);
-    ctx.meta.totalCost += callCost;
-    ctx.meta.totalTokens += callTokens;
-    ctx.meta.lastLatency = duration;
-    ctx.meta.stageCount++;
-    ctx.meta.calls.push({ model: selectedModel, tokens: callTokens, cost: callCost, latency: duration });
-
-    return { 
-      text: response.text, 
-      metrics: { duration, completionTokens: response.usage?.completionTokens ?? 0 } 
-    };
-  }
-
-  /** Call an adapter with proper error handling. */
-  private async callAdapter(
-    adapter: ProviderAdapter,
-    request: LLMRequest,
-    apiKey: string,
-    ctx?: ExecutionContext,
-  ): Promise<LLMResponse> {
-    if (ctx && ctx._streamSink && adapter.parseStreamChunk) {
-      request.pipeline = true;
-    }
-
-    const url = adapter.getUrlWithApiKey
-      ? adapter.getUrlWithApiKey(request.model, apiKey)
-      : adapter.getUrl(request.model);
-    const headers = adapter.getHeaders(apiKey);
-    const body = adapter.transformRequest(request);
-
-    const res = await Bun.fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new LanglyError(`LLM API error (${res.status}): ${text}`, "LLM_API_ERROR");
-    }
-
-    if (request.pipeline && res.body && adapter.parseStreamChunk) {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let fullText = "";
-      let buffer = "";
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-            const token = adapter.parseStreamChunk(data);
-            if (token) {
-              fullText += token;
-              if (ctx?._streamSink) {
-                ctx._streamSink.push({ type: "token", text: token, stage: ctx.streamName ?? "unknown" });
-              }
-            }
-          }
-        }
-      }
-      return { text: fullText, raw: null };
-    }
-
-    const json = await res.json();
-    return adapter.parseResponse(json);
+  mockAll(responses: Record<string, MockValue>): this {
+    this.mocks = { ...(this.mocks ?? {}), ...responses };
+    return this;
   }
 
   /** Get cost tracker for usage tracking. */
   getCostTracker(): CostTracker {
     return this.costTracker;
   }
-}
 
-/** CollectingErrorListener for ANTLR4 */
-class CollectingErrorListener {
-  errors: string[] = [];
-  syntaxError(
-    _recognizer: unknown,
-    offendingSymbol: unknown,
-    line: number,
-    charPositionInLine: number,
-    msg: string,
-    _e: unknown,
-  ): void {
-    const symbol = offendingSymbol as { text?: string };
-    const tokenText = symbol?.text ?? "<missing>";
-    this.errors.push(`[${line}:${charPositionInLine}] ${msg} near "${tokenText}"`);
+  /** Release database handles. */
+  async close(): Promise<void> {
+    this.vectorStore?.close();
+    this.vectorStore = undefined;
+    await Promise.all([...this.sqlPool.values()].map((db) => db.close()));
+    this.sqlPool.clear();
   }
-  reportAmbiguity(..._args: unknown[]): void {}
-  reportAttemptingFullContext(..._args: unknown[]): void {}
-  reportContextSensitivity(..._args: unknown[]): void {}
+
+  // ── Execution ──
+
+  /** Execute a named pipeline with the provided arguments and return its output. */
+  async execute(pipelineName: string, args: Record<string, unknown>): Promise<unknown> {
+    return (await this.run(pipelineName, args)).output;
+  }
+
+  /** Execute a named pipeline and return its output, status, and full context. */
+  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal } = {}): Promise<RunResult> {
+    const pipeline = this.pipelines.get(pipelineName);
+    if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
+    return this.runTop(this.newContext(pipeline, args, 0, options.signal), 0);
+  }
+
+  /**
+   * Run a pipeline and yield its events as they happen: stages, model output
+   * (`token`), tool calls, and finally `done` (or `error`).
+   */
+  async *stream(pipelineName: string, args: Record<string, unknown> = {}): AsyncGenerator<RuntimeEvent | { type: "done"; result: RunResult } | { type: "error"; error: Error }> {
+    const pipeline = this.pipelines.get(pipelineName);
+    if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
+    const ctx = this.newContext(pipeline, args, 0);
+    const queue: Array<RuntimeEvent | { type: "done"; result: RunResult } | { type: "error"; error: Error }> = [];
+    let wake: (() => void) | undefined;
+    const push = (e: (typeof queue)[number]) => {
+      queue.push(e);
+      wake?.();
+    };
+    // Only this run's events (other runs may share the runtime).
+    const listener = (e: RuntimeEvent) => e.runId === ctx.meta.runId && push(e);
+    this.listeners.add(listener);
+    let finished = false;
+    this.runTop(ctx, 0).then(
+      (result) => push({ type: "done", result }),
+      (error: unknown) => push({ type: "error", error: error instanceof Error ? error : new Error(String(error)) }),
+    ).finally(() => (finished = true));
+    try {
+      while (true) {
+        while (queue.length) {
+          const e = queue.shift()!;
+          yield e;
+          if (e.type === "done" || e.type === "error") return;
+        }
+        if (finished && !queue.length) return;
+        await new Promise<void>((r) => (wake = r));
+        wake = undefined;
+      }
+    } finally {
+      this.listeners.delete(listener);
+    }
+  }
+
+  /** Continue a run from a @checkpoint file. */
+  async resume(checkpointPath: string): Promise<RunResult> {
+    const cp = (await Bun.file(checkpointPath).json()) as RunSnapshot;
+    return this.runTop(this.restore(cp), cp.nextStage);
+  }
+
+  /**
+   * Resume a paused run. `event` is "yield" for a run paused at `|! yield(...)`,
+   * or the listen target (e.g. "Slack.Reaction") for `~> listen(...)`; `payload`
+   * becomes the response (`context.data.yield`, the listen target, and any `as` binding).
+   */
+  async signal(runId: string, event: string, payload: unknown): Promise<RunResult> {
+    const snap = await this.runStore.load(runId);
+    if (!snap?.waitingFor) throw new SignalError(`No paused run "${runId}"`, "RUN_NOT_FOUND");
+    if (snap.waitingFor !== event) {
+      throw new SignalError(`Run ${runId} is waiting for "${snap.waitingFor}", not "${event}"`, "SIGNAL_MISMATCH");
+    }
+    const ctx = this.restore(snap);
+    const stage = ctx.pipeline.pipeline[snap.nextStage];
+    if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
+    await this.runStore.delete(runId);
+    ctx.stageIndex = snap.nextStage;
+    this.deliver(stage, ctx, payload, snap.waitingFor);
+    this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
+    return this.runTop(ctx, snap.nextStage + 1);
+  }
+
+  private restore(snap: RunSnapshot): ExecutionContext {
+    const pipeline = this.pipelines.get(snap.pipeline);
+    if (!pipeline) throw new HaloError(`Saved run is for pipeline "${snap.pipeline}", which is not loaded`);
+    const ctx = this.newContext(pipeline, snap.input, 0);
+    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current });
+    ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
+    return ctx;
+  }
+
+  /** Run a top-level pipeline from `start`, reporting run events and checking the declared output schema. */
+  private async runTop(ctx: ExecutionContext, start: number): Promise<RunResult> {
+    const base = { pipeline: ctx.pipeline.name, runId: ctx.meta.runId };
+    this.emit({ type: "run", ...base, status: "start" });
+    try {
+      const result = await this.runFrom(ctx, start);
+      this.emit({ type: "run", ...base, status: result.status, output: result.output, durationMs: ctx.meta.durationMs, cost: ctx.meta.cost });
+      return result;
+    } catch (err) {
+      this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost });
+      throw err;
+    }
+  }
+
+  private newContext(pipeline: PipelineDeclaration, args: Record<string, unknown>, depth: number, signal?: AbortSignal): ExecutionContext {
+    const first = pipeline.params[0];
+    return {
+      loops: {},
+      pipeline,
+      input: { ...args },
+      data: { ...args },
+      meta: {
+        runId: crypto.randomUUID(),
+        pipeline: pipeline.name,
+        startedAt: new Date().toISOString(),
+        cost: 0,
+        tokens: { prompt: 0, completion: 0 },
+        calls: [],
+        violations: [],
+        shadows: [],
+      },
+      trace: [],
+      current: first && first.name in args ? args[first.name] : Object.values(args)[0],
+      stageIndex: 0,
+      depth,
+      signal: signal ?? new AbortController().signal,
+      shadowTasks: [],
+    };
+  }
+
+  private snapshot(ctx: ExecutionContext): ContextSnapshot {
+    return { input: ctx.input, data: ctx.data, meta: ctx.meta, trace: ctx.trace };
+  }
+
+  private async runFrom(ctx: ExecutionContext, start: number): Promise<RunResult> {
+    const timeout = findDirective(ctx.pipeline.directives, "timeout");
+    const timeoutMs = timeout ? parseDuration(timeout.value) : NaN;
+    const controller = childSignal(ctx.signal);
+    ctx.signal = controller.signal;
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => controller.abort(new TimeoutError(`Pipeline "${ctx.pipeline.name}" timed out after ${timeout!.value}`)), timeoutMs)
+        : undefined;
+
+    const t0 = performance.now();
+    try {
+      const status = await raceAbort(this.executePipeline(ctx, start), controller.signal);
+      await Promise.allSettled(ctx.shadowTasks);
+      ctx.meta.finishedAt = new Date().toISOString();
+      ctx.meta.durationMs = Math.round(performance.now() - t0);
+      if (status === "completed") ctx.current = this.checkSchema(ctx.pipeline, ctx.current);
+      return { output: ctx.current, status, runId: ctx.meta.runId, context: this.snapshot(ctx) };
+    } finally {
+      clearTimeout(timer);
+      controller.abort(new HaloError("Run finished"));
+    }
+  }
+
+  private async executePipeline(ctx: ExecutionContext, start: number): Promise<RunResult["status"]> {
+    try {
+      return await this.executeStages(ctx, start);
+    } catch (err) {
+      if (!(err instanceof Pause)) throw err;
+      // No handler for this yield/listen: save the run so signal() can continue it.
+      const i = ctx.stageIndex;
+      ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message };
+      await this.runStore.save(ctx.meta.runId, this.toSnapshot(ctx, i, err.waitingFor));
+      this.emit({ type: "paused", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index: i, waitingFor: err.waitingFor });
+      return "paused";
+    }
+  }
+
+  private toSnapshot(ctx: ExecutionContext, nextStage: number, waitingFor?: string): RunSnapshot {
+    const { input, data, meta, trace, current } = ctx;
+    return { version: 1, pipeline: ctx.pipeline.name, nextStage, ...(waitingFor ? { waitingFor } : {}), input, data, meta, trace, current };
+  }
+
+  private async executeStages(ctx: ExecutionContext, start: number): Promise<RunResult["status"]> {
+    const { pipeline, name } = ctx.pipeline;
+    for (let i = start; i < pipeline.length; i++) {
+      const stage = pipeline[i]!;
+      const label = stageLabel(stage);
+      const t0 = performance.now();
+      ctx.stageIndex = i;
+      this.emit({ type: "stage", pipeline: name, runId: ctx.meta.runId, index: i, kind: stage.kind, label, status: "start" });
+
+      switch (stage.kind) {
+        case "expression":
+          ctx.current = this.evalHead(stage.expr, ctx);
+          break;
+        case "call":
+          ctx.current = await this.callStage(stage, ctx);
+          break;
+        case "fanout":
+          ctx.current = await this.fanout(stage, ctx);
+          break;
+        case "branch":
+          ctx.current = await this.branch(stage, ctx);
+          break;
+        case "each":
+          ctx.current = await this.each(stage, ctx);
+          break;
+        case "gate":
+          if (!truthy(this.evalCond(stage.expr, ctx))) {
+            ctx.meta.halted = { stage: i, condition: stage.condition };
+            this.appendTrace(ctx, i, stage, label);
+            this.emit({ type: "halt", pipeline: name, runId: ctx.meta.runId, index: i, condition: stage.condition });
+            // Resuming re-evaluates the gate.
+            await this.writeCheckpoint(ctx, i);
+            return "halted";
+          }
+          break;
+        case "interrupt":
+          await this.interrupt(stage, ctx);
+          break;
+        case "listen":
+          await this.listen(stage, ctx);
+          break;
+        case "loop": {
+          const to = this.loopBack(stage, ctx, i);
+          if (to !== undefined) {
+            this.appendTrace(ctx, i, stage, label);
+            i = to - 1; // the for loop's i++ lands on `to`
+            continue;
+          }
+          break;
+        }
+      }
+
+      this.appendTrace(ctx, i, stage, label);
+      this.emit({ type: "stage", pipeline: name, runId: ctx.meta.runId, index: i, kind: stage.kind, label, status: "end", value: ctx.current, durationMs: Math.round(performance.now() - t0) });
+      await this.writeCheckpoint(ctx, i + 1);
+    }
+    return "completed";
+  }
+
+  private appendTrace(ctx: ExecutionContext, index: number, stage: PipelineStage, label: string): void {
+    const prev = ctx.trace.at(-1)?.hash ?? GENESIS;
+    const at = new Date().toISOString();
+    const outputHash = sha256(safeJson(ctx.current));
+    ctx.trace.push({ index, stage: stage.kind, label, at, outputHash, prev, hash: sha256(prev, String(index), stage.kind, label, at, outputHash) });
+  }
+
+  private async writeCheckpoint(ctx: ExecutionContext, nextStage: number): Promise<void> {
+    if (!findDirective(ctx.pipeline.directives, "checkpoint") || ctx.depth > 0) return;
+    const path = `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
+    ctx.meta.checkpoint = path;
+    mkdirSync(dirname(path), { recursive: true });
+    await Bun.write(path, JSON.stringify(this.toSnapshot(ctx, nextStage), null, 2));
+    this.emit({ type: "checkpoint", runId: ctx.meta.runId, path });
+  }
+
+  private emit(event: RuntimeEvent): void {
+    this.config.onEvent?.(event);
+    for (const l of this.listeners) l(event);
+  }
+
+  /**
+   * `|<> loop(Agent, "cond", max: n)`: while the condition holds, jump back to the
+   * agent's most recent stage so it can try again with the current value (e.g. a
+   * failing build's output). Returns the stage to jump to, or undefined to go on.
+   */
+  private loopBack(stage: LoopStage, ctx: ExecutionContext, index: number): number | undefined {
+    if (!stage.expr) throw new HaloError(`loop condition "${stage.condition}" is not valid: ${stage.conditionErrors?.join("; ")}`);
+    const done = ctx.loops[index] ?? 0;
+    const holds = truthy(this.evalCond(stage.expr, ctx));
+    if (!holds) {
+      if (stage.bind) ctx.data[stage.bind] = done;
+      delete ctx.loops[index];
+      return undefined;
+    }
+    const max = Number(this.resolveArgs({ argList: stage.options }, ctx).named.max ?? 3);
+    if (done >= max) {
+      throw new LoopLimitError(`loop(${stage.target}) gave up after ${max} ${max === 1 ? "try" : "tries"}: "${stage.condition}" is still true`);
+    }
+    const to = ctx.pipeline.pipeline.findLastIndex((s, j) => j < index && s.kind === "call" && s.callee === stage.target);
+    if (to < 0) throw new HaloError(`loop(${stage.target}, ...) needs an earlier ${stage.target} stage to go back to`, { code: "LOOP_TARGET_NOT_FOUND" });
+    ctx.loops[index] = done + 1;
+    ctx.data.loop = { target: stage.target, iteration: done + 1, condition: stage.condition };
+    this.emit({ type: "loop", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index, to, iteration: done + 1, condition: stage.condition });
+    return to;
+  }
+
+  /** Validate (and parse) a pipeline's output when its `-> Type` names a declared schema. */
+  private checkSchema(pipeline: PipelineDeclaration, output: unknown): unknown {
+    const schema = this.schemas.get(pipeline.returnType);
+    if (!schema) return output;
+    return validateSchema(schema, output, (name) => this.schemas.get(name));
+  }
+
+  // ── Values ──
+
+  private evalHead(expr: Value, ctx: ExecutionContext): unknown {
+    if (expr.kind === "ref") {
+      const [root, ...rest] = expr.path as [string, ...string[]];
+      if (root in ctx.input) return getPath(ctx.input[root], rest);
+      if (root in ctx.data) return getPath(ctx.data[root], rest);
+      throw new HaloError(`Undefined variable "${root}"`);
+    }
+    return this.resolveValue(expr, ctx);
+  }
+
+  private contextPath(path: string[], ctx: ExecutionContext): unknown {
+    const [ns, ...rest] = path;
+    if (ns === undefined) return this.snapshot(ctx);
+    const roots: Record<string, unknown> = { data: ctx.data, input: ctx.input, meta: ctx.meta, trace: ctx.trace, current: ctx.current };
+    return getPath(roots[ns], rest);
+  }
+
+  /** Resolve a `{{path}}` placeholder or bare name against the context. */
+  private lookup(path: string[], ctx: ExecutionContext): unknown {
+    const [root, ...rest] = path as [string, ...string[]];
+    if (root === "context") return this.contextPath(rest, ctx);
+    if (root === "current") return getPath(ctx.current, rest);
+    if (root in ctx.data) return getPath(ctx.data[root], rest);
+    if (root in ctx.input) return getPath(ctx.input[root], rest);
+    return undefined;
+  }
+
+  private template(text: string, ctx: ExecutionContext, format?: (v: unknown) => string) {
+    // Env.* is deliberately not resolvable here, so secrets never reach prompts.
+    return interpolate(text, (path) => (path[0] === "Env" ? undefined : this.lookup(path, ctx)), format);
+  }
+
+  private resolveValue(v: Value, ctx: ExecutionContext, opts: { allowEnv?: boolean; owner?: string; shell?: boolean } = {}): unknown {
+    switch (v.kind) {
+      case "string": {
+        // In a tool declaration, "Env.NAME" (as a string) reads that environment variable.
+        if (opts.allowEnv && /^Env\.\w+$/.test(v.value)) return this.resolveValue({ kind: "ref", path: v.value.split(".") }, ctx, opts);
+        return this.template(v.value, ctx, opts.shell ? (x) => shellQuote(formatValue(x)) : undefined).text;
+      }
+      case "number": return v.value;
+      case "bool": return v.value;
+      case "null": return null;
+      case "duration": return v.raw;
+      case "model": return v.value;
+      case "context": return this.contextPath(v.path, ctx);
+      case "list": return v.items.map((item) => this.resolveValue(item, ctx, opts));
+      case "ref": {
+        const [root, ...rest] = v.path as [string, ...string[]];
+        if (root === "Env") {
+          const name = rest.join(".");
+          if (!opts.allowEnv) throw new HaloError(`Env.${name} can only be used in tool declarations`);
+          const value = this.env[name];
+          if (value === undefined) throw new HaloError(`Environment variable ${name} is not set (needed by "${opts.owner}")`);
+          return value;
+        }
+        if (root in ctx.input) return getPath(ctx.input[root], rest);
+        // A declared name refers to the declaration itself (e.g. `history: PastCases`);
+        // its results are read explicitly via context.data.<Name>.
+        if (this.isDeclared(root)) return v.path.join(".");
+        if (root in ctx.data) return getPath(ctx.data[root], rest);
+        // Anything else is a symbol, e.g. `channel: Slack`.
+        return v.path.join(".");
+      }
+    }
+  }
+
+  private isDeclared(name: string): boolean {
+    return this.tools.has(name) || this.agents.has(name) || this.pipelines.has(name) || this.policies.has(name);
+  }
+
+  private resolveArgs(stage: { argList: CallStage["argList"] }, ctx: ExecutionContext, opts: { shell?: boolean } = {}) {
+    const positional: unknown[] = [];
+    const named: Record<string, unknown> = {};
+    for (const a of stage.argList) {
+      const value = this.resolveValue(a.value, ctx, opts);
+      if (a.name) named[a.name] = value;
+      else positional.push(value);
+    }
+    return { positional, named };
+  }
+
+  private evalCond(c: CondExpr, ctx: ExecutionContext): unknown {
+    switch (c.kind) {
+      case "or": return c.terms.some((t) => truthy(this.evalCond(t, ctx)));
+      case "and": return c.terms.every((t) => truthy(this.evalCond(t, ctx)));
+      case "not": return !truthy(this.evalCond(c.expr, ctx));
+      case "value": return this.resolveValue(c.value, ctx);
+      case "compare": {
+        const l = this.evalCond(c.left, ctx);
+        const r = this.evalCond(c.right, ctx);
+        if (c.op === "==") return looseEquals(l, r);
+        if (c.op === "!=") return !looseEquals(l, r);
+        const [a, b] = [Number(l), Number(r)];
+        if (l === null || l === undefined || r === null || r === undefined || Number.isNaN(a) || Number.isNaN(b)) return false;
+        return c.op === ">" ? a > b : c.op === "<" ? a < b : c.op === ">=" ? a >= b : a <= b;
+      }
+    }
+  }
+
+  // ── Calls ──
+
+  private async callStage(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
+    const value = await this.dispatchCall(stage, ctx);
+    if (stage.callee !== "System") this.store(ctx, stage.callee, stage.method, value);
+    if (stage.bind) ctx.data[stage.bind] = value;
+    return value;
+  }
+
+  /** Store a result at context.data.<callee>.<method> (or context.data.<callee> for pipeline calls). */
+  private store(ctx: ExecutionContext, callee: string, method: string, value: unknown): void {
+    if (!method) {
+      ctx.data[callee] = value;
+      return;
+    }
+    const slot = ctx.data[callee];
+    if (isPlainObject(slot)) slot[method] = value;
+    else ctx.data[callee] = { [method]: value };
+    // Also by method name alone (`context.data.triage`), unless that would hide an input.
+    if (!(method in ctx.input) && !this.isDeclared(method)) ctx.data[method] = value;
+  }
+
+  private dispatchCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
+    if (stage.callee === "System") return this.systemCall(stage, ctx);
+    const agent = this.agents.get(stage.callee);
+    const tool = this.tools.get(stage.callee);
+    if (!stage.method || (stage.implicit && !agent && this.pipelines.has(stage.callee))) return this.pipelineCall(stage, ctx);
+    if (tool) {
+      // Values inserted into a Bash command are shell-quoted, so they can't run as commands.
+      const { positional, named } = this.resolveArgs(stage, ctx, { shell: tool.provider === "Bash" });
+      return this.toolCall(tool, stage.method, positional, named, ctx, false);
+    }
+    if (agent) return this.agentCall(agent, stage, ctx);
+    return Promise.reject(new HaloError(`Unknown callee "${stage.callee}": not an agent, tool, store, or pipeline`));
+  }
+
+  private mockFor(...keys: string[]): ((req: MockRequest) => Promise<unknown>) | undefined {
+    if (!this.mocks) return undefined;
+    const key = keys.find((k) => k in this.mocks!);
+    if (key === undefined) return undefined;
+    const mock = this.mocks[key];
+    return async (req) => (typeof mock === "function" ? await (mock as (r: MockRequest) => unknown)(req) : mock);
+  }
+
+  private retryPolicy(ctx: ExecutionContext, agent?: Agent): { retries: number; delayMs: number } {
+    const d = findDirective(agent?.directives, "retry") ?? findDirective(ctx.pipeline.directives, "retry");
+    const [count, delay] = directiveArgs(d);
+    return { retries: Number(count ?? 0) || 0, delayMs: delay ? parseDuration(delay) || 0 : 0 };
+  }
+
+  /** Run `fn` under the @retry policy and an agent's @timeout. */
+  private async withPolicies<T>(ctx: ExecutionContext, target: string, agent: Agent | undefined, fn: (signal: AbortSignal) => Promise<T>): Promise<{ result: T; attempts: number }> {
+    const { retries, delayMs } = this.retryPolicy(ctx, agent);
+    const timeout = findDirective(agent?.directives, "timeout");
+    const timeoutMs = timeout ? parseDuration(timeout.value) : NaN;
+
+    for (let attempt = 1; ; attempt++) {
+      const controller = childSignal(ctx.signal);
+      const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(new TimeoutError(`${target} timed out after ${timeout!.value}`)), timeoutMs) : undefined;
+      try {
+        return { result: await raceAbort(fn(controller.signal), controller.signal), attempts: attempt };
+      } catch (err) {
+        if (ctx.signal.aborted || attempt > retries || !isRetryable(err)) throw err;
+        this.emit({ type: "retry", runId: ctx.meta.runId, target, attempt, error: err instanceof Error ? err.message : String(err), delayMs });
+        await sleep(delayMs, ctx.signal);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  /** Spend of the whole run: this pipeline plus the callers waiting on it. */
+  private spent(ctx: ExecutionContext): number {
+    return ctx.meta.cost + (ctx.parent ? this.spent(ctx.parent) : 0);
+  }
+
+  private guardHooks(ctx: ExecutionContext): PolicyHooks {
+    return {
+      spent: () => this.spent(ctx),
+      lookup: (path) => this.lookup(path.split("."), ctx),
+      onViolation: (v, log) => {
+        ctx.meta.violations.push(v);
+        this.emit({ type: "violation", runId: ctx.meta.runId, ...v });
+        if (log) this.logger.warn(`[Policy] ${v.policy}/${v.rule}: ${v.message}`);
+      },
+    };
+  }
+
+  private async agentCall(agent: Agent, stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
+    const target = `${agent.name}.${stage.method}`;
+    const instructions: string[] = [];
+    const inputs: unknown[] = [];
+    const params: Record<string, unknown> = {};
+    const callOptions: Record<string, unknown> = {};
+    let templated = false;
+    const toolArg = stage.argList.find((a) => a.name === "tool");
+    const toolName = toolArg ? (toolArg.value.kind === "ref" ? toolArg.value.path.join(".") : String(this.resolveValue(toolArg.value, ctx))) : undefined;
+    const shell = toolName !== undefined && this.tools.get(toolName)?.provider === "Bash";
+
+    for (const a of stage.argList) {
+      if (a.name === "tool") {
+        continue;
+      } else if (a.name && LLM_OPTION_KEYS.has(a.name)) {
+        callOptions[a.name] = this.resolveValue(a.value, ctx);
+      } else if (!a.name && a.value.kind === "string") {
+        const t = this.template(a.value.value, ctx);
+        templated ||= t.used;
+        instructions.push(t.text);
+      } else if (a.name) {
+        params[a.name] = this.resolveValue(a.value, ctx, { shell });
+      } else {
+        const value = this.resolveValue(a.value, ctx, { shell });
+        if (value !== undefined) inputs.push(value);
+      }
+    }
+
+    // `Agent.method(tool: T, ...)`: call the (equipped) tool, then let the agent work on its result.
+    let toolResult: unknown;
+    if (toolName !== undefined) {
+      const tool = this.tools.get(toolName);
+      if (!tool) throw new HaloError(`${target} uses undefined tool "${toolName}"`);
+      if (!agent.equips?.includes(toolName)) throw new HaloError(`Agent "${agent.name}" is not equipped with tool "${toolName}" (add \`equips ${toolName}\`)`);
+      toolResult = await this.toolCall(tool, stage.method, inputs, params, ctx, true);
+      this.store(ctx, toolName, stage.method, toolResult);
+    }
+
+    const parts: PromptParts = {
+      method: stage.method,
+      instructions,
+      inputs,
+      params,
+      tool: toolName !== undefined ? { name: toolName, result: toolResult } : undefined,
+      current: !templated && inputs.length === 0 ? ctx.current : undefined,
+    };
+    const memory = await this.equippedContext(agent, toolName, parts, ctx);
+    const prompt = buildPrompt({ ...parts, context: memory.context });
+    if (!prompt.trim()) throw new HaloError(`${target} has an empty prompt (its arguments and the pipeline value are all empty)`);
+    const system = String(callOptions.system ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined;
+    const options = llmOptions(agent.params, callOptions);
+
+    const hooks = this.guardHooks(ctx);
+    this.guard.checkBudget(agent, hooks);
+    const user = this.guard.checkInput(agent, prompt, hooks);
+
+    this.startShadows(agent, stage.method, user, system, options, ctx);
+    const corrections = this.correctLimit(ctx, agent);
+    let ask = user;
+    for (let attempt = 0; ; attempt++) {
+      const { value, tokens } = await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], ask, system, options, stage, ctx);
+      try {
+        const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
+        await memory.remember?.(checked);
+        return checked;
+      } catch (err) {
+        // @correct(n): show the model what the policy rejected and let it try again.
+        if (!(err instanceof PolicyViolation) || attempt >= corrections) throw err;
+        this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
+        ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
+      }
+    }
+  }
+
+  /** `@correct(n)` on the agent, else on the pipeline: how many times a policy-rejected answer may be retried. */
+  private correctLimit(ctx: ExecutionContext, agent: Agent): number {
+    const d = findDirective(agent.directives, "correct") ?? findDirective(ctx.pipeline.directives, "correct");
+    if (!d) return 0;
+    const n = Number(directiveArgs(d)[0] ?? 1);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  /**
+   * Context an agent gets from what it `equips`, beyond explicit `tool:` calls:
+   *   - a VectorStore: the closest stored entries to this call's input
+   *   - a File store: the recent conversation, which this call is appended to
+   */
+  private async equippedContext(agent: Agent, explicitTool: string | undefined, parts: PromptParts, ctx: ExecutionContext) {
+    const context: PromptParts["context"] = [];
+    const histories: ToolDeclaration[] = [];
+    const query = [...parts.instructions, ...parts.inputs.map(formatValue), parts.current === undefined ? "" : formatValue(parts.current)].join("\n").trim();
+    for (const name of agent.equips ?? []) {
+      const tool = this.tools.get(name);
+      if (!tool || name === explicitTool) continue;
+      if (tool.provider === "VectorStore" && query && !this.mockFor(`${name}.search`, name)) {
+        const hits = (await this.toolCall(tool, "search", [query], { limit: 3, min_score: 0.1 }, ctx, true)) as Array<{ content: unknown }>;
+        if (hits.length) context.push({ source: name, text: hits.map((h) => `- ${formatValue(h.content)}`).join("\n") });
+      } else if (tool.provider === "File") {
+        histories.push(tool);
+        const history = await this.toolCall(tool, "read", [], {}, ctx, true);
+        if (typeof history === "string" && history.trim()) context.push({ source: name, text: history, label: "Conversation so far" });
+      }
+    }
+    // The history records what was asked (this call's input), not the full built prompt.
+    const remember = histories.length
+      ? async (answer: unknown) => {
+          for (const h of histories) await this.toolCall(h, "append", [`User: ${query}\nAssistant: ${formatValue(answer)}`], {}, ctx, true);
+        }
+      : undefined;
+    return { context, remember };
+  }
+
+  /** Send a prompt to a model (or its mock), with retry/timeout, and record the call. */
+  private async complete(
+    agent: Agent,
+    model: string,
+    target: string,
+    mockKeys: string[],
+    prompt: string,
+    system: string | undefined,
+    options: LLMOptions,
+    stage: CallStage | undefined,
+    ctx: ExecutionContext,
+    kind: CallRecord["kind"] = "agent",
+  ): Promise<{ value: unknown; tokens?: { prompt: number; completion: number } }> {
+    const t0 = performance.now();
+    const mock = this.mockFor(...mockKeys);
+    const { result, attempts } = await this.withPolicies(ctx, target, agent, async (signal) => {
+      if (mock) {
+        const { positional, named } = stage ? this.resolveArgs(stage, ctx) : { positional: [], named: {} };
+        return { value: await mock({ target, kind: "agent", prompt, system, args: positional, named, input: ctx.current }), model, cost: 0, tokens: undefined, mocked: true };
+      }
+      const r = await this.callLLM(model, prompt, system, options, signal);
+      return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false };
+    });
+
+    const latencyMs = Math.round(performance.now() - t0);
+    ctx.meta.cost += result.cost;
+    if (result.tokens) {
+      ctx.meta.tokens.prompt += result.tokens.prompt;
+      ctx.meta.tokens.completion += result.tokens.completion;
+    }
+    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
+    const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
+    if (kind !== "shadow") {
+      if (typeof result.value === "string") this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: result.value });
+      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt, output: value, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
+    }
+    return { value, tokens: result.tokens };
+  }
+
+  private startShadows(primary: Agent, method: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext): void {
+    const runs: Array<{ shadow: string; agent: Agent; model: string; mockKeys: string[] }> = [
+      ...(this.shadowMinds.get(primary.name) ?? []).map((m) => ({ shadow: m.name, agent: m, model: m.modelId, mockKeys: [`${m.name}.${method}`, m.name, "*"] })),
+      ...(this.shadowModels.get(primary.name) ?? []).map((model) => ({ shadow: model, agent: primary, model, mockKeys: [`${primary.name}@${model}`] })),
+    ];
+    for (const run of runs) {
+      const t0 = performance.now();
+      const label = `${run.shadow}.${method}`;
+      const task = this.complete(run.agent, run.model, label, run.mockKeys, prompt, system, { ...llmOptions(run.agent.params, {}), ...options }, undefined, ctx, "shadow").then(
+        ({ value: output }) => ({ primary: primary.name, shadow: run.shadow, output, latencyMs: Math.round(performance.now() - t0) }),
+        (err: unknown) => ({ primary: primary.name, shadow: run.shadow, error: err instanceof Error ? err.message : String(err), latencyMs: Math.round(performance.now() - t0) }),
+      );
+      ctx.shadowTasks.push(
+        task.then((record: ShadowRecord) => {
+          ctx.meta.shadows.push(record);
+          this.emit({ type: "shadow", runId: ctx.meta.runId, record });
+          this.logger.log(`[Shadow] ${run.shadow} ${record.error ? "failed: " + record.error : "output: " + formatValue(record.output)}`);
+        }),
+      );
+    }
+  }
+
+  private apiKeyFor(adapter: ProviderAdapter): string | undefined {
+    const fromEnv = adapter.envKeys?.map((k) => this.env[k]).find(Boolean);
+    return this.config.apiKeys?.[adapter.id] ?? fromEnv ?? this.config.apiKey ?? this.env.HALO_API_KEY ?? this.env.LANGLY_API_KEY ?? undefined;
+  }
+
+  private isModelAvailable(modelId: string): boolean {
+    const adapter = this.adapterRegistry.findAdapter(modelId);
+    return !!adapter && (adapter.requiresApiKey === false || !!this.apiKeyFor(adapter));
+  }
+
+  /** Call an LLM through its adapter (and the router, when configured). */
+  private async callLLM(requestedModel: string, prompt: string, system: string | undefined, options: LLMOptions, signal: AbortSignal) {
+    let model = requestedModel;
+    if (this.routerEnabled) {
+      try {
+        const routed = await this.router.route(model, Math.ceil(prompt.length / 4), options.maxTokens ?? 1024, undefined, (id) => this.isModelAvailable(id));
+        model = routed.model;
+        this.logger.log(`[Router] ${routed.reason}`);
+      } catch (e) {
+        this.logger.warn(`[Router] Failed to route, using ${model}: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    const adapter = this.adapterRegistry.findAdapter(model);
+    if (!adapter) throw new HaloError(`No adapter found for model "${model}". Register an adapter with runtime.registerAdapter().`);
+    const apiKey = this.apiKeyFor(adapter);
+    if (adapter.requiresApiKey !== false && !apiKey) {
+      const vars = [...(adapter.envKeys ?? []), "HALO_API_KEY"].join(" or ");
+      throw new HaloError(`No API key set for ${adapter.id} (model "${model}"). Set ${vars}, or pass apiKey in RuntimeConfig.`);
+    }
+
+    const request: LLMRequest = {
+      model,
+      messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }],
+      temperature: options.temperature,
+      maxTokens: options.maxTokens,
+      topP: options.topP,
+    };
+
+    const res = await this.fetch(adapter.getUrl(model), {
+      method: "POST",
+      headers: adapter.getHeaders(apiKey ?? ""),
+      body: JSON.stringify(adapter.transformRequest(request)),
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new HttpError(`LLM API error from ${adapter.id} (${res.status}): ${body.slice(0, 500)}`, res.status, body);
+    }
+    const parsed = adapter.parseResponse(await res.json());
+    const tokens = { prompt: parsed.usage?.promptTokens ?? 0, completion: parsed.usage?.completionTokens ?? 0 };
+    const cost = adapter.estimateCost?.(model, tokens.prompt, tokens.completion) ?? 0;
+    this.costTracker.recordUsage(model, cost);
+    return { text: parsed.text, model, cost, tokens };
+  }
+
+  private toolServices(): ToolServices {
+    return {
+      fetch: this.fetch,
+      vectors: () => (this.vectorStore ??= new LocalVectorStore(this.config.vectorPath ?? ".halo/vectors.sqlite")),
+      sql: (url) => {
+        let db = this.sqlPool.get(url);
+        if (!db) this.sqlPool.set(url, (db = new Bun.SQL(url)));
+        return db;
+      },
+    };
+  }
+
+  private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean): Promise<unknown> {
+    const target = `${tool.name}.${method}`;
+    const args = positional.length || ctx.current === undefined ? positional : [ctx.current];
+    const decl = declArgs(tool);
+    const config = (key: string | number) => {
+      const v = typeof key === "number" ? decl.positional[key] : decl.named[key];
+      return v === undefined ? undefined : this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name });
+    };
+
+    const t0 = performance.now();
+    const mock = this.mockFor(target, tool.name);
+    const provider = this.providers.get(tool.provider);
+    if (!mock && !provider) throw new HaloError(`Unknown tool provider "${tool.provider}" for tool "${tool.name}" (register it with runtime.registerToolProvider)`);
+
+    const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
+      mock
+        ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current }), mocked: true }
+        : { value: await provider!({ tool, method, positional: args, named, config, viaAgent, signal }, this.toolServices()), mocked: false },
+    );
+
+    const latencyMs = Math.round(performance.now() - t0);
+    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked });
+    this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output: result.value, latencyMs, mocked: result.mocked });
+    return result.value;
+  }
+
+  private async systemCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
+    const { positional, named } = this.resolveArgs(stage, ctx);
+    const call: SystemCall = { method: stage.method, args: positional, named, current: ctx.current, context: this.snapshot(ctx) };
+
+    const custom = this.systems.get(stage.method);
+    if (custom) {
+      const r = await custom(call);
+      return r === undefined ? ctx.current : r;
+    }
+
+    switch (stage.method) {
+      case "Print":
+        console.log(...(positional.length ? positional : [ctx.current]));
+        return ctx.current;
+      case "Log":
+        this.logger.log(`[${ctx.pipeline.name}]`, ...(positional.length ? positional : [ctx.current]));
+        return ctx.current;
+      case "Sleep": {
+        const ms = parseDuration(String(positional[0] ?? ""));
+        if (!(ms >= 0)) throw new HaloError(`System.Sleep needs a duration, e.g. System.Sleep(2s)`);
+        await sleep(ms, ctx.signal);
+        return ctx.current;
+      }
+      case "Fail":
+        throw new HaloError(String(positional[0] ?? named.message ?? `Pipeline "${ctx.pipeline.name}" failed`));
+      case "Pick": {
+        const fields = named.fields ?? positional.slice(1);
+        if (!Array.isArray(fields) || !fields.length) throw new HaloError(`System.Pick needs fields, e.g. System.Pick(context.data.x, fields: ["id", "user.login"])`);
+        const maxChars = named.maxChars === undefined ? Infinity : Number(named.maxChars);
+        return pick(positional.length ? positional[0] : ctx.current, fields.map(String), maxChars);
+      }
+    }
+
+    if (includes(SYSTEM_EVENTS, stage.method)) {
+      if (this.config.onSystemEvent) {
+        const r = await this.config.onSystemEvent(call);
+        return r === undefined ? ctx.current : r;
+      }
+      this.logger.log(`[System.${stage.method}]`, ...(positional.length ? positional : [ctx.current]), ...(Object.keys(named).length ? [named] : []));
+      return ctx.current;
+    }
+    throw new HaloError(`Unknown System.${stage.method}`);
+  }
+
+  private async pipelineCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
+    const target = this.pipelines.get(stage.callee);
+    if (!target) throw new HaloError(`Pipeline "${stage.callee}" not found`);
+    if (ctx.depth + 1 >= MAX_STREAM_DEPTH) throw new HaloError(`Pipeline call depth exceeded ${MAX_STREAM_DEPTH} (recursive "${stage.callee}"?)`);
+
+    const { positional, named } = this.resolveArgs(stage, ctx);
+    const args: Record<string, unknown> = {};
+    target.params.forEach((p, i) => {
+      if (p.name in named) args[p.name] = named[p.name];
+      else if (i < positional.length) args[p.name] = positional[i];
+    });
+    if (stage.argList.length === 0 && target.params[0]) args[target.params[0].name] = ctx.current;
+
+    const child = this.newContext(target, args, ctx.depth + 1, ctx.signal);
+    child.meta.runId = ctx.meta.runId;
+    child.parent = ctx;
+    const result = await this.runFrom(child, 0);
+    ctx.meta.cost += child.meta.cost;
+    ctx.meta.tokens.prompt += child.meta.tokens.prompt;
+    ctx.meta.tokens.completion += child.meta.tokens.completion;
+    ctx.meta.calls.push(...child.meta.calls);
+    ctx.meta.violations.push(...child.meta.violations);
+    ctx.meta.shadows.push(...child.meta.shadows);
+    return result.output;
+  }
+
+  private async fanout(stage: FanOutStage, ctx: ExecutionContext): Promise<unknown[]> {
+    const results = await Promise.all(stage.stages.map((sub) => this.callStage(sub, ctx)));
+    if (stage.bind) ctx.data[stage.bind] = results;
+    return results;
+  }
+
+  private async branch(stage: BranchStage, ctx: ExecutionContext): Promise<unknown> {
+    const arm = stage.arms.findIndex((a) => !a.expr || truthy(this.evalCond(a.expr, ctx)));
+    this.emit({ type: "branch", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index: ctx.stageIndex, arm, condition: stage.arms[arm]?.condition });
+    // No matching arm and no else: the value passes through unchanged.
+    const value = arm < 0 ? ctx.current : await this.callStage(stage.arms[arm]!.call, ctx);
+    if (stage.bind) ctx.data[stage.bind] = value;
+    return value;
+  }
+
+  private async each(stage: EachStage, ctx: ExecutionContext): Promise<unknown[]> {
+    const list = this.resolveValue(stage.list, ctx);
+    if (!Array.isArray(list)) {
+      throw new HaloError(`each(${stage.item} in ${render(stage.list)}) needs a list, got ${list === undefined ? "nothing" : typeof list}`);
+    }
+    const options = this.resolveArgs({ argList: stage.options }, ctx).named;
+    const concurrency = Math.max(1, Number(options.concurrency ?? 4) || 1);
+    const { callee, method } = stage.call;
+
+    const results: unknown[] = new Array(list.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < list.length) {
+        const i = next++;
+        // Each iteration sees the item under its own name and as the flowing value.
+        const data: Record<string, unknown> = { ...ctx.data, [stage.item]: list[i], index: i };
+        if (isPlainObject(data[callee])) data[callee] = { ...(data[callee] as object) };
+        results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i] });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+
+    if (callee !== "System") this.store(ctx, callee, method, results);
+    if (stage.bind) ctx.data[stage.bind] = results;
+    return results;
+  }
+
+  // ── Human-in-the-loop ──
+
+  private async interrupt(stage: InterruptStage, ctx: ExecutionContext): Promise<void> {
+    const { positional, named } = this.resolveArgs(stage, ctx);
+    const req: InterruptRequest = { pipeline: ctx.pipeline.name, attachments: [], args: positional, named, current: ctx.current, context: this.snapshot(ctx) };
+
+    const messages: string[] = [];
+    stage.argList.forEach((a) => {
+      if (a.name) return;
+      const value = this.resolveValue(a.value, ctx);
+      if (a.value.kind === "duration") req.timeoutMs = a.value.ms;
+      else if (a.value.kind === "list") req.attachments.push(...(value as unknown[]));
+      else if (a.value.kind === "ref" && this.tools.has(a.value.path.join("."))) req.channel ??= a.value.path.join(".");
+      else messages.push(formatValue(value));
+    });
+    const msg = named.msg ?? named.message;
+    req.message = msg !== undefined ? formatValue(msg) : messages.length ? messages.join("\n") : undefined;
+    const channel = named.channel ?? named.queue;
+    if (channel !== undefined) req.channel = formatValue(channel);
+    if (named.timeout !== undefined) req.timeoutMs = parseDuration(String(named.timeout)) || undefined;
+    if (Array.isArray(named.attachments)) req.attachments.push(...named.attachments);
+
+    const mock = this.mockFor("yield");
+    const handler: InterruptHandler | undefined = mock
+      ? () => mock({ target: "yield", kind: "yield", args: positional, named, input: ctx.current })
+      : this.config.onInterrupt;
+    if (!handler) {
+      if (ctx.depth > 0) {
+        throw new HaloError(`Pipeline "${ctx.pipeline.name}" reached |! yield(...) inside a called pipeline, which can't pause; register runtime.onInterrupt(...) (or use the CLI in a terminal)`);
+      }
+      throw new Pause("yield", req.message);
+    }
+
+    let work = Promise.resolve(handler(req));
+    if (req.timeoutMs) {
+      const controller = childSignal(ctx.signal);
+      const timer = setTimeout(() => controller.abort(new TimeoutError(`No response to |! yield(...) within ${req.timeoutMs}ms`)), req.timeoutMs);
+      work = raceAbort(work, controller.signal).finally(() => clearTimeout(timer));
+    }
+    this.deliver(stage, ctx, await work, "yield");
+  }
+
+  /** Store a human's (or event source's) response for a yield or listen stage. */
+  private deliver(stage: InterruptStage | ListenStage, ctx: ExecutionContext, response: unknown, target: string): void {
+    if (stage.kind === "interrupt") {
+      ctx.data.yield = response;
+    } else {
+      const [root, ...rest] = target.split(".");
+      if (rest.length) this.store(ctx, root!, rest.join("."), response);
+      else ctx.data[root!] = response;
+    }
+    if (stage.bind) ctx.data[stage.bind] = response;
+  }
+
+  private async listen(stage: ListenStage, ctx: ExecutionContext): Promise<void> {
+    const target = stage.targetValue.kind === "context" ? formatValue(this.resolveValue(stage.targetValue, ctx)) : stage.target;
+    const mock = this.mockFor(target);
+    const handler: ListenHandler | undefined = mock
+      ? () => mock({ target, kind: "listen", args: [], named: {}, input: ctx.current })
+      : this.config.onListen;
+    if (!handler) {
+      if (ctx.depth > 0) {
+        throw new HaloError(`Pipeline "${ctx.pipeline.name}" reached ~> listen(${target}) inside a called pipeline, which can't pause; register runtime.onListen(...)`);
+      }
+      throw new Pause(target);
+    }
+    const event = await raceAbort(Promise.resolve(handler({ pipeline: ctx.pipeline.name, target, current: ctx.current, context: this.snapshot(ctx) })), ctx.signal);
+    this.deliver(stage, ctx, event, target);
+  }
 }
 
+// ── Prompt construction ─────
+
+function llmOptions(params: Record<string, string>, call: Record<string, unknown>): LLMOptions {
+  const num = (v: unknown) => (v === undefined || v === "" ? undefined : Number(v));
+  return {
+    temperature: num(call.temperature ?? call.temp ?? params.temperature ?? params.temp),
+    maxTokens: num(call.max_tokens ?? params.max_tokens),
+    topP: num(call.top_p ?? params.top_p),
+  };
+}
+
+export interface PromptParts {
+  method: string;
+  instructions: string[];
+  inputs: unknown[];
+  params: Record<string, unknown>;
+  tool?: { name: string; result: unknown };
+  /** The pipeline value, when it should be included as the input. */
+  current: unknown;
+  /** Retrieved context from equipped stores. */
+  context?: Array<{ source: string; text: string; label?: string }>;
+}
+
+/**
+ * Compose the user message for an agent call:
+ *   Task (from the method name, unless it's `prompt`), the instruction strings,
+ *   the input (pipeline value or explicit positional values), any tool result,
+ *   and named args as parameters.
+ */
+export function buildPrompt(p: PromptParts): string {
+  const sections: string[] = [];
+  const hasCurrent = p.current !== undefined && p.current !== "";
+  if (p.method !== "prompt") sections.push(`Task: ${humanize(p.method)}`);
+  if (p.instructions.length) sections.push(p.instructions.join("\n\n"));
+  if (hasCurrent) {
+    if (!sections.length && !p.inputs.length && !p.tool && !Object.keys(p.params).length) return formatValue(p.current);
+    sections.push(`Input:\n${formatValue(p.current)}`);
+  }
+  if (p.inputs.length === 1) sections.push(`Input:\n${formatValue(p.inputs[0])}`);
+  else if (p.inputs.length > 1) sections.push(`Inputs:\n${p.inputs.map((v, i) => `${i + 1}. ${formatValue(v)}`).join("\n")}`);
+  if (p.tool) sections.push(`Result from tool ${p.tool.name}:\n${formatValue(p.tool.result)}`);
+  for (const c of p.context ?? []) sections.push(`${c.label ?? "Relevant context"} (from ${c.source}):\n${c.text}`);
+  const params = Object.entries(p.params);
+  if (params.length) sections.push(`Parameters:\n${params.map(([k, v]) => `- ${k}: ${formatValue(v)}`).join("\n")}`);
+  return sections.join("\n\n");
+}

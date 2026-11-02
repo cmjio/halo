@@ -1,6 +1,6 @@
-# Zed Extension: Langly DSL
+# Zed Extension: Halo DSL
 
-Zed editor support for the **Langly DSL** (`.ly` files).
+Zed editor support for the **Halo DSL** (`.halo` files).
 
 ## Installation
 
@@ -13,21 +13,21 @@ Zed editor support for the **Langly DSL** (`.ly` files).
 ```json
 {
   "languages": {
-    "Langly": {
+    "Halo": {
       "language_servers": []
     }
   }
 }
 ```
 
-4. In **Keybindings** or via the command palette, you can manually associate `.ly` files with Langly syntax.
+4. In **Keybindings** or via the command palette, you can manually associate `.halo` files with Halo syntax.
 
 ### Option 2: Publish to Zed Extensions
 
 To publish this extension to the Zed extension registry, push to the community extensions repo:
 
 1. Fork [zed-industries/extensions](https://github.com/zed-industries/extensions)
-2. Add this extension under `extensions/langly/`
+2. Add this extension under `extensions/halo/`
 3. Submit a PR
 
 The extension structure:
@@ -36,15 +36,15 @@ The extension structure:
 editors/zed/
 ├── extension.toml             # Extension manifest
 ├── languages/
-│   └── langly/
+│   └── halo/
 │       ├── config.toml        # Language configuration
 │       ├── highlights.scm     # Tree-sitter highlight queries
 │       ├── indents.scm        # Tree-sitter indentation rules
 │       └── brackets.scm       # Tree-sitter bracket pairing
 ├── grammars/
-│   └── langly/
+│   └── halo/
 │       ├── grammar.js         # Tree-sitter grammar source
-│       ├── langly.wasm        # Pre-compiled tree-sitter parser
+│       ├── halo.wasm        # Pre-compiled tree-sitter parser
 │       ├── tree-sitter.json   # Tree-sitter metadata
 │       ├── stubs.c            # Minimal libc stubs for wasm build
 │       └── src/               # Generated parser (from tree-sitter generate)
@@ -56,13 +56,13 @@ editors/zed/
 │               ├── alloc.h
 │               └── array.h
 └── queries/
-    └── langly/
+    └── halo/
         └── highlights.scm     # Alternative query location
 ```
 
 ## Features
 
-- **Syntax highlighting** for all Langly DSL constructs:
+- **Syntax highlighting** for all Halo DSL constructs:
   - `mind` declarations with model references and configuration
   - `stream` declarations with typed signatures and pipelines
   - Pipe operators (`|>`)
@@ -75,16 +75,16 @@ editors/zed/
 If you modify `grammar.js`, regenerate and rebuild:
 
 ```sh
-# From the grammars/langly directory
+# From the grammars/halo directory
 tree-sitter generate
 # Then rebuild with zig (requires zig installed):
 zig cc -target wasm32-freestanding \
   -isystem stub_includes \
   -I src/ -Os \
-  -Wl,--export=tree_sitter_langly -Wl,--no-entry \
-  stubs.c src/parser.c -o langly.wasm
+  -Wl,--export=tree_sitter_halo -Wl,--no-entry \
+  stubs.c src/parser.c -o halo.wasm
 ```
 
 ## Grammar
 
-The tree-sitter grammar is ported from the ANTLR grammar at `grammars/Langly.g4`.
+The tree-sitter grammar is ported from the ANTLR grammar at `grammars/Halo.g4`.

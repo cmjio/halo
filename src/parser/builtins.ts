@@ -1,0 +1,44 @@
+// ── Language-level catalog of built-ins, shared by the validator and runtime ──
+
+export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct"] as const;
+
+/** Field types a `schema` can use (besides other schemas). */
+export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any"] as const;
+
+/** System methods with built-in behavior. */
+export const SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick"] as const;
+
+/** System methods that emit an event to `onSystemEvent` (logged when no handler is set). */
+export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "TriggerWebhook", "Notify"] as const;
+
+export const TOOL_PROVIDERS = ["REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "GitHub", "Linear", "Figma"] as const;
+
+/** Content categories detectable by `Block(...)`. */
+export const BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection", "PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "Markdown"] as const;
+
+/** Content categories removable by `Redact(...)`. */
+export const REDACT_CATEGORIES = ["PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress"] as const;
+
+/** Policy rules the runtime enforces deterministically. */
+export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate"] as const;
+
+/** What `Require(...)` can check. Anything else (e.g. Require(Approver)) needs a judge and is not enforced. */
+export const REQUIRE_CHECKS = ["JSON", "XML", "Citation"] as const;
+
+/** Policy rules that are recognized but need an AI judge, so they are not enforced yet. */
+export const UNENFORCED_RULES = ["Tone", "Anonymize", "MaxDensity"] as const;
+
+/** Top-level namespaces of `context`. */
+export const CONTEXT_NAMESPACES = ["data", "input", "meta", "trace", "current"] as const;
+
+export function includes<T extends string>(list: readonly T[], value: string): value is T {
+  return (list as readonly string[]).includes(value);
+}
+
+/** Parse a duration like "500ms", "30s", "5m", "1h", "2d" into milliseconds (NaN if invalid). */
+export function parseDuration(d: string): number {
+  const m = d.trim().match(/^(\d+)(ms|s|m|h|d)$/);
+  if (!m) return NaN;
+  const unit = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "ms" | "s" | "m" | "h" | "d"];
+  return Number(m[1]) * unit;
+}

@@ -20,7 +20,7 @@ Keywords that declare foundational infrastructure blocks. Instantiated globally 
 | Field | Value |
 |---|---|
 | **Definition** | Declares an external capability — database query, REST API, etc. |
-| **Compiles to** | Zero-trust network policies with explicit egress whitelisting |
+| **Enforced** | Zero trust: an agent can only use the tools it `equips` |
 | **Syntax** | `tool Name : Provider(args)` |
 | **Example** | `tool CoreDB : PostgreSQL(Env.DB_URI)` |
 
@@ -28,17 +28,26 @@ Keywords that declare foundational infrastructure blocks. Instantiated globally 
 
 | Field | Value |
 |---|---|
-| **Definition** | Persistent, stateful storage for RAG (Retrieval-Augmented Generation) |
-| **Use case** | Vector stores, document indexes, past-test registries |
+| **Definition** | Persistent storage: a local vector store (`VectorStore`) or a conversation history (`File`) |
+| **Equipped** | An agent that equips a VectorStore gets the entries closest to each call's input; a File store keeps its conversation |
 | **Syntax** | `store Name : Provider(args)` |
-| **Example** | `store KnowledgeBase : VectorStore(Env.PINECONE_KEY, namespace: "engineering")` |
+| **Example** | `store KnowledgeBase : VectorStore(namespace: "engineering")` |
+
+### `schema`
+
+| Field | Value |
+|---|---|
+| **Definition** | Declares the shape of a pipeline's output |
+| **Field types** | `String`, `Number`, `Integer`, `Boolean`, `Array` / `List` (or `Array<T>`), `Object` / `JSON`, `Any`, another schema |
+| **Enforced** | A pipeline declared `-> Schema` fails with `SchemaValidationError` if its output doesn't match |
+| **Example** | `schema Profile { name: String, tags: Array<String> }` |
 
 ### `agent`
 
 | Field | Value |
 |---|---|
 | **Definition** | Instantiates an AI actor. Binds a foundation model to parameters |
-| **Modifiers** | `equips` (binds tools/store), `requires` (binds policies) |
+| **Modifiers** | `system` (system prompt), `equips` (binds tools/stores), `requires` (binds policies) |
 | **Syntax** | `agent Name [model-ref, key: value]` |
 | **Example** | `agent DataAnalyst [gemini-3-1-pro, temp: 0.1]` |
 
@@ -46,7 +55,7 @@ Keywords that declare foundational infrastructure blocks. Instantiated globally 
 
 | Field | Value |
 |---|---|
-| **Definition** | Defines an execution pipeline and its event trigger |
+| **Definition** | Defines a pipeline: its parameters, return type, and stages |
 | **Syntax** | `pipeline Name(param: Type) -> ReturnType: ...` |
 | **Example** | `pipeline ProcessClaim(event: Webhook) -> Result:` |
 
@@ -99,7 +108,7 @@ Evaluates structured data in the context and only continues if true.
 
 ### `|!` — Interrupt Pipe
 
-The Human-in-the-Loop trigger. Hard-stops the pipeline and freezes container state until external intervention.
+The Human-in-the-Loop trigger. Asks the runtime's interrupt handler; with no handler, the run pauses until `signal()` / `halo resume` continues it.
 
 ```halo
 |! yield(channel: Slack, msg: "Approve deployment?")
@@ -113,9 +122,33 @@ Triggers parallel execution. Runs multiple nodes concurrently, merging outputs w
 |* { AgentA.prompt("task1"), AgentB.prompt("task2") }
 ```
 
-### `~>` — Listen (Telemetry)
+### `|? { ... }` — Branch
 
-The asynchronous pause. Suspends the pipeline indefinitely to wait for human interaction or system events, injecting results back into context.
+| Field | Value |
+|---|---|
+| **Definition** | Runs the first arm whose condition holds; `else` matches anything and must come last |
+| **Result** | The chosen arm's result (or the unchanged value when nothing matches) |
+| **Example** | `\|? { (context.data.score > 0.9) => System.Notify("removed"), else => Review(post) } as outcome` |
+
+### `|* each(...)` — Each
+
+| Field | Value |
+|---|---|
+| **Definition** | Runs one call per list item, in parallel (`concurrency: n`, default 4), in input order |
+| **Scope** | The item under its loop name (`issue`, `{{issue.number}}`) and `index`, inside the call only |
+| **Example** | `\|* each(issue in context.data.issues, concurrency: 2) => GitHub.add_labels(labels: issue.labels) as labeled` |
+
+### `|<>` — Loop
+
+| Field | Value |
+|---|---|
+| **Definition** | While the condition (a string) holds, jump back to the agent's most recent stage so it can try again |
+| **Limit** | `max: n` (default 3); then the run fails with `LoopLimitError` |
+| **Example** | `\|<> loop(SWE, "context.data.Shell.run.exitCode != 0", max: 3) as retries` |
+
+### `~>` — Listen (Events)
+
+Waits for an external event (from the listen handler, or `signal()` after a pause) and stores it at `context.data.<Source>.<Event>`.
 
 ```halo
 ~> listen(UI.Button_Click)
@@ -123,36 +156,44 @@ The asynchronous pause. Suspends the pipeline indefinitely to wait for human int
 
 ## 4. Compiler Directives
 
-Annotations placed above entities or pipelines that control cloud infrastructure behavior.
+Annotations placed above agents or pipelines that control how they run.
 
 ### `@checkpoint`
 
 | Field | Value |
 |---|---|
-| **Definition** | Snapshots container memory at this node |
-| **Benefit** | Enables time-travel debugging and resumption from failure points |
+| **Definition** | On a pipeline: saves a snapshot after every stage (and at a closed gate) to `.halo/checkpoints` |
+| **Benefit** | Continue a failed or halted run with `halo run --checkpoint <file>` |
 
 ### `@shadow(Name)`
 
 | Field | Value |
 |---|---|
-| **Definition** | Duplicates production traffic to a secondary agent |
-| **Use case** | CI/CD model comparison — tests a new prompt silently |
+| **Definition** | On an agent: runs it alongside every call to the named agent (or model) and records its output, which is never used |
+| **Use case** | Comparing a new model or prompt on real traffic |
 
 ### `@retry(count, backoff)`
 
 | Field | Value |
 |---|---|
-| **Definition** | Auto-recovers transient API failures |
+| **Definition** | Retries model and tool calls on transient failures (network, 429, 5xx, timeouts); never on policy violations |
 | **Example** | `@retry(3, 2s)` |
 
 ### `@timeout(duration)`
 
 | Field | Value |
 |---|---|
-| **Definition** | Hard-kills the process to prevent infinite agentic looping |
-| **Units** | `s` (seconds), `m` (minutes), `h` (hours), `d` (days) |
+| **Definition** | On a pipeline: aborts the whole run. On an agent: aborts each call |
+| **Units** | `ms`, `s`, `m`, `h`, `d` |
 | **Example** | `@timeout(5m)` |
+
+### `@correct(n)`
+
+| Field | Value |
+|---|---|
+| **Definition** | When an output policy rejects an agent's answer, show the agent the reason and ask again, up to n times |
+| **Applies to** | An agent, or a pipeline (all its agents) |
+| **Example** | `@correct(2)` |
 
 ## 5. Native Primitives (The Built-ins)
 
@@ -162,7 +203,7 @@ Reserved functions for state mechanics.
 
 | Field | Value |
 |---|---|
-| **Definition** | Packages current context state and pushes to external UI for human input |
+| **Definition** | Asks a human: the request (message, channel, attachments, timeout) goes to the interrupt handler, or the run pauses |
 | **Used with** | The `|!` interrupt pipe |
 | **Args** | `channel`, `msg`, `timeout`, `attachments` |
 
@@ -170,8 +211,24 @@ Reserved functions for state mechanics.
 
 | Field | Value |
 |---|---|
-| **Definition** | The implicit, immutable data structure flowing through the pipeline |
-| **Namespaces** | `context.data` (payload), `context.meta` (system), `context.trace` (history) |
+| **Definition** | The state of a run |
+| **Namespaces** | `context.current` (flowing value), `context.input` (arguments), `context.data` (results), `context.meta` (cost, calls, violations), `context.trace` (hash chain) |
+
+### `as`
+
+| Field | Value |
+|---|---|
+| **Definition** | Binds a stage's result to a name under `context.data` |
+| **Applies to** | `\|>` calls, fan-out items and blocks, `\|! yield`, `~> listen` |
+| **Example** | `\|> Analyst.score(deal) as score` then `\|? (context.data.score.value > 80)` |
+
+### `System`
+
+| Field | Value |
+|---|---|
+| **Definition** | Built-in callee for runtime utilities and events |
+| **Methods** | `Print`, `Log` (output, pass the value through), `Sleep(duration)`, `Fail(msg)`, `Pick(value, fields: [...], maxChars: n)` (keep only dotted fields of an object or of each list item; `labels.name` maps over a list), and the events `ResolveIncident`, `Publish`, `Distribute`, `TriggerWebhook`, `Notify` (sent to `onSystemEvent`) |
+| **Example** | `\|> System.Pick(context.data.issues.items, fields: ["number", "title", "labels.name"], maxChars: 1500) as items` |
 
 ## 6. Lexical Tokens
 

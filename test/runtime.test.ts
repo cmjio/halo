@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { parse } from "../src/parser/index";
-import { LanglyRuntime } from "../src/runtime/runtime";
+import { HaloRuntime } from "../src/runtime/runtime";
 
 describe("Langly Runtime", () => {
   // ── Helper ────//
@@ -15,7 +15,7 @@ describe("Langly Runtime", () => {
     const savedKey = Bun.env.LANGLY_API_KEY;
     delete Bun.env.LANGLY_API_KEY;
     const ast = parse(await readExample("01-hello.halo"));
-    const rt = new LanglyRuntime();
+    const rt = new HaloRuntime({ env: {} });
     rt.load(ast);
     await expect(
       rt.execute("HelloWorld", { name: "Alice" }),
@@ -25,7 +25,7 @@ describe("Langly Runtime", () => {
 
   test("executes HelloWorld pipeline (mocked)", async () => {
     const ast = parse(await readExample("01-hello.halo"));
-    const rt = new LanglyRuntime();
+    const rt = new HaloRuntime();
     rt.load(ast).mockAll({
       "Greeter.prompt": "Hello, Alice! Welcome to coding!",
     });
@@ -41,7 +41,7 @@ describe("Langly Runtime", () => {
 
     try {
       const ast = parse(await readExample("01-hello.halo"));
-      const rt = new LanglyRuntime();
+      const rt = new HaloRuntime();
       rt.load(ast).mockAll({
         "Greeter.prompt": "Greetings, Bob!",
       });
@@ -54,7 +54,7 @@ describe("Langly Runtime", () => {
   });
 
   test("throws on unknown pipeline", async () => {
-    const rt = new LanglyRuntime();
+    const rt = new HaloRuntime();
     await expect(rt.execute("NonExistent", {})).rejects.toThrow(
       'Pipeline "NonExistent" not found',
     );
@@ -66,7 +66,7 @@ agent M [openai/gpt-4]
 pipeline Test(x: String) -> Result:
   x |> M.prompt("greet them") |> System.Print()
 `);
-    const rt = new LanglyRuntime().mockAll({ "M.prompt": "hi" });
+    const rt = new HaloRuntime().mockAll({ "M.prompt": "hi" });
     rt.load(ast);
     await expect(rt.execute("Test", {})).rejects.toThrow(
       'Undefined variable "x"',
@@ -77,7 +77,7 @@ pipeline Test(x: String) -> Result:
     const savedKey = Bun.env.LANGLY_API_KEY;
     delete Bun.env.LANGLY_API_KEY;
     const ast = parse(await readExample("01-hello.halo"));
-    const rt = new LanglyRuntime();
+    const rt = new HaloRuntime({ env: {} });
     rt.load(ast);
     await expect(rt.execute("HelloWorld", { name: "Alice" })).rejects.toThrow(
       "No API key set",
@@ -96,7 +96,7 @@ pipeline Greet(person: String) -> Result:
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
 
-    const rt = new LanglyRuntime();
+    const rt = new HaloRuntime();
     rt
       .load(ast)
       .mockAll({ "Quick.prompt": "Hey there, World!" });
@@ -123,7 +123,7 @@ pipeline Chain2(x: String) -> Result:
       const ast = parse(src);
       expect(ast.errors).toEqual([]);
 
-      const rt = new LanglyRuntime();
+      const rt = new HaloRuntime();
       rt
         .load(ast)
         .mockAll({
@@ -186,10 +186,10 @@ pipeline Ping(msg: String) -> Result:
   msg |> Test.prompt("echo this back verbatim") |> System.Print()
 `;
     const ast = parse(src);
-    const rt = new LanglyRuntime({ apiKey });
+    const rt = new HaloRuntime({ apiKey });
     rt.load(ast);
 
     const output = await rt.execute("Ping", { msg: "hello world" });
-    expect((output as string).toLowerCase()).toContain("hello world");
+    expect(String(output).toLowerCase()).toContain("hello world");
   });
 });

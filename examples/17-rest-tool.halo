@@ -30,4 +30,4 @@ pipeline GetWeather(city: String) -> Result:
 //   tool Name : REST("base.url", apiKey: Env.KEY)
 //
 // In pipeline:
-//   Mind.method(tool: ToolName, path: "/path", query: "key=value")
+//   Agent.method(tool: ToolName, path: "/path", query: "key=value")

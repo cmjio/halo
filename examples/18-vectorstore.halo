@@ -1,7 +1,7 @@
 // ============================================================
 // STEP 18: VectorStore Operations
 // ============================================================
-// LEARN: How to use VectorStore for semantic memory
+// LEARN: How to use VectorStore for semantic store
 // WHY:  Store and search embeddings for RAG patterns
 // ============================================================
 
