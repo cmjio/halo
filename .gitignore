@@ -33,10 +33,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# Zed extension build artifacts (the generated src/ is committed: Zed builds the grammar from it)
-editors/zed/grammars/halo/halo.wasm
-editors/zed/grammars/halo/stubs.o
-editors/zed/grammars/halo/parser.o
+# Tree-sitter build artifacts (the generated src/ is committed: Zed builds the grammar from it)
+editors/tree-sitter-halo/halo.wasm
+editors/tree-sitter-halo/*.o
+# Zed clones and compiles the grammar here when installing the extension
+editors/zed/grammars/
 
 # Halo local state (vector store, checkpoints, paused runs, telemetry)
 .halo/

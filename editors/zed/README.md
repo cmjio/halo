@@ -1,7 +1,7 @@
 # Zed extension: Halo
 
 Syntax highlighting, bracket matching, and indentation for `.halo` files in
-[Zed](https://zed.dev), from a tree-sitter grammar (`grammars/halo/grammar.js`,
+[Zed](https://zed.dev), from a tree-sitter grammar (`../tree-sitter-halo/grammar.js`,
 ported from `grammars/Halo.g4`). It has no language server.
 
 ## Install as a dev extension
@@ -15,6 +15,11 @@ Zed compiles the grammar itself (it downloads a WASI SDK the first time). If
 installing fails, run **zed: open log** for the reason. Dev extensions also need
 Rust installed with rustup.
 
+Zed clones the grammar's repository into `editors/zed/grammars/` (ignored by
+git). That's why the grammar source lives outside this folder: a source folder
+at `grammars/halo` would block the clone ("already exists, but is not a git
+clone").
+
 `extension.toml` points `[grammars.halo]` at this checkout with an absolute
 `file://` path. If the repository lives somewhere else on your machine, change
 `repository` to match.
@@ -22,17 +27,18 @@ Rust installed with rustup.
 ## Changing the grammar
 
 ```sh
-cd editors/zed
-./build.sh                     # tree-sitter generate (and a local halo.wasm)
+editors/zed/build.sh           # tree-sitter generate (and a local halo.wasm)
+cd editors/tree-sitter-halo
 tree-sitter parse --quiet --stat ../../examples/*.halo   # every example should parse
 ```
 
 Then commit (Zed builds the grammar from a commit, including the generated
-`grammars/halo/src/`), set `rev` in `extension.toml` to that commit, and run
+`editors/tree-sitter-halo/src/`), set `rev` in `extension.toml` to that commit, and run
 **zed: rebuild dev extension** (or reinstall).
 
 ## Files
 
 - `extension.toml`: the manifest
 - `languages/halo/`: language config and the highlight, bracket, and indent queries
-- `grammars/halo/`: the tree-sitter grammar and its generated parser (`src/`)
+- `../tree-sitter-halo/`: the tree-sitter grammar and its generated parser (`src/`)
+- `build.sh`: regenerates the parser

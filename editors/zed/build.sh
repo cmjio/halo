@@ -4,8 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-GRAMMAR_DIR="$SCRIPT_DIR/grammars"
-LANG_DIR="$GRAMMAR_DIR/halo"
+LANG_DIR="$SCRIPT_DIR/../tree-sitter-halo"
 
 echo "=== Building tree-sitter grammar for Halo ==="
 
@@ -136,5 +135,3 @@ zig cc -target wasm32-freestanding \
   -o "$LANG_DIR/halo.wasm"
 
 echo "=== Built halo.wasm ($(stat -f%z "$LANG_DIR/halo.wasm" | numfmt --to=iec 2>/dev/null || stat -f%z "$LANG_DIR/halo.wasm" | awk '{printf "%.1fK", $1/1024}')) ==="
-cp "$LANG_DIR/halo.wasm" "$GRAMMAR_DIR/halo.wasm"
-echo "Copied to $GRAMMAR_DIR/halo.wasm"

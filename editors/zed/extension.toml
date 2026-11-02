@@ -10,12 +10,13 @@ icon_themes = []
 languages = ["languages/halo"]
 
 # Zed builds the grammar from this repository at `rev` (a commit that has the
-# generated src/). For a dev install, `repository` is this checkout. After
+# generated src/). For a dev install, `repository` is this checkout. Zed clones it
+# into grammars/, so the grammar source lives outside this folder. After
 # changing grammar.js: run ./build.sh, commit, and set `rev` to that commit.
 [grammars.halo]
 repository = "file:///Users/cmj/projects/oneshots/halo"
 rev = "e6e3114019dcf148f06f4f4aaff6d38876f87878"
-path = "editors/zed/grammars/halo"
+path = "editors/tree-sitter-halo"
 
 [language_servers]
 
