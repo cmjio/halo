@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Halo · AI workflows you can read, plan, and replay</title>
+    <meta name="description" content="Halo is a small language for AI workflows: pipelines of models and tools, policies the runtime enforces, a plan before anything runs, and a recording of everything after." />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href="/" aria-label="Halo home">
+          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><ellipse cx="16" cy="12" rx="11" ry="4.2" fill="none" stroke="currentColor" stroke-width="2.2" /><circle cx="16" cy="21" r="5.5" fill="currentColor" opacity=".9" /></svg>
+          <span>Halo</span>
+        </a>
+        <nav aria-label="Main">
+          <a href="#agents">Agents</a>
+          <a href="#plan">Plan &amp; replay</a>
+          <a href="#registry">Registry</a>
+          <a href="#playground">Playground</a>
+          <a href="#examples">Examples</a>
+          <a class="nav-docs" href="/docs/">Docs</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Hero -->
+      <section class="hero">
+        <div class="halo-ring" aria-hidden="true"></div>
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow">A language for AI workflows · v<span data-version></span></p>
+            <h1>Agents you can <em>read</em>, <em>plan</em>, and <em>replay</em>.</h1>
+            <p class="lede">
+              Halo is a small language for pipelines of models and tools. Agents choose their own tool calls, inside policies the runtime enforces before each call runs. You can see everything a run could do before it starts, and replay exactly what it did after.
+            </p>
+            <div class="cta">
+              <a class="btn primary" href="#playground">Try it in your browser</a>
+              <a class="btn" href="/docs/guide/quickstart.html">Quickstart</a>
+            </div>
+            <ul class="facts" data-facts></ul>
+          </div>
+          <figure class="code-card hero-code">
+            <figcaption><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="file">fix.halo</span></figcaption>
+            <pre><code data-highlight>// What the fixer may do: edit sources, run the tests. Nothing else.
+policy FixerTools : AllowTools("Code.*", "Tests.run")
+  &amp; DenyArgs("Code.write", "path", "\\.test\\.")
+  &amp; DenyArgs("Tests.run", "command", "^(?!bun test[\\w ./-]*$)")
+  &amp; MaxSpend(3.00)
+
+tool Code  : Workspace("{{workdir}}", write: true)
+tool Tests : Bash(cwd: "{{workdir}}")
+
+agent Fixer [anthropic/claude-sonnet-4-5, max_steps: 40]
+  equips Code, Tests
+  requires FixerTools
+
+pipeline FixUntilGreen(workdir: String) -> Result:
+  workdir
+    |&gt; Fixer.fix("Make the acceptance tests pass.", tools: [Code, Tests])
+    |&gt; Tests.run(command: "bun test") as result
+    |&lt;&gt; loop(Fixer, "context.data.result.exitCode != 0", max: 3)</code></pre>
+          </figure>
+        </div>
+      </section>
+
+      <!-- The language -->
+      <section class="band" id="language">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">The language</p>
+            <h2>A pipeline reads top to bottom.</h2>
+            <p>Six operators cover the shapes AI workflows take. Each stage's result flows to the next, and everything it produced stays in <code>context</code>.</p>
+          </div>
+          <div class="ops">
+            <div class="op"><code class="t-op">|&gt;</code><h3>Call</h3><p>Ask an agent, call a tool, or run another pipeline.</p></div>
+            <div class="op"><code class="t-op">|?</code><h3>Gate or branch</h3><p>Stop unless a condition holds, or pick the first arm that matches.</p></div>
+            <div class="op"><code class="t-op">|*</code><h3>Fan out</h3><p>Run calls side by side, or once for each item of a list.</p></div>
+            <div class="op"><code class="t-op">|&lt;&gt;</code><h3>Loop</h3><p>Send an agent back with what the check found, until it passes.</p></div>
+            <div class="op"><code class="t-op">|!</code><h3>Ask a person</h3><p>Pause for an answer. Without a terminal, the run waits on disk.</p></div>
+            <div class="op"><code class="t-op">~&gt;</code><h3>Listen</h3><p>Wait for an event from outside, such as a webhook.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Agents with tools: the real run -->
+      <section class="band alt" id="agents">
+        <div class="wrap two">
+          <div class="section-head sticky">
+            <p class="eyebrow">Agents with tools</p>
+            <h2>It picks the steps. Policy sets the fence.</h2>
+            <p>Give an agent tools and it works like an engineer: run the tests, read the code, edit, run them again. Every call it asks for is checked against its policies before it runs:</p>
+            <ul class="checks">
+              <li><b>AllowTools</b> and <b>AllowEffects</b> decide what it sees at all.</li>
+              <li><b>DenyArgs</b> refuses calls whose arguments match a pattern.</li>
+              <li><b>ApproveTools</b> asks a person first, in the terminal, by link, or with Slack buttons, and the run waits on disk until someone answers.</li>
+              <li>Tool results go through the agent's <b>Redact</b> and <b>Block</b> rules before the model sees them.</li>
+            </ul>
+            <p class="muted small">This is a real run on a small project with two bugs, recorded by <code>halo run</code> and shown here as recorded.</p>
+          </div>
+          <div class="run" data-run aria-label="A recorded run of the fixer"></div>
+        </div>
+      </section>
+
+      <!-- Plan and replay -->
+      <section class="band" id="plan">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">Before and after</p>
+            <h2>See what a run could do. Then replay what it did.</h2>
+          </div>
+          <div class="two even">
+            <div>
+              <h3 class="sub"><code>halo plan</code></h3>
+              <p>Lists every model call with its worst-case cost, every tool it could call and what that call changes (read, write, or acts on the world), and what needs a person's approval. Nothing runs.</p>
+              <pre class="term" data-plan></pre>
+            </div>
+            <div>
+              <h3 class="sub"><code>halo replay</code></h3>
+              <p>Every run keeps a recording of what it got back: model answers, tool results, and each person's answers. Replay feeds them back with no calls at all, or redoes one side with <code>--live-models</code> or <code>--live-tools</code>.</p>
+              <pre class="term" data-replay></pre>
+              <p class="muted small">A tool the recording never called is refused rather than run, so a replay can't touch anything.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Registry -->
+      <section class="band alt" id="registry">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">Tool packages</p>
+            <h2>Any API can become a Halo tool.</h2>
+            <p>A service describes its tools in a <code>halo-tool.json</code> file: a declarative HTTP API (no code runs), an MCP server, or a module. Halo checks every package against its checksum when it loads, and a package that runs its own code needs <code>--trust</code>, which is kept on your machine and never read from the lockfile.</p>
+          </div>
+          <div class="term-line"><span class="prompt">$</span> halo add stripe <span class="muted"># then: tool Pay : Stripe()</span></div>
+          <div class="packages" data-packages></div>
+          <p class="muted small center">Built in as well: <span data-builtins></span>.</p>
+        </div>
+      </section>
+
+      <!-- Serve -->
+      <section class="band" id="serve">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">In production</p>
+            <h2><code>halo serve</code> runs it as a service.</h2>
+          </div>
+          <div class="cards3">
+            <article class="card">
+              <h3>Watches</h3>
+              <p>Check a URL, file, or command's output on a schedule. A pipeline starts only when something changed, with what changed. No model call while nothing does.</p>
+              <pre><code data-highlight-json>{ "pipeline": "OnStatusChange",
+  "url": "https://status.example.com/api.json",
+  "every": "2m" }</code></pre>
+            </article>
+            <article class="card">
+              <h3>Approvals in Slack</h3>
+              <p>A paused run is announced with Approve and Reject buttons. Each one answers only the pause it was posted for, and Slack's signature is checked on every click.</p>
+              <pre><code data-highlight-json>{ "notify": { "slack": "Env.SLACK_WEBHOOK_URL" },
+  "slack": { "signingSecret": "Env.SLACK_SIGNING_SECRET" } }</code></pre>
+            </article>
+            <article class="card">
+              <h3>Pipelines as MCP tools</h3>
+              <p>Claude, Cursor, and other agents can call your pipelines as tools, with their policies and spend limits still in force: at <code>/mcp</code>, or <code>halo mcp</code> over stdio.</p>
+              <pre><code>claude mcp add halo -- halo mcp ./pipelines</code></pre>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- Playground -->
+      <section class="band alt" id="playground">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">Playground</p>
+            <h2>Write Halo. It's checked and planned as you type.</h2>
+            <p>This runs Halo's own parser, validator, and planner in your browser. Nothing is sent anywhere, and no models are called.</p>
+          </div>
+          <div class="pg">
+            <div class="pg-bar">
+              <label>Example <select data-pg-pick aria-label="Load an example"></select></label>
+              <label data-pg-pipeline-wrap>Pipeline <select data-pg-pipeline aria-label="Pipeline to plan"></select></label>
+              <span class="pg-status" data-pg-status role="status"></span>
+            </div>
+            <div class="pg-body">
+              <div class="editor">
+                <pre class="editor-hl" aria-hidden="true"><code data-pg-hl></code></pre>
+                <textarea data-pg-src spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Halo source"></textarea>
+              </div>
+              <div class="pg-out">
+                <div class="tabs" role="tablist">
+                  <button role="tab" aria-selected="true" data-tab="plan">Plan</button>
+                  <button role="tab" aria-selected="false" data-tab="problems">Problems <span class="badge" data-pg-count></span></button>
+                  <button role="tab" aria-selected="false" data-tab="ast">AST</button>
+                </div>
+                <div class="tab-body" data-pane="plan"><div data-pg-plan></div></div>
+                <div class="tab-body" data-pane="problems" hidden><ul class="problems" data-pg-problems></ul></div>
+                <div class="tab-body" data-pane="ast" hidden><pre class="ast" data-pg-ast></pre></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Examples -->
+      <section class="band" id="examples">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">Examples</p>
+            <h2><span data-count-examples></span> working examples.</h2>
+            <p>From hello world to a team of agents that builds a spreadsheet engine from a spec. Each one is checked by the test suite. Open any of them in the playground.</p>
+          </div>
+          <div class="filters" role="group" aria-label="Filter examples">
+            <button class="chip on" data-filter="all">All</button>
+            <button class="chip" data-filter="tools">Agents with tools</button>
+            <button class="chip" data-filter="policies">Policies</button>
+            <button class="chip" data-filter="loops">Loops</button>
+            <button class="chip" data-filter="parallel">Parallel</button>
+            <button class="chip" data-filter="humans">People in the loop</button>
+          </div>
+          <div class="examples" data-examples></div>
+        </div>
+      </section>
+
+      <!-- Get started -->
+      <section class="band start">
+        <div class="wrap">
+          <h2>Start with one file.</h2>
+          <div class="steps">
+            <div><span class="n">1</span><pre class="term">bun install
+bun index.ts init my-flow</pre></div>
+            <div><span class="n">2</span><pre class="term">halo test main.halo --arg topic=tides
+<span class="muted"># offline: every model and tool mocked</span></pre></div>
+            <div><span class="n">3</span><pre class="term">halo plan main.halo
+halo run main.halo --arg topic=tides</pre></div>
+          </div>
+          <div class="cta center"><a class="btn primary" href="/docs/guide/quickstart.html">Read the quickstart</a><a class="btn" href="/docs/guide/agents-with-tools.html">Agents with tools</a></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap foot-inner">
+        <span>Halo v<span data-version></span> · built <span data-built></span></span>
+        <span><a href="/docs/">Docs</a> · <a href="/docs/guide/tool-packages.html">Publish a tool package</a> · <a href="/docs/guide/plan-and-replay.html">Plan &amp; replay</a></span>
+      </div>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

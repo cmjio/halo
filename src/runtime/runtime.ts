@@ -40,6 +40,8 @@ import type {
 } from "../parser/types.js";
 import { SYSTEM_EVENTS, includes, parseDuration } from "../parser/builtins.js";
 import { render } from "../parser/index.js";
+import { stageLabel } from "../parser/labels.js";
+export { stageLabel };
 import { producedKeys } from "../parser/validate.js";
 import { AdapterRegistry, type LLMMessage, type LLMRequest, type LLMToolCall, type LLMToolSpec, type ProviderAdapter } from "./adapter.js";
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
@@ -543,20 +545,6 @@ function directiveArgs(d: Directive | undefined): string[] {
 
 function findDirective(list: Directive[] | undefined, name: string): Directive | undefined {
   return list?.find((d) => d.name === name);
-}
-
-export function stageLabel(stage: PipelineStage): string {
-  switch (stage.kind) {
-    case "expression": return stage.value;
-    case "call": return stage.method ? `${stage.callee}.${stage.method}` : stage.callee;
-    case "gate": return `|? (${stage.condition})`;
-    case "fanout": return `|* { ${stage.stages.map(stageLabel).join(", ")} }`;
-    case "branch": return `|? { ${stage.arms.map((a) => `${a.condition === undefined ? "else" : `(${a.condition})`} => ${stageLabel(a.call)}`).join(", ")} }`;
-    case "each": return `|* each(${stage.item} in ${render(stage.list)}) => ${stageLabel(stage.call)}`;
-    case "interrupt": return "|! yield";
-    case "listen": return `~> listen(${stage.target})`;
-    case "loop": return `|<> loop(${stage.target}, "${stage.condition}")`;
-  }
 }
 
 /** Check that a trace is an unbroken hash chain. */

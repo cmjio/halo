@@ -11,7 +11,7 @@ import type { Agent, CallStage, ParseResult, PipelineDeclaration, PipelineStage 
 import { AdapterRegistry } from "./runtime/adapter.js";
 import { toolMatches } from "./runtime/policies.js";
 import type { ProviderInfo, ToolEffect, ToolMethod } from "./runtime/tools.js";
-import { stageLabel } from "./runtime/runtime.js";
+import { stageLabel } from "./parser/labels.js";
 
 export interface PlanStep {
   /** e.g. "3" or "3.1" for a stage inside a called pipeline. */

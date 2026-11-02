@@ -19,7 +19,10 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "studio": "bun run index.ts serve"
+    "studio": "bun run index.ts serve",
+    "site:build": "bun site/build.ts",
+    "site:dev": "bun site/build.ts --no-docs && bunx wrangler dev --config site/wrangler.jsonc",
+    "site:deploy": "bun site/build.ts && bunx wrangler deploy --config site/wrangler.jsonc"
   },
   "keywords": [
     "ai",
@@ -53,6 +56,7 @@
     "antlr4ng-cli": "^2.0.0",
     "bun-types": "latest",
     "vitepress": "^1.2.2",
-    "vue": "^3.4.27"
+    "vue": "^3.4.27",
+    "wrangler": "4.156.0"
   }
 }

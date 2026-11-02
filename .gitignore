@@ -45,3 +45,9 @@ editors/zed/grammars/
 # VitePress build cache
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+
+# Showcase site build output
+site/dist/
+site/.gen/
+.wrangler/
+site/.wrangler/

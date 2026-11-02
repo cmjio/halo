@@ -10,6 +10,8 @@ const haloGrammar = JSON.parse(fs.readFileSync(haloGrammarPath, 'utf-8'))
 haloGrammar.name = 'halo'
 
 export default defineConfig({
+  // The showcase site serves the docs under /docs/ (site/build.ts sets DOCS_BASE).
+  base: process.env.DOCS_BASE || '/',
   title: "Halo",
   description: "A small language for AI workflows",
   markdown: {
