@@ -387,3 +387,79 @@ test("`halo serve` starts from the CLI and stops on SIGTERM", async () => {
   proc.kill("SIGTERM");
   expect(await proc.exited).toBe(0);
 });
+
+describe("watches, Slack buttons, and MCP", () => {
+  test("a watched file starts a pipeline only when it changes, with what changed", async () => {
+    const dir = mkdtempSync(join(tmp, "watch-"));
+    const file = join(dir, "prices.json");
+    await Bun.write(file, JSON.stringify({ apple: 1, pear: 2 }));
+    const s = await serve({ watches: [{ pipeline: "Echo", file, every: "1m" }] });
+    try {
+      expect(await s.checkWatches()).toEqual([]); // the first reading is only remembered
+      expect(await s.checkWatches()).toEqual([]); // nothing changed: no run, no model call
+      await Bun.write(file, JSON.stringify({ apple: 1, pear: 3 }));
+      const [runId] = await s.checkWatches();
+      const result = await s.settled(runId!);
+      expect(result?.output).toMatchObject({ source: file, changes: [{ path: "pear", before: 2, after: 3 }] });
+      expect(s.calls.filter((c) => c.startsWith("echo")).length).toBe(1);
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test("text sources report lines added and removed; bad watch configs are refused", async () => {
+    const { diff } = await import("../src/serve/watch");
+    expect(diff("a\nb\n", "a\nc\n")).toEqual([{ added: "c" }, { removed: "b" }]);
+    await expect(serve({ watches: [{ pipeline: "Echo", every: "1m" }] })).rejects.toThrow(/exactly one of url, file, or command/);
+    await expect(serve({ watches: [{ pipeline: "Nope", file: "x" }] })).rejects.toThrow(/Unknown pipeline/);
+  });
+
+  test("Slack buttons on a pause notice answer it, and only with Slack's signature", async () => {
+    const sent: any[] = [];
+    const fetchSpy = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).startsWith("https://hooks.slack")) return (sent.push(JSON.parse(String(init!.body))), new Response("ok"));
+      return fetch(input, init);
+    }) as typeof fetch;
+    const secret = "shh";
+    const s = await serve({ notify: { slack: "https://hooks.slack.test/T1" }, slack: { signingSecret: secret }, fetch: fetchSpy });
+    try {
+      const runId = s.start("Draft", { topic: "buttons" }, "test");
+      await s.settled(runId);
+      await Bun.sleep(20);
+      const approve = sent[0].blocks[1].elements[0];
+      expect(approve.text.text).toBe("Approve");
+      const click = (value: string, sign = secret, ts = Math.floor(Date.now() / 1000)) => {
+        const body = new URLSearchParams({ payload: JSON.stringify({ actions: [{ value }], user: { username: "ana" }, response_url: "https://hooks.slack.com/actions/x" }) }).toString();
+        const sig = `v0=${createHmac("sha256", sign).update(`v0:${ts}:${body}`).digest("hex")}`;
+        return fetch(`${s.url}/slack/actions`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Slack-Request-Timestamp": String(ts), "X-Slack-Signature": sig }, body });
+      };
+      expect((await click(approve.value, "wrong")).status).toBe(401);
+      expect((await click(approve.value, secret, Math.floor(Date.now() / 1000) - 3600)).status).toBe(401);
+      const forged = JSON.stringify({ ...JSON.parse(approve.value), sig: "0".repeat(32) });
+      expect((await click(forged)).status).toBe(403);
+      expect((await click(approve.value)).status).toBe(200);
+      const result = await s.settled(runId);
+      expect(result?.status).toBe("completed");
+      expect(s.calls).toContain("publish");
+      expect(sent.at(-1)).toEqual({ replace_original: true, text: "✓ Answered by ana: approve" });
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test("pipelines are MCP tools at /mcp, behind the token", async () => {
+    const s = await serve({ token: "Env.T", env: { T: "tok" } });
+    const rpc = (body: unknown, token = "tok") =>
+      fetch(`${s.url}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+    try {
+      expect((await rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "nope")).status).toBe(401);
+      const list = (await (await rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as any;
+      expect(list.result.tools.map((t: any) => t.name)).toEqual(["Draft", "Echo", "Quick"]);
+      expect(list.result.tools[2].inputSchema).toMatchObject({ type: "object", properties: { n: { type: "number" } }, required: ["n"] });
+      const call = (await (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "Quick", arguments: { n: 5 } } })).json()) as any;
+      expect(JSON.stringify(call.result.content)).toContain("count 5");
+    } finally {
+      await s.stop();
+    }
+  });
+});

@@ -30,6 +30,7 @@ import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
 import { formatPlan, plan } from "./plan.js";
+import { pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { describePermissions, permissionsOf } from "./registry/manifest.js";
 import { DEFAULT_REGISTRY, install, installFromLock, loadInstalled, pack, publish, readLock, search, uninstall, type LoadedProvider } from "./registry/packages.js";
@@ -42,6 +43,8 @@ USAGE:
   halo debug <file.halo> [options]      Run with stage-by-stage tracing
   halo test <file.halo> [options]       Run offline: --mock plus --auto-approve
   halo resume <file.halo> <runId>       Continue a paused run (--payload '<json or word>')
+  halo replay <file.halo> <runId>       Rerun a recorded run with the answers it got: no model
+                                        or tool calls (--live-models or --live-tools to redo one side)
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name]                      Create a new Halo project
@@ -71,6 +74,7 @@ RUN OPTIONS:
   --router '<json>'      Router configuration, e.g. '{"strategy":"cost-optimized"}'
   --json                 Print the full run result (output, meta, trace) as JSON
   --no-telemetry         Don't record this run for Halo Studio (.halo/telemetry.db)
+  --no-record            Don't keep a recording for halo replay (.halo/recordings)
 
   Without a terminal (and without --auto-approve), a run that reaches |! yield
   or ~> listen pauses and prints the command that continues it.
@@ -123,7 +127,8 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust"]);
+const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
+const RECORDINGS = ".halo/recordings";
 const ALIASES: Record<string, string> = { p: "pipeline", s: "pipeline", stream: "pipeline", resume: "checkpoint", h: "help", v: "version" };
 
 function parseFlags(argv: string[]): Flags {
@@ -360,7 +365,7 @@ function tracer(debug: boolean): (e: RuntimeEvent) => void {
   };
 }
 
-async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise<number> {
+async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRun?: string): Promise<number> {
   const { path, ast } = await load(flags.positional[0]);
   const rel = relative(process.cwd(), path);
 
@@ -373,7 +378,12 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
   const routerJson = last(flags, "router");
   const telemetry = flags.bools.has("no-telemetry") ? undefined : new SqliteTelemetry(".halo/telemetry.db");
   const trace = tracer(debug);
+  const replaying = replayRun ? readRecording(RECORDINGS, replayRun) : undefined;
+  // Every real run keeps a recording, so it can be replayed (a resumed run adds to its own).
+  const runId = resumeRun ?? crypto.randomUUID();
+  const recorder = mock || replaying || flags.bools.has("no-record") || last(flags, "checkpoint") ? undefined : new Recorder(RECORDINGS, runId);
   const rt = new HaloRuntime({
+    recorder: recorder?.record,
     apiKey: last(flags, "api-key"),
     router: routerJson ? (parseJsonish(routerJson) as object) : undefined,
     // In a terminal, ask; otherwise pause the run (it is saved to .halo/runs) unless auto-approving.
@@ -387,6 +397,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
   }).load(ast);
   registerInstalled(rt, await installed());
   if (mock) mockRuntime(rt, ast);
+  if (replaying) rt.mockAll({ yield: AUTO_EVENT, ...replayMocks(replaying, { liveModels: flags.bools.has("live-models"), liveTools: flags.bools.has("live-tools") }) });
 
   let result: RunResult;
   const checkpoint = last(flags, "checkpoint");
@@ -399,6 +410,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
       result = await rt.signal(resumeRun, last(flags, "event") ?? saved.waitingFor ?? "yield", payload);
     } else if (checkpoint) {
       result = await rt.resume(checkpoint);
+    } else if (replaying) {
+      result = await rt.run(replaying.pipeline, replaying.args);
     } else {
       const pipeline = pickStream(ast, last(flags, "pipeline"));
       const args = inputArgs(flags);
@@ -406,8 +419,14 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
       if (missing.length) {
         fail(`Missing argument(s) for ${pipeline.name}(${pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ")}): ${missing.join(", ")}\n  Pass them with ${missing.map((m) => `--arg ${m}=...`).join(" ")}`);
       }
-      result = await rt.run(pipeline.name, args);
+      recorder?.start(pipeline.name, args);
+      pruneRecordings(RECORDINGS);
+      result = await rt.run(pipeline.name, args, { runId });
     }
+    recorder?.finish({ status: result.status, output: result.output });
+  } catch (err) {
+    recorder?.finish({ status: "error", error: err instanceof Error ? err.message : String(err) });
+    throw err;
   } finally {
     await rt.close();
     telemetry?.close();
@@ -423,6 +442,10 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string): Promise
   }
 
   const meta = result.context.meta;
+  if (replaying) {
+    const same = replaying.end && replaying.end.status === result.status && JSON.stringify(replaying.end.output) === JSON.stringify(result.output);
+    console.error(same ? green(`✓ Same output as the recorded run ${replayRun}`) : yellow(`≠ Different from the recorded run ${replayRun}${replaying.end ? ` (it ${replaying.end.status === "error" ? `failed: ${replaying.end.error}` : `ended ${replaying.end.status} with ${formatValue(replaying.end.output).slice(0, 200)}`})` : ""}`));
+  }
   if (result.status === "halted" && meta.halted) {
     const stage = stageAt(ast, meta.pipeline, meta.halted.stage);
     console.error(yellow(`⏹ Halted at stage ${meta.halted.stage} ${stage}`));
@@ -640,6 +663,11 @@ export async function main(argv: string[]): Promise<number> {
         flags.bools.add("mock");
         flags.bools.add("auto-approve");
         return await cmdRun(flags, false);
+      case "replay": {
+        const runId = flags.positional[1];
+        if (!runId) fail("Usage: halo replay <file.halo> <runId> [--live-models | --live-tools]");
+        return await cmdRun(flags, false, undefined, runId);
+      }
       case "resume": {
         const runId = flags.positional[1];
         if (!runId) fail("Usage: halo resume <file.halo> <runId> [--payload '<json or word>']");

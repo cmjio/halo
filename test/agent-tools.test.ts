@@ -251,3 +251,30 @@ describe("tool calling on the wire", () => {
     expect(events.some((e) => e.type === "agent_tool" && e.decision === "allowed" && e.target === "Files.read")).toBe(true);
   });
 });
+
+describe("recording and replay", () => {
+  test("a recorded tool conversation replays exactly, without calling anything", async () => {
+    const { Recorder, readRecording, replayMocks } = await import("../src/runtime/replay");
+    const dir = workspace();
+    const recordings = mkdtempSync(join(tmp, "rec-"));
+    const src = `tool Files : Workspace("${dir}", write: true)\nagent A [openai/gpt-4o] equips Files\npipeline P(x: String) -> Result:\n  x |> A.go(tools: [Files])`;
+    const recorder = new Recorder(recordings, "run-1");
+    const { mock } = script([useTool("Files.read", { path: "notes.md" })], [useTool("Files.write", { path: "copy.md", content: "alpha" })], "copied");
+    recorder.start("P", { x: "copy" });
+    const first = await rt(src, { "A.go": mock }, { recorder: recorder.record }).run("P", { x: "copy" });
+    recorder.finish({ status: first.status, output: first.output });
+
+    rmSync(join(dir, "copy.md"));
+    const rec = readRecording(recordings, "run-1");
+    expect(rec.calls.map((c) => `${c.kind}:${c.target}`)).toEqual(["agent:A.go", "tool:Files.read", "agent:A.go", "tool:Files.write", "agent:A.go"]);
+    const again = await rt(src, replayMocks(rec)).run("P", { x: "copy" });
+    expect(again.output).toBe("copied");
+    // The write came from the recording: nothing touched the folder.
+    expect(existsSync(join(dir, "copy.md"))).toBe(false);
+    expect(again.context.meta.calls.every((c) => c.mocked)).toBe(true);
+
+    // A changed pipeline asks for something the recording doesn't have.
+    const changed = src.replace("A.go(tools: [Files])", "A.go(tools: [Files]) |> A.check()");
+    await expect(rt(changed, replayMocks(rec)).run("P", { x: "copy" })).rejects.toThrow(/no model answers for A.check/);
+  });
+});

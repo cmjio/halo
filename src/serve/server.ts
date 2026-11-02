@@ -4,6 +4,9 @@
  *   - HTTP API: list pipelines, start runs, resume paused runs
  *   - Webhooks: POST /hooks/<path> starts a pipeline with the JSON body as its arguments
  *   - Schedules: cron expressions start pipelines
+ *   - Watches: a change in a URL, file, or command's output starts a pipeline
+ *   - Slack: Approve/Reject buttons on pause notices answer the run (with a signing secret)
+ *   - MCP: the pipelines as tools at /mcp
  *   - Approvals: a run that pauses at `|! yield` / `~> listen` gets a signed
  *     approve/reject link (and an optional Slack notification)
  *   - Halo Studio at /, reading the same telemetry
@@ -21,9 +24,10 @@ import type { PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
-import { answerToEvent, APPROVED, formatValue } from "../runtime/values.js";
+import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
 import { cronMatches, nextRun, parseCron, type CronSchedule } from "./cron.js";
 import { createMcpServer } from "./mcp-server.js";
+import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
 import { loadInstalled } from "../registry/packages.js";
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
@@ -44,6 +48,13 @@ export interface ServeConfig {
   webhooks?: Array<{ path: string; pipeline: string; secret?: string }>;
   /** Where to announce paused runs: a Slack incoming-webhook URL. */
   notify?: { slack?: string };
+  /** Start pipelines when a URL, file, or command's output changes (see watch.ts). */
+  watches?: WatchConfig[];
+  /**
+   * Your Slack app's signing secret. With it, pause notices get Approve/Reject buttons, and
+   * clicks on them (and on Slack tool buttons from a run) are received at /slack/actions.
+   */
+  slack?: { signingSecret?: string };
   /** Folder for runs, telemetry, and paused runs. Default .halo */
   stateDir?: string;
   /** Serve the pipelines as MCP tools at /mcp (behind the API token). Default true. */
@@ -79,6 +90,8 @@ export interface HaloServer {
   pipelines: string[];
   /** Run schedules that are due in the minute containing `now`. */
   tick(now?: Date): string[];
+  /** Check every watch now; resolves with the runs started by changes. */
+  checkWatches(): Promise<string[]>;
   /** Start a run as the API would; resolves with its id. */
   start(pipeline: string, args: Record<string, unknown>, source: string): string;
   /** Wait for a started run to finish its current stretch (complete, halt, pause, or fail). */
@@ -213,6 +226,20 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     webhooks.set(path, { pipeline: w.pipeline, secret });
   }
   const slackUrl = fromEnv(options.notify?.slack);
+  const slackSecret = fromEnv(options.slack?.signingSecret);
+  if (options.slack?.signingSecret !== undefined && !slackSecret) throw new ServeError(`slack.signingSecret "${options.slack.signingSecret}" is empty or not set`);
+
+  const watches = (options.watches ?? []).map((w) => {
+    entry(w.pipeline);
+    try {
+      checkWatchConfig(w);
+    } catch (err) {
+      throw new ServeError(err instanceof Error ? err.message : String(err));
+    }
+    return { config: w, key: watchKey(w), every: watchInterval(w), busy: false };
+  });
+  const watchFile = join(stateDir, "watches.json");
+  const readings: Record<string, Reading> = existsSync(watchFile) ? JSON.parse(await Bun.file(watchFile).text()) : {};
 
   // ── Runs ──
   const inflight = new Map<string, Promise<RunResult | undefined>>();
@@ -290,13 +317,54 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const text = `⏸ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}`;
     logger.log(`[halo] ${text.replace("\n", " · ")}`);
     if (!slackUrl) return;
+    // With a signing secret, Slack can tell us about clicks: answer right in the message.
+    const pauseId = snap.meta.paused?.id;
+    const blocks =
+      slackSecret && pauseId
+        ? [
+            { type: "section", text: { type: "mrkdwn", text } },
+            {
+              type: "actions",
+              elements: (["approve", "reject"] as const).map((answer) => ({
+                type: "button",
+                text: { type: "plain_text", text: answer === "approve" ? "Approve" : "Reject" },
+                style: answer === "approve" ? "primary" : "danger",
+                action_id: `halo_${answer}`,
+                value: JSON.stringify({ runId, pauseId, answer, sig: sign(runId, pauseId) }),
+              })),
+            },
+          ]
+        : undefined;
     try {
-      const res = await (options.fetch ?? fetch)(slackUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      const res = await (options.fetch ?? fetch)(slackUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, blocks }) });
       if (!res.ok) logger.warn(`[halo] Slack notification failed (${res.status})`);
     } catch (err) {
       logger.warn(`[halo] Slack notification failed: ${err instanceof Error ? err.message : err}`);
     }
   }
+
+  const checkWatch = async (w: (typeof watches)[number]): Promise<string | undefined> => {
+    if (w.busy) return undefined;
+    w.busy = true;
+    try {
+      const value = await readSource(w.config, { fetch: options.fetch ?? fetch, env });
+      const now = reading(value);
+      const last = readings[w.key];
+      readings[w.key] = now;
+      await Bun.write(watchFile, JSON.stringify(readings));
+      if (last ? last.hash === now.hash : !w.config.runOnStart) return undefined;
+      const changes = last ? diff(last.value, value) : [];
+      const source = w.config.url ?? w.config.file ?? w.config.command;
+      const body = { ...(w.config.args ?? {}), source, before: last?.value, after: value, changes };
+      return start(w.config.pipeline, argsFromBody(entry(w.config.pipeline).decl, body), `a change in ${source}`);
+    } catch (err) {
+      logger.warn(`[halo] watch for ${w.config.pipeline} failed: ${err instanceof Error ? err.message : err}`);
+      return undefined;
+    } finally {
+      w.busy = false;
+    }
+  };
+  const checkWatches = async () => (await Promise.all(watches.map(checkWatch))).filter((id): id is string => !!id);
 
   const tick = (now = new Date()) => {
     const minute = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()} ${now.getHours()}:${now.getMinutes()}`;
@@ -388,6 +456,46 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     );
   };
 
+  // ── Slack buttons ──
+  /**
+   * A click on a button in Slack. Slack signs each request with the app's signing secret.
+   * Pause notices carry their run, pause, and a link signature; a Slack tool's buttons from a
+   * run carry that run, and answer whatever it is waiting for when clicked.
+   */
+  async function slackAction(req: Request): Promise<Response> {
+    if (!slackSecret) return json({ error: "Slack actions need slack.signingSecret in halo.json" }, 404);
+    const raw = await req.text();
+    const ts = req.headers.get("x-slack-request-timestamp") ?? "";
+    const sig = req.headers.get("x-slack-signature") ?? "";
+    if (!/^\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) return json({ error: "Stale or missing Slack timestamp" }, 401);
+    if (!safeEqual(sig, `v0=${createHmac("sha256", slackSecret).update(`v0:${ts}:${raw}`).digest("hex")}`)) return json({ error: "Bad Slack signature" }, 401);
+    let payload: { actions?: Array<{ value?: string }>; user?: { username?: string; name?: string; id?: string }; response_url?: string };
+    try {
+      payload = JSON.parse(new URLSearchParams(raw).get("payload") ?? "");
+    } catch {
+      return json({ error: "No Slack payload" }, 400);
+    }
+    let action: { runId?: string; pauseId?: string; answer?: string; sig?: string };
+    try {
+      action = JSON.parse(payload.actions?.[0]?.value ?? "");
+    } catch {
+      return new Response("", { status: 200 }); // a button that isn't Halo's
+    }
+    if (!action.runId || !/^[\w-]+$/.test(action.runId)) return new Response("", { status: 200 });
+    // A pause notice's button answers only that pause.
+    if (action.pauseId !== undefined && !(action.sig && safeEqual(action.sig, sign(action.runId, action.pauseId)))) return json({ error: "Bad button signature" }, 403);
+    const who = payload.user?.username ?? payload.user?.name ?? payload.user?.id ?? "someone";
+    const answer = String(action.answer ?? "approve");
+    const event = answerToEvent(answer);
+    const outcome = await resume(action.runId, isPlainObject(event) ? { ...event, by: who, via: "slack" } : event, undefined, action.pauseId);
+    const text = "work" in outcome ? `${answer === "reject" ? "✗ Rejected" : "✓ Answered"} by ${who}: ${answer}` : `This step was already answered (${outcome.error}).`;
+    // Replace the buttons with what happened. Slack sends response_url to its own domain.
+    if (payload.response_url && /^https:\/\/hooks\.slack\.com\//.test(payload.response_url)) {
+      void (options.fetch ?? fetch)(payload.response_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ replace_original: true, text }) }).catch(() => {});
+    }
+    return new Response("", { status: 200 });
+  }
+
   // ── MCP ──
   const mcp = createMcpServer(
     {
@@ -433,6 +541,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
             return approvalPage(runId, url, "work" in outcome ? `Thanks. The run continues with “${answer}”.` : "This step was already answered.");
           }
         }
+
+        if (path === "/slack/actions" && req.method === "POST") return slackAction(req);
 
         const hook = path.match(/^\/hooks\/(.+)$/);
         if (hook && req.method === "POST") {
@@ -543,16 +653,21 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     arm();
   }
 
+  const watchTimers = options.scheduler === false ? [] : watches.map((w) => setInterval(() => void checkWatch(w), w.every));
+  if (options.scheduler !== false) void checkWatches();
+
   return {
     url: baseUrl,
     port: server.port!,
     pipelines: [...entries.keys()],
     tick,
+    checkWatches,
     start,
     settled,
     approvalUrl,
     async stop() {
       clearTimeout(timer);
+      for (const t of watchTimers) clearInterval(t);
       await server.stop(true);
       await Promise.allSettled([...inflight.values()]);
       await Promise.all(runtimes.map((r) => r.close()));

@@ -211,7 +211,11 @@ export const slack: ToolProvider = async (call, { fetch }) => {
       const blocks = buttons.length
         ? [
             { type: "section", text: { type: "mrkdwn", text } },
-            { type: "actions", elements: buttons.map((b, i) => ({ type: "button", text: { type: "plain_text", text: b }, value: b, action_id: `halo_${i}` })) },
+            // Each button names the run, so halo serve (/slack/actions) can answer what the run then waits for.
+            {
+              type: "actions",
+              elements: buttons.map((b, i) => ({ type: "button", text: { type: "plain_text", text: b }, value: call.runId ? JSON.stringify({ runId: call.runId, answer: b }) : b, action_id: `halo_${i}` })),
+            },
           ]
         : undefined;
       const res = await fetch("https://slack.com/api/chat.postMessage", { method: "POST", headers: auth, body: JSON.stringify({ channel, text, blocks }), signal: call.signal });

@@ -124,6 +124,15 @@ export class ToolUse {
 
 export const useTool = (target: string, args: Record<string, unknown> = {}) => new ToolUse(target, args);
 
+/** One answer a run got from outside: a model, a tool, or a person approving a tool call. */
+export interface RecordedCall {
+  kind: "agent" | "tool" | "approval";
+  target: string;
+  value: unknown;
+  /** For a model turn that called tools: the calls. */
+  toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+}
+
 /** A canned value, or a function computing one. */
 export type MockValue = unknown | ((req: MockRequest) => unknown | Promise<unknown>);
 
@@ -353,6 +362,8 @@ export interface RuntimeConfig {
   onSystemEvent?: (call: SystemCall) => unknown | Promise<unknown>;
   /** Observe execution (stages, LLM calls, retries, ...). */
   onEvent?: (event: RuntimeEvent) => void;
+  /** Receives every model answer, tool result, and approval as it happened (unredacted), so the run can be replayed. */
+  recorder?: (entry: RecordedCall) => void;
   logger?: Pick<Console, "log" | "warn">;
 }
 
@@ -1630,12 +1641,14 @@ export class HaloRuntime {
     if (ctx.approvals && Object.hasOwn(ctx.approvals, ctx.stageIndex)) {
       const answer = ctx.approvals[ctx.stageIndex];
       delete ctx.approvals[ctx.stageIndex];
+      this.config.recorder?.({ kind: "approval", target, value: answer });
       return answer;
     }
     const mock = this.mockFor("approval", target + "?");
     const req: InterruptRequest = { pipeline: ctx.pipeline.name, message, channel: "approval", attachments: [args], args: [], named: { target, args, policy, agent: agent.name }, current: ctx.current, context: this.snapshot(ctx) };
-    if (mock) return mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current });
-    if (this.config.onInterrupt) return raceAbort(Promise.resolve(this.config.onInterrupt(req)), ctx.signal);
+    const recorded = (answer: unknown) => (this.config.recorder?.({ kind: "approval", target, value: answer }), answer);
+    if (mock) return recorded(await mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current }));
+    if (this.config.onInterrupt) return recorded(await raceAbort(Promise.resolve(this.config.onInterrupt(req)), ctx.signal));
     // Only a top-level stage that is itself the agent call can stop and pick up again.
     const stage = ctx.pipeline.pipeline[ctx.stageIndex];
     const own = stage?.kind === "call" && stage.callee === agent.name;
@@ -1747,6 +1760,7 @@ export class HaloRuntime {
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
     const toolCalls = result.toolCalls;
+    if (kind !== "shadow") this.config.recorder?.({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}) });
     if (kind !== "shadow") {
       // Telemetry keeps what the agent's policies let out: redacted, or withheld if blocked.
       const shown = this.guard.forLog(agent, value);
@@ -1887,6 +1901,7 @@ export class HaloRuntime {
     );
 
     const latencyMs = Math.round(performance.now() - t0);
+    this.config.recorder?.({ kind: "tool", target, value: result.value });
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: chosenBy } : {}) });
     this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output: result.value, latencyMs, mocked: result.mocked });
     return result.value;
