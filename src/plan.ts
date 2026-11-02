@@ -18,6 +18,8 @@ export interface PlanStep {
   at: string;
   label: string;
   kind: "model" | "tool" | "agent-tools" | "control" | "human" | "pipeline";
+  /** The agent making the model call. */
+  agent?: string;
   /** How many times it can run (loops, each), when more than once. */
   times?: string;
   model?: string;
@@ -34,6 +36,8 @@ export interface Plan {
   /** Worst case for the whole run; undefined when it depends on input size (each over a list). */
   maxCost?: number;
   costNote?: string;
+  /** When every agent that calls a model has a MaxSpend, the run can't spend more than the highest one. */
+  cappedAt?: number;
   spendLimits: Array<{ agent: string; policy: string; limit: number }>;
 }
 
@@ -122,7 +126,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     if (agent) {
       const toolset = toolsetOf(agent, stage);
       const maxSteps = Number(stage.namedArgs.max_steps ?? agent.params.max_steps ?? DEFAULT_MAX_STEPS);
-      const step: PlanStep = { at, label: target, kind: toolset.length ? "agent-tools" : "model", times, model: agent.modelId, effects: [], notes: [] };
+      const step: PlanStep = { at, label: target, kind: toolset.length ? "agent-tools" : "model", agent: agent.name, times, model: agent.modelId, effects: [], notes: [] };
       const explicit = stage.argList.find((a) => a.name === "tool");
       if (explicit?.value.kind === "ref") {
         const name = explicit.value.path.join(".");
@@ -192,10 +196,15 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   const costs = steps.filter((s) => s.maxCost !== undefined);
   const maxCost = unbounded ? undefined : costs.reduce((sum, s) => sum + s.maxCost! * multiplier(s.times), 0);
   const spendLimits = [...agents.values()].flatMap((a) => rulesOf(a).filter((r) => r.name === "MaxSpend").map((r) => ({ agent: a.name, policy: r.policy, limit: Number(r.args[0]) })));
+  // MaxSpend counts the whole run's spend, so the highest limit among the calling agents bounds it.
+  const callers = new Set(steps.filter((s) => s.agent).map((s) => s.agent!));
+  const limitOf = (name: string) => Math.min(...spendLimits.filter((l) => l.agent === name).map((l) => l.limit));
+  const cappedAt = callers.size && [...callers].every((a) => Number.isFinite(limitOf(a))) ? Math.max(...[...callers].map(limitOf)) : undefined;
   return {
     pipeline: pipelineName,
     steps,
     maxCost,
+    cappedAt,
     costNote: unbounded ? "depends on how many items `each` gets" : costs.length < steps.filter((s) => s.kind === "model" || s.kind === "agent-tools").length ? "some models have no price list" : undefined,
     spendLimits,
   };
@@ -219,7 +228,8 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
   lines.push(`${color.bold("Acts on the world without asking:")} ${ext.length ? color.red(ext.join(", ")) : "nothing"}`);
   lines.push(`${color.bold("Needs a person's approval:")} ${approved.length ? approved.join(", ") : "nothing"}`);
   if (unknown.length) lines.push(`${color.bold("Effects not described:")} ${unknown.join(", ")}`);
-  lines.push(`${color.bold("Worst-case model cost:")} ${p.maxCost !== undefined ? `$${p.maxCost.toFixed(4)}` : "unbounded"}${p.costNote ? color.dim(` (${p.costNote})`) : ""}`);
-  for (const l of p.spendLimits) lines.push(`${color.bold("Spend limit:")} ${l.agent} stops at $${l.limit.toFixed(2)} (policy ${l.policy})`);
+  const capped = p.cappedAt !== undefined && (p.maxCost === undefined || p.cappedAt < p.maxCost) ? `, but MaxSpend stops the run at $${p.cappedAt.toFixed(2)}` : "";
+  lines.push(`${color.bold("Worst-case model cost:")} ${p.maxCost !== undefined ? `$${p.maxCost.toFixed(4)}` : "unbounded"}${capped}${p.costNote ? color.dim(` (${p.costNote})`) : ""}`);
+  for (const l of p.spendLimits) lines.push(`${color.bold("Spend limit:")} ${l.agent} stops once the run has spent $${l.limit.toFixed(2)} (policy ${l.policy})`);
   return lines.join("\n");
 }

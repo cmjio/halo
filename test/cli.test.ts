@@ -21,7 +21,8 @@ describe("CLI", () => {
   test("validate examples/ succeeds", () => {
     const r = cli("validate", "examples/");
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/55 file\(s\), 0 error\(s\)/);
+    const count = [...new Bun.Glob("**/*.halo").scanSync(join(root, "examples"))].length;
+    expect(r.out).toContain(`${count} file(s), 0 error(s)`);
   });
 
   test("validate --strict fails on warnings", () => {

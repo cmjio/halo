@@ -1,9 +1,9 @@
 import { test, expect, describe, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, validate } from "../src/parser/index";
-import { HaloRuntime, LoopLimitError, PolicyViolation, SchemaValidationError, type MockRequest, type MockValue, type RunResult, type RuntimeConfig } from "../src/runtime/runtime";
+import { HaloRuntime, LoopLimitError, PolicyViolation, SchemaValidationError, useTool, type MockRequest, type MockValue, type RunResult, type RuntimeConfig } from "../src/runtime/runtime";
 
 const dir = `${import.meta.dir}/../examples`;
 const files = readdirSync(dir).filter((f) => f.endsWith(".halo")).sort();
@@ -852,7 +852,7 @@ test("73 code writer: failing test output goes back to the coder until the real 
   expect(await Bun.file(join(work, "add.ts")).text()).toBe("export const add = (a: number, b: number) => a + b;\n");
 }, 30_000);
 
-test("74 software team: modules are checked for their exports, and the fixer patches until the acceptance tests pass", async () => {
+test("74 software team: modules are checked for their exports, and the fixer uses its tools until the acceptance tests pass", async () => {
   const work = join(tmp, "team");
   await Bun.write(join(work, "package.json"), '{"name":"t","type":"module"}');
   await Bun.write(join(work, "spec.md"), "index.ts exports add(a, b) and double(x).");
@@ -874,14 +874,73 @@ test("74 software team: modules are checked for their exports, and the fixer pat
     "Integrator.wire": 'export { add, double } from "./math";',
     "Fixer.fix": (r: MockRequest) => {
       prompts.fixer!.push(r.prompt!);
-      return `Looking at the failure, double multiplies by 3.\n\n${JSON.stringify({ files: [{ path: "math.ts", content: "export const add = (a: number, b: number) => a + b;\nexport const double = (x: number) => x * 2;\n" }] })}`;
+      // It runs the tests, tries things its policies refuse, then reads and fixes the bug.
+      return [
+        useTool("Tests.run", { command: "bun test acceptance.test.ts" }),
+        useTool("Tests.run", { command: "rm -rf ." }),
+        useTool("Code.write", { path: "acceptance.test.ts", content: "" }),
+        useTool("Code.read", { path: "math.ts" }),
+        useTool("Code.edit", { path: "math.ts", old: "x * 3", new: "x * 2" }),
+        useTool("Tests.run", { command: "bun test acceptance.test.ts" }),
+        "double multiplied by 3; it multiplies by 2 now.",
+      ][r.step! - 1];
     },
   });
   const result = await rt.run("BuildProject", { workdir: work });
   expect(result.status).toBe("completed");
   expect(prompts.coder![1]).toContain("missing exports: double");
-  expect(prompts.fixer).toHaveLength(1);
-  expect(prompts.fixer![0]).toContain("Expected: 8");
-  expect(prompts.fixer![0]).toContain("--- math.ts");
+  expect(prompts.fixer).toHaveLength(7);
+  // The model saw the failing test, and its policies' refusals.
+  expect(prompts.fixer![1]).toContain("Expected: 8");
+  expect(prompts.fixer![2]).toMatch(/Refused by policy "FixerTools"/);
+  expect(prompts.fixer![3]).toMatch(/Refused by policy "FixerTools"/);
+  expect(existsSync(join(work, "acceptance.test.ts"))).toBe(true);
+  expect(readFileSync(join(work, "acceptance.test.ts"), "utf8")).toContain("double(4)");
+  expect(result.context.meta.violations.map((v) => v.rule)).toEqual(["DenyArgs", "DenyArgs"]);
   expect(String(result.output)).toContain("1 pass");
 }, 60_000);
+
+test("75 research assistant: it picks its tools, its policies fence them, and writing the report waits for approval", async () => {
+  const ast = parse(await Bun.file(`${dir}/75-research-assistant.halo`).text());
+  const seen: MockRequest[] = [];
+  const written: unknown[] = [];
+  const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
+    "Researcher.investigate": (r: MockRequest) => {
+      seen.push(r);
+      return [
+        useTool("Web.fetch", { url: "https://evil.example/steal" }),
+        useTool("Web.fetch", { url: "https://modelcontextprotocol.io/specification" }),
+        useTool("Notes.write", { path: "report.md", content: "# Report" }),
+        "Wrote research/report.md.",
+      ][r.step! - 1];
+    },
+    "Web.fetch": { url: "https://modelcontextprotocol.io/specification", title: "Spec", content: "Contact: ana@example.com. Key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789" },
+    "Notes.write": (r: MockRequest) => (written.push(r.named), { path: "report.md" }),
+  });
+  const paused = await rt.run("Research", { question: "q" });
+  expect(paused.status).toBe("paused");
+  expect(paused.context.meta.paused!.message).toContain("Notes.write");
+  // The refused fetch went back to the model; the allowed one came back screened.
+  expect(seen[1]!.prompt).toMatch(/Refused by policy "Bounds"/);
+  expect(seen[2]!.prompt).toContain("[withheld");
+  expect(seen[0]!.tools).toEqual(expect.arrayContaining(["Web.fetch", "Docs.extract", "Notes.write", "Memo.set"]));
+  const done = await rt.signal(paused.runId, "approval", "approve");
+  expect(done.output).toBe("Wrote research/report.md.");
+  expect(written).toEqual([{ path: "report.md", content: "# Report" }]);
+});
+
+test("76 watch and react: a change gets one decision from a fixed list, and paging waits for a person", async () => {
+  const ast = parse(await Bun.file(`${dir}/76-watch-and-react.halo`).text());
+  const posted: string[] = [];
+  const answers = ['{"action": "panic", "reason": "?"}', '{"action": "page", "reason": "API is down"}'];
+  const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
+    "Triage.decide": () => answers.shift(),
+    "Chat.post": (r: MockRequest) => (posted.push(String(r.named.text)), { ok: true }),
+    yield: { approved: true },
+  });
+  const result = await rt.run("OnStatusChange", { source: "status page", changes: [{ path: "status.indicator", before: "none", after: "major" }] });
+  // "panic" isn't one of the actions: @correct sent it back once.
+  expect(result.context.meta.violations[0]).toMatchObject({ rule: "MatchRegex", corrected: true });
+  expect(result.output).toEqual({ action: "page", reason: "API is down" });
+  expect(posted).toEqual(["<!here> Paging on-call: API is down"]);
+});

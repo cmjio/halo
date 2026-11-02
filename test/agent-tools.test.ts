@@ -134,6 +134,25 @@ describe("tool policies", () => {
     expect(existsSync(join(dir, "x.sh"))).toBe(false);
   });
 
+  test("DenyArgs can check one argument, and an allow-list pattern can't be dodged with a newline", async () => {
+    const shell = (command: string) => {
+      const ws = workspace();
+      const { mock, seen } = script([useTool("Sh.run", { command })], "ok");
+      const r = rt(
+        `policy G : DenyArgs("Sh.run", "command", "^(?!echo [a-z]+$)")
+         tool Sh : Bash(cwd: "${ws}")
+         agent A [openai/gpt-4o] equips Sh requires G
+         pipeline P(x: String) -> Result:
+           x |> A.go(tools: [Sh])`,
+        { "A.go": mock },
+      );
+      return r.run("P", { x: "hi" }).then(() => seen[1]!.messages!.at(-1)!.content);
+    };
+    expect(await shell("echo hello")).toContain('"stdout":"hello"');
+    expect(await shell("echo hello\ntouch pwned")).toMatch(/^Refused by policy "G"/);
+    expect(await shell("echo hi; rm -rf .")).toMatch(/^Refused/);
+  });
+
   test("ApproveTools asks first: a yes runs the call, a no tells the model", async () => {
     for (const [answer, written] of [["approve", true], ["no", false]] as const) {
       const dir = workspace();

@@ -177,6 +177,21 @@ function scanText(value: unknown): string {
   return parts.join("\n");
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Every string or number inside an argument value, each on its own. */
+function argValues(value: unknown): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") out.push(v);
+    else if (typeof v === "number" || typeof v === "boolean") out.push(String(v));
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (isRecord(v)) Object.values(v).forEach(walk);
+  };
+  shallowEnough(() => walk(value));
+  return out;
+}
+
 const unquote = (s: string | undefined) => (s ?? "").replace(/^(["'])(.*)\1$/, "$2");
 
 /** Rough XML well-formedness: one root element and balanced tags. */
@@ -376,10 +391,11 @@ export class PolicyEngine {
     const rules = this.rulesFor(agent);
     const refusal = this.toolRefusal(rules, target, effect);
     if (refusal) this.violate(refusal.rule, refusal.message, "tool", hooks);
-    const text = scanText(args);
     for (const b of rules) {
       if (b.rule.name !== "DenyArgs") continue;
-      const [pattern = "*", regex = ""] = b.rule.args.map(unquote);
+      // DenyArgs(tool, regex) checks every argument's value; DenyArgs(tool, "name", regex) checks one argument.
+      const parts = b.rule.args.map(unquote);
+      const [pattern = "*", field, regex = ""] = parts.length >= 3 ? parts : [parts[0], undefined, parts[1]];
       if (!toolMatches(pattern, target)) continue;
       let re: RegExp;
       try {
@@ -387,7 +403,11 @@ export class PolicyEngine {
       } catch {
         throw new PolicyViolation(`Policy "${b.policy}": DenyArgs(${b.rule.args.join(", ")}) is not a valid regular expression`, b.policy, "DenyArgs");
       }
-      if ([text, normalizeForScan(text), unescapeJson(text)].some((t) => re.test(t))) this.violate(b, `${target} was refused: its arguments match /${regex}/`, "tool", hooks);
+      const values = argValues(field === undefined ? args : isRecord(args) ? args[field] : undefined);
+      // A missing argument is checked as "", so an allow-list pattern like ^(?!bun test) also refuses its absence.
+      if (field !== undefined && !values.length) values.push("");
+      const hit = values.find((v) => [v, normalizeForScan(v), unescapeJson(v)].some((t) => re.test(t)));
+      if (hit !== undefined) this.violate(b, `${target} was refused: ${field ? `its ${field}` : "an argument"} matches /${regex}/`, "tool", hooks);
     }
     const approver = rules.find(
       (b) => (b.rule.name === "ApproveTools" && b.rule.args.some((p) => toolMatches(unquote(p), target))) || (b.rule.name === "ApproveEffects" && b.rule.args.map(unquote).includes(effect)),

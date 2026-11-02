@@ -139,8 +139,8 @@ class Validator {
       return;
     }
     if (rule.name === "DenyArgs") {
-      if (args.length !== 2) this.add("error", `Policy "${g.name}": DenyArgs needs a tool pattern and a regular expression, e.g. DenyArgs("Shell.run", "rm\\s+-rf")`, g.loc);
-      else if (!validRegex(args[1]!)) this.add("error", `Policy "${g.name}": DenyArgs(${rule.args[1]}) is not a valid regular expression`, g.loc);
+      if (args.length !== 2 && args.length !== 3) this.add("error", `Policy "${g.name}": DenyArgs needs a tool pattern, optionally an argument name, and a regular expression, e.g. DenyArgs("Shell.run", "command", "rm\\s+-rf")`, g.loc);
+      else if (!validRegex(args.at(-1)!)) this.add("error", `Policy "${g.name}": DenyArgs(${rule.args.at(-1)}) is not a valid regular expression`, g.loc);
     }
     const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
     for (const pattern of patterns) {

@@ -1,0 +1,46 @@
+// ============================================================
+// A research assistant that chooses its own tools, within limits
+// ============================================================
+// The assistant gets a question and decides for itself what to do:
+// read pages, pull text out of documents in the project, take notes,
+// and write a report. Its policies decide what it can't do:
+//
+//   - it only sees tools that read, or write inside ./research
+//   - writing the final report needs a person's approval
+//   - fetching from anything but a few sites is refused
+//   - whatever the tools return is screened (API keys withheld, emails
+//     redacted) before the model sees it
+//
+// In a terminal, the approval is asked right there. Without one, the run
+// pauses and `halo resume` continues the same conversation.
+// `halo plan` shows all of this before anything runs.
+//
+// RUN:  halo plan examples/75-research-assistant.halo
+//       halo run examples/75-research-assistant.halo \
+//         --arg question="What changed in the MCP spec in 2025?"
+// ============================================================
+
+policy Screened : Block(APIKey) & Redact(Email) & MaxSpend(0.50)
+policy Bounds   : AllowEffects(read, write)
+  & ApproveTools("Notes.write")
+  & DenyArgs("Web.fetch", "url", "^(?!https://(modelcontextprotocol\\.io|github\\.com|en\\.wikipedia\\.org)/)")
+
+tool Web   : Browser(maxChars: 12000)
+tool Docs  : Documents()
+tool Notes : Workspace("research", write: true)
+tool Memo  : KV(".halo/research.sqlite")
+
+agent Researcher [anthropic/claude-sonnet-4-5, temp: 0.2, max_steps: 15]
+  system """
+    You answer research questions carefully. Gather sources with your tools
+    before answering, cite each claim with its URL or file, and say when the
+    sources don't settle something. Keep notes in Memo as you go (key: the
+    source, value: what it says). When you're done, write the report to
+    Notes as report.md, then reply with a three-line summary.
+  """
+  equips Web, Docs, Notes, Memo
+  requires Screened, Bounds
+
+pipeline Research(question: String) -> Result:
+  question
+    |> Researcher.investigate("Research this question and write a report.", tools: auto)

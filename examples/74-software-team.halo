@@ -5,8 +5,10 @@
 // into modules and shared types; coders write the modules in parallel,
 // each looping until its file loads and has the exports the plan names;
 // an integrator wires them together; and while the acceptance tests fail,
-// a fixer gets the failures plus every source file and patches whatever
-// it needs (|<> loop). The tests decide when it's done, not the models.
+// a fixer works like an engineer: it runs the tests, reads files, edits
+// them, and runs the tests again, choosing its own steps. Its tools are
+// fenced in by policy: files only inside the project, never the tests, and
+// the shell only for `bun test`. The tests decide when it's done.
 //
 // The project folder holds spec.md and acceptance.test.ts. Try the
 // spreadsheet engine in examples/projects/spreadsheet (copy it first:
@@ -18,8 +20,16 @@
 
 policy Team : Block(DestructiveOps) & Block(APIKey) & MaxSpend(3.00)
 policy Json : Enforce(JSON)
+// What the fixer may do with its tools: edit sources, run the tests. Nothing else.
+policy FixerTools : AllowTools("Code.*", "Tests.run")
+  & DenyTools("Code.delete")
+  & DenyArgs("Code.write", "path", "\\.test\\.")
+  & DenyArgs("Code.edit", "path", "\\.test\\.")
+  & DenyArgs("Tests.run", "command", "^(?!bun test[\\w ./-]*$)")
 
 tool Shell : Bash()
+tool Code  : Workspace("{{workdir}}", write: true)
+tool Tests : Bash(cwd: "{{workdir}}", timeout_ms: 120000)
 
 agent Architect [anthropic/claude-sonnet-4-5, temp: 0.2, max_tokens: 8000]
   system """
@@ -59,18 +69,17 @@ agent Integrator [anthropic/claude-sonnet-4-5, temp: 0.0, max_tokens: 8000]
   """
   requires Team
 
-agent Fixer [anthropic/claude-sonnet-4-5, temp: 0.0, max_tokens: 16000]
+agent Fixer [anthropic/claude-sonnet-4-5, temp: 0.0, max_tokens: 8000, max_steps: 40]
   system """
-    You fix a TypeScript project until its acceptance tests pass. You get the
-    failing test output and every source file. Before changing anything, pick
-    a failing test and trace it call by call through the code to the line that
-    goes wrong. If you are shown your previous attempt, it didn't work: its
-    diagnosis was wrong or incomplete, so look somewhere else. Reply with only
-    JSON listing the files to replace, each with its complete new contents:
-    { "files": [ { "path": "name.ts", "content": "..." } ] }
-    Never change or add test files. Don't special-case test inputs.
+    You fix a TypeScript project until its acceptance tests pass. Run them with
+    Tests.run (command: "bun test acceptance.test.ts"). Pick a failing test,
+    read the code it calls, and trace it to the line that goes wrong before
+    you edit anything. Prefer small edits (Code.edit) to rewriting files. Run
+    the tests after each fix. Never change the tests and don't special-case
+    test inputs. When they all pass, say in a few lines what was wrong.
   """
-  requires Team, Json
+  equips Code, Tests
+  requires Team, FixerTools
 
 // One module: write it, then check it loads and has its exports.
 pipeline BuildModule(m: JSON, workdir: String, spec: String, types: String) -> Result:
@@ -89,30 +98,14 @@ pipeline BuildModule(m: JSON, workdir: String, spec: String, types: String) -> R
     |<> loop(Coder, "context.data.check.exitCode != 0", max: 3)
     |> System.Value(m.file)
 
-// Patch files from the fixer until the acceptance tests pass.
-@correct(2)
+// The fixer runs the tests, reads and edits files, and reruns them, until
+// they pass. Then the pipeline checks for itself, and sends it back if not.
 pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
   workdir
-    |> Shell.run(command: """
-         set -o pipefail
-         cd {{workdir}}
-         bun test acceptance.test.ts 2>&1 | tail -80
-         code=$?
-         for f in *.ts; do case "$f" in *.test.ts) ;; *) printf '\n--- %s\n' "$f"; cat "$f";; esac; done
-         exit $code
-       """) as result
-    |> Fixer.fix("Make the acceptance tests pass. The spec, then the test output and every source file:", spec, context.data.result.stdout) as patch
-    |> Shell.run(command: """
-         set -o pipefail
-         cd {{workdir}}
-         bun -e 'for (const f of JSON.parse(process.argv[1]).files ?? []) { if (!/^[\w-]+\.ts$/.test(f.path) || f.path.endsWith(".test.ts")) throw new Error("refusing to write " + f.path); await Bun.write(f.path, f.content); console.log("wrote " + f.path) }' {{patch}}
-         bun test acceptance.test.ts 2>&1 | tail -80
-         code=$?
-         for f in *.ts; do case "$f" in *.test.ts) ;; *) printf '\n--- %s\n' "$f"; cat "$f";; esac; done
-         exit $code
-       """) as result
-    |<> loop(Fixer, "context.data.result.exitCode != 0", max: 5) as rounds
-    |> System.Value(context.data.rounds)
+    |> Fixer.fix("Make the acceptance tests pass. The spec:", spec, tools: [Code, Tests]) as report
+    |> Tests.run(command: "bun test acceptance.test.ts 2>&1 | tail -40") as result
+    |<> loop(Fixer, "context.data.result.exitCode != 0", max: 3)
+    |> System.Value(context.data.report)
 
 @correct(2)
 pipeline BuildProject(workdir: String) -> Result:
