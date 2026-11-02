@@ -152,6 +152,33 @@
         }
       },
       "publisher": "Halo (first-party)"
+    },
+    "cloudflare": {
+      "description": "Cloudflare: Workers, KV, D1, R2, Pages and Queues in an account; DNS records, settings and cache purges in a zone",
+      "latest": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "file": "packages/cloudflare-1.0.0.halotool",
+          "sha256": "9e2fc17eb9102180a2bda8821aba5025fc99b67ac7da45df1fd7d8269cc86146",
+          "providers": [
+            "Cloudflare",
+            "CloudflareZone"
+          ],
+          "permissions": {
+            "network": [
+              "api.cloudflare.com"
+            ],
+            "env": [
+              "CLOUDFLARE_API_TOKEN"
+            ],
+            "spawn": [],
+            "code": false
+          },
+          "publishedAt": "2026-11-02T21:13:34.305Z"
+        }
+      },
+      "publisher": "Halo (first-party)",
+      "homepage": "https://developers.cloudflare.com/api/"
     }
   }
 }

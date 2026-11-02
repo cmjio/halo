@@ -184,7 +184,7 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 
 Tokens can be `Env.NAME` or the string `"Env.NAME"`. An agent calls an equipped tool first with `Agent.task(tool: T, ...)`, or chooses its own calls with `tools: [T]`. `VectorStore(embeddings: "openai/text-embedding-3-small")` searches by meaning, and `url:` keeps it in Postgres with pgvector.
 
-**Tool packages** add providers from a registry: `halo add stripe` (also `jira`, `notion`, `sentry`, `github-mcp`, `world-time`). A package is a REST API described as data, an MCP server, or code; anything that runs code needs `--trust`, and `halo.lock` pins each one's checksum. See [Tool Packages](docs/guide/tool-packages.md).
+**Tool packages** add providers from a registry: `halo add stripe` (also `jira`, `notion`, `sentry`, `cloudflare`, `github-mcp`, `world-time`). A package is a REST API described as data, an MCP server, or code; anything that runs code needs `--trust`, and `halo.lock` pins each one's checksum. See [Tool Packages](docs/guide/tool-packages.md).
 
 ## 🛡 Policies
 
