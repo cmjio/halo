@@ -1,31 +1,52 @@
 {
-  "name": "langly",
+  "name": "halo",
   "version": "0.1.0",
   "description": "AI Workflow Language - Declarative LLM orchestration",
   "type": "module",
-  "main": "./index.ts",
+  "main": "./src/index.ts",
   "bin": {
-    "langly": "./index.ts"
+    "halo": "./src/cli.ts"
   },
   "scripts": {
     "test": "bun test",
-    "build": "bun build ./index.ts --outdir ./dist",
-    "validate": "bun run index.ts validate",
-    "lint": "bun run index.ts validate examples/"
+    "dev": "bun --hot src/cli.ts",
+    "build": "bun build src/cli.ts --outdir ./dist",
+    "validate": "bun run src/cli.ts validate",
+    "build:vsx": "bun build src/lsp/server.ts --target node --outfile editors/vscode/server.js && cd editors/vscode && npm run compile",
+    "package:vsx": "bun run build:vsx && cd editors/vscode && bunx vsce package",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "studio:api": "bun run studio/server.ts",
+    "studio:ui": "cd studio && bun run dev",
+    "studio": "bun run studio:api & bun run studio:ui"
   },
-  "keywords": ["ai", "llm", "dsl", "workflow", "pipeline"],
+  "keywords": [
+    "ai",
+    "llm",
+    "dsl",
+    "workflow",
+    "pipeline"
+  ],
   "exports": {
-    ".": "./index.ts",
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
     "./parser": "./src/parser/index.ts",
     "./runtime": "./src/runtime/runtime.ts",
     "./adapter": "./src/runtime/adapter.ts",
-    "./router": "./src/runtime/router.ts"
+    "./router": "./src/runtime/router.ts",
+    "./errors": "./src/errors.ts"
   },
   "dependencies": {
-    "antlr4ng": "^3.0.16"
+    "antlr4ng": "^3.0.16",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
   },
   "devDependencies": {
+    "@types/bun": "latest",
+    "antlr4ng-cli": "^2.0.0",
     "bun-types": "latest",
-    "@types/bun": "latest"
+    "vitepress": "^1.2.2",
+    "vue": "^3.4.27"
   }
 }

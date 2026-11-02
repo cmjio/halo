@@ -6,15 +6,18 @@
   "foldingStartMarker": "^//\\s*\\{",
   "foldingStopMarker": "^//\\s*\\}",
   "patterns": [
-    {
-      "include": "#comment"
-    },
-    {
-      "include": "#mind-decl"
-    },
-    {
-      "include": "#stream-decl"
-    }
+    { "include": "#comment" },
+    { "include": "#decorators" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#mind-decl" },
+    { "include": "#stream-decl" },
+    { "include": "#pipeline-operators" },
+    { "include": "#context-vars" },
+    { "include": "#function-calls" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#boolean" }
   ],
   "repository": {
     "comment": {
@@ -25,10 +28,33 @@
         "0": { "name": "punctuation.definition.comment.langly" }
       }
     },
+    "decorators": {
+      "match": "(@)(timeout|retry|shadow)\\b",
+      "captures": {
+        "1": { "name": "punctuation.definition.annotation.langly" },
+        "2": { "name": "entity.name.function.decorator.langly" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(mind|stream|tool|guardrail|struct|memory)\\b",
+          "name": "keyword.control.declaration.langly"
+        },
+        {
+          "match": "\\b(equips|requires|loop|listen|yield)\\b",
+          "name": "keyword.control.langly"
+        }
+      ]
+    },
+    "types": {
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b",
+      "name": "entity.name.type.langly"
+    },
     "mind-decl": {
       "begin": "\\b(mind)\\b\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
       "beginCaptures": {
-        "1": { "name": "storage.type.langly" },
+        "1": { "name": "keyword.control.declaration.langly" },
         "2": { "name": "entity.name.type.mind.langly" }
       },
       "end": "\\]",
@@ -36,9 +62,7 @@
         "0": { "name": "punctuation.section.brackets.end.langly" }
       },
       "patterns": [
-        {
-          "include": "#model-config"
-        }
+        { "include": "#model-config" }
       ]
     },
     "model-config": {
@@ -48,9 +72,7 @@
       },
       "end": "(?=\\])",
       "patterns": [
-        {
-          "include": "#model-ref"
-        },
+        { "include": "#model-ref" },
         {
           "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)",
           "captures": {
@@ -58,19 +80,10 @@
             "2": { "name": "keyword.operator.assignment.langly" }
           }
         },
-        {
-          "include": "#string"
-        },
-        {
-          "include": "#number"
-        },
-        {
-          "include": "#boolean"
-        },
-        {
-          "match": ",",
-          "name": "punctuation.separator.langly"
-        }
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#boolean" },
+        { "match": ",", "name": "punctuation.separator.langly" }
       ]
     },
     "model-ref": {
@@ -82,13 +95,11 @@
     "stream-decl": {
       "begin": "\\b(stream)\\b",
       "beginCaptures": {
-        "1": { "name": "storage.type.langly" }
+        "1": { "name": "keyword.control.declaration.langly" }
       },
       "end": "(?=$|\\n(?=\\s*[^ \\t]))",
       "patterns": [
-        {
-          "include": "#stream-body"
-        }
+        { "include": "#stream-body" }
       ]
     },
     "stream-signature": {
@@ -98,17 +109,9 @@
       },
       "end": "(?=:)",
       "patterns": [
-        {
-          "include": "#stream-params"
-        },
-        {
-          "match": "->",
-          "name": "keyword.operator.arrow.langly"
-        },
-        {
-          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-          "name": "entity.name.type.langly"
-        }
+        { "include": "#stream-params" },
+        { "match": "->", "name": "keyword.operator.arrow.langly" },
+        { "include": "#types" }
       ]
     },
     "stream-params": {
@@ -122,82 +125,70 @@
       },
       "patterns": [
         {
-          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b\\s*(:)\\s*\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b\\s*(:)\\s*\\b([A-Z][a-zA-Z0-9_]*)\\b",
           "captures": {
             "1": { "name": "variable.parameter.langly" },
             "2": { "name": "keyword.operator.assignment.langly" },
             "3": { "name": "entity.name.type.langly" }
           }
         },
-        {
-          "match": ",",
-          "name": "punctuation.separator.langly"
-        }
+        { "match": ",", "name": "punctuation.separator.langly" }
       ]
     },
     "stream-body": {
       "patterns": [
-        {
-          "include": "#stream-signature"
-        },
-        {
-          "include": "#pipeline-stages"
-        }
+        { "include": "#stream-signature" },
+        { "include": "#pipeline-stages" }
       ]
     },
     "pipeline-stages": {
       "patterns": [
+        { "include": "#pipeline-operators" },
+        { "include": "#context-vars" },
+        { "include": "#function-calls" },
+        { "include": "#keywords" },
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#boolean" },
         {
-          "match": "\\|>",
-          "name": "keyword.operator.pipe.langly"
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "name": "variable.other.langly"
+        }
+      ]
+    },
+    "pipeline-operators": {
+      "match": "(\\|>|\\|\\?|\\|!|\\|\\*|\\~>|\\|<>)",
+      "name": "keyword.control.langly"
+    },
+    "context-vars": {
+      "patterns": [
+        {
+          "match": "\\b(context)\\b",
+          "name": "variable.language.context.langly"
         },
         {
-          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\.\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "match": "\\b(Env)\\.([A-Z_0-9]+)\\b",
+          "captures": {
+            "1": { "name": "support.class.env.langly" },
+            "2": { "name": "constant.other.env.langly" }
+          }
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\.\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\b",
           "captures": {
             "1": { "name": "variable.other.object.langly" },
             "2": { "name": "entity.name.function.call.langly" }
           }
         },
         {
-          "include": "#call-args"
-        },
-        {
-          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-          "name": "variable.other.langly"
-        },
-        {
-          "include": "#string"
-        },
-        {
-          "include": "#number"
-        },
-        {
-          "include": "#boolean"
-        }
-      ]
-    },
-    "call-args": {
-      "begin": "\\(",
-      "beginCaptures": {
-        "0": { "name": "punctuation.section.parens.begin.langly" }
-      },
-      "end": "\\)",
-      "endCaptures": {
-        "0": { "name": "punctuation.section.parens.end.langly" }
-      },
-      "patterns": [
-        {
-          "include": "#string"
-        },
-        {
-          "include": "#number"
-        },
-        {
-          "include": "#boolean"
-        },
-        {
-          "match": ",",
-          "name": "punctuation.separator.langly"
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": { "name": "entity.name.function.call.langly" }
+          }
         }
       ]
     },
@@ -208,6 +199,7 @@
           "begin": "\"",
           "end": "\"",
           "patterns": [
+            { "include": "#template-vars" },
             {
               "match": "\\\\([\"'/\\\\nrt]|.)",
               "name": "constant.character.escape.langly"
@@ -222,15 +214,25 @@
           "begin": "'",
           "end": "'",
           "patterns": [
+            { "include": "#template-vars" },
             {
               "match": "\\\\([\"'/\\\\nrt]|.)",
-              "name": "constant.character.escape.langly" }
+              "name": "constant.character.escape.langly"
+            }
           ],
           "captures": {
             "0": { "name": "punctuation.definition.string.langly" }
           }
         }
       ]
+    },
+    "template-vars": {
+      "match": "(\\{\\{)(.*?)(\\}\\})",
+      "captures": {
+        "1": { "name": "punctuation.definition.template.begin.langly" },
+        "2": { "name": "variable.other.template.langly" },
+        "3": { "name": "punctuation.definition.template.end.langly" }
+      }
     },
     "number": {
       "match": "\\b-?[0-9]+(\\.[0-9]+)?\\b",

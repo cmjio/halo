@@ -1,0 +1,11 @@
+tool UsersDB : PostgreSQL("postgres://user:pass@localhost:5432/mydb")
+tool KnowledgeBase : VectorStore("index-123")
+
+agent Analyst [openai/gpt-4]
+  equips UsersDB, KnowledgeBase
+
+pipeline AnalyzeUser(userId: String) -> Result:
+  userId
+    |> UsersDB.execute(query: "SELECT * FROM users WHERE id = '{{context.input.userId}}'")
+    |> KnowledgeBase.execute(method: "search", query: "Policies for user type: {{context.current.type}}")
+    |> Analyst.prompt("Summarize the user profile and relevant policies. User: {{context.data.UsersDB.execute}}, Policies: {{context.current}}")

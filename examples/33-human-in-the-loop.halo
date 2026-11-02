@@ -1,0 +1,25 @@
+tool Approvals : Slack("Env.SLACK_BOT_TOKEN")
+tool Notifier : Email("Env.RESEND_API_KEY")
+
+agent Writer [openai/gpt-4, temp: 0.7]
+
+pipeline DraftEmail(topic: String) -> Result:
+  topic
+    |> Writer.prompt("Draft a professional email about this topic: {{context.input.topic}}")
+    
+    // Slack connector automatically embeds the runId in the message metadata
+    |> Approvals.execute(
+         channel: "#approvals",
+         text: "Please review this draft: {{context.current}}",
+         buttons: ["Approve", "Reject"]
+       )
+       
+    // The pipeline suspends safely, waiting ONLY for a Slack Interaction signal
+    ~> listen(Slack.Interaction)
+    
+    // Pipeline resumes here with the user's feedback, then we send the final email
+    |> Notifier.execute(
+         to: "client@example.com",
+         subject: "Update",
+         body: "Final approved message: {{context.current}}"
+       )

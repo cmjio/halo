@@ -1,3 +1,5 @@
+import { LanglyError } from "../errors.js";
+
 /**
  * LLM Router
  * 
@@ -102,7 +104,7 @@ export class LLMRouter {
     );
     
     if (!selected) {
-      throw new Error(`No suitable model found for request. Candidates: ${candidates.length}`);
+      throw new LanglyError(`No suitable model found for request. Candidates: ${candidates.length}`, "ROUTING_FAILED");
     }
     
     const reason = this.getRoutingReason(selected, requestedModel);

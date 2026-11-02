@@ -3,7 +3,7 @@
  * langly — CLI for the Langly DSL
  *
  * Usage:
- *   bun run langly.ts run <file.ly> --stream <name> --args name:Alice
+ *   bun run langly.ts run <file.ly> --pipeline <name> --args name:Alice
  *   bun run langly.ts parse <file.ly>
  */
 
@@ -55,9 +55,9 @@ if (cmd === "parse") {
 }
 
 if (cmd === "run") {
-  const streamName = flags.stream ?? flags.s;
+  const streamName = flags.pipeline ?? flags.s;
   if (streamName == null) {
-    console.error("Error: --stream <name> is required for run");
+    console.error("Error: --pipeline <name> is required for run");
     process.exit(1);
   }
 
@@ -76,7 +76,7 @@ if (cmd === "run") {
   const apiKey = flags.key ?? Bun.env.LANGLY_API_KEY;
   const config: RuntimeConfig = apiKey != null ? { apiKey } : {};
 
-  let output: string;
+  let output: unknown;
   let printedBySystem = false;
 
   try {
@@ -84,10 +84,10 @@ if (cmd === "run") {
     rt.load(ast);
 
     if (flags.mock != null && flags.mock === "true") {
-      const stream = ast.streams.find((s) => s.name === streamName);
-      if (stream) {
+      const pipeline = ast.pipelines.find((s) => s.name === streamName);
+      if (pipeline) {
         const mocks: Record<string, string> = {};
-        for (const stage of stream.pipeline) {
+        for (const stage of pipeline.pipeline) {
           if (stage.kind === "call" && stage.callee !== "System") {
             const key = `${stage.callee}.${stage.method}`;
             const argsStr = stage.args.join(", ");
@@ -104,7 +104,7 @@ if (cmd === "run") {
     process.exit(1);
   }
 
-  const lastStage = ast.streams.find(
+  const lastStage = ast.pipelines.find(
     (s) => s.name === streamName,
   )?.pipeline.at(-1);
   printedBySystem =

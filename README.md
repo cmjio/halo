@@ -4,32 +4,29 @@ A **declarative domain-specific language (DSL)** for orchestrating AI/LLM workfl
 
 ## 🚀 Quick Start
 
-### 1. Install
+### 1. Installation
 ```bash
 bun install
 # or
 npm install langly
 ```
 
-### 2. Create Your First Workflow
-```langly
-// hello.ly
-mind Greeter [gemini-3-1-pro, temp: 0.7]
-
-stream HelloWorld(name: String) -> Result:
-  name
-    |> Greeter.prompt("Write a warm greeting for {{name}}.")
-    |> System.Print()
+### 2. Create Your First Project
+```bash
+langly init my-chat-bot
+cd my-chat-bot
+cp .env.example .env
+# Edit .env with your API keys
 ```
 
 ### 3. Run It
 ```bash
 # With mock (for testing)
-bun run examples/01-hello.ly
+langly run src/main.ly --mock
 
-# With real LLM API
+# With real LLM
 export LANGLY_API_KEY="your-api-key"
-langly run examples/01-hello.ly --args '{"name": "World"}'
+langly run src/main.ly --args '{"message": "World"}'
 ```
 
 ## 📚 Learn Langly (Build-Up Examples)
@@ -47,21 +44,16 @@ The `examples/` folder is a **complete learning path** — each example builds o
 | 07 | `07-interrupts-and-listeners.ly` | Human-in-the-loop |
 | 08 | `08-memory.ly` | Persistence |
 | 09 | `09-directives.ly` | Build/runtime modifiers |
-| 10 | `10-named-args.ly` | Named arguments |
-| 11 | `11-context-flow.ly` | Context data flow |
-| 12 | `12-multiple-minds.ly` | Multiple minds in one stream |
-| 13 | `13-deep-context.ly` | Deep context paths |
-| 14 | `14-env-vars.ly` | Environment variables |
-| 15 | `15-shadow-minds.ly` | Shadow directive (A/B testing) |
-| 16 | `16-retry-checkpoint.ly` | Retry/checkpoint directives |
-| 17 | `17-rest-tool.ly` | REST tool usage |
-| 18 | `18-vectorstore.ly` | VectorStore operations |
+| 10-18 | Intermediate patterns | Named args, multiple minds, etc. |
 | 20-25 | Role examples | Advanced patterns |
 | 30-32 | Expert examples | Production systems |
 
 ## 🔧 CLI Commands
 
 ```bash
+# Initialize a new project
+langly init [project-name] [--template <name>] [--local]
+
 # Validate syntax
 langly validate examples/20-role-founder.ly
 
@@ -69,33 +61,44 @@ langly validate examples/20-role-founder.ly
 langly run examples/20-role-founder.ly --args '{"date": "2024-01-15"}'
 
 # Debug mode
-langly debug examples/01-hello.ly
+langly run examples/01-hello.ly --verbose
 
-# Run all examples
-bun test
+# Development mode (hot-reload)
+langly dev examples/01-hello.ly
+
+# Build to executable
+langly build examples/20-role-founder.ly -o founder-bot
 ```
 
-## 📖 Documentation
+## 🏗 Deployment
 
-- **Language Spec**: `docs/spec.md`
-- **Grammar Review**: `docs/grammar_review.md`
-- **Dictionary**: `docs/dictionary.md`
+### Local Development (Ollama - Zero Cost)
+```bash
+# 1. Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
 
-## 🏗 Architecture
+# 2. Pull a model
+ollama pull llama3.1
 
-```
-langly/
-├── src/
-│   ├── parser/          # ANTLR4-based parser
-│   └── runtime/         # Execution engine
-│       ├── adapter.ts    # LLM provider adapters
-│       └── router.ts     # Cost-optimized routing
-├── examples/            # Build-up learning path (01-32)
-├── editors/            # VS Code, Sublime, Zed support
-└── docs/               # Specifications & guides
+# 3. Run with local models
+langly init my-bot --local
+cd my-bot
+langly run src/main.ly
 ```
 
-## ✅ Supported Providers (Adapters)
+### Cloud Deployment (Docker)
+```dockerfile
+FROM oven/bun:latest
+
+WORKDIR /app
+COPY . .
+
+RUN bun install
+EXPOSE 3000
+CMD ["bun", "run", "src/main.ly"]
+```
+
+## 📖 Supported Providers (Adapters)
 
 | Provider | Prefix | Status |
 |-----------|--------|--------|
@@ -110,10 +113,19 @@ langly/
 ## 🧪 Test Status
 
 ```bash
-bun test  # Run all 95+ tests
+bun test  # Run all 121+ tests
 ```
 
-**Current:** 91 pass, 4 fail (grammar/parser edge cases)
+**Current:** 121 pass, 0 fail ✅
+
+## 📄 Examples for Startups
+
+| Use Case | Example | Cost |
+|-----------|---------|------|
+| Customer Support Bot | `examples/20-role-founder.ly` | ~$0.02/interaction |
+| Content Moderation | `examples/30-control-moderation.ly` | Budget-capped at $2.00 |
+| QA Automation | `examples/24-role-qa-engineer.ly` | ~$0.01/test |
+| Design Review | `examples/22-role-ux-designer.ly` | ~$0.015/review |
 
 ## 📄 License
 

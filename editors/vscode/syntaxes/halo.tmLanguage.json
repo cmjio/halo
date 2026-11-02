@@ -1,0 +1,246 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Halo",
+  "scopeName": "source.halo",
+  "fileTypes": ["halo"],
+  "foldingStartMarker": "^//\\s*\\{",
+  "foldingStopMarker": "^//\\s*\\}",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#decorators" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#agent-decl" },
+    { "include": "#pipeline-decl" },
+    { "include": "#pipeline-operators" },
+    { "include": "#context-vars" },
+    { "include": "#function-calls" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#boolean" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.halo",
+      "begin": "//",
+      "end": "$",
+      "captures": {
+        "0": { "name": "punctuation.definition.comment.halo" }
+      }
+    },
+    "decorators": {
+      "match": "(@)(timeout|retry|shadow)\\b",
+      "captures": {
+        "1": { "name": "punctuation.definition.annotation.halo" },
+        "2": { "name": "entity.name.function.decorator.halo" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(agent|pipeline|tool|policy|schema|store)\\b",
+          "name": "keyword.control.declaration.halo"
+        },
+        {
+          "match": "\\b(equips|requires|loop|listen|yield)\\b",
+          "name": "keyword.control.halo"
+        }
+      ]
+    },
+    "types": {
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b",
+      "name": "entity.name.type.halo"
+    },
+    "agent-decl": {
+      "begin": "\\b(agent)\\b\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.declaration.halo" },
+        "2": { "name": "entity.name.type.agent.halo" }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.brackets.end.halo" }
+      },
+      "patterns": [
+        { "include": "#model-config" }
+      ]
+    },
+    "model-config": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.brackets.begin.halo" }
+      },
+      "end": "(?=\\])",
+      "patterns": [
+        { "include": "#model-ref" },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.parameter.halo" },
+            "2": { "name": "keyword.operator.assignment.halo" }
+          }
+        },
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#boolean" },
+        { "match": ",", "name": "punctuation.separator.halo" }
+      ]
+    },
+    "model-ref": {
+      "match": "(?=/?[a-zA-Z_][a-zA-Z0-9_-]*([\\-\\/][a-zA-Z0-9_-]+)*)(/?[a-zA-Z_][a-zA-Z0-9_/-]*)",
+      "captures": {
+        "1": { "name": "entity.name.model.halo" }
+      }
+    },
+    "pipeline-decl": {
+      "begin": "\\b(pipeline)\\b",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.declaration.halo" }
+      },
+      "end": "(?=$|\\n(?=\\s*[^ \\t]))",
+      "patterns": [
+        { "include": "#stream-body" }
+      ]
+    },
+    "stream-signature": {
+      "begin": "\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\(",
+      "beginCaptures": {
+        "1": { "name": "entity.name.function.stream.halo" }
+      },
+      "end": "(?=:)",
+      "patterns": [
+        { "include": "#stream-params" },
+        { "match": "->", "name": "keyword.operator.arrow.halo" },
+        { "include": "#types" }
+      ]
+    },
+    "stream-params": {
+      "begin": "\\(",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.parens.begin.halo" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.parens.end.halo" }
+      },
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b\\s*(:)\\s*\\b([A-Z][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "variable.parameter.halo" },
+            "2": { "name": "keyword.operator.assignment.halo" },
+            "3": { "name": "entity.name.type.halo" }
+          }
+        },
+        { "match": ",", "name": "punctuation.separator.halo" }
+      ]
+    },
+    "pipeline-body": {
+      "patterns": [
+        { "include": "#pipeline-signature" },
+        { "include": "#pipeline-stages" }
+      ]
+    },
+    "pipeline-stages": {
+      "patterns": [
+        { "include": "#pipeline-operators" },
+        { "include": "#context-vars" },
+        { "include": "#function-calls" },
+        { "include": "#keywords" },
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#boolean" },
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "name": "variable.other.halo"
+        }
+      ]
+    },
+    "pipeline-operators": {
+      "match": "(\\|>|\\|\\?|\\|!|\\|\\*|\\~>|\\|<>)",
+      "name": "keyword.control.halo"
+    },
+    "context-vars": {
+      "patterns": [
+        {
+          "match": "\\b(context)\\b",
+          "name": "variable.language.context.halo"
+        },
+        {
+          "match": "\\b(Env)\\.([A-Z_0-9]+)\\b",
+          "captures": {
+            "1": { "name": "support.class.env.halo" },
+            "2": { "name": "constant.other.env.halo" }
+          }
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\.\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "variable.other.object.halo" },
+            "2": { "name": "entity.name.function.call.halo" }
+          }
+        },
+        {
+          "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\(",
+          "captures": {
+            "1": { "name": "entity.name.function.call.halo" }
+          }
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.halo",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "include": "#template-vars" },
+            {
+              "match": "\\\\([\"'/\\\\nrt]|.)",
+              "name": "constant.character.escape.halo"
+            }
+          ],
+          "captures": {
+            "0": { "name": "punctuation.definition.string.halo" }
+          }
+        },
+        {
+          "name": "string.quoted.single.halo",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "include": "#template-vars" },
+            {
+              "match": "\\\\([\"'/\\\\nrt]|.)",
+              "name": "constant.character.escape.halo"
+            }
+          ],
+          "captures": {
+            "0": { "name": "punctuation.definition.string.halo" }
+          }
+        }
+      ]
+    },
+    "template-vars": {
+      "match": "(\\{\\{)(.*?)(\\}\\})",
+      "captures": {
+        "1": { "name": "punctuation.definition.template.begin.halo" },
+        "2": { "name": "variable.other.template.halo" },
+        "3": { "name": "punctuation.definition.template.end.halo" }
+      }
+    },
+    "number": {
+      "match": "\\b-?[0-9]+(\\.[0-9]+)?\\b",
+      "name": "constant.numeric.halo"
+    },
+    "boolean": {
+      "match": "\\b(true|false)\\b",
+      "name": "constant.language.boolean.halo"
+    }
+  }
+}

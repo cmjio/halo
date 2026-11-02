@@ -1,0 +1,15 @@
+// ============================================================
+// STEP 1: Hello World - Core Concepts
+// Learn: Mind (LLM config), Stream (execution pipeline), Pipeline stages
+// ============================================================
+
+// 1. Define the Mind (the LLM to use)
+agent Greeter [gemini-3-1-pro, temp: 0.7]
+
+// 2. Define the Stream (execution pipeline)
+pipeline HelloWorld(name: String) -> Result:
+  name
+    // Stage 1: Pass name to LLM prompt
+    |> Greeter.prompt("Write a warm, one-sentence 'Hello World' greeting for this person.")
+    // Stage 2: Print result to stdout
+    |> System.Print()

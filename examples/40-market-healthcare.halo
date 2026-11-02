@@ -1,0 +1,89 @@
+// ============================================================
+// MARKET: Healthcare — Patient Intake Processing
+// PURPOSE: Automate insurance verification, triage, and clinical
+//          note generation while enforcing HIPAA compliance
+// ============================================================
+
+// --- Guardrails (HIPAA-grade) ---
+policy HIPAA          : Redact(SSN) & Redact(DateOfBirth) & Redact(MedicalRecordNumber)
+policy PHIProtection  : Redact(HealthData) & Redact(InsuranceID)
+policy ClinicalSafety : Block(DiagnosisClaim) & Block(PrescriptionAdvice)
+policy AuditTrail     : LogViolation("hipaa-audit.log")
+policy CostGuard      : MaxSpend(1.00)
+
+// --- Tools ---
+tool EHR           : REST("api.epic.com/FHIR/R4", apiKey: Env.EPIC_KEY)
+tool InsuranceAPI  : REST("api.availity.com/v1/coverages", apiKey: Env.AVAILITY_KEY)
+tool ClinicSlack   : POST("hooks.slack.com/services/intake-alerts")
+
+// --- Memory ---
+tool PatientHistory : VectorStore(Env.PINECONE_KEY, namespace: "patient-notes")
+tool ProtocolDB     : VectorStore(Env.PINECONE_KEY, namespace: "clinical-protocols")
+
+// --- Struct ---
+schema IntakeResult {
+  patient_id     : String
+  insurance_status : String
+  triage_level   : String
+  clinical_note  : String
+  followup_actions : Array
+}
+
+// --- Minds ---
+agent IntakeBot [openai/gpt-4o-mini, temp: 0.0]
+  requires HIPAA, PHIProtection, ClinicalSafety, AuditTrail, CostGuard
+
+agent ClinicalScribe [anthropic/claude-sonnet-4, temp: 0.1]
+  equips PatientHistory, ProtocolDB
+  requires HIPAA, PHIProtection, ClinicalSafety, AuditTrail
+
+// --- The Stream ---
+@timeout(3m)
+@retry(2, 10s)
+pipeline ProcessIntake(form: PatientForm) -> IntakeResult:
+  form
+    // Step 1: Fan-out — verify insurance and pull patient history simultaneously
+    |* {
+         IntakeBot.verify_insurance(
+           tool: InsuranceAPI,
+           member_id: context.data.form.insurance_id,
+           provider_npi: context.data.form.provider_npi
+         ),
+         IntakeBot.pull_chart(
+           tool: EHR,
+           patient_id: context.data.form.patient_id,
+           sections: ["allergies", "medications", "conditions"]
+         )
+       }
+
+    // Step 2: Triage based on chief complaint + history
+    |> IntakeBot.triage(
+         chief_complaint: context.data.form.chief_complaint,
+         vitals: context.data.form.vitals,
+         history: context.data.pull_chart
+       )
+
+    // Step 3: Gate — immediate escalation for critical triage
+    |? (context.data.triage.level == "critical")
+    |> ClinicSlack.post(
+         message: "🚨 CRITICAL INTAKE — immediate provider needed",
+         patient_id: context.data.form.patient_id,
+         triage: context.data.triage
+       )
+
+    // Step 4: Generate structured clinical note
+    |> ClinicalScribe.draft_note(
+         intake_form: context.data.form,
+         insurance: context.data.verify_insurance,
+         chart: context.data.pull_chart,
+         triage: context.data.triage
+       )
+
+    // Step 5: Human sign-off — clinician must review before it enters the chart
+    |! yield(
+         ClinicSlack,
+         context.data.draft_note,
+         [context.data.triage, context.data.verify_insurance],
+         30m
+       )
+    ~> listen(ClinicSlack.Reaction)

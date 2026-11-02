@@ -7,8 +7,8 @@ describe("Langly Features - Runtime", () => {
 
   test("gate: skips stages when condition is false", async () => {
     const src = `
-mind M [openai/gpt-4]
-stream TestGate(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline TestGate(x: String) -> Result:
   x
     |? (x == "go")
     |> M.prompt("should not run")
@@ -30,8 +30,8 @@ stream TestGate(x: String) -> Result:
 
   test("gate: continues when condition is true", async () => {
     const src = `
-mind M [openai/gpt-4]
-stream TestGate(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline TestGate(x: String) -> Result:
   x
     |? (x != "skip")
     |> M.prompt("should run")
@@ -53,8 +53,8 @@ stream TestGate(x: String) -> Result:
 
   test("fan-out: executes stages in parallel", async () => {
     const src = `
-mind M [openai/gpt-4]
-stream TestFanout(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline TestFanout(x: String) -> Result:
   x
     |* {
         M.prompt("first"),
@@ -79,17 +79,17 @@ stream TestFanout(x: String) -> Result:
 
   test("named args: passed to LLM call", async () => {
     const src = `
-mind M [openai/gpt-4]
-stream TestNamed(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline TestNamed(x: String) -> Result:
   x
     |> M.prompt("hello", name: "world", count: 42)
     |> System.Print()
 `;
     const ast = parse(src);
     expect(ast.errors).toEqual([]);
-    const stream = ast.streams[0];
-    expect(stream).toBeDefined();
-    const stage = stream!.pipeline[1] as { kind: "call"; namedArgs: Record<string, string> };
+    const pipeline = ast.pipelines[0];
+    expect(pipeline).toBeDefined();
+    const stage = pipeline!.pipeline[1] as { kind: "call"; namedArgs: Record<string, string> };
     expect(stage.namedArgs).toEqual({
       name: "world",
       count: "42",
@@ -108,8 +108,8 @@ stream TestNamed(x: String) -> Result:
 
   test("context: stores results for later reference", async () => {
     const src = `
-mind M [openai/gpt-4]
-stream TestContext(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline TestContext(x: String) -> Result:
   x
     |> M.prompt("step1")
     |> M.prompt(context.data.M.prompt)
@@ -129,12 +129,12 @@ stream TestContext(x: String) -> Result:
 
   // ── Guardrails ─────
 
-  test("guardrail: Block(Profanity) catches bad words", async () => {
+  test("policy: Block(Profanity) catches bad words", async () => {
     const src = `
-guardrail NoProfanity : Block(Profanity)
-mind M [openai/gpt-4]
+policy NoProfanity : Block(Profanity)
+agent M [openai/gpt-4]
   requires NoProfanity
-stream TestGuard(x: String) -> Result:
+pipeline TestGuard(x: String) -> Result:
   x |> M.prompt("hello damn world") |> System.Print()
 `;
     const ast = parse(src);
@@ -150,12 +150,12 @@ stream TestGuard(x: String) -> Result:
     );
   });
 
-  test("guardrail: MaxWords enforces limit", async () => {
+  test("policy: MaxWords enforces limit", async () => {
     const src = `
-guardrail Short : MaxWords(3)
-mind M [openai/gpt-4]
+policy Short : MaxWords(3)
+agent M [openai/gpt-4]
   requires Short
-stream TestGuard(x: String) -> Result:
+pipeline TestGuard(x: String) -> Result:
   x |> M.prompt("one two three four") |> System.Print()
 `;
     const ast = parse(src);
@@ -176,7 +176,7 @@ stream TestGuard(x: String) -> Result:
   test("directive @timeout: throws on timeout", async () => {
     const src = `
 @timeout(1s)
-stream TestTimeout(x: String) -> Result:
+pipeline TestTimeout(x: String) -> Result:
   x |> System.Print()
 `;
     const ast = parse(src);
@@ -196,8 +196,8 @@ stream TestTimeout(x: String) -> Result:
 
   test("deep context ref: context.data.x.y.z works", async () => {
     const src = `
-mind M [openai/gpt-4]
-stream TestDeep(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline TestDeep(x: String) -> Result:
   x
     |? (context.data.M.prompt == "test")
     |> M.prompt("deep ref works")

@@ -1,409 +1,259 @@
-import { CharStream, CommonTokenStream, type ANTLRErrorListener, type Recognizer, type Token, type RecognitionException } from "antlr4ng";
-import { LanglyLexer } from "./LanglyLexer.js";
-import { LanglyParser } from "./LanglyParser.js";
-import type {
-  ParseResult,
-  Mind,
-  StreamDeclaration,
-  PipelineStage,
-  Directive,
-  GuardrailDeclaration,
-  ToolDeclaration,
-  MemoryDeclaration,
-} from "./types.js";
+import { CharStream, CommonTokenStream, BaseErrorListener } from "antlr4ng";
+import { HaloLexer } from "./grammars/HaloLexer.js";
+import { HaloParser, ProgramContext, DeclarationContext, AgentDeclContext, PipelineDeclContext, PolicyDeclContext, ToolDeclContext, StoreDeclContext, SchemaDeclContext, DirectiveContext, ParamListContext, PipelineContext, PipelineStageContext, CallExprContext, ConditionContext, FanoutStagesContext, ExpressionContext, ListenExprContext, LoopExprContext, YieldExprContext } from "./grammars/HaloParser.js";
+import { HaloVisitor } from "./grammars/HaloVisitor.js";
+import type { ParseResult, Agent, PipelineDeclaration, PolicyDeclaration, ToolDeclaration, StoreDeclaration, SchemaDeclaration, Directive, PipelineStage, ExpressionStage, CallStage, GateStage, InterruptStage, FanOutStage, ListenStage, LoopStage, PipelineParam } from "./types.js";
+import { ParseError } from "../errors.js";
 
-/** Extract text from a TerminalNode or context. */
-function tok(node: unknown): string {
-  if (node == null) return "";
-  const n: any = node;
-  if (typeof n.getText === "function") { const t = n.getText(); if (t != null) return String(t); }
-  if (n.getSymbol && typeof n.getSymbol === "function") { const s = n.getSymbol(); if (s?.text) return String(s.text); }
-  if (n.text != null) return String(n.text);
-  return "";
-}
-
-/** Extract all token texts from a context (e.g. for directive values). */
-function ctxText(ctx: unknown): string {
-  return ((ctx as any)?.text) ?? "";
-}
-
-/** Walk children of a context, collecting non-paren text tokens. */
-function innerText(ctx: unknown): string {
-  if (!ctx) return "";
-  const c = ctx as any;
-  if (c.children) {
-    const parts: string[] = [];
-    for (const child of c.children) {
-      const t = tok(child);
-      if (t !== "(" && t !== ")") parts.push(t);
-    }
-    // Join with commas but clean up excessive whitespace
-    return parts.join(", ").replace(/\s*,\s*/g, ", ").trim();
-  }
-  return tok(ctx);
-}
-
-class CollectingErrorListener {
+class CollectingErrorListener extends BaseErrorListener {
   errors: string[] = [];
-  syntaxError(
-    _recognizer: any,
-    offendingSymbol: any,
-    line: number,
-    charPositionInLine: number,
-    msg: string,
-    _e: any,
-  ): void {
-    const t = offendingSymbol?.text;
-    const tokenText = t ?? offendingSymbol?.text ?? "<missing>";
+  override syntaxError(recognizer: any, offendingSymbol: any, line: number, charPositionInLine: number, msg: string, e: any): void {
+    const symbol = offendingSymbol as { text?: string };
+    const tokenText = symbol?.text ?? "<missing>";
     this.errors.push(`[${line}:${charPositionInLine}] ${msg} near "${tokenText}"`);
   }
-  reportAmbiguity(..._args: any[]): void {}
-  reportAttemptingFullContext(..._args: any[]): void {}
-  reportContextSensitivity(..._args: any[]): void {}
+}
+
+class HaloAstBuilder extends HaloVisitor<any> {
+  result: ParseResult = {
+    agents: [],
+    pipelines: [],
+    policies: [],
+    tools: [],
+    stores: [],
+    schemas: [],
+    errors: []
+  };
+
+  override visitProgram = (ctx: ProgramContext) => {
+    if (ctx.declaration()) {
+      for (const decl of ctx.declaration()) {
+        this.visitDeclaration(decl);
+      }
+    }
+    return this.result;
+  };
+
+  override visitDeclaration = (ctx: DeclarationContext) => {
+    if (ctx.agentDecl()) this.result.agents.push(this.visitAgentDecl(ctx.agentDecl()!));
+    else if (ctx.pipelineDecl()) this.result.pipelines.push(this.visitPipelineDecl(ctx.pipelineDecl()!));
+    else if (ctx.policyDecl()) this.result.policies.push(this.visitPolicyDecl(ctx.policyDecl()!));
+    else if (ctx.toolDecl()) this.result.tools.push(this.visitToolDecl(ctx.toolDecl()!));
+    else if (ctx.storeDecl()) this.result.stores.push(this.visitStoreDecl(ctx.storeDecl()!));
+    else if (ctx.schemaDecl()) this.result.schemas.push(this.visitSchemaDecl(ctx.schemaDecl()!));
+  };
+
+  override visitSchemaDecl = (ctx: SchemaDeclContext): SchemaDeclaration => {
+    const name = ctx.IDENTIFIER().getText();
+    const fieldsCtx = ctx.schemaFields();
+    const fields = fieldsCtx ? fieldsCtx.schemaField().map(f => ({
+      name: f.IDENTIFIER().getText(),
+      type: f.typeRef().getText()
+    })) : [];
+    return { name, fields };
+  };
+
+  override visitPolicyDecl = (ctx: PolicyDeclContext): PolicyDeclaration => {
+    const name = ctx.IDENTIFIER().getText();
+    const rules = ctx.policyRule().map(r => {
+      const ruleName = r.IDENTIFIER().getText();
+      const argsCtx = r.policyArgs();
+      const args = argsCtx ? argsCtx.policyArg().map(a => a.getText().replace(/^["']|["']$/g, "")) : [];
+      return { name: ruleName, args };
+    });
+    return { name, rules };
+  };
+
+  override visitToolDecl = (ctx: ToolDeclContext): ToolDeclaration => {
+    const name = ctx.IDENTIFIER(0)!.getText();
+    const provider = ctx.IDENTIFIER(1)!.getText();
+    const argsCtx = ctx.toolArgs();
+    const args = argsCtx ? argsCtx.toolArg().map(a => a.getText().replace(/^["']|["']$/g, "")) : [];
+    return { name, provider, args };
+  };
+
+  override visitStoreDecl = (ctx: StoreDeclContext): StoreDeclaration => {
+    const name = ctx.IDENTIFIER(0)!.getText();
+    const provider = ctx.IDENTIFIER(1)!.getText();
+    const argsCtx = ctx.storeArgs();
+    const args = argsCtx ? argsCtx.storeArg().map(a => a.getText().replace(/^["']|["']$/g, "")) : [];
+    return { name, provider, args };
+  };
+
+  override visitAgentDecl = (ctx: AgentDeclContext): Agent => {
+    const name = ctx.IDENTIFIER().getText();
+    const directives = ctx.directive().map(d => this.visitDirective(d));
+    
+    const configCtx = ctx.modelConfig();
+    const modelId = configCtx.modelId().getText();
+    const params: Record<string, string> = {};
+    for (const p of configCtx.modelParam()) {
+      params[p.IDENTIFIER().getText()] = p.value().getText();
+    }
+
+    let equips: string[] = [];
+    let requires: string[] = [];
+    let system: string | undefined;
+    
+    const mods = ctx.agentModifiers();
+    if (mods) {
+      for (const m of mods.agentModifier()) {
+        if (m.equipsList()) equips.push(...m.equipsList()!.IDENTIFIER().map(id => id.getText()));
+        if (m.requiresList()) requires.push(...m.requiresList()!.IDENTIFIER().map(id => id.getText()));
+        if (m.stringLiteral()) {
+          const raw = m.stringLiteral()!.getText();
+          // Strip triple-quote or single/double-quote delimiters
+          system = raw.replace(/^"""|"""$/g, '').replace(/^["']|["']$/g, '').trim();
+        }
+      }
+    }
+
+    return { name, modelId, params, equips, requires, directives, system };
+  };
+
+
+  override visitDirective = (ctx: DirectiveContext): Directive => {
+    const name = ctx.directiveName().getText();
+    const valueCtx = ctx.directiveValue();
+    let value = "";
+    if (valueCtx) {
+      const argsCtx = valueCtx.directiveArgs();
+      if (argsCtx) {
+        value = argsCtx.getText();
+      }
+    }
+    return { name, value };
+  };
+
+  override visitPipelineDecl = (ctx: PipelineDeclContext): PipelineDeclaration => {
+    const name = ctx.IDENTIFIER().getText();
+    const directives = ctx.directive().map(d => this.visitDirective(d));
+    
+    const paramsCtx = ctx.paramList();
+    const params: PipelineParam[] = paramsCtx ? paramsCtx.param().map(p => ({
+      name: p.IDENTIFIER().getText(),
+      type: p.typeRef().getText()
+    })) : [];
+
+    const returnType = ctx.typeRef().getText();
+    
+    const pipelineCtx = ctx.pipeline();
+    const pipeline: PipelineStage[] = [];
+    for (const st of pipelineCtx.pipelineStage()) {
+      pipeline.push(this.visitPipelineStage(st));
+    }
+
+    return { name, params, returnType, pipeline, directives };
+  };
+
+  override visitPipelineStage = (ctx: PipelineStageContext): PipelineStage => {
+    if (ctx.PIPE() && ctx.callExpr()) {
+      return this.visitCallExpr(ctx.callExpr()!);
+    } else if (ctx.GATE() && ctx.condition()) {
+      return this.visitCondition(ctx.condition()!);
+    } else if (ctx.FANOUT() && ctx.fanoutStages()) {
+      return this.visitFanoutStages(ctx.fanoutStages()!);
+    } else if (ctx.INTERRUPT() && ctx.yieldExpr()) {
+      return this.visitYieldExpr(ctx.yieldExpr()!);
+    } else if (ctx.LISTEN() && ctx.listenExpr()) {
+      return this.visitListenExpr(ctx.listenExpr()!);
+    } else if (ctx.LOOP() && ctx.loopExpr()) {
+      return this.visitLoopExpr(ctx.loopExpr()!);
+    } else if (ctx.expression()) {
+      return this.visitExpression(ctx.expression()!);
+    }
+    throw new ParseError("Unknown pipeline stage");
+  };
+
+  override visitCallExpr = (ctx: CallExprContext): CallStage => {
+    const callee = ctx.IDENTIFIER(0)!.getText();
+    const method = ctx.IDENTIFIER(1)!.getText();
+    const argsCtx = ctx.callArgs();
+    const args: string[] = [];
+    const namedArgs: Record<string, string> = {};
+    
+    if (argsCtx) {
+      for (const arg of argsCtx.callArg()) {
+        if (arg.idOrKeyword()) {
+          namedArgs[arg.idOrKeyword()!.getText()] = arg.callValue().getText().replace(/^["']|["']$/g, "");
+        } else {
+          args.push(arg.callValue().getText().replace(/^["']|["']$/g, ""));
+        }
+      }
+    }
+
+    return { kind: "call", callee, method, args, namedArgs };
+  };
+
+  override visitCondition = (ctx: ConditionContext): GateStage => {
+    return { kind: "gate", condition: ctx.conditionExpr().getText() };
+  };
+
+  override visitFanoutStages = (ctx: FanoutStagesContext): FanOutStage => {
+    const stages: PipelineStage[] = [];
+    for (const fs of ctx.fanoutStage()) {
+      if (fs.callExpr()) {
+        stages.push(this.visitCallExpr(fs.callExpr()!));
+      } else if (fs.IDENTIFIER()) {
+        stages.push({ kind: "expression", value: fs.IDENTIFIER()!.getText() });
+      }
+    }
+    return { kind: "fanout", stages };
+  };
+
+  override visitYieldExpr = (ctx: YieldExprContext): InterruptStage => {
+    const argsCtx = ctx.yieldArgs();
+    const args: string[] = argsCtx ? argsCtx.yieldArg().map(a => a.getText()) : [];
+    return { kind: "interrupt", callee: "yield", args };
+  };
+
+  override visitListenExpr = (ctx: ListenExprContext): ListenStage => {
+    return { kind: "listen", target: ctx.listenTarget().getText() };
+  };
+
+  override visitLoopExpr = (ctx: LoopExprContext): LoopStage => {
+    return { 
+      kind: "loop", 
+      target: ctx.IDENTIFIER()!.getText(), 
+      condition: ctx.STRING()!.getText().replace(/^["']|["']$/g, "") 
+    };
+  };
+
+  override visitExpression = (ctx: ExpressionContext): ExpressionStage => {
+    return { kind: "expression", value: ctx.getText() };
+  };
 }
 
 export function parse(source: string): ParseResult {
-  const input = CharStream.fromString(source);
-  const lexer = new LanglyLexer(input);
-  lexer.removeErrorListeners();
+  const chars = CharStream.fromString(source);
+  const lexer = new HaloLexer(chars);
   const tokens = new CommonTokenStream(lexer);
-  const parser = new LanglyParser(tokens);
+  const parser = new HaloParser(tokens);
 
-  const listener = new CollectingErrorListener();
+  const errorListener = new CollectingErrorListener();
+  lexer.removeErrorListeners();
+  lexer.addErrorListener(errorListener);
   parser.removeErrorListeners();
-  parser.addErrorListener(listener);
+  parser.addErrorListener(errorListener);
 
-  const ctx = parser.program();
-
-  if (listener.errors.length > 0) {
-    return { guardrails: [], tools: [], memories: [], minds: [], streams: [], errors: listener.errors };
+  const tree = parser.program();
+  
+  if (errorListener.errors.length > 0) {
+    return {
+      agents: [],
+      pipelines: [],
+      policies: [],
+      tools: [],
+      stores: [],
+      schemas: [],
+      errors: errorListener.errors
+    };
   }
 
-  return walkProgram(ctx);
+  const builder = new HaloAstBuilder();
+  const ast = builder.visitProgram(tree);
+  ast.errors = errorListener.errors;
+  return ast;
 }
 
-// ── Walk Program ──
-
-function walkProgram(ctx: unknown): ParseResult {
-  const guardrails: GuardrailDeclaration[] = [];
-  const tools: ToolDeclaration[] = [];
-  const memories: MemoryDeclaration[] = [];
-  const minds: Mind[] = [];
-  const streams: StreamDeclaration[] = [];
-  const a = ctx as any;
-  const decls = a.declaration?.() ?? [];
-
-  for (const decl of decls) {
-    const dc = decl as any;
-    if (dc.guardrailDecl?.()) guardrails.push(walkGuardrail(dc.guardrailDecl()));
-    if (dc.toolDecl?.()) tools.push(walkTool(dc.toolDecl()));
-    if (dc.memoryDecl?.()) memories.push(walkMemory(dc.memoryDecl()));
-    if (dc.mindDecl?.()) minds.push(walkMind(dc.mindDecl()));
-    if (dc.streamDecl?.()) streams.push(walkStream(dc.streamDecl()));
-  }
-
-  return { guardrails, tools, memories, minds, streams, errors: [] };
-}
-
-// ── Guardrail ──
-
-function walkGuardrail(ctx: unknown): GuardrailDeclaration {
-  const c = ctx as any;
-  const ids = c.IDENTIFIER?.();
-  const name = tok(Array.isArray(ids) ? ids[0] : ids);
-  const rules: GuardrailRule[] = [];
-  for (const r of c.guardrailRule?.() ?? []) {
-    rules.push(walkGuardrailRule(r));
-  }
-  return { name, rules };
-}
-
-function walkGuardrailRule(ctx: unknown): GuardrailRule {
-  const c = ctx as any;
-  const name = tok(c.IDENTIFIER?.());
-  const args: string[] = [];
-  for (const a of c.guardrailArgs?.()?.guardrailArg?.() ?? []) {
-    args.push(extractValueRaw(a));
-  }
-  return { name, args };
-}
-
-// ── Tool ──
-
-function walkTool(ctx: unknown): ToolDeclaration {
-  const c = ctx as any;
-  const ids = c.IDENTIFIER?.() ?? [];
-  const name = tok(ids[0]);
-  const provider = tok(ids[1]);
-  const args: string[] = [];
-  for (const a of c.toolArgs?.()?.toolArg?.() ?? []) {
-    args.push(extractValueRaw(a));
-  }
-  return { name, provider, args };
-}
-
-// ── Memory ──
-
-function walkMemory(ctx: unknown): MemoryDeclaration {
-  const c = ctx as any;
-  const ids = c.IDENTIFIER?.() ?? [];
-  const name = tok(ids[0]);
-  const provider = tok(ids[1]);
-  const args: string[] = [];
-  for (const a of c.memoryArgs?.()?.memoryArg?.() ?? []) {
-    args.push(extractValueRaw(a));
-  }
-  return { name, provider, args };
-}
-
-// ── Mind ──
-
-function walkMind(ctx: unknown): Mind {
-  const c = ctx as any;
-  const name = extractNameKeyword(c, "mind");
-  const mc = c.modelConfig?.();
-  const modelId = tok(mc?.modelId?.()?.MODEL_REF?.());
-  const params: Record<string, string> = {};
-  for (const p of mc?.modelParam?.() ?? []) {
-    const key = tok(p.IDENTIFIER?.());
-    params[key] = extractValue(p.value());
-  }
-
-  const directives = walkDirectives(c.directive?.() ?? []);
-
-  let equips: string[] | undefined;
-  let requires: string[] | undefined;
-  const mmCtx = c.mindModifiers?.();
-  if (mmCtx) {
-    for (const mod of mmCtx.mindModifier?.() ?? []) {
-      if (mod.equipsList?.()) equips = extractAllIdentifiers(mod.equipsList());
-      if (mod.requiresList?.()) requires = extractAllIdentifiers(mod.requiresList());
-    }
-  }
-
-  return { name, modelId, params, equips, requires, directives };
-}
-
-function extractNameKeyword(ctx: unknown, keyword: string): string {
-  const children = (ctx as any)?.children ?? [];
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i];
-    const txt = tok(child);
-    if (txt === keyword && i + 1 < children.length) return tok(children[i + 1]);
-  }
-  return "";
-}
-
-function extractAllIdentifiers(ctx: unknown): string[] {
-  return ((ctx as any)?.IDENTIFIER?.() ?? []).map(tok).filter(Boolean);
-}
-
-// ── Directives ──
-
-function walkDirectives(directives: any[]): Directive[] {
-  return directives.map((d: any) => ({
-    name: tok(d.directiveName?.()),
-    value: innerText(d.directiveValue?.()),
-  }));
-}
-
-// ── Stream ──
-
-function walkStream(ctx: unknown): StreamDeclaration {
-  const c = ctx as any;
-  const name = extractNameKeyword(c, "stream");
-  const returnType = tok(c.typeRef?.()?.contextRef?.()) || textOfDottedId(c.typeRef?.());
-  const params: StreamDeclaration["params"] = [];
-  const pl = c.paramList?.();
-  if (pl) {
-    for (const p of pl.param?.() ?? []) {
-      params.push({
-        name: tok(p.IDENTIFIER?.()),
-        type: tok(p.typeRef?.()) || textOfDottedId(p.typeRef?.()),
-      });
-    }
-  }
-  const pipeline = walkPipeline(c.pipeline());
-  const directives = walkDirectives(c.directive?.() ?? []);
-  return { name, params, returnType, pipeline, directives };
-}
-
-// ── Pipeline ──
-
-function walkPipeline(ctx: unknown): PipelineStage[] {
-  const c = ctx as any;
-  const stages: PipelineStage[] = [];
-
-  // pipelineStage+ — each stage is one of: expression, PIPE callExpr, GATE condition,
-  // INTERRUPT yieldExpr, FANOUT {…}, LISTEN listenExpr
-  for (const ps of c.pipelineStage?.() ?? []) {
-    const psc = ps as any;
-
-    // expression
-    const expr = psc.expression?.();
-    if (expr) {
-      stages.push({ kind: "expression", value: walkExpressionText(expr) });
-      continue;
-    }
-
-    // PIPE callExpr
-    const call = psc.callExpr?.();
-    if (call) {
-      stages.push(walkCall(call));
-      continue;
-    }
-
-    // GATE condition
-    const cond = psc.condition?.();
-    if (cond) {
-      stages.push({ kind: "gate", condition: innerText(cond) });
-      continue;
-    }
-
-    // INTERRUPT yieldExpr
-    const yld = psc.yieldExpr?.();
-    if (yld) {
-      const args: string[] = [];
-      for (const a of yld.yieldArgs?.()?.yieldArg?.() ?? []) {
-        args.push(extractValueRaw(a));
-      }
-      stages.push({ kind: "interrupt", callee: "yield", args });
-      continue;
-    }
-
-    // FANOUT
-    const fanout = psc.fanoutStages?.();
-    if (fanout) {
-      const inner: PipelineStage[] = [];
-      for (const fs of fanout.fanoutStage?.() ?? []) {
-        const fc = fs as any;
-        const fcall = fc.callExpr?.();
-        if (fcall) {
-          inner.push(walkCall(fcall));
-        } else {
-          inner.push({ kind: "expression", value: tok(fc.IDENTIFIER?.()) });
-        }
-      }
-      stages.push({ kind: "fanout", stages: inner });
-      continue;
-    }
-
-    // LISTEN
-    const lsn = psc.listenExpr?.();
-    if (lsn) {
-      stages.push({ kind: "listen", target: tok((lsn as any).listenTarget?.()) });
-      continue;
-    }
-  }
-
-  return stages;
-}
-
-// ── Helpers ──
-
-function walkExpressionText(ctx: unknown): string {
-  const c = ctx as any;
-  if (c.contextRef?.()) return tok(c.contextRef());
-  if (c.IDENTIFIER?.()) return tok(c.IDENTIFIER());
-  if (c.STRING?.()) return stripQuotes(tok(c.STRING()));
-  if (c.NUMBER?.()) return tok(c.NUMBER());
-  if (c.BOOL?.()) return tok(c.BOOL());
-  return "";
-}
-
-function walkCall(ctx: unknown): PipelineStage {
-  const c = ctx as any;
-  const ids = c.IDENTIFIER?.() ?? [];
-  // In ANTLR, callExpr has exactly 2 IDENTIFIERs: callee.method
-  const callee = tok(ids[0]);
-  const method = tok(ids[1]);
-  const args: string[] = [];
-  const namedArgs: Record<string, string> = {};
-  const ca = c.callArgs?.();
-  if (ca) {
-    for (const arg of ca.callArg?.() ?? []) {
-      const ac = arg as any;
-      // Check if this is a namedCallArg (has IDENTIFIER followed by ':' and callValue)
-      const namedCallArg = ac.namedCallArg?.();
-      if (namedCallArg) {
-        // Extract key from namedCallArg
-        const key = tok(namedCallArg.IDENTIFIER?.());
-        // Extract value from namedCallArg's callValue
-        const value = extractCallValue(namedCallArg.callValue?.());
-        namedArgs[key] = value;
-      } else {
-        // Positional arg
-        args.push(extractCallArg(arg));
-      }
-    }
-  }
-  return { kind: "call", callee, method, args, namedArgs };
-}
-
-function extractCallArg(ctx: unknown): string {
-  const c = ctx as any;
-  // callArg either has a callValue child (positional) or is a named arg
-  if (c.callValue?.()) return extractCallValue(c.callValue());
-  return extractValueRaw(ctx);
-}
-
-function extractCallValue(ctx: unknown): string {
-  const c = ctx as any;
-  if (c.STRING?.()) return stripQuotes(tok(c.STRING()));
-  if (c.NUMBER?.()) return tok(c.NUMBER());
-  if (c.BOOL?.()) return tok(c.BOOL());
-  if (c.dottedId?.()) return textOfDottedId(c.dottedId());
-  if (c.contextRef?.()) return extractContextRef(c.contextRef());
-  if (c.callItems?.()) {
-    const items = c.callItems()
-      .callValue?.()
-      .map((cv: any) => extractCallValue(cv)) ?? [];
-    return `[${items.join(", ")}]`;
-  }
-  return extractValueRaw(ctx);
-}
-
-function extractValue(ctx: unknown): string {
-  return extractValueRaw(ctx);
-}
-
-function extractValueRaw(ctx: unknown): string {
-  const c = ctx as any;
-  if (c.MODEL_REF?.()) return tok(c.MODEL_REF());
-  if (c.STRING?.()) return stripQuotes(tok(c.STRING()));
-  if (c.NUMBER?.()) return tok(c.NUMBER());
-  if (c.BOOL?.()) return tok(c.BOOL());
-  if (c.dottedId?.()) return tok(c.dottedId());
-  if (c.contextRef?.()) return tok(c.contextRef());
-  if (c.IDENTIFIER?.()) return tok(Array.isArray(c.IDENTIFIER()) ? c.IDENTIFIER().map(tok).join(".") : c.IDENTIFIER());
-  if (c.yieldArg?.()) {
-    // For yield args with named params (key: value), just return full text
-    return tok(ctx);
-  }
-  return tok(ctx);
-}
-
-/** Extract full dotted-id text (e.g. "Env.DB_URI"). */
-function textOfDottedId(ctx: unknown): string {
-  const c = ctx as any;
-  const ids = c.IDENTIFIER?.() ?? [];
-  return ids.map(tok).join(".");
-}
-
-/** Extract full context reference (e.g. "context.data.user.name"). */
-function extractContextRef(ctx: unknown): string {
-  const c = ctx as any;
-  const parts = ["context"];
-  parts.push(tok(c.IDENTIFIER?.()));
-  const tail = c.contextTail?.();
-  if (tail) {
-    const ids = tail.IDENTIFIER?.() ?? [];
-    for (const id of ids) parts.push(tok(id));
-  }
-  return parts.join(".");
-}
-
-function stripQuotes(s: string): string {
-  if (!s || s.length < 2) return s;
-  return s.slice(1, -1).replace(/\\(.)/g, "$1");
-}
+export * from './types.js';

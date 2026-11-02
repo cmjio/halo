@@ -1,0 +1,51 @@
+// ============================================================
+// STEP 19: System Prompts
+// ============================================================
+// LEARN: How to give agents persistent identity with system prompts
+// WHY:   System prompts define *who* the agent is — its persona,
+//        constraints, and output format — separate from *what*
+//        it does in each pipeline step.
+// ============================================================
+
+// Without system prompt — agent has no inherent identity
+agent Generic [openai/gpt-4o-mini, temp: 0.5]
+
+// With single-line system prompt
+agent Translator [openai/gpt-4o-mini, temp: 0.3]
+  system "You are a professional translator. Always respond with the translated text only, no explanations."
+
+// With multi-line system prompt (triple-quoted)
+agent Analyst [anthropic/claude-sonnet-4, temp: 0.1]
+  system """
+    You are a senior data analyst.
+    Always respond with structured JSON containing:
+    - result: the analysis output
+    - confidence: a score from 0.0 to 1.0
+    - methodology: one-line description of approach used
+    Never include raw data in responses.
+  """
+  equips StripeAPI
+
+tool StripeAPI : REST("api.stripe.com/v1", apiKey: Env.STRIPE_KEY)
+
+// The system prompt is sent as role:"system" to the LLM.
+// The pipeline step's prompt becomes role:"user".
+// This mirrors how LLM APIs actually work:
+//   messages: [
+//     { role: "system", content: <agent's system directive> },
+//     { role: "user",   content: <pipeline step prompt> }
+//   ]
+
+pipeline TranslateGreeting(name: String, lang: String) -> Result:
+  name
+    // The Translator's system prompt ("You are a professional translator...")
+    // is automatically prepended. This prompt is the user message.
+    |> Translator.prompt("Translate 'Hello {{name}}' into {{lang}}")
+    |> System.Print()
+
+// NOTES:
+// - system belongs on the agent, not the pipeline step
+// - If you need a different persona, declare a different agent
+// - system prompts and policies are orthogonal:
+//     system = shapes intent ("respond in JSON")
+//     policy = enforces limits (MaxWords, Redact)

@@ -5,14 +5,14 @@ export interface Directive {
   value: string;
 }
 
-export interface GuardrailRule {
+export interface PolicyRule {
   name: string;
   args: string[];
 }
 
-export interface GuardrailDeclaration {
+export interface PolicyDeclaration {
   name: string;
-  rules: GuardrailRule[];
+  rules: PolicyRule[];
   rawRules?: string[];  // string representation for quick lookup
 }
 
@@ -20,24 +20,27 @@ export interface ToolDeclaration {
   name: string;
   provider: string;
   args: string[];
+  namedArgs?: Record<string, string>;
 }
 
-export interface MemoryDeclaration {
+export interface StoreDeclaration {
   name: string;
   provider: string;
   args: string[];
+  namedArgs?: Record<string, string>;
 }
 
-export interface Mind {
+export interface Agent {
   name: string;
   modelId: string;
   params: Record<string, string>;
   equips?: string[];
   requires?: string[];
   directives?: Directive[];
+  system?: string;
 }
 
-export interface StreamParam {
+export interface PipelineParam {
   name: string;
   type: string;
 }
@@ -49,7 +52,8 @@ export type PipelineStage =
   | GateStage
   | InterruptStage
   | FanOutStage
-  | ListenStage;
+  | ListenStage
+  | LoopStage;
 
 export interface ExpressionStage {
   kind: "expression";
@@ -85,19 +89,36 @@ export interface ListenStage {
   target: string;
 }
 
-export interface StreamDeclaration {
+export interface LoopStage {
+  kind: "loop";
+  target: string;
+  condition: string;
+}
+
+export interface PipelineDeclaration {
   name: string;
-  params: StreamParam[];
+  params: PipelineParam[];
   returnType: string;
   pipeline: PipelineStage[];
   directives: Directive[];
 }
 
+export interface SchemaField {
+  name: string;
+  type: string;
+}
+
+export interface SchemaDeclaration {
+  name: string;
+  fields: SchemaField[];
+}
+
 export interface ParseResult {
-  guardrails: GuardrailDeclaration[];
+  policies: PolicyDeclaration[];
   tools: ToolDeclaration[];
-  memories: MemoryDeclaration[];
-  minds: Mind[];
-  streams: StreamDeclaration[];
+  stores: StoreDeclaration[];
+  agents: Agent[];
+  pipelines: PipelineDeclaration[];
+  schemas: SchemaDeclaration[];
   errors: string[];
 }

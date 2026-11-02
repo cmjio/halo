@@ -11,17 +11,20 @@ describe("Langly Runtime", () => {
 
   // ── Basic Tests ────//
 
-  test("loads 01-hello.ly AST", async () => {
-    const ast = parse(await readExample("01-hello.ly"));
+  test("loads 01-hello.halo AST", async () => {
+    const savedKey = Bun.env.LANGLY_API_KEY;
+    delete Bun.env.LANGLY_API_KEY;
+    const ast = parse(await readExample("01-hello.halo"));
     const rt = new LanglyRuntime();
     rt.load(ast);
     await expect(
       rt.execute("HelloWorld", { name: "Alice" }),
     ).rejects.toThrow("No API key");
+    if (savedKey) Bun.env.LANGLY_API_KEY = savedKey;
   });
 
-  test("executes HelloWorld stream (mocked)", async () => {
-    const ast = parse(await readExample("01-hello.ly"));
+  test("executes HelloWorld pipeline (mocked)", async () => {
+    const ast = parse(await readExample("01-hello.halo"));
     const rt = new LanglyRuntime();
     rt.load(ast).mockAll({
       "Greeter.prompt": "Hello, Alice! Welcome to coding!",
@@ -37,7 +40,7 @@ describe("Langly Runtime", () => {
     console.log = (msg: unknown) => logs.push(String(msg));
 
     try {
-      const ast = parse(await readExample("01-hello.ly"));
+      const ast = parse(await readExample("01-hello.halo"));
       const rt = new LanglyRuntime();
       rt.load(ast).mockAll({
         "Greeter.prompt": "Greetings, Bob!",
@@ -50,17 +53,17 @@ describe("Langly Runtime", () => {
     }
   });
 
-  test("throws on unknown stream", async () => {
+  test("throws on unknown pipeline", async () => {
     const rt = new LanglyRuntime();
     await expect(rt.execute("NonExistent", {})).rejects.toThrow(
-      'Stream "NonExistent" not found',
+      'Pipeline "NonExistent" not found',
     );
   });
 
   test("throws on undefined variable", async () => {
     const ast = parse(`
-mind M [openai/gpt-4]
-stream Test(x: String) -> Result:
+agent M [openai/gpt-4]
+pipeline Test(x: String) -> Result:
   x |> M.prompt("greet them") |> System.Print()
 `);
     const rt = new LanglyRuntime().mockAll({ "M.prompt": "hi" });
@@ -71,18 +74,21 @@ stream Test(x: String) -> Result:
   });
 
   test("throws when no API key and no mock", async () => {
-    const ast = parse(await readExample("01-hello.ly"));
+    const savedKey = Bun.env.LANGLY_API_KEY;
+    delete Bun.env.LANGLY_API_KEY;
+    const ast = parse(await readExample("01-hello.halo"));
     const rt = new LanglyRuntime();
     rt.load(ast);
     await expect(rt.execute("HelloWorld", { name: "Alice" })).rejects.toThrow(
       "No API key set",
     );
+    if (savedKey) Bun.env.LANGLY_API_KEY = savedKey;
   });
 
   test("end-to-end: parse + load + execute with mock", async () => {
     const src = `
-mind Quick [openai/gpt-4o, temp: 0.5]
-stream Greet(person: String) -> Result:
+agent Quick [openai/gpt-4o, temp: 0.5]
+pipeline Greet(person: String) -> Result:
   person
     |> Quick.prompt("Give a short greeting for this person.")
     |> System.Print()
@@ -106,9 +112,9 @@ stream Greet(person: String) -> Result:
 
     try {
       const src = `
-mind Step1 [openai/gpt-4]
-mind Step2 [openai/gpt-4]
-stream Chain2(x: String) -> Result:
+agent Step1 [openai/gpt-4]
+agent Step2 [openai/gpt-4]
+pipeline Chain2(x: String) -> Result:
   x
     |> Step1.translate("first")
     |> Step2.translate("second")
@@ -130,32 +136,32 @@ stream Chain2(x: String) -> Result:
       expect(logs).toContain("FINAL_RESULT");
 
       // Verify pipeline structure
-      const stream = ast.streams[0]!;
-      const pipeline = stream.pipeline;
-      expect(pipeline).toHaveLength(4);
+      const pipelineDecl = ast.pipelines[0]!;
+      const stages = pipelineDecl.pipeline;
+      expect(stages).toHaveLength(4);
 
       // Stage 0: expression "x"
-      const s0 = pipeline[0] as any;
+      const s0 = stages[0] as any;
       expect(s0).toBeDefined();
       expect(s0.kind).toBe("expression");
       expect(s0.value).toBe("x");
 
       // Stage 1: Step1.translate
-      const s1 = pipeline[1] as any;
+      const s1 = stages[1] as any;
       expect(s1).toBeDefined();
       expect(s1.kind).toBe("call");
       expect(s1.callee).toBe("Step1");
       expect(s1.method).toBe("translate");
 
       // Stage 2: Step2.translate
-      const s2 = pipeline[2] as any;
+      const s2 = stages[2] as any;
       expect(s2).toBeDefined();
       expect(s2.kind).toBe("call");
       expect(s2.callee).toBe("Step2");
       expect(s2.method).toBe("translate");
 
       // Stage 3: System.Print
-      const s3 = pipeline[3] as any;
+      const s3 = stages[3] as any;
       expect(s3).toBeDefined();
       expect(s3.kind).toBe("call");
       expect(s3.callee).toBe("System");
@@ -167,16 +173,16 @@ stream Chain2(x: String) -> Result:
 
   test("real LLM call with API key", async () => {
     const apiKey = Bun.env.LANGLY_API_KEY;
-    if (!apiKey) {
+    if (!apiKey || apiKey === "test_key") {
       console.log(
-        "[SKIP] No LANGLY_API_KEY set — skipping real LLM call test",
+        "[SKIP] No valid LANGLY_API_KEY set — skipping real LLM call test",
       );
       return;
     }
 
     const src = `
-mind Test [openai/gpt-4o-mini, temp: 0.0]
-stream Ping(msg: String) -> Result:
+agent Test [openai/gpt-4o-mini, temp: 0.0]
+pipeline Ping(msg: String) -> Result:
   msg |> Test.prompt("echo this back verbatim") |> System.Print()
 `;
     const ast = parse(src);
@@ -184,6 +190,6 @@ stream Ping(msg: String) -> Result:
     rt.load(ast);
 
     const output = await rt.execute("Ping", { msg: "hello world" });
-    expect(output.toLowerCase()).toContain("hello world");
+    expect((output as string).toLowerCase()).toContain("hello world");
   });
 });

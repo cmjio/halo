@@ -1,0 +1,20 @@
+// ============================================================
+// STEP 5: Fan-Out - Parallel Execution
+// Learn: Run independent stages in parallel with `|* { ... }`
+// All fanout stages complete before the next stage runs
+// ============================================================
+
+policy NoProfanity : Block(Profanity)
+
+agent Greeter [gemini-3-1-pro, temp: 0.7]
+  requires NoProfanity
+
+pipeline ParallelGreetings(name: String) -> Result:
+  name
+    // Fan-out: Run two independent prompts in parallel
+    |* {
+        Greeter.prompt("Write a greeting in English for {{name}}."),
+        Greeter.prompt("Write a greeting in Spanish for {{name}}.")
+      }
+    // Merge results (both greetings now available in context)
+    |> System.Print()

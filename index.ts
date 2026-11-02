@@ -71,11 +71,11 @@ if (command === "validate") {
   
   // Print summary
   console.log(`\nSummary:`);
-  console.log(`  Minds: ${result.minds.length}`);
-  console.log(`  Streams: ${result.streams.length}`);
-  console.log(`  Guardrails: ${result.guardrails.length}`);
+  console.log(`  Minds: ${result.agents.length}`);
+  console.log(`  Streams: ${result.pipelines.length}`);
+  console.log(`  Guardrails: ${result.policies.length}`);
   console.log(`  Tools: ${result.tools.length}`);
-  console.log(`  Memory: ${result.memories.length}`);
+  console.log(`  Store: ${result.stores.length}`);
   process.exit(0);
 }
 
@@ -113,18 +113,18 @@ if (command === "run" || command === undefined) {
       process.exit(1);
     }
   } else {
-    // Try to infer from stream params
-    const stream = result.streams[0];
-    if (stream && stream.params.length > 0) {
-      console.log(`Expected arguments: ${stream.params.map(p => p.name).join(", ")}`);
+    // Try to infer from pipeline params
+    const pipeline = result.pipelines[0];
+    if (pipeline && pipeline.params.length > 0) {
+      console.log(`Expected arguments: ${pipeline.params.map(p => p.name).join(", ")}`);
       console.log(`Provide them via --args '<json>'`);
     }
   }
   
-  // Execute first stream
-  const streamName = result.streams[0]?.name;
+  // Execute first pipeline
+  const streamName = result.pipelines[0]?.name;
   if (!streamName) {
-    console.error("Error: No streams found in file");
+    console.error("Error: No pipelines found in file");
     process.exit(1);
   }
   

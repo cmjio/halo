@@ -1,0 +1,102 @@
+// ============================================================
+// CONTROL: Enterprise Content Moderation Pipeline
+// ============================================================
+// A hardened moderation pipeline with multiple defense layers,
+// audit trails, escalating human review, and budget-safe
+// AI model selection. Shows how Langly handles compliance.
+// ============================================================
+
+// --- GUARDRAILS: Hard boundaries ---
+policy PIIProtection   : Redact(SSN) & Redact(CreditCard) & Redact(HealthData)
+policy OutputSafety    : Block(HarmfulContent) & Block(HateSpeech) & Block(SexualContent)
+policy CostControl     : MaxSpend(2.00)
+
+// --- TOOLS ---
+tool ModerationAPI  : POST("api.openai.com/v1/moderations")
+tool AuditLogger    : POST("api.example.com/audit", apiKey: Env.AUDIT_KEY)
+tool EscalationQueue: POST("api.jira.com/rest/issue")
+
+// --- MEMORY ---
+tool PolicyRules    : VectorStore(Env.PINECONE_KEY, namespace: "content-policy-v3")
+tool PastCases      : VectorStore(Env.PINECONE_KEY, namespace: "moderation-history")
+
+// --- MINDS ---
+// The triage agent is cheap — handles bulk content fast
+agent TriageAgent [openai/gpt-4o-mini, temp: 0.0]
+  system """
+    You are a content triage specialist. Rapidly screen
+    submissions for obvious policy violations. Classify as
+    safe, borderline, or blocked. Optimize for throughput
+    — most content should auto-clear in under 500ms.
+  """
+  requires CostControl
+
+// The deep-review agent handles edge cases with precision
+@timeout(60s)
+agent ReviewAgent [google/gemini-flash, temp: 0.1]
+  system """
+    You are a nuanced content review agent. Handle edge cases
+    that triage couldn't auto-resolve. Consider cultural
+    context, satire, and intent. Report risk level with
+    detailed reasoning for borderline decisions.
+  """
+
+// The policy expert knows regulations inside-out
+agent PolicyExpert [anthropic/claude-sonnet-4, temp: 0.2]
+  system """
+    You are a regulatory compliance specialist. Verify content
+    against platform policies and applicable regulations
+    (GDPR, COPPA, DSA). Cite specific policy clauses in
+    every decision. Never approve content you're uncertain about.
+  """
+  equips PolicyRules
+
+// --- The Stream ---
+@timeout(5m)
+@retry(3, 10s)
+pipeline ModerateContent(submission: ContentSubmission) -> Decision:
+  submission
+    // Layer 1: Quick triage — 80% of content auto-decisioned
+    |> TriageAgent.screen(
+        text: context.data.submission.body,
+        user_flags: context.data.submission.user_flags
+      )
+
+    // Layer 2: Gate — skip deep review for obvious cases
+    |? (context.data.TriageAgent.screen.toxicity_score < 0.3)
+
+    // Layer 3: Deep review for ambiguous content
+    |> ReviewAgent.evaluate(
+        content: context.data.submission.body,
+        policy: PolicyRules,
+        history: PastCases
+      )
+
+    // Layer 4: Log everything to audit trail
+    |> AuditLogger.record(
+        event: "moderation_review",
+        data: context.data
+      )
+
+    // Layer 5: Gate — escalate to human if risk is high
+    |? (context.data.ReviewAgent.evaluate.risk_level == "high")
+
+    // Layer 6: Human-in-the-loop for final sign-off
+    |! yield(
+        queue: EscalationQueue,
+        context: context.data.ReviewAgent.evaluate,
+        timeout: 1h
+      )
+
+    // Layer 7: Wait for human decision
+    ~> listen(EscalationQueue.Reaction)
+
+    // Layer 8: Gate on approval
+    |? (context.data.human.action == "approve")
+
+    // Layer 9: Final policy check before publishing
+    |> PolicyExpert.final_review(
+        content: context.data.submission.body,
+        review: context.data.ReviewAgent.evaluate
+      )
+    |> System.Print()

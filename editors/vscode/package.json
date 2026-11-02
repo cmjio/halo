@@ -1,29 +1,59 @@
 {
-  "name": "langly-dsl",
-  "displayName": "Langly DSL",
-  "description": "Syntax highlighting for the Langly DSL (.ly files)",
+  "name": "halo-dsl",
+  "displayName": "Halo DSL",
+  "description": "Syntax highlighting and language intelligence for the Halo DSL (.halo files)",
   "version": "0.1.0",
-  "publisher": "langly",
+  "publisher": "halo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halo/halo.git"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:halo"
+  ],
+  "categories": [
+    "Programming Languages"
+  ],
   "contributes": {
     "languages": [
       {
-        "id": "langly",
-        "aliases": ["Langly", "langly"],
-        "extensions": [".ly"],
+        "id": "halo",
+        "aliases": [
+          "Halo",
+          "halo"
+        ],
+        "extensions": [
+          ".halo"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "langly",
-        "scopeName": "source.langly",
-        "path": "./syntaxes/langly.tmLanguage.json",
+        "language": "halo",
+        "scopeName": "source.halo",
+        "path": "./syntaxes/halo.tmLanguage.json",
         "injectTo": []
       }
     ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
   }
 }

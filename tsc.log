@@ -1,0 +1,91 @@
+src/lsp/hover.ts(28,13): error TS18048: 'line' is possibly 'undefined'.
+src/lsp/hover.ts(29,13): error TS18048: 'line' is possibly 'undefined'.
+src/lsp/hover.ts(30,13): error TS18048: 'line' is possibly 'undefined'.
+src/lsp/hover.ts(31,13): error TS18048: 'line' is possibly 'undefined'.
+src/lsp/hover.ts(32,13): error TS18048: 'line' is possibly 'undefined'.
+src/lsp/hover.ts(42,22): error TS2532: Object is possibly 'undefined'.
+src/parser/index.ts(9,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'BaseErrorListener'.
+src/parser/index.ts(27,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(36,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(45,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(55,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(66,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(67,18): error TS2531: Object is possibly 'null'.
+src/parser/index.ts(68,22): error TS2531: Object is possibly 'null'.
+src/parser/index.ts(74,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(75,18): error TS2531: Object is possibly 'null'.
+src/parser/index.ts(76,22): error TS2531: Object is possibly 'null'.
+src/parser/index.ts(82,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(107,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(120,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(141,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(160,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(161,20): error TS2531: Object is possibly 'null'.
+src/parser/index.ts(162,20): error TS2531: Object is possibly 'null'.
+src/parser/index.ts(180,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(184,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(196,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(202,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(206,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/parser/index.ts(214,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'LanglyVisitor<any>'.
+src/runtime/runtime.ts(147,10): error TS2339: Property 'router' does not exist on type 'LanglyRuntime'.
+src/runtime/runtime.ts(208,10): error TS2339: Property 'router' does not exist on type 'LanglyRuntime'.
+src/runtime/runtime.ts(356,15): error TS18048: 'stage' is possibly 'undefined'.
+src/runtime/runtime.ts(358,48): error TS2345: Argument of type 'PipelineStage | undefined' is not assignable to parameter of type 'ExpressionStage'.
+  Type 'undefined' is not assignable to type 'ExpressionStage'.
+src/runtime/runtime.ts(362,48): error TS2345: Argument of type 'PipelineStage | undefined' is not assignable to parameter of type 'CallStage'.
+  Type 'undefined' is not assignable to type 'CallStage'.
+src/runtime/runtime.ts(363,33): error TS2345: Argument of type 'PipelineStage | undefined' is not assignable to parameter of type '{ callee: string; method: string; }'.
+  Type 'undefined' is not assignable to type '{ callee: string; method: string; }'.
+src/runtime/runtime.ts(367,39): error TS18048: 'stage' is possibly 'undefined'.
+src/runtime/runtime.ts(367,45): error TS2339: Property 'condition' does not exist on type 'PipelineStage'.
+  Property 'condition' does not exist on type 'ExpressionStage'.
+src/runtime/runtime.ts(373,50): error TS2345: Argument of type 'PipelineStage | undefined' is not assignable to parameter of type 'FanOutStage'.
+  Type 'undefined' is not assignable to type 'FanOutStage'.
+src/runtime/runtime.ts(377,53): error TS2345: Argument of type 'PipelineStage | undefined' is not assignable to parameter of type 'InterruptStage'.
+  Type 'undefined' is not assignable to type 'InterruptStage'.
+src/runtime/runtime.ts(381,50): error TS2345: Argument of type 'PipelineStage | undefined' is not assignable to parameter of type 'ListenStage'.
+  Type 'undefined' is not assignable to type 'ListenStage'.
+src/runtime/runtime.ts(385,38): error TS18048: 'stage' is possibly 'undefined'.
+src/runtime/runtime.ts(385,44): error TS2339: Property 'condition' does not exist on type 'PipelineStage'.
+  Property 'condition' does not exist on type 'ExpressionStage'.
+src/runtime/runtime.ts(386,89): error TS18048: 'stage' is possibly 'undefined'.
+src/runtime/runtime.ts(386,95): error TS2339: Property 'target' does not exist on type 'PipelineStage'.
+  Property 'target' does not exist on type 'ExpressionStage'.
+src/runtime/runtime.ts(390,47): error TS18048: 'stage' is possibly 'undefined'.
+src/runtime/runtime.ts(390,53): error TS2339: Property 'target' does not exist on type 'PipelineStage'.
+  Property 'target' does not exist on type 'ExpressionStage'.
+src/runtime/runtime.ts(639,14): error TS2339: Property 'namedArgs' does not exist on type 'ToolDeclaration'.
+src/runtime/runtime.ts(640,48): error TS2339: Property 'namedArgs' does not exist on type 'ToolDeclaration'.
+src/runtime/runtime.ts(875,42): error TS2339: Property 'router' does not exist on type 'LanglyRuntime'.
+test/audit-examples.test.ts(42,20): error TS18046: 'e' is of type 'unknown'.
+test/audit-examples.test.ts(49,28): error TS2345: Argument of type 'AuditAdapter' is not assignable to parameter of type 'ProviderAdapter'.
+  Type 'AuditAdapter' is missing the following properties from type 'ProviderAdapter': id, canHandle
+test/audit-examples.test.ts(71,24): error TS18046: 'e' is of type 'unknown'.
+test/features-tdd.test.ts(20,77): error TS2345: Argument of type 'MockAdapter' is not assignable to parameter of type 'ProviderAdapter'.
+  Type 'MockAdapter' is missing the following properties from type 'ProviderAdapter': id, canHandle
+test/features-tdd.test.ts(37,71): error TS2345: Argument of type 'MockAdapter' is not assignable to parameter of type 'ProviderAdapter'.
+  Type 'MockAdapter' is missing the following properties from type 'ProviderAdapter': id, canHandle
+test/features-tdd.test.ts(50,96): error TS2345: Argument of type 'MockAdapter' is not assignable to parameter of type 'ProviderAdapter'.
+  Type 'MockAdapter' is missing the following properties from type 'ProviderAdapter': id, canHandle
+test/features-tdd.test.ts(85,80): error TS2345: Argument of type 'MockAdapter' is not assignable to parameter of type 'ProviderAdapter'.
+  Type 'MockAdapter' is missing the following properties from type 'ProviderAdapter': id, canHandle
+test/features-tdd.test.ts(122,87): error TS2345: Argument of type 'MockAdapter' is not assignable to parameter of type 'ProviderAdapter'.
+  Type 'MockAdapter' is missing the following properties from type 'ProviderAdapter': id, canHandle
+test/features-tdd.test.ts(133,64): error TS18046: 'err' is of type 'unknown'.
+test/lsp-diagnostics.test.ts(21,12): error TS2532: Object is possibly 'undefined'.
+test/lsp-diagnostics.test.ts(22,12): error TS2532: Object is possibly 'undefined'.
+test/parser-loops.test.ts(14,23): error TS2532: Object is possibly 'undefined'.
+test/parser-schema.test.ts(13,12): error TS2532: Object is possibly 'undefined'.
+test/parser-schema.test.ts(14,12): error TS2532: Object is possibly 'undefined'.
+test/parser-schema.test.ts(28,12): error TS2532: Object is possibly 'undefined'.
+test/parser-schema.test.ts(28,12): error TS2532: Object is possibly 'undefined'.
+test/parser-schema.test.ts(39,12): error TS2532: Object is possibly 'undefined'.
+test/runtime.test.ts(193,12): error TS18046: 'output' is of type 'unknown'.
+test/structs-tdd.test.ts(47,79): error TS18046: 'e' is of type 'unknown'.
+test/structs-tdd.test.ts(50,12): error TS18046: 'e' is of type 'unknown'.
+test/structs-tdd.test.ts(51,101): error TS18046: 'e' is of type 'unknown'.
+test/structs-tdd.test.ts(54,65): error TS18046: 'e' is of type 'unknown'.
+test/tools-tdd.test.ts(21,9): error TS18046: 'e' is of type 'unknown'.
+test/tools-tdd.test.ts(41,9): error TS18046: 'e' is of type 'unknown'.
+test/tools-tdd.test.ts(41,22): error TS18046: 'e' is of type 'unknown'.

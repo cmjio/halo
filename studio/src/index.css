@@ -1,0 +1,8 @@
+/* Emptied default vite css to prevent layout conflicts with App.css */
+#root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: flex;
+}

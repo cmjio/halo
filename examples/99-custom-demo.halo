@@ -1,0 +1,27 @@
+// ============================================================
+// CUSTOM DEMO: Langly DSL
+// ============================================================
+
+policy NoPessimism : Tone("Optimistic")
+tool WebSearch : GET("api.duckduckgo.com/lite")
+
+agent Researcher [openai/gpt-4o-mini]
+  system """
+    You are a researcher. Search for the latest and most relevant
+    facts about the requested topic. Ensure accuracy.
+  """
+  equips WebSearch
+
+agent Analyst [anthropic/claude-3-5-sonnet]
+  system """
+    You are an analyst. Synthesize the collected facts into a
+    coherent and optimistic narrative. Avoid negativity.
+  """
+  requires NoPessimism
+
+pipeline Demo(topic: String) -> Result:
+  topic
+    |* { Researcher.prompt("Find 3 recent facts about {{topic}}"), Researcher.prompt("Find 3 historical facts about {{topic}}") }
+    |? (context.meta.error == null)
+    |> Analyst.prompt("Synthesize these facts into an optimistic outlook")
+    |> System.Print()

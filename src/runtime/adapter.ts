@@ -15,7 +15,7 @@ export interface LLMRequest {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
-  stream?: boolean;
+  pipeline?: boolean;
   [key: string]: unknown;
 }
 
@@ -46,6 +46,9 @@ export interface ProviderAdapter {
   
   /** Build the API URL for the request */
   getUrl(modelId: string): string;
+
+  /** Build the API URL with API key embedded (for query-param auth providers like Google) */
+  getUrlWithApiKey?(modelId: string, apiKey: string): string;
   
   /** Build request headers */
   getHeaders(apiKey: string): Record<string, string>;
@@ -58,6 +61,9 @@ export interface ProviderAdapter {
   
   /** Estimate cost for a request (optional, for cost routing) */
   estimateCost(modelId: string, inputTokens: number, outputTokens: number): number;
+  
+  /** Parse a single SSE pipeline chunk (optional) */
+  parseStreamChunk?(chunk: string): string | null;
   
   /** List available models (optional) */
   listModels?(): Promise<ModelInfo[]>;
@@ -90,7 +96,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       temperature: req.temperature ?? 0.7,
       max_tokens: req.maxTokens,
       top_p: req.topP,
-      stream: req.stream,
+      pipeline: req.pipeline,
     };
   }
   
@@ -109,6 +115,16 @@ export class OpenAIAdapter implements ProviderAdapter {
       },
       raw: json,
     };
+  }
+  
+  parseStreamChunk(chunk: string): string | null {
+    if (chunk === "[DONE]") return null;
+    try {
+      const data = JSON.parse(chunk);
+      return data.choices?.[0]?.delta?.content ?? null;
+    } catch {
+      return null;
+    }
   }
   
   estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
@@ -148,21 +164,48 @@ export class AnthropicAdapter implements ProviderAdapter {
   
   transformRequest(req: LLMRequest): unknown {
     const model = req.model.replace(/^(anthropic\/|claude\/)/, "");
-    const lastMessage = req.messages[req.messages.length - 1];
-    
-    return {
+
+    // Separate system messages from conversation messages.
+    // Claude Messages API: system is a top-level string field,
+    // messages array must alternate user/assistant and start with user.
+    let systemPrompt: string | undefined;
+    const conversationMessages: Array<{ role: string; content: string }> = [];
+
+    for (const m of req.messages) {
+      if (m.role === "system") {
+        // Concatenate multiple system messages (rare but possible)
+        systemPrompt = systemPrompt ? `${systemPrompt}\n\n${m.content}` : m.content;
+      } else {
+        conversationMessages.push({
+          role: m.role === "user" ? "user" : "assistant",
+          content: m.content,
+        });
+      }
+    }
+
+    // If the runtime sent a single user message with no explicit system,
+    // ensure we still have at least one user message in the array.
+    if (conversationMessages.length === 0 && systemPrompt) {
+      // The only message was tagged "system" — Langly runtime sends
+      // user prompts as role:"user", so this means someone explicitly
+      // set a system prompt with no user content. Treat the system
+      // prompt as the user message to avoid an empty messages array.
+      conversationMessages.push({ role: "user", content: systemPrompt });
+      systemPrompt = undefined;
+    }
+
+    const body: Record<string, unknown> = {
       model,
-      messages: req.messages.slice(0, -1).map(m => ({
-        role: m.role === "user" ? "user" : "assistant",
-        content: m.content,
-      })),
-      system: req.messages[0]?.role === "system" ? req.messages[0].content : undefined,
-      prompt: lastMessage?.content, // Legacy
+      messages: conversationMessages,
       max_tokens: req.maxTokens ?? 4096,
       temperature: req.temperature ?? 0.7,
-      top_p: req.topP,
-      stream: req.stream,
     };
+
+    if (systemPrompt) body.system = systemPrompt;
+    if (req.topP !== undefined) body.top_p = req.topP;
+    if (req.pipeline) body.pipeline = true;
+
+    return body;
   }
   
   parseResponse(json: unknown): LLMResponse {
@@ -181,12 +224,27 @@ export class AnthropicAdapter implements ProviderAdapter {
     };
   }
   
+  parseStreamChunk(chunk: string): string | null {
+    if (chunk === "[DONE]" || chunk.trim() === "") return null;
+    try {
+      const data = JSON.parse(chunk);
+      // Claude streaming uses content_block_delta events
+      if (data.type === "content_block_delta") {
+        return data.delta?.text ?? null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
     const costs: Record<string, { in: number; out: number }> = {
       "claude-3-opus-20240229": { in: 0.015, out: 0.075 },
       "claude-3-sonnet-20240229": { in: 0.003, out: 0.015 },
       "claude-3-haiku-20240307": { in: 0.00025, out: 0.00125 },
       "claude-3-5-sonnet-20240620": { in: 0.003, out: 0.015 },
+      "claude-sonnet-4-20250514": { in: 0.003, out: 0.015 },
     };
     
     const model = modelId.replace(/^(anthropic\/|claude\/)/, "");
@@ -208,7 +266,15 @@ export class GoogleAdapter implements ProviderAdapter {
     const modelName = modelId
       .replace(/^(google\/|gemini\/)/, "")
       .replace(/^gemini-/, "gemini-");
+    // API key is appended as a query parameter by the runtime's callAdapter
+    // via getUrlWithAuth(). Base URL has no key.
     return `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+  }
+
+  /** Google uses query-param auth, not header auth. Override getUrl at call time. */
+  getUrlWithApiKey(modelId: string, apiKey: string): string {
+    const base = this.getUrl(modelId);
+    return `${base}?key=${encodeURIComponent(apiKey)}`;
   }
   
   getHeaders(_apiKey: string): Record<string, string> {
@@ -216,25 +282,41 @@ export class GoogleAdapter implements ProviderAdapter {
   }
   
   transformRequest(req: LLMRequest): unknown {
-    const apiKey = req["apiKey"] as string | undefined;
-    const model = req.model
-      .replace(/^(google\/|gemini\/)/, "")
-      .replace(/^gemini-/, "gemini-");
-    
+    // Separate system instructions from conversation messages.
+    // Gemini API supports a top-level systemInstruction field.
+    let systemInstruction: string | undefined;
+    const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+
+    for (const m of req.messages) {
+      if (m.role === "system") {
+        systemInstruction = systemInstruction
+          ? `${systemInstruction}\n\n${m.content}`
+          : m.content;
+      } else {
+        contents.push({
+          role: m.role === "user" ? "user" : "model",
+          parts: [{ text: m.content }],
+        });
+      }
+    }
+
+    // If everything was system messages, move them to user
+    if (contents.length === 0 && systemInstruction) {
+      contents.push({ role: "user", parts: [{ text: systemInstruction }] });
+      systemInstruction = undefined;
+    }
+
     const body: Record<string, unknown> = {
-      contents: req.messages.map(m => ({
-        role: m.role === "user" ? "user" : "model",
-        parts: [{ text: m.content }],
-      })),
+      contents,
       generationConfig: {
         temperature: req.temperature,
         maxOutputTokens: req.maxTokens,
         topP: req.topP,
       },
     };
-    
-    if (apiKey) {
-      body["key"] = apiKey;
+
+    if (systemInstruction) {
+      body.systemInstruction = { parts: [{ text: systemInstruction }] };
     }
     
     return body;
@@ -253,9 +335,17 @@ export class GoogleAdapter implements ProviderAdapter {
     };
   }
   
-  estimateCost(_modelId: string, _inputTokens: number, _outputTokens: number): number {
-    // Google doesn't publish per-token costs - use approximate
-    return 0.001; // Placeholder
+  estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
+    const costs: Record<string, { in: number; out: number }> = {
+      "gemini-1.5-pro": { in: 0.00125, out: 0.005 },
+      "gemini-1.5-flash": { in: 0.000075, out: 0.0003 },
+      "gemini-2.0-flash": { in: 0.0001, out: 0.0004 },
+      "gemini-2.5-pro": { in: 0.00125, out: 0.01 },
+      "gemini-2.5-flash": { in: 0.00015, out: 0.0006 },
+    };
+    const model = modelId.replace(/^(google\/|gemini\/)/, "");
+    const cost = costs[model] ?? { in: 0.001, out: 0.004 };
+    return (inputTokens / 1000) * cost.in + (outputTokens / 1000) * cost.out;
   }
 }
 
@@ -288,7 +378,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
       temperature: req.temperature ?? 0.7,
       max_tokens: req.maxTokens,
       top_p: req.topP,
-      stream: req.stream,
+      pipeline: req.pipeline,
     };
   }
   
@@ -343,7 +433,7 @@ export class TogetherAdapter implements ProviderAdapter {
       temperature: req.temperature ?? 0.7,
       max_tokens: req.maxTokens,
       top_p: req.topP,
-      stream: req.stream,
+      pipeline: req.pipeline,
     };
   }
   
@@ -458,7 +548,7 @@ export class OllamaAdapter implements ProviderAdapter {
         num_predict: req.maxTokens,
         top_p: req.topP,
       },
-      stream: false,
+      pipeline: false,
     };
   }
   

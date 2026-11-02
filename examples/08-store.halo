@@ -1,0 +1,21 @@
+// ============================================================
+// STEP 8: Memory - Persist Data Across Runs
+// Learn: Define store tools, save/retrieve data with `equips`
+// ============================================================
+
+policy NoProfanity : Block(Profanity)
+
+tool GreetingsDB : VectorStore(Env.PINECONE_KEY, namespace: "greetings")
+
+agent Greeter [gemini-3-1-pro, temp: 0.7]
+  equips GreetingsDB
+  requires NoProfanity
+
+pipeline RememberedHello(name: String) -> Result:
+  name
+    |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.")
+    // Save greeting to memory
+    |> GreetingsDB.log(content: context.data.greeting, tags: [name])
+    // Retrieve past greetings for this name
+    |> GreetingsDB.search(query: name, limit: 3)
+    |> System.Print()

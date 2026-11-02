@@ -2,20 +2,39 @@
  * Langly Runtime — executes a parsed AST.
  *
  * Execution model:
- *   1. Register all `mind` and `stream` definitions.
+ *   1. Register all `agent` and `pipeline` definitions.
  *   2. Maintain a `context` object that accumulates results from each stage.
  *   3. Use adapters to call different LLM providers.
  *   4. Use router to optimize model selection based on cost/performance.
  */
 
+import {
+  LanglyError,
+  PipelineNotFoundError,
+  AgentNotFoundError,
+  ToolNotFoundError,
+  AdapterNotFoundError,
+  PolicyViolation,
+  SchemaValidationError,
+  TimeoutError as LanglyTimeoutError,
+  ApiKeyMissingError,
+  ToolExecutionError,
+  ProviderNotFoundError,
+  UndefinedVariableError,
+  SignalMismatchError,
+  LoopTargetError,
+  MaxDepthExceededError,
+} from "../errors.js";
+
 import type {
   ParseResult,
-  Mind,
-  StreamDeclaration,
+  Agent,
+  PipelineDeclaration,
   PipelineStage,
-  GuardrailDeclaration,
+  PolicyDeclaration,
   ToolDeclaration,
-  MemoryDeclaration,
+  StoreDeclaration,
+  LoopStage,
 } from "../parser/types.js";
 
 import {
@@ -31,6 +50,46 @@ import {
   type RouterConfig,
 } from "./router.js";
 
+import { TelemetryDispatcher, SQLiteTelemetrySink, TelemetryEvent } from "./telemetry.js";
+
+import {
+  ToolRegistry,
+  RestTool,
+  PostTool,
+  PostgreSQLTool,
+  VectorStoreTool,
+  SlackTool,
+  EmailTool,
+  GitHubTool,
+  BashTool,
+  FigmaTool,
+  LinearTool,
+  BrowserTool,
+  SearchTool
+} from "./tools.js";
+
+import {
+  PolicyRegistry,
+  BlockPlugin,
+  MaxWordsPlugin,
+  MaxTokensPlugin,
+  MaxLatencyPlugin,
+  RedactPlugin,
+  LogViolationPlugin,
+  RequirePlugin,
+  MatchRegexPlugin,
+  ValidatePlugin,
+  createMaxSpendPlugin,
+  type PolicyPlugin,
+  type PolicyPhase,
+} from "./policies.js";
+
+import {
+  StoreRegistry,
+  FileStorePlugin,
+  type StorePlugin
+} from "./store.js";
+
 // ── Runtime configuration ─────
 
 export interface RuntimeConfig {
@@ -40,15 +99,104 @@ export interface RuntimeConfig {
   router?: RouterConfig;
 }
 
+// ── Pipeline Events ─────
+
+export type StreamEvent =
+  | { type: "token"; text: string; stage: string }
+  | { type: "stage_start"; stage: string }
+  | { type: "stage_complete"; stage: string; result?: unknown }
+  | { type: "done"; result: unknown }
+  | { type: "error"; error: Error };
+
+// ── Persistence ─────
+export class SuspendedRun {
+  constructor(public runId: string, public state?: any) {}
+}
+
+export interface ExecutionStore {
+  save(runId: string, context: ExecutionContext): Promise<void>;
+  load(runId: string): Promise<ExecutionContext | null>;
+}
+
+export class InMemoryExecutionStore implements ExecutionStore {
+  private runs = new Map<string, ExecutionContext>();
+  async save(runId: string, context: ExecutionContext) { this.runs.set(runId, context); }
+  async load(runId: string) { return this.runs.get(runId) ?? null; }
+}
+
+/** Durable SQLite-backed execution store. Survives process restarts. */
+export class SQLiteExecutionStore implements ExecutionStore {
+  private db: import("bun:sqlite").Database;
+  private insertStmt: any;
+  private selectStmt: any;
+
+  constructor(dbPath: string = ".langly.db") {
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    this.db = new Database(dbPath);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS execution_runs (
+        run_id TEXT PRIMARY KEY,
+        context_json TEXT NOT NULL,
+        status TEXT DEFAULT 'suspended',
+        created_at INTEGER DEFAULT (unixepoch()),
+        updated_at INTEGER DEFAULT (unixepoch())
+      )
+    `);
+    this.insertStmt = this.db.prepare(`
+      INSERT OR REPLACE INTO execution_runs (run_id, context_json, updated_at)
+      VALUES (?, ?, unixepoch())
+    `);
+    this.selectStmt = this.db.prepare(`SELECT context_json FROM execution_runs WHERE run_id = ?`);
+  }
+
+  async save(runId: string, context: ExecutionContext): Promise<void> {
+    // Strip non-serializable fields before persisting
+    const serializable = { ...context, _streamSink: undefined };
+    this.insertStmt.run(runId, JSON.stringify(serializable));
+  }
+
+  async load(runId: string): Promise<ExecutionContext | null> {
+    const row = this.selectStmt.get(runId) as { context_json: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(row.context_json) as ExecutionContext;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
 // ── Context ─────
 
-interface ExecutionContext {
-  /** Input arguments to the stream */
+export interface ExecutionContext {
+  /** Input arguments to the pipeline */
   input: Record<string, unknown>;
   /** Accumulated results from each pipeline stage */
   data: Record<string, unknown>;
   /** Current pipeline result (passed to next stage) */
   current: unknown;
+  /** System metadata (token usage, latency, cost) */
+  meta: {
+    totalCost: number;
+    totalTokens: number;
+    lastLatency: number;
+    stageCount: number;
+    calls: Array<{ model: string; tokens: number; cost: number; latency: number }>;
+  };
+  /** Execution trace — ordered list of stages executed */
+  trace: Array<{ stage: string; timestamp: number; result?: string }>;
+  /** Unique ID for the run */
+  runId?: string;
+  /** Internal depth counter to prevent infinite loops */
+  _callDepth?: number;
+  /** Index of the current pipeline stage */
+  stageIndex?: number;
+  /** Name of the pipeline being executed */
+  streamName?: string;
+  /** The specific signal event name the pipeline is waiting for (if suspended by listen) */
+  targetSignal?: string;
+  /** Internal: pipeline event sink for streaming mode. Not part of the public API. */
+  _streamSink?: StreamEvent[];
 }
 
 // ── Mock table ─────
@@ -60,35 +208,121 @@ interface MockTable {
 // ── Runtime ─────
 
 export class LanglyRuntime {
-  private minds = new Map<string, Mind>();
-  private streams = new Map<string, StreamDeclaration>();
-  private guardrails = new Map<string, GuardrailDeclaration>();
+  private agents = new Map<string, Agent>();
+  private pipelines = new Map<string, PipelineDeclaration>();
+  private policies = new Map<string, PolicyDeclaration>();
   private tools = new Map<string, ToolDeclaration>();
-  private memories = new Map<string, MemoryDeclaration>();
+  private stores = new Map<string, StoreDeclaration>();
+  private schemas = new Map<string, any>();
   private config: RuntimeConfig;
   private mocks: MockTable | null = null;
   private adapterRegistry = new AdapterRegistry();
-  private router: LLMRouter;
   private costTracker = new CostTracker();
+  private store: ExecutionStore = new InMemoryExecutionStore();
+  public toolRegistry = new ToolRegistry();
+  public guardrailRegistry = new PolicyRegistry();
+  public memoryRegistry = new StoreRegistry();
+  public router: LLMRouter;
+  public telemetry = new TelemetryDispatcher();
+
+  public lastContext?: ExecutionContext;
+
+  /** Load-time validation warnings (non-fatal). */
+  public warnings: string[] = [];
+
+  /** Optional callback for shadow agent failures. Set this to opt into shadow error alerting. */
+  public onShadowError?: (agentName: string, error: Error) => void;
+
+  setExecutionStore(store: ExecutionStore): this {
+    this.store = store;
+    return this;
+  }
 
   constructor(config: RuntimeConfig = {}) {
     this.config = config;
     this.router = new LLMRouter(config.router);
+
+    // Register built-in tools
+    this.toolRegistry
+      .register(new RestTool())
+      .register(new PostTool())
+      .register(new PostgreSQLTool())
+      .register(new VectorStoreTool())
+      .register(new SlackTool())
+      .register(new EmailTool())
+      .register(new GitHubTool())
+      .register(new BashTool())
+      .register(new FigmaTool())
+      .register(new LinearTool())
+      .register(new BrowserTool())
+      .register(new SearchTool());
+
+    // Register built-in policies
+    this.guardrailRegistry
+      .register(new BlockPlugin())
+      .register(new MaxWordsPlugin())
+      .register(new MaxTokensPlugin())
+      .register(new MaxLatencyPlugin())
+      .register(new RedactPlugin())
+      .register(new LogViolationPlugin())
+      .register(new RequirePlugin())
+      .register(new MatchRegexPlugin())
+      .register(new ValidatePlugin())
+      .register(createMaxSpendPlugin(() => this.costTracker.getTotalCost()));
+
+    // Register built-in store providers
+    this.memoryRegistry
+      .register(new FileStorePlugin());
+
+    // Add default SQLite sink
+    this.telemetry.addSink(new SQLiteTelemetrySink());
   }
 
   /** Load a parsed program into the runtime. */
   load(ast: ParseResult): this {
-    for (const m of ast.minds) this.minds.set(m.name, m);
-    for (const s of ast.streams) this.streams.set(s.name, s);
-    for (const g of ast.guardrails) this.guardrails.set(g.name, g);
+    for (const m of ast.agents) this.agents.set(m.name, m);
+    for (const s of ast.pipelines) this.pipelines.set(s.name, s);
+    for (const g of ast.policies) this.policies.set(g.name, g);
     for (const t of ast.tools) this.tools.set(t.name, t);
-    for (const m of ast.memories) this.memories.set(m.name, m);
+    for (const m of ast.stores) this.stores.set(m.name, m);
+    if (ast.schemas) {
+      for (const s of ast.schemas) this.schemas.set(s.name, s);
+    }
+
+    // Load-time validation (non-fatal warnings)
+    this.warnings = [];
+    for (const s of ast.pipelines) {
+      if (s.returnType && s.returnType !== "Result" && s.returnType !== "String" && s.returnType !== "Number" && s.returnType !== "Boolean") {
+        if (!this.schemas.has(s.returnType)) {
+          this.warnings.push(`Pipeline "${s.name}" returns "${s.returnType}" but no schema "${s.returnType}" is declared`);
+        }
+      }
+    }
+    for (const m of ast.agents) {
+      if (m.directives) {
+        for (const d of m.directives) {
+          if (d.name === "shadow") {
+            const shadowName = d.value.replace(/^["'(]|["')]$/g, "");
+            if (!this.agents.has(shadowName)) {
+              this.warnings.push(`Agent "${m.name}" has @shadow(${shadowName}) but agent "${shadowName}" is not declared`);
+            }
+          }
+        }
+      }
+    }
+
     return this;
   }
 
   /** Register a custom adapter */
   registerAdapter(adapter: ProviderAdapter): this {
     this.adapterRegistry.register(adapter);
+    return this;
+  }
+
+  /** Register a custom policy plugin */
+  registerGuardrail(plugin: PolicyPlugin): this {
+    this.guardrailRegistry.register(plugin);
     return this;
   }
 
@@ -104,36 +338,246 @@ export class LanglyRuntime {
     return this;
   }
 
-  /** Execute a named stream with the provided arguments. */
+  /** Execute a named pipeline with the provided arguments. */
   async execute(
     streamName: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    const stream = this.streams.get(streamName);
-    if (!stream) throw new Error(`Stream "${streamName}" not found`);
+    const pipeline = this.pipelines.get(streamName);
+    if (!pipeline) throw new PipelineNotFoundError(streamName);
 
     // Initialize execution context
     const ctx: ExecutionContext = {
       input: { ...args },
       data: {},
       current: Object.values(args)[0] ?? "",
+      meta: { totalCost: 0, totalTokens: 0, lastLatency: 0, stageCount: 0, calls: [] },
+      trace: [],
+      runId: crypto.randomUUID(),
+      stageIndex: 0,
+      streamName,
     };
-
-    // Apply stream-level directives (timeout, retry)
-    const timeout = stream.directives.find(d => d.name === "timeout");
+    this.lastContext = ctx;
     
-    const executeWithDirectives = async (): Promise<unknown> => {
-      return await this.executePipeline(stream.pipeline, ctx);
+    this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "stream_start", stage: streamName, payload: args });
+
+    // Apply pipeline-level directives (timeout, retry)
+    const timeout = pipeline.directives.find(d => d.name === "timeout");
+    
+    let executeWithDirectives = async (): Promise<unknown> => {
+      return await this.executePipeline(pipeline.pipeline, ctx);
     };
 
-    let result: unknown;
-    if (timeout) {
-      result = await this.withTimeout(executeWithDirectives, timeout.value);
-    } else {
-      result = await executeWithDirectives();
+    const retry = pipeline.directives.find(d => d.name === "retry");
+    if (retry) {
+      const argsStr = retry.value.replace(/^\(|\)$/g, "");
+      const [r, d] = argsStr.split(",").map(s => s.trim());
+      const maxRetries = parseInt(r ?? "0");
+      const delay = this.parseDuration(d ?? "0");
+      const baseExecute = executeWithDirectives;
+      executeWithDirectives = async () => {
+        let lastError;
+        for (let i = 0; i < maxRetries; i++) {
+          try {
+            return await baseExecute();
+          } catch (err: any) {
+            lastError = err;
+            // Don't retry deterministic failures — they won't improve on retry
+            if (
+              err instanceof PolicyViolation ||
+              err instanceof SchemaValidationError ||
+              err instanceof PipelineNotFoundError ||
+              err instanceof AgentNotFoundError ||
+              err instanceof ToolNotFoundError ||
+              err instanceof AdapterNotFoundError ||
+              err instanceof ApiKeyMissingError ||
+              err instanceof UndefinedVariableError ||
+              err instanceof LoopTargetError
+            ) {
+              throw err;
+            }
+            if (i < maxRetries - 1) {
+              await new Promise(r => setTimeout(r, delay));
+            }
+          }
+        }
+        throw lastError;
+      };
     }
 
-    return result;
+    let result: unknown;
+    try {
+      if (timeout) {
+        result = await this.withTimeout(executeWithDirectives, timeout.value);
+      } else {
+        result = await executeWithDirectives();
+      }
+
+      if (pipeline.returnType && this.schemas.has(pipeline.returnType)) {
+        result = this.validateStruct(result, this.schemas.get(pipeline.returnType));
+      }
+
+      this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "stream_end", stage: streamName, payload: result });
+      return result;
+    } catch (err: any) {
+      this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "error", stage: streamName, payload: err.stack || err.message });
+      throw err;
+    }
+  }
+
+  /** Pipeline a named pipeline, yielding events as they happen. */
+  async *pipeline(
+    streamName: string,
+    args: Record<string, unknown>,
+  ): AsyncGenerator<StreamEvent> {
+    const pipelineDecl = this.pipelines.get(streamName);
+    if (!pipelineDecl) throw new PipelineNotFoundError(streamName);
+
+    const ctx: ExecutionContext = {
+      input: { ...args },
+      data: {},
+      current: Object.values(args)[0] ?? "",
+      meta: { totalCost: 0, totalTokens: 0, lastLatency: 0, stageCount: 0, calls: [] },
+      trace: [],
+      runId: crypto.randomUUID(),
+      stageIndex: 0,
+      streamName,
+      _streamSink: [],
+    };
+    this.lastContext = ctx;
+
+    // Event-driven notification: the sink signals the consumer when events arrive.
+    // This replaces the CPU-burning 1ms polling loop.
+    let notifyResolve: (() => void) | null = null;
+    const originalPush = ctx._streamSink!.push.bind(ctx._streamSink!);
+    ctx._streamSink!.push = (...items: StreamEvent[]) => {
+      const result = originalPush(...items);
+      if (notifyResolve) {
+        const resolve = notifyResolve;
+        notifyResolve = null;
+        resolve();
+      }
+      return result;
+    };
+
+    const waitForEvent = (): Promise<void> =>
+      new Promise(resolve => { notifyResolve = resolve; });
+
+    // Run pipeline in background
+    let pipelineDone = false;
+    let pipelineError: Error | null = null;
+    let pipelineResult: unknown;
+
+    this.executePipeline(pipelineDecl.pipeline, ctx)
+      .then(result => {
+        pipelineResult = result;
+        pipelineDone = true;
+        // Wake up the consumer if it's waiting
+        if (notifyResolve) notifyResolve();
+      })
+      .catch(err => {
+        pipelineError = err;
+        pipelineDone = true;
+        if (notifyResolve) notifyResolve();
+      });
+
+    // Yield events as they arrive — no busy-waiting
+    while (!pipelineDone) {
+      while (ctx._streamSink!.length > 0) {
+        yield ctx._streamSink!.shift()!;
+      }
+      if (!pipelineDone) {
+        await waitForEvent();
+      }
+    }
+
+    // Drain any remaining events
+    while (ctx._streamSink!.length > 0) {
+      yield ctx._streamSink!.shift()!;
+    }
+
+    // Validate schema if needed
+    if (!pipelineError && pipelineDecl.returnType && this.schemas.has(pipelineDecl.returnType)) {
+      try {
+        pipelineResult = this.validateStruct(pipelineResult, this.schemas.get(pipelineDecl.returnType));
+      } catch (err: any) {
+        pipelineError = err;
+      }
+    }
+
+    if (pipelineError) {
+      yield { type: "error", error: pipelineError };
+    } else {
+      yield { type: "done", result: pipelineResult };
+    }
+  }
+
+  private validateStruct(data: unknown, schemaDecl: any): unknown {
+    let parsedData = data;
+    if (typeof data === "string") {
+      try {
+        parsedData = JSON.parse(data);
+      } catch (e) {
+        throw new SchemaValidationError(schemaDecl.name, "Output is not valid JSON");
+      }
+    }
+
+    if (!parsedData || typeof parsedData !== "object") {
+      throw new SchemaValidationError(schemaDecl.name, `expected object matching '${schemaDecl.name}'`);
+    }
+
+    for (const field of schemaDecl.fields) {
+      if (!(field.name in (parsedData as Record<string, unknown>))) {
+        throw new SchemaValidationError(schemaDecl.name, `missing field '${field.name}' in '${schemaDecl.name}'`);
+      }
+
+      const val = (parsedData as Record<string, unknown>)[field.name];
+      const typeStr = field.type;
+
+      let valid = false;
+      if (typeStr === "String") valid = typeof val === "string";
+      else if (typeStr === "Number") valid = typeof val === "number";
+      else if (typeStr === "Boolean") valid = typeof val === "boolean";
+      else if (typeStr === "Array") valid = Array.isArray(val);
+      else {
+        // If it's a nested schema, we could recursively validate, but for now we just allow object
+        valid = typeof val === "object" && val !== null;
+      }
+
+      if (!valid) {
+        throw new SchemaValidationError(schemaDecl.name, `expected type '${typeStr}' for field '${field.name}'`);
+      }
+    }
+
+    return parsedData;
+  }
+
+  /** Signal a suspended execution to resume. */
+  async signal(runId: string, eventName: string, payload: unknown): Promise<unknown> {
+    const ctx = await this.store.load(runId);
+    if (!ctx) throw new LanglyError(`Run ${runId} not found`, "RUN_NOT_FOUND");
+    if (!ctx.streamName) throw new LanglyError("Pipeline name missing in context", "INVALID_CONTEXT");
+    
+    // Verify signal matches
+    if (ctx.targetSignal && ctx.targetSignal !== eventName) {
+      // If it's a generic "resume" signal and we didn't specify a strict target, we could allow it,
+      // but the listen node sets a strict target.
+      if (eventName !== "resume" || ctx.targetSignal !== "resume") {
+        throw new SignalMismatchError(ctx.targetSignal!, eventName);
+      }
+    }
+
+    const pipeline = this.pipelines.get(ctx.streamName);
+    if (!pipeline) throw new PipelineNotFoundError(ctx.streamName!);
+
+    ctx.current = payload;
+    ctx.stageIndex = (ctx.stageIndex ?? 0) + 1;
+    // Clear the target signal so it doesn't block future yields
+    ctx.targetSignal = undefined;
+    
+    this.lastContext = ctx;
+
+    return await this.executePipeline(pipeline.pipeline, ctx);
   }
 
   /** Execute a pipeline stage by stage. */
@@ -141,35 +585,90 @@ export class LanglyRuntime {
     stages: PipelineStage[],
     ctx: ExecutionContext,
   ): Promise<unknown> {
-    for (const stage of stages) {
-      switch (stage.kind) {
-        case "expression":
-          ctx.current = this.resolveExpression(stage, ctx);
-          break;
+    ctx._callDepth = (ctx._callDepth ?? 0) + 1;
+    if (ctx._callDepth > 50) throw new MaxDepthExceededError(50);
 
-        case "call":
+    while (ctx.stageIndex !== undefined && ctx.stageIndex < stages.length) {
+      const stage = stages[ctx.stageIndex];
+      if (!stage) break;
+      switch (stage.kind) {
+        case "expression": {
+          const exprName = `expression:${stage.value}`;
+          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_start", stage: exprName });
+          ctx.current = this.resolveExpression(stage, ctx);
+          // Store expression value in context.data so context.data.<name> works
+          if (stage.value && !stage.value.startsWith('"') && !stage.value.startsWith("'") && !stage.value.startsWith("context.")) {
+            ctx.data[stage.value] = ctx.current;
+          }
+          ctx.trace.push({ stage: exprName, timestamp: Date.now() });
+          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_complete", stage: exprName, result: ctx.current });
+          break;
+        }
+
+        case "call": {
+          const callName = `${stage.callee}.${stage.method}`;
+          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_start", stage: callName });
           ctx.current = await this.executeCall(stage, ctx);
           this.storeResult(ctx, stage);
+          ctx.trace.push({ stage: callName, timestamp: Date.now() });
+          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_complete", stage: callName, result: ctx.current });
           break;
+        }
 
         case "gate":
           if (!this.evaluateCondition(stage.condition, ctx)) {
+            ctx.trace.push({ stage: `gate:${stage.condition}:false`, timestamp: Date.now() });
             return ctx.current;
           }
+          ctx.trace.push({ stage: `gate:${stage.condition}:true`, timestamp: Date.now() });
           break;
 
-        case "fanout":
+        case "fanout": {
+          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_start", stage: "fanout" });
           ctx.current = await this.executeFanout(stage, ctx);
+          ctx.trace.push({ stage: `fanout`, timestamp: Date.now() });
+          if (ctx._streamSink) ctx._streamSink.push({ type: "stage_complete", stage: "fanout", result: ctx.current });
           break;
+        }
 
         case "interrupt":
           ctx.current = await this.executeInterrupt(stage, ctx);
+          ctx.trace.push({ stage: `interrupt`, timestamp: Date.now() });
           break;
 
         case "listen":
           ctx.current = await this.executeListen(stage, ctx);
+          ctx.trace.push({ stage: `listen:${stage.target}`, timestamp: Date.now() });
           break;
+
+        case "loop": {
+          const loopStage = stage as LoopStage;
+          if (this.evaluateCondition(loopStage.condition, ctx)) {
+            const targetIndex = stages.findIndex(s => s.kind === "call" && s.callee === loopStage.target);
+            if (targetIndex !== -1) {
+              ctx.stageIndex = targetIndex - 1;
+            } else {
+              throw new LoopTargetError(loopStage.target);
+            }
+          }
+          ctx.trace.push({ stage: `loop:${loopStage.target}`, timestamp: Date.now() });
+          break;
+        }
       }
+
+      if (ctx.current instanceof SuspendedRun) {
+        await this.store.save(ctx.runId!, ctx);
+        return ctx.current;
+      }
+
+      if (ctx.streamName) {
+        const pipeline = this.pipelines.get(ctx.streamName);
+        if (pipeline && pipeline.directives.some(d => d.name === "checkpoint")) {
+          await this.store.save(ctx.runId!, ctx);
+        }
+      }
+
+      ctx.stageIndex++;
     }
     return ctx.current;
   }
@@ -179,6 +678,8 @@ export class LanglyRuntime {
     const key = `${stage.callee}.${stage.method}`;
     ctx.data[key] = ctx.current;
     ctx.data[stage.callee] = ctx.current;
+    // Also store by method name for friendlier access (e.g., context.data.brief)
+    ctx.data[stage.method] = ctx.current;
   }
 
   /** Resolve an expression (identifier lookup in context/input). */
@@ -188,6 +689,13 @@ export class LanglyRuntime {
   ): unknown {
     const value = stage.value;
 
+    if (value.startsWith('"') && value.endsWith('"')) {
+      return value.slice(1, -1);
+    }
+    if (value.startsWith("'") && value.endsWith("'")) {
+      return value.slice(1, -1);
+    }
+
     if (value in ctx.data) return ctx.data[value];
     if (value in ctx.input) return ctx.input[value];
 
@@ -195,10 +703,10 @@ export class LanglyRuntime {
       return this.resolveContextRef(value, ctx);
     }
 
-    throw new Error(`Undefined variable "${value}"`);
+    throw new UndefinedVariableError(value);
   }
 
-  /** Resolve a context reference like "context.data.mind.result" */
+  /** Resolve a context reference like "context.data.agent.result" */
   private resolveContextRef(ref: string, ctx: ExecutionContext): unknown {
     const path = ref.replace(/^context\./, "");
     const parts = path.split(".");
@@ -207,6 +715,18 @@ export class LanglyRuntime {
     for (const part of parts) {
       if (current && typeof current === "object") {
         current = (current as Record<string, unknown>)[part];
+      } else if (typeof current === "string") {
+        // Auto-parse JSON strings for deep traversal
+        try {
+          const parsed = JSON.parse(current);
+          if (parsed && typeof parsed === "object") {
+            current = (parsed as Record<string, unknown>)[part];
+          } else {
+            return undefined;
+          }
+        } catch {
+          return undefined;
+        }
       } else {
         return undefined;
       }
@@ -214,37 +734,232 @@ export class LanglyRuntime {
     return current;
   }
 
-  /** Execute a call stage (mind method or system call). */
+  /** Execute a call stage (agent method or system call). */
   private async executeCall(
     stage: Extract<PipelineStage, { kind: "call" }>,
     ctx: ExecutionContext,
   ): Promise<unknown> {
+    ctx._callDepth = (ctx._callDepth ?? 0) + 1;
+    if (ctx._callDepth > 50) throw new MaxDepthExceededError(50);
+
+
     // Built-in: System methods
     if (stage.callee === "System") {
       return this.executeSystemCall(stage, ctx);
     }
 
-    // Check if it's a tool call
+    // Check if it's a direct tool call
     if (this.tools.has(stage.callee)) {
       return this.executeToolCall(stage, ctx);
     }
 
-    // LLM mind call
-    const mind = this.minds.get(stage.callee);
-    if (!mind) throw new Error(`Mind "${stage.callee}" not found`);
+    const stageName = `${stage.callee}.${stage.method}`;
+    this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "node_start", stage: stageName, payload: ctx.current });
+    const startTime = Date.now();
 
-    const promptText = this.buildPrompt(stage, ctx);
-    await this.applyGuardrails(mind, ctx, promptText);
-
-    // Check mocks
-    if (this.mocks) {
+    // Check if it's a Agent delegating to a tool (e.g. Analyst.fetch(tool: WeatherAPI))
+    // In mock mode, skip tool routing — the mock is for the agent.method key
+    if (stage.namedArgs?.tool && typeof stage.namedArgs.tool === "string") {
       const mockKey = `${stage.callee}.${stage.method}`;
-      if (this.mocks.responses[mockKey] !== undefined) {
-        return this.mocks.responses[mockKey];
+      if (this.mocks?.responses[mockKey] !== undefined) {
+        // Mock mode: fall through to the LLM agent call path which handles mocks
+      } else if (this.tools.has(stage.namedArgs.tool)) {
+        // Production mode: call the tool first, then pass result to the agent
+        const toolName = stage.namedArgs.tool;
+        const toolStage = { ...stage, callee: toolName };
+        this.telemetry.record({ runId: ctx.runId!, timestamp: Date.now(), type: "tool_call", stage: toolName, payload: toolStage.namedArgs });
+        const toolResult = await this.executeToolCall(toolStage, ctx);
+        // Inject tool result into context so the agent can reference it
+        ctx.data[`${toolName}_result`] = toolResult;
+        // Now fall through to the LLM agent call with tool data in context
       }
     }
 
-    return await this.callLLM(mind, promptText, ctx);
+    // LLM agent call
+    const agent = this.agents.get(stage.callee);
+    if (!agent) throw new AgentNotFoundError(stage.callee);
+
+    const promptText = this.buildPrompt(stage, ctx);
+
+    // Auto-load store context
+    let memoryContext = "";
+    const loadedMemories: { decl: any; plugin: StorePlugin; config: Record<string, unknown> }[] = [];
+    
+    if (agent.equips) {
+      for (const eq of agent.equips) {
+        let handled = false;
+        const storeDecl = this.stores.get(eq);
+        if (storeDecl) {
+          const plugin = this.memoryRegistry.get(storeDecl.provider);
+          if (plugin) {
+            // Store config resolution
+            const memConfig: Record<string, unknown> = {};
+            if (storeDecl.args) {
+              storeDecl.args.forEach((a, i) => memConfig[`arg${i}`] = a);
+            }
+            const history = await plugin.load(ctx, memConfig);
+            if (history) memoryContext += `\n[Historical Context from ${eq}]\n${history}\n[/Historical Context]\n\n`;
+            
+            loadedMemories.push({ decl: storeDecl, plugin, config: memConfig });
+            handled = true;
+          }
+        }
+
+        if (!handled) {
+          const toolDecl = this.tools.get(eq);
+          if (toolDecl) {
+            if (toolDecl.provider === "VectorStore") {
+              const vsTool = this.toolRegistry.get("VectorStore") as any;
+              if (vsTool && typeof vsTool.search === "function") {
+                let namespace = "default";
+                if (toolDecl.args) {
+                  for (const arg of toolDecl.args) {
+                    if (typeof arg === "string" && arg.startsWith("namespace:")) {
+                      namespace = arg.split(":", 2)[1]?.trim().replace(/^["']|["']$/g, '') || "default";
+                    }
+                  }
+                }
+                const query = String(ctx.current ?? "");
+                const results = vsTool.search(namespace, query, 3);
+                if (results && results.length > 0) {
+                  memoryContext += `\n[Retrieved Context from ${eq}]\n${results.join("\n---\n")}\n[/Retrieved Context]\n\n`;
+                }
+              }
+            } else {
+              // Inject info for other tools
+              const toolInfo = `Tool: ${eq}\nProvider: ${toolDecl.provider}\nDescription: Available for use via tool: ${eq} in named arguments.`;
+              memoryContext += `\n[Equipped Tool Info: ${eq}]\n${toolInfo}\n[/Equipped Tool Info]\n\n`;
+            }
+          }
+        }
+      }
+    }
+
+    let fullPromptText = memoryContext + promptText;
+
+    // ── Input Guardrails: scrub/block the prompt BEFORE it hits the LLM ──
+    fullPromptText = await this.applyGuardrails(agent, ctx, fullPromptText, undefined, "input");
+    ctx.trace.push({ stage: `input_guardrail:${stage.callee}.${stage.method}`, timestamp: Date.now() });
+
+    // Dispatch shadow agents asynchronously
+    const shadowDirectives = agent.directives?.filter(d => d.name === "shadow") ?? [];
+    for (const shadowDir of shadowDirectives) {
+      const shadowAgentName = shadowDir.value.replace(/^["'(]|["')]$/g, "");
+      const shadowAgent = this.agents.get(shadowAgentName);
+      if (shadowAgent) {
+        this.callLLM(shadowAgent, fullPromptText, ctx).then(shadowResult => {
+          console.log(`[Shadow] ${shadowAgentName} returned:`, shadowResult);
+        }).catch(err => {
+          if (this.onShadowError) {
+            this.onShadowError(shadowAgentName, err);
+          } else {
+            console.error(`[Shadow] ${shadowAgentName} failed:`, err);
+          }
+        });
+      }
+    }
+
+    // Determine self-correction budget from @correct(N) directive
+    const correctDirective = agent.directives?.find(d => d.name === "correct");
+    const maxCorrections = correctDirective
+      ? parseInt(correctDirective.value.replace(/^[("']|[)"']$/g, ""), 10)
+      : 0;
+
+    // Check mocks
+    let responseText: unknown;
+    if (this.mocks) {
+      const mockKey = `${stage.callee}.${stage.method}`;
+      if (this.mocks.responses[mockKey] !== undefined) {
+        const mockResponse = this.mocks.responses[mockKey];
+        // Simulate token streaming for mock mode
+        if (ctx._streamSink) {
+          const stageName = `${stage.callee}.${stage.method}`;
+          const words = mockResponse.split(/(?<=\s)/);
+          for (const word of words) {
+            ctx._streamSink.push({ type: "token", text: word, stage: stageName });
+          }
+        }
+        responseText = mockResponse;
+      }
+    }
+
+    let metrics: { duration: number; completionTokens: number } | undefined;
+
+    if (responseText === undefined) {
+      const result = await this.callLLM(agent, fullPromptText, ctx) as { text: string, metrics: any };
+      responseText = result.text;
+      metrics = result.metrics;
+    }
+
+    // Auto-save store interaction
+    for (const loaded of loadedMemories) {
+      await loaded.plugin.save(ctx, `User: ${promptText}\nAssistant: ${responseText}`, loaded.config);
+    }
+
+    // ── Output Guardrails with Self-Correction Loop ──
+    let correctionAttempts = 0;
+    let lastViolation: PolicyViolation | null = null;
+
+    while (true) {
+      try {
+        responseText = await this.applyGuardrails(agent, ctx, String(responseText), metrics, "output");
+        break; // Guardrails passed
+      } catch (err: unknown) {
+        if (!(err instanceof PolicyViolation) || correctionAttempts >= maxCorrections) {
+          throw err; // Not a policy violation, or exhausted correction budget
+        }
+
+        // Self-correction: retry the agent call with the violation feedback
+        correctionAttempts++;
+        lastViolation = err;
+        ctx.trace.push({
+          stage: `correction_attempt:${stage.callee}.${stage.method}:${correctionAttempts}`,
+          timestamp: Date.now(),
+          result: err.message,
+        });
+
+        this.telemetry.record({
+          runId: ctx.runId!,
+          timestamp: Date.now(),
+          type: "node_start",
+          stage: `${stageName}:correction:${correctionAttempts}`,
+          payload: { violation: err.message, attempt: correctionAttempts },
+        });
+
+        // Append the violation feedback to the prompt so the LLM can correct
+        const correctionPrompt = `${fullPromptText}\n\n[CORRECTION REQUIRED] Your previous response was rejected by a policy:\n"${err.message}"\nPlease fix your response to comply with this constraint.`;
+
+        if (this.mocks) {
+          // In mock mode, the mock always returns the same thing — can't self-correct
+          // Just rethrow after logging the attempt
+          throw err;
+        }
+
+        const correctionResult = await this.callLLM(agent, correctionPrompt, ctx) as { text: string, metrics: any };
+        responseText = correctionResult.text;
+        metrics = correctionResult.metrics;
+      }
+    }
+
+    const durationMs = Date.now() - startTime;
+    this.telemetry.record({ 
+      runId: ctx.runId!, 
+      timestamp: Date.now(), 
+      type: "node_end", 
+      stage: stageName, 
+      payload: responseText,
+      metrics: { durationMs, tokens: metrics?.completionTokens }
+    });
+
+    return responseText;
+  }
+
+  private interpolate(str: string, ctx: ExecutionContext): string {
+    const regex = new RegExp("\\{\\{context\\.([a-zA-Z0-9_.]+)\\}\\}", "g");
+    return str.replace(regex, (match, path) => {
+      const val = this.resolveContextRef(`context.${path}`, ctx);
+      return val !== undefined ? String(val) : match;
+    });
   }
 
   /** Build prompt from stage args and context. */
@@ -253,13 +968,18 @@ export class LanglyRuntime {
     ctx: ExecutionContext,
   ): string {
     if (stage.namedArgs && Object.keys(stage.namedArgs).length > 0) {
-      return JSON.stringify(stage.namedArgs);
+      const interpolatedArgs: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(stage.namedArgs)) {
+        interpolatedArgs[k] = typeof v === "string" ? this.interpolate(v, ctx) : v;
+      }
+      return JSON.stringify(interpolatedArgs);
     }
 
     if (stage.args && stage.args.length > 0) {
       const resolved = stage.args.map(arg => {
-        if (typeof arg === "string" && arg.startsWith("context.")) {
-          return this.resolveContextRef(arg, ctx);
+        if (typeof arg === "string") {
+          if (arg.startsWith("context.")) return this.resolveContextRef(arg, ctx);
+          return this.interpolate(arg, ctx);
         }
         return arg;
       });
@@ -284,112 +1004,56 @@ export class LanglyRuntime {
         return ctx.current;
 
       default:
-        throw new Error(`Unknown System.${stage.method}`);
+        throw new LanglyError(`Unknown System.${stage.method}`, "UNKNOWN_SYSTEM_METHOD");
     }
   }
 
-  /** Execute a tool call (REST, POST, VectorStore, etc.). */
+  /** Execute a tool call via the registry. */
   private async executeToolCall(
     stage: Extract<PipelineStage, { kind: "call" }>,
     ctx: ExecutionContext,
   ): Promise<unknown> {
     const tool = this.tools.get(stage.callee);
-    if (!tool) throw new Error(`Tool "${stage.callee}" not found`);
+    if (!tool) throw new ToolNotFoundError(stage.callee);
 
     const provider = tool.provider;
     const toolConfig: Record<string, unknown> = {};
+
+    // Helper to resolve Env variables
+    const resolveEnv = (val: unknown) => {
+      if (typeof val === "string" && val.startsWith("Env.")) {
+        return Bun.env[val.replace("Env.", "")] ?? "";
+      }
+      return val;
+    };
+
+    // 1. Resolve arguments from the tool declaration itself
+    if (tool.args) {
+      tool.args.forEach((arg, i) => {
+        toolConfig[`arg${i}`] = resolveEnv(arg);
+      });
+      // Also provide the raw args array in config if tools expect it (like RestTool expects url in args[0])
+      toolConfig.__args = tool.args.map(resolveEnv);
+    }
+    if (tool.namedArgs) {
+      for (const [k, v] of Object.entries(tool.namedArgs)) {
+        toolConfig[k] = resolveEnv(v);
+      }
+    }
+
+    // 2. Override with arguments from the pipeline stage call
     if (stage.namedArgs) {
-      Object.assign(toolConfig, stage.namedArgs);
+      for (const [k, v] of Object.entries(stage.namedArgs)) {
+         toolConfig[k] = typeof v === "string" ? resolveEnv(this.interpolate(v, ctx)) : v;
+      }
     }
 
-    if (provider.startsWith("REST(")) {
-      const url = provider.match(/REST\("(.+?)"\)/)?.[1] ?? "";
-      return await this.callREST(url, toolConfig, ctx);
-    }
+    const toolPlugin = this.toolRegistry.get(provider);
+    if (!toolPlugin) throw new ProviderNotFoundError(provider);
 
-    if (provider.startsWith("POST(")) {
-      const url = provider.match(/POST\("(.+?)"\)/)?.[1] ?? "";
-      return await this.callPOST(url, toolConfig, ctx);
-    }
-
-    if (provider.startsWith("VectorStore(")) {
-      return this.callVectorStore(tool.provider, toolConfig, ctx);
-    }
-
-    if (provider.startsWith("PostgreSQL(")) {
-      return this.callPostgreSQL(tool.provider, toolConfig, ctx);
-    }
-
-    throw new Error(`Unknown tool provider: ${provider}`);
-  }
-
-  /** Call a REST API tool. */
-  private async callREST(
-    baseUrl: string,
-    config: Record<string, unknown>,
-    _ctx: ExecutionContext,
-  ): Promise<unknown> {
-    const apiKey = this.resolveApiKey(config);
-    const url = this.buildToolUrl(baseUrl, config);
-    
-    const res = await Bun.fetch(url, {
-      method: "GET",
-      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-    });
-
-    if (!res.ok) {
-      throw new Error(`REST API error (${res.status}): ${await res.text()}`);
-    }
-
-    return await res.json();
-  }
-
-  /** Call a POST API tool. */
-  private async callPOST(
-    baseUrl: string,
-    config: Record<string, unknown>,
-    _ctx: ExecutionContext,
-  ): Promise<unknown> {
-    const apiKey = this.resolveApiKey(config);
-    const url = this.buildToolUrl(baseUrl, config);
-    const body = this.buildToolBody(config);
-    
-    const res = await Bun.fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      throw new Error(`POST API error (${res.status}): ${await res.text()}`);
-    }
-
-    return await res.json();
-  }
-
-  /** Call a VectorStore tool (simplified). */
-  private async callVectorStore(
-    _provider: string,
-    config: Record<string, unknown>,
-    _ctx: ExecutionContext,
-  ): Promise<unknown> {
-    const method = config.method as string;
-    if (method === "log" || method === "search") {
-      return { result: `VectorStore ${method} called`, ...config };
-    }
-    return { result: "VectorStore operation not implemented" };
-  }
-
-  /** Call a PostgreSQL tool (simplified). */
-  private async callPostgreSQL(
-    _provider: string,
-    _config: Record<string, unknown>,
-    _ctx: ExecutionContext,
-  ): Promise<unknown> {
-    return { result: "PostgreSQL query not implemented" };
+    // If __args exists, use it, otherwise use the declaration args directly
+    const execArgs = (toolConfig.__args as string[]) ?? tool.args.map(a => String(resolveEnv(a)));
+    return await toolPlugin.execute(execArgs, toolConfig, ctx);
   }
 
   /** Resolve API key from config or env. */
@@ -424,118 +1088,83 @@ export class LanglyRuntime {
     return body;
   }
 
-  /** Apply guardrails to a mind before calling it. */
+  /**
+   * Apply policies to text, filtered by execution phase.
+   * - "input": runs policies with phase "input" or "both" (before LLM)
+   * - "output": runs policies with phase "output" or "both" (after LLM)
+   */
   private async applyGuardrails(
-    mind: Mind,
+    agent: Agent,
     ctx: ExecutionContext,
-    textToCheck?: string,
-  ): Promise<void> {
-    if (!mind.requires) return;
+    textToCheck: string,
+    metrics?: { duration: number; completionTokens: number },
+    phase: "input" | "output" = "output",
+  ): Promise<string> {
+    if (!agent.requires) return textToCheck;
 
-    for (const guardrailName of mind.requires) {
-      const guardrail = this.guardrails.get(guardrailName);
-      if (!guardrail) continue;
+    let currentText = textToCheck;
+    for (const guardrailName of agent.requires) {
+      const policy = this.policies.get(guardrailName);
+      if (!policy) continue;
 
-      for (const rule of guardrail.rules) {
-        await this.applyGuardrailRule(rule, ctx, textToCheck);
+      for (const rule of policy.rules) {
+        // Check if this plugin should run in the current phase
+        const plugin = this.guardrailRegistry.get(rule.name);
+        if (plugin) {
+          const pluginPhase = plugin.phase ?? "output";
+          const shouldRun =
+            pluginPhase === "both" ||
+            pluginPhase === phase;
+          if (!shouldRun) continue;
+        }
+
+        currentText = await this.applyGuardrailRule(rule, ctx, currentText, metrics);
       }
     }
+    return currentText;
   }
 
-  /** Apply a single guardrail rule. */
+  /** Apply a single policy rule. */
   private async applyGuardrailRule(
     rule: { name: string; args: string[] },
     ctx: ExecutionContext,
-    textToCheck?: string,
-  ): Promise<void> {
-    const text = textToCheck ?? String(ctx.current ?? "");
-    
-    switch (rule.name) {
-      case "Block":
-        if (rule.args.includes("Profanity")) {
-          if (this.containsProfanity(text)) {
-            throw new Error("Content blocked: Profanity detected");
-          }
-        }
-        if (rule.args.includes("DestructiveOps")) {
-          if (this.containsDestructiveOps(text)) {
-            throw new Error("Content blocked: Destructive operations not allowed");
-          }
-        }
-        break;
-
-      case "MaxWords":
-        const maxWords = parseInt(rule.args[0] ?? "0");
-        const wordCount = text.split(/\s+/).length;
-        if (wordCount > maxWords) {
-          throw new Error(`Content exceeds max words: ${wordCount} > ${maxWords}`);
-        }
-        break;
-
-      case "Redact":
-        console.log(`[Guardrail] Redacting: ${rule.args.join(", ")}`);
-        break;
-
-      case "LogViolation":
-        console.log(`[Guardrail] Violation logged`);
-        break;
-
-      case "MaxSpend":
-        const maxSpend = parseFloat(rule.args[0] ?? "0");
-        console.log(`[Guardrail] Max spend: $${maxSpend}`);
-        break;
+    textToCheck: string,
+    metrics?: { duration: number; completionTokens: number }
+  ): Promise<string> {
+    const plugin = this.guardrailRegistry.get(rule.name);
+    if (!plugin) {
+      console.warn(`[Policy] Unknown rule: ${rule.name}`);
+      return textToCheck;
     }
-  }
-
-  /** Check for profanity (simplified - word boundary check). */
-  private containsProfanity(text: string): boolean {
-    const badWords = ["damn", "shit", "fuck"];
-    const lower = text.toLowerCase();
-    return badWords.some(w => {
-      const regex = new RegExp(`\\b${w}\\b`, 'i');
-      return regex.test(lower);
-    });
-  }
-
-  /** Check for destructive operations. */
-  private containsDestructiveOps(text: string): boolean {
-    const ops = ["DROP", "DELETE", "TRUNCATE", "rm -rf"];
-    return ops.some(op => text.includes(op));
+    
+    const result = await plugin.apply(textToCheck, rule.args, ctx, metrics);
+    return result;
   }
 
   /** Evaluate a gate condition. */
   private evaluateCondition(condition: string, ctx: ExecutionContext): boolean {
-    let expr = condition;
-    
-    // Replace context.data.* references
-    expr = expr.replace(/context\.data\.(\w+)/g, (_, key) => {
-      const val = ctx.data[key];
-      return val !== undefined ? JSON.stringify(val) : "undefined";
-    });
-
-    // Replace input references
-    expr = expr.replace(/\b(\w+)\b/g, (match) => {
-      if (ctx.input[match] !== undefined) {
-        return JSON.stringify(ctx.input[match]);
-      }
-      return match;
-    });
-
-    // Evaluate simple comparisons
-    const comparison = expr.match(/^(.+?)\s*(==|!=|>|<|>=|<=)\s*(.+)$/);
+    const comparison = condition.match(/^(.+?)\s*(==|!=|>|<|>=|<=)\s*(.+)$/);
     if (comparison) {
-      const left = comparison[1];
-      const op = comparison[2];
-      const right = comparison[3];
-      if (left && op && right) {
-        const lval = this.parseValue(left.trim());
-        const rval = this.parseValue(right.trim());
-        return this.compare(lval, op, rval);
-      }
+      const left = this.resolveConditionValue(comparison[1] ?? "", ctx);
+      const op = comparison[2] ?? "==";
+      const right = this.resolveConditionValue(comparison[3] ?? "", ctx);
+      return this.compare(left, op, right);
     }
+    
+    const val = this.resolveConditionValue(condition, ctx);
+    return val === true || val === "true";
+  }
 
-    const boolVal = this.parseValue(expr);
-    return boolVal === true || boolVal === "true";
+  private resolveConditionValue(expr: string, ctx: ExecutionContext): unknown {
+    expr = expr.trim();
+    if (expr.startsWith("context.")) {
+      return this.resolveContextRef(expr, ctx);
+    }
+    // Also support checking raw input directly if not prefixed with context.input
+    if (ctx.input[expr] !== undefined) {
+      return ctx.input[expr];
+    }
+    return this.parseValue(expr);
   }
 
   /** Parse a value from string. */
@@ -566,24 +1195,84 @@ export class LanglyRuntime {
     stage: Extract<PipelineStage, { kind: "fanout" }>,
     ctx: ExecutionContext,
   ): Promise<unknown> {
-    const promises = stage.stages.map(async (subStage) => {
-      if (subStage.kind === "call") {
-        return await this.executeCall(subStage, ctx);
-      } else if (subStage.kind === "expression") {
-        return this.resolveExpression(subStage, ctx);
-      }
-      return undefined;
-    });
+    const results: unknown[] = [];
+    const maxConcurrent = 5;
+    // Collect per-branch data writes so we can merge them back safely
+    const branchDataSets: Record<string, unknown>[] = [];
+    
+    for (let i = 0; i < stage.stages.length; i += maxConcurrent) {
+      const chunk = stage.stages.slice(i, i + maxConcurrent);
+      const chunkPromises = chunk.map(async (subStage) => {
+        // Clone context for each branch to prevent shared-state race conditions.
+        // Each branch gets its own `data` object and `meta`, but reads from
+        // the same snapshot of `input` and `current`.
+        const branchCtx: ExecutionContext = {
+          input: ctx.input,               // read-only snapshot — safe to share
+          data: { ...ctx.data },           // shallow clone — branch writes here
+          current: ctx.current,            // read-only starting value
+          meta: { ...ctx.meta, calls: [...ctx.meta.calls] },
+          trace: [...ctx.trace],
+          runId: ctx.runId,
+          _callDepth: ctx._callDepth,
+          stageIndex: ctx.stageIndex,
+          streamName: ctx.streamName,
+          _streamSink: ctx._streamSink,    // shared sink is fine — events are append-only
+        };
 
-    const results = await Promise.all(promises);
+        let result: unknown;
+        if (subStage.kind === "call") {
+          result = await this.executeCall(subStage, branchCtx);
+        } else if (subStage.kind === "expression") {
+          result = this.resolveExpression(subStage, branchCtx);
+        }
 
-    stage.stages.forEach((subStage, index) => {
+        // Collect the branch's data writes and meta for merging
+        branchDataSets.push(branchCtx.data);
+        // Merge cost/token metrics back to parent
+        ctx.meta.totalCost += branchCtx.meta.totalCost - ctx.meta.totalCost;
+        ctx.meta.totalTokens += branchCtx.meta.totalTokens - ctx.meta.totalTokens;
+        ctx.meta.calls.push(...branchCtx.meta.calls.slice(ctx.meta.calls.length));
+        ctx.trace.push(...branchCtx.trace.slice(ctx.trace.length));
+
+        return result;
+      });
+      
+      const chunkResults = await Promise.all(chunkPromises);
+      results.push(...chunkResults);
+    }
+
+    // Track method names to detect duplicates
+    const methodCounts = new Map<string, number>();
+    stage.stages.forEach((subStage) => {
       if (subStage.kind === "call") {
         const key = `${subStage.callee}.${subStage.method}`;
-        ctx.data[key] = results[index];
-        ctx.data[subStage.callee] = results[index];
+        methodCounts.set(key, (methodCounts.get(key) ?? 0) + 1);
       }
     });
+
+    // Merge branch results into the parent context
+    stage.stages.forEach((subStage, index) => {
+      if (subStage.kind === "call") {
+        const baseKey = `${subStage.callee}.${subStage.method}`;
+        // Always store with index suffix
+        ctx.data[`${baseKey}_${index}`] = results[index];
+        // Also store without index if method name is unique in this fan-out
+        if (methodCounts.get(baseKey) === 1) {
+          ctx.data[baseKey] = results[index];
+          ctx.data[subStage.callee] = results[index];
+          ctx.data[subStage.method] = results[index];
+        }
+      }
+    });
+
+    // Also merge any data keys that branches wrote (e.g. storeResult writes)
+    for (const branchData of branchDataSets) {
+      for (const [key, value] of Object.entries(branchData)) {
+        if (!(key in ctx.data)) {
+          ctx.data[key] = value;
+        }
+      }
+    }
 
     return results;
   }
@@ -595,16 +1284,19 @@ export class LanglyRuntime {
   ): Promise<unknown> {
     console.log(`[Interrupt] Yielding:`, stage.args);
     console.log(`[Interrupt] Context:`, ctx.current);
-    return ctx.current;
+    ctx.targetSignal = "resume"; // Internal generic yield
+    return new SuspendedRun(ctx.runId!, stage.args);
   }
 
   /** Execute listener (wait for external event). */
   private async executeListen(
     stage: Extract<PipelineStage, { kind: "listen" }>,
-    _ctx: ExecutionContext,
+    ctx: ExecutionContext,
   ): Promise<unknown> {
     console.log(`[Listen] Waiting for:`, stage.target);
-    return { reaction: "approved", source: stage.target };
+    const target = stage.target.replace(/^["']|["']$/g, "");
+    ctx.targetSignal = target;
+    return new SuspendedRun(ctx.runId!, { target });
   }
 
   /** Execute with timeout. */
@@ -614,7 +1306,7 @@ export class LanglyRuntime {
   ): Promise<unknown> {
     const ms = this.parseDuration(timeoutValue);
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Timeout after ${timeoutValue}`)), ms);
+      setTimeout(() => reject(new LanglyTimeoutError(timeoutValue)), ms);
     });
     return Promise.race([fn(), timeout]);
   }
@@ -638,15 +1330,15 @@ export class LanglyRuntime {
 
   /** Call LLM using adapter system with router. */
   private async callLLM(
-    mind: Mind,
+    agent: Agent,
     prompt: string,
     ctx: ExecutionContext,
   ): Promise<unknown> {
-    const modelId = mind.modelId;
+    const modelId = agent.modelId;
     const apiKey = this.config.apiKey ?? Bun.env.LANGLY_API_KEY;
     
     if (!apiKey) {
-      throw new Error(`No API key set for LLM call. Set LANGLY_API_KEY or pass apiKey in RuntimeConfig.`);
+      throw new ApiKeyMissingError();
     }
 
     // Use router to select best model (if routing is configured)
@@ -671,20 +1363,34 @@ export class LanglyRuntime {
     // Find the adapter for this model
     const adapter = this.adapterRegistry.findAdapter(selectedModel);
     if (!adapter) {
-      throw new Error(`No adapter found for model "${selectedModel}". Register an adapter with runtime.registerAdapter().`);
+      throw new AdapterNotFoundError(selectedModel);
     }
 
     // Build request
-    const temperature = parseFloat(String(mind.params["temp"] ?? "0.7"));
+    const temperature = parseFloat(String(agent.params["temp"] ?? "0.7"));
+    const maxTokens = agent.params["max_tokens"] ? parseInt(agent.params["max_tokens"]) : undefined;
+    const topP = agent.params["top_p"] ? parseFloat(agent.params["top_p"]) : undefined;
+
+    // Build messages: prepend system prompt if agent declares one
+    const messages: Array<{ role: string; content: string }> = [];
+    if (agent.system) {
+      messages.push({ role: "system", content: agent.system });
+    }
+    messages.push({ role: "user", content: prompt });
+
     const request: LLMRequest = {
       model: selectedModel, // Adapter's transformRequest handles ID transformation
-      messages: [{ role: "user", content: prompt }],
+      messages,
       temperature,
+      maxTokens,
+      topP,
       apiKey, // Pass API key for adapters that need it in the body
     };
 
     // Call the adapter
-    const response = await this.callAdapter(adapter, request, apiKey);
+    const startTime = Date.now();
+    const response = await this.callAdapter(adapter, request, apiKey, ctx);
+    const duration = Date.now() - startTime;
     
     // Track cost
     if (response.usage) {
@@ -694,7 +1400,23 @@ export class LanglyRuntime {
       this.costTracker.recordUsage(selectedModel, actualCost);
     }
 
-    return response.text;
+    // Populate context.meta with call metrics
+    const callCost = response.usage
+      ? (adapter.estimateCost
+          ? adapter.estimateCost(selectedModel, response.usage.promptTokens ?? 0, response.usage.completionTokens ?? 0)
+          : estimatedCost)
+      : 0;
+    const callTokens = (response.usage?.promptTokens ?? 0) + (response.usage?.completionTokens ?? 0);
+    ctx.meta.totalCost += callCost;
+    ctx.meta.totalTokens += callTokens;
+    ctx.meta.lastLatency = duration;
+    ctx.meta.stageCount++;
+    ctx.meta.calls.push({ model: selectedModel, tokens: callTokens, cost: callCost, latency: duration });
+
+    return { 
+      text: response.text, 
+      metrics: { duration, completionTokens: response.usage?.completionTokens ?? 0 } 
+    };
   }
 
   /** Call an adapter with proper error handling. */
@@ -702,8 +1424,15 @@ export class LanglyRuntime {
     adapter: ProviderAdapter,
     request: LLMRequest,
     apiKey: string,
+    ctx?: ExecutionContext,
   ): Promise<LLMResponse> {
-    const url = adapter.getUrl(request.model);
+    if (ctx && ctx._streamSink && adapter.parseStreamChunk) {
+      request.pipeline = true;
+    }
+
+    const url = adapter.getUrlWithApiKey
+      ? adapter.getUrlWithApiKey(request.model, apiKey)
+      : adapter.getUrl(request.model);
     const headers = adapter.getHeaders(apiKey);
     const body = adapter.transformRequest(request);
 
@@ -715,7 +1444,37 @@ export class LanglyRuntime {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`LLM API error (${res.status}): ${text}`);
+      throw new LanglyError(`LLM API error (${res.status}): ${text}`, "LLM_API_ERROR");
+    }
+
+    if (request.pipeline && res.body && adapter.parseStreamChunk) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let fullText = "";
+      let buffer = "";
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            const token = adapter.parseStreamChunk(data);
+            if (token) {
+              fullText += token;
+              if (ctx?._streamSink) {
+                ctx._streamSink.push({ type: "token", text: token, stage: ctx.streamName ?? "unknown" });
+              }
+            }
+          }
+        }
+      }
+      return { text: fullText, raw: null };
     }
 
     const json = await res.json();
@@ -748,8 +1507,3 @@ class CollectingErrorListener {
   reportContextSensitivity(..._args: unknown[]): void {}
 }
 
-/** Parse function using ANTLR4 */
-export function parse(source: string): ParseResult {
-  // This is a placeholder - the actual implementation is in src/parser/index.ts
-  throw new Error("Use src/parser/index.ts for parsing");
-}

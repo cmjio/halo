@@ -1,6 +1,6 @@
 Seeing the conceptual syntax hardened into a formal ANTLR grammar is fantastic. This is the moment a theoretical DSL becomes a computable language. You’ve successfully mapped out the lexer priority, handled the whitespace/newline insensitivity perfectly for the pipeline operators, and structured the entities cleanly.
 
-However, putting on my compiler architect hat and reading through the rules, there are three critical gaps in this grammar that will cause your parser to crash when evaluating the V2.0 spec examples we wrote earlier.
+However, putting on my compiler architect hat and reading through the rules, there are three critical gaps in this grammar that will cause your parser to crash when evaluating the V2.0 Halo examples we wrote earlier.
 
 Here are the fixes you need to apply to make this production-ready:
 
