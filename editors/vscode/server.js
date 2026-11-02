@@ -8085,7 +8085,7 @@ var require_server = __commonJS(function(exports) {
 
 // node_modules/vscode-languageserver/lib/node/files.js
 var require_files = __commonJS(function(exports) {
-  var __filename = "/Users/cmj/projects/oneshots/langly/.claude/worktrees/deep-work-4ed0fb/node_modules/vscode-languageserver/lib/node/files.js";
+  var __filename = "/Users/cmj/projects/oneshots/halo/node_modules/vscode-languageserver/lib/node/files.js";
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.resolveModulePath = exports.FileSystem = exports.resolveGlobalYarnPath = exports.resolveGlobalNodePath = exports.resolve = exports.uriToFilePath = undefined;
   var url = __require("url");
