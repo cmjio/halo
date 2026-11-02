@@ -144,6 +144,7 @@ export default defineConfig({
       }
     ]},
 
-    socialLinks: []
+    socialLinks: [{ icon: 'github', link: 'https://github.com/cmjio/halo' }],
+    editLink: { pattern: 'https://github.com/cmjio/halo/edit/main/docs/:path', text: 'Edit this page on GitHub' }
   }
 })

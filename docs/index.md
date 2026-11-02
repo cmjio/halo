@@ -32,8 +32,8 @@ irm https://halolang.com/install.ps1 | iex
 ```
 
 ```bash [From source]
-# in a checkout of the repository: `halo` then runs the source
-bun install && bun link
+git clone https://github.com/cmjio/halo && cd halo
+bun install && bun link   # `halo` now runs the source
 ```
 
 :::

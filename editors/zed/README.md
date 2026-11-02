@@ -20,9 +20,7 @@ git). That's why the grammar source lives outside this folder: a source folder
 at `grammars/halo` would block the clone ("already exists, but is not a git
 clone").
 
-`extension.toml` points `[grammars.halo]` at this checkout with an absolute
-`file://` path. If the repository lives somewhere else on your machine, change
-`repository` to match.
+`extension.toml` builds the grammar from `https://github.com/cmjio/halo` at the commit in `rev`, so the grammar comes from GitHub even for a dev install. To try a grammar change before pushing, point `repository` at your checkout with a `file://` URL.
 
 ## Changing the grammar
 
@@ -32,7 +30,7 @@ cd editors/tree-sitter-halo
 tree-sitter parse --quiet --stat ../../examples/*.halo   # every example should parse
 ```
 
-Then commit (Zed builds the grammar from a commit, including the generated
+Then commit and push (Zed builds the grammar from a commit on GitHub, including the generated
 `editors/tree-sitter-halo/src/`), set `rev` in `extension.toml` to that commit, and run
 **zed: rebuild dev extension** (or reinstall).
 

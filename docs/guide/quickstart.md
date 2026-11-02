@@ -24,7 +24,7 @@ This installs `halo`, a single standalone binary with Bun built in, so nothing e
 
 On Alpine, install the C++ runtime first: `apk add libstdc++ libgcc`. To uninstall, delete `~/.halo/bin` and the `PATH` line the installer added.
 
-To work on Halo itself, run it from a checkout instead: `bun install`, then `bun link` makes `halo` run the source.
+To work on Halo itself, run it from source: `git clone https://github.com/cmjio/halo && cd halo && bun install && bun link`, and `halo` runs your checkout.
 
 ## 2. Create a project
 

@@ -30,7 +30,7 @@ cp .env.example .env                           # add your API key
 halo run main.halo --arg topic="tide pools"    # for real
 ```
 
-The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it. To work on Halo itself: `bun install && bun link` in a checkout.
+The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it. To work on Halo itself: `git clone https://github.com/cmjio/halo && cd halo && bun install && bun link`. Docs and playground: [halolang.com](https://halolang.com).
 
 Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 

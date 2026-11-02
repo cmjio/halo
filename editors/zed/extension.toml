@@ -3,18 +3,18 @@ name = "Halo DSL"
 version = "0.1.0"
 schema_version = 2
 description = "Syntax highlighting for the Halo DSL (.halo files)"
-repository = ""
+repository = "https://github.com/cmjio/halo"
 authors = []
 themes = []
 icon_themes = []
 languages = ["languages/halo"]
 
 # Zed builds the grammar from this repository at `rev` (a commit that has the
-# generated src/). For a dev install, `repository` is this checkout. Zed clones it
+# generated src/), cloned from GitHub. Zed clones it
 # into grammars/, so the grammar source lives outside this folder. After
 # changing grammar.js: run ./build.sh, commit, and set `rev` to that commit.
 [grammars.halo]
-repository = "file:///Users/cmj/projects/oneshots/halo"
+repository = "https://github.com/cmjio/halo"
 rev = "1b0353b3dee70474132451c515f87a33920f2ea4"
 path = "editors/tree-sitter-halo"
 
