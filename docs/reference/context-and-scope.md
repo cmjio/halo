@@ -7,7 +7,7 @@ Every run has a `context` with five namespaces:
 | `context.current` | The flowing value (the last stage's result) |
 | `context.input` | The pipeline's arguments, as passed |
 | `context.data` | Arguments, call results, and `as` bindings |
-| `context.meta` | `runId`, `pipeline`, `startedAt`, `finishedAt`, `durationMs`, `cost`, `tokens`, `calls`, `violations`, `shadows`, `halted`, `paused`, `checkpoint` |
+| `context.meta` | `runId`, `pipeline`, `startedAt`, `finishedAt`, `durationMs`, `cost`, `tokens`, `calls`, `violations`, `shadows`, `halted`, `paused`, `checkpoint`, `rewoundFrom` |
 | `context.trace` | One entry per stage, each with a SHA-256 hash linking it to the previous entry |
 
 ## Where results go

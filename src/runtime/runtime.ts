@@ -51,7 +51,7 @@ import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
 import { closeKvDatabases } from "./providers/index.js";
 import { LocalVectorStore } from "./vectors.js";
-import { appendStep } from "./history.js";
+import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
@@ -180,6 +180,8 @@ export interface RunMeta {
   /** How many times the run has paused. */
   pauses?: number;
   checkpoint?: string;
+  /** For a run started from an earlier step of another (`rewind`): that run and step. */
+  rewoundFrom?: { runId: string; step: number };
 }
 
 export interface TraceEntry {
@@ -791,6 +793,51 @@ export class HaloRuntime {
   }
 
   /**
+   * Go back to a step of a @checkpoint run and continue from there, as a new run.
+   * The new run starts with the state, trace, calls and cost the old one had after
+   * that step (and, with @checkpoint, the history up to it). The old run is untouched.
+   * Every stage after the step runs again: models, tools and approvals.
+   */
+  async rewind(checkpointPath: string, step: number, options: { runId?: string } = {}): Promise<RunResult> {
+    const cp = await readSnapshot(checkpointPath);
+    if (!cp) throw new HaloError(`No checkpoint at ${checkpointPath}`);
+    const steps = await readSteps(stepsPathFor(checkpointPath));
+    const at = stateAt(steps, step);
+    const s = at.step;
+    const runId = options.runId ?? crypto.randomUUID();
+    const snap: RunSnapshot = {
+      version: 1,
+      pipeline: cp.pipeline,
+      nextStage: s.next,
+      input: cp.input,
+      data: at.data,
+      current: at.current,
+      trace: cp.trace.slice(0, s.step),
+      loops: s.loops ?? {},
+      loopFeedback: s.loopFeedback,
+      meta: {
+        runId,
+        pipeline: cp.pipeline,
+        startedAt: new Date().toISOString(),
+        cost: s.cost,
+        tokens: s.tokens,
+        calls: cp.meta.calls.slice(0, s.calls),
+        violations: [],
+        shadows: [],
+        rewoundFrom: { runId: cp.meta.runId, step: s.step },
+      },
+    };
+    const ctx = this.restore(snap);
+    // The new run's history begins with the steps it shares with the old one.
+    const path = this.checkpointPath(ctx);
+    if (path) {
+      mkdirSync(dirname(path), { recursive: true });
+      await Bun.write(stepsPathFor(path), steps.slice(0, steps.indexOf(s) + 1).map((x) => JSON.stringify(x) + "\n").join(""));
+    }
+    return this.runTop(ctx, s.next);
+  }
+
+  /**
    * Resume a paused run. `event` is "yield" for a run paused at `|! yield(...)`,
    * or the listen target (e.g. "Slack.Reaction") for `~> listen(...)`; `payload`
    * becomes the response (`context.data.yield`, the listen target, and any `as` binding).
@@ -1037,9 +1084,15 @@ export class HaloRuntime {
     ctx.trace.push({ index, stage: stage.kind, label, at, outputHash, prev, hash: sha256(prev, String(index), stage.kind, label, at, outputHash) });
   }
 
+  /** Where a run's @checkpoint goes; undefined when it doesn't keep one. */
+  private checkpointPath(ctx: ExecutionContext): string | undefined {
+    if (!findDirective(ctx.pipeline.directives, "checkpoint") || ctx.depth > 0) return undefined;
+    return `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
+  }
+
   private async writeCheckpoint(ctx: ExecutionContext, nextStage: number): Promise<void> {
-    if (!findDirective(ctx.pipeline.directives, "checkpoint") || ctx.depth > 0) return;
-    const path = `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
+    const path = this.checkpointPath(ctx);
+    if (!path) return;
     ctx.meta.checkpoint = path;
     // Appends to the checkpoint's log, so checkpointing every stage of a long run stays cheap.
     const snap = this.toSnapshot(ctx, nextStage);

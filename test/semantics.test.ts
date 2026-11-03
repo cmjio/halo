@@ -335,6 +335,55 @@ describe("directives", () => {
     expect(stateAt(steps).data).toMatchObject({ x: "doc", draft: { ready: true }, M: { publish: "published" } });
   });
 
+  test("rewind goes back to a step and continues as a new run, leaving the old one as it was", async () => {
+    let reviews = 0;
+    const r = rt(
+      `agent M [openai/gpt-4o]
+       @checkpoint
+       pipeline S(x: String) -> Result:
+         x |> M.draft() as draft |> M.review() as review |> M.publish()`,
+      { "M.draft": "v1", "M.review": () => `review ${++reviews}`, "M.publish": (q: MockRequest) => `published after ${q.prompt?.match(/review \d/)?.[0]}` },
+    );
+    const first = await r.run("S", { x: "doc" });
+    const oldSteps = await readSteps(stepsPathFor(first.context.meta.checkpoint!));
+    expect(first.output).toBe("published after review 1");
+
+    const again = await r.rewind(first.context.meta.checkpoint!, 2);
+    expect(again.output).toBe("published after review 2");
+    expect(again.runId).not.toBe(first.runId);
+    expect(again.context.meta.rewoundFrom).toEqual({ runId: first.runId, step: 2 });
+    // It kept the draft (not redone) and the calls up to step 2, then made its own.
+    expect(again.context.meta.calls.map((c) => c.target)).toEqual(["M.draft", "M.review", "M.publish"]);
+    expect(again.context.trace.slice(0, 2)).toEqual(first.context.trace.slice(0, 2));
+    expect(verifyTrace(again.context.trace)).toBe(true);
+
+    // Its history starts with the two shared steps; the old history is untouched.
+    const newSteps = await readSteps(stepsPathFor(again.context.meta.checkpoint!));
+    expect(newSteps.map((s) => s.label)).toEqual(["x", "M.draft", "M.review", "M.publish"]);
+    expect(newSteps.slice(0, 2)).toEqual(oldSteps.slice(0, 2));
+    expect(stateAt(newSteps).data.review).toBe("review 2");
+    expect(await readSteps(stepsPathFor(first.context.meta.checkpoint!))).toEqual(oldSteps);
+  });
+
+  test("rewinding to a closed gate checks it again", async () => {
+    let ready = false;
+    const r = rt(
+      `agent M [openai/gpt-4o]
+       @checkpoint
+       pipeline S(x: String) -> Result:
+         x |> M.check() |? (context.data.M.check.ready == true) |> M.publish()`,
+      { "M.check": () => ({ ready }), "M.publish": "published" },
+    );
+    const first = await r.run("S", { x: "doc" });
+    expect(first.status).toBe("halted");
+    // Back to just before the check, which now passes.
+    ready = true;
+    const again = await r.rewind(first.context.meta.checkpoint!, 1);
+    expect(again.status).toBe("completed");
+    expect(again.output).toBe("published");
+    await expect(r.rewind(first.context.meta.checkpoint!, 7)).rejects.toThrow("No step 7");
+  });
+
   test("@shadow with a model ref runs the same prompt on that model", async () => {
     const r = rt(
       `@shadow(anthropic/claude-sonnet-4)\nagent M [openai/gpt-4o]\npipeline S(x: String) -> Result:\n  x |> M.prompt()`,

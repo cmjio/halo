@@ -115,7 +115,7 @@ A call is `Agent.method(...)`, `Tool.method(...)`, `System.Method(...)`, or `Oth
 |---|---|---|
 | `@retry(n, duration)` | Retry each model/tool call up to n times on transient failures (network, 429, 5xx, timeouts). Policy violations are never retried | `@retry(3, 2s)` |
 | `@timeout(duration)` | On a pipeline: abort the whole run. On an agent: abort each call | `@timeout(5m)` |
-| `@checkpoint` | Snapshot state after every stage (and at a closed gate); continue with `halo run --checkpoint <file>`; `halo history <runId>` lists every step | `@checkpoint` |
+| `@checkpoint` | Snapshot state after every stage (and at a closed gate); continue with `halo run --checkpoint <file>`; `halo history <runId>` lists every step and `halo rewind <file> <runId> --step N` continues from one | `@checkpoint` |
 | `@shadow(Primary)` | On an agent: run it alongside every call to `Primary` and record its output, which is never used. `@shadow(openai/gpt-4o)` runs the same prompt on that model instead | `@shadow(Baseline)` |
 | `@correct(n)` | On an agent or pipeline: when an output policy rejects an answer, tell the agent what was wrong and ask again, up to n times | `@correct(2)` |
 

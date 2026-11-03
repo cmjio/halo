@@ -1,6 +1,6 @@
 # Plan and Replay
 
-Two commands help you trust a pipeline: `halo plan` shows what a run could do before it runs, and `halo replay` runs a recorded run again with the answers it got, without calling any model.
+`halo plan` shows what a run could do before it runs. `halo replay` runs a recorded run again with the answers it got, without calling any model. For a `@checkpoint` run, `halo history` lists every step and `halo rewind` continues from any of them.
 
 ## `halo plan`
 
@@ -152,6 +152,23 @@ Each line shows the step number, its time, the stage, the keys it changed, the r
 
 A history is a record of what the run did. Editing the checkpoint file by hand doesn't change earlier steps: the edit shows up as a change at the next step the run saves. Like recordings, histories aren't redacted, so keep `.halo/checkpoints` out of version control.
 
+## `halo rewind`
+
+Go back to a step of a `@checkpoint` run and continue from there:
+
+```bash
+halo rewind tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77 --step 2
+```
+
+The run continues as a new run, with a new run ID. It starts with the state the old run had after step 2: `context.data`, `context.current`, the trace, the calls and the cost so far. Then it runs every stage after that step against the current file, so you can change a prompt or a model and see what the run does from that point. If step 2 was a gate that closed, the gate is checked again. The old run's checkpoint and history aren't changed. The new run records where it came from in `context.meta.rewoundFrom` (`{ runId, step }`), and its history begins with the steps it shares with the old run.
+
+**Stages after the step run again for real:** models are called, tools run, and people are asked again. If any of those stages calls a tool that writes, calls out, or doesn't say what it does (see [`halo plan`](#halo-plan)), `halo rewind` lists those stages and stops unless you pass `--yes`. If a loop comes after the step, it can jump back before it, so every stage counts. With `--mock`, nothing runs for real and no `--yes` is needed.
+
+Limits:
+
+- Stage numbers come from the old run. If you add or remove stages before the step, the new run continues from the wrong place.
+- A rewound run has no recording, because the recording would be missing everything before the step. Policy violations and shadow results from before the step aren't carried over.
+
 ## From TypeScript
 
 `RuntimeConfig.recorder` receives each recorded call (`{ kind: "agent" | "tool" | "approval" | "yield" | "listen", target, value, toolCalls? }`) as it happens. The CLI's helpers are in `src/runtime/replay.ts`:
@@ -182,4 +199,7 @@ import { readSteps, stateAt, stepsPathFor } from "halo";
 
 const steps = await readSteps(stepsPathFor(result.context.meta.checkpoint!));
 const { data, current, step } = stateAt(steps, 2); // the run as it was after step 2
+
+// Continue from step 2 as a new run.
+const again = await runtime.rewind(result.context.meta.checkpoint!, 2);
 ```

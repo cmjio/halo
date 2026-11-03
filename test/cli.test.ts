@@ -35,6 +35,38 @@ describe("CLI", () => {
     expect(r.out.trim()).toBe("[mock Greeter.prompt] Write a warm, one-sentence 'Hello World' greeting for this person. Input: World");
   });
 
+  test("history lists a @checkpoint run's steps, and rewind continues from one after a yes for its writes", async () => {
+    const dir = mkdtempSync(join(work, "rewind-"));
+    await Bun.write(
+      join(dir, "p.halo"),
+      `agent M [openai/gpt-4o]
+tool Out : File("out.txt")
+@checkpoint
+pipeline S(x: String) -> Result:
+  x |> M.draft() as draft |> Out.append(entry: context.data.draft)`,
+    );
+    const run = cliIn(dir, "run", "p.halo", "--arg", "x=doc", "--mock", "--json");
+    expect(run.code).toBe(0);
+    const runId = JSON.parse(run.out).runId;
+
+    const history = cliIn(dir, "history", runId);
+    expect(history.code).toBe(0);
+    expect(history.out).toMatch(/1 .* stage 0 +x/);
+    expect(history.out).toMatch(/3 .* stage 2 +Out\.append/);
+    expect(JSON.parse(cliIn(dir, "history", runId, "--step", "2", "--json").out).data.draft).toContain("mock M.draft");
+
+    // Going back past the write needs a yes (or --mock).
+    const refused = cliIn(dir, "rewind", "p.halo", runId, "--step", "2");
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("stage 2 Out.append: write");
+    expect(refused.err).toContain("Pass --yes");
+    const rewound = cliIn(dir, "rewind", "p.halo", runId, "--step", "2", "--yes", "--json");
+    expect(rewound.code).toBe(0);
+    expect(JSON.parse(rewound.out).context.meta.rewoundFrom).toEqual({ runId, step: 2 });
+    expect(rewound.err).toContain(`Rewound from run ${runId} at step 2`);
+    expect(cliIn(dir, "history", "no-such-run").err).toContain("No step history for run no-such-run");
+  });
+
   test("run --json returns the full result", () => {
     const r = cli("run", "examples/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
     const result = JSON.parse(r.out);

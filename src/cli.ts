@@ -29,7 +29,7 @@ import { nextRun, parseCron } from "./serve/cron.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
-import { formatPlan, plan } from "./plan.js";
+import { formatPlan, plan, type PlanOptions } from "./plan.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
@@ -46,6 +46,10 @@ USAGE:
   halo resume <file.halo> <runId>       Continue a paused run (--payload '<json or word>')
   halo replay <file.halo> <runId>       Rerun a recorded run with the answers it got: no model
                                         or tool calls (--live-models or --live-tools to redo one side)
+  halo rewind <file.halo> <runId> --step N
+                                        Go back to a step of a @checkpoint run and continue
+                                        from there as a new run (--yes if stages after it
+                                        write or call out; --mock to try it offline)
   halo history <runId|steps file>       List every step of a @checkpoint run (--step N: the
                                         state after step N; --json for the raw steps)
   halo validate <file.halo|dir ...>     Check syntax and semantics
@@ -132,7 +136,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
+const BOOL_FLAGS = new Set(["yes", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const ALIASES: Record<string, string> = { p: "pipeline", s: "pipeline", stream: "pipeline", resume: "checkpoint", h: "help", v: "version" };
@@ -377,7 +381,7 @@ function tracer(debug: boolean): (e: RuntimeEvent) => void {
   };
 }
 
-async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRun?: string): Promise<number> {
+async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRun?: string, rewind?: { runId: string; step: number }): Promise<number> {
   const { path, ast } = await load(flags.positional[0]);
   const rel = relative(process.cwd(), path);
 
@@ -393,7 +397,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   const replaying = replayRun ? readRecording(RECORDINGS, replayRun) : undefined;
   // Every real run keeps a recording, so it can be replayed (a resumed run adds to its own).
   const runId = resumeRun ?? crypto.randomUUID();
-  const recorder = mock || replaying || flags.bools.has("no-record") || last(flags, "checkpoint") ? undefined : new Recorder(RECORDINGS, runId);
+  // A rewound run's recording would miss what came before its step, so it couldn't be replayed.
+  const recorder = mock || replaying || rewind || flags.bools.has("no-record") || last(flags, "checkpoint") ? undefined : new Recorder(RECORDINGS, runId);
   const rt = new HaloRuntime({
     recorder: recorder?.record,
     apiKey: last(flags, "api-key"),
@@ -424,6 +429,20 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
       const saved = await new FileRunStore(".halo/runs").load(resumeRun);
       if (!saved) fail(`No paused run "${resumeRun}" in .halo/runs`);
       result = await rt.signal(resumeRun, last(flags, "event") ?? saved.waitingFor ?? "yield", payload);
+    } else if (rewind) {
+      const steps = findSteps(CHECKPOINTS, rewind.runId);
+      const checkpointFile = steps.replace(/\.steps\.jsonl$/, ".json");
+      const { step } = stateAt(await readSteps(steps), rewind.step);
+      const pipelineName = ((await Bun.file(checkpointFile).json()) as { pipeline: string }).pipeline;
+      // Stages after the step run again for real: say which ones change something, and want a yes for them.
+      const again = rerunEffects(ast, pipelineName, step.next, (provider) => rt.toolProviderInfo(provider));
+      if (again.length && !mock) {
+        const list = again.map((e) => `  stage ${e.stage} ${e.target}: ${e.effect}${e.approval ? ` (needs approval: ${e.approval})` : ""}`).join("\n");
+        if (!flags.bools.has("yes")) fail(`Going back to step ${rewind.step} runs these again:\n${list}\nPass --yes to run them, or --mock to try it offline.`);
+        console.error(yellow(`Running again:\n${list}`));
+      }
+      result = await rt.rewind(checkpointFile, rewind.step);
+      console.error(dim(`Rewound from run ${rewind.runId} at step ${rewind.step} (stage ${step.stage} ${step.label})`));
     } else if (checkpoint) {
       result = await rt.resume(checkpoint);
     } else if (replaying) {
@@ -542,6 +561,19 @@ async function cmdPlan(flags: Flags): Promise<number> {
   if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));
   else console.log(plans.map((p) => formatPlan(p, { bold, dim, red, yellow })).join("\n\n"));
   return diags.some((d) => d.severity === "error") ? 1 : 0;
+}
+
+/**
+ * Tool calls that change something (or might: effect not described) in the stages from `from` on.
+ * A loop after `from` can jump back before it, so then every stage counts.
+ */
+function rerunEffects(ast: ParseResult, pipeline: string, from: number, providerInfo: PlanOptions["providerInfo"]) {
+  const steps = plan(ast, pipeline, { providerInfo }).steps;
+  const decl = ast.pipelines.find((p) => p.name === pipeline);
+  const start = decl?.pipeline.some((s, i) => i >= from && s.kind === "loop") ? 0 : from;
+  return steps
+    .filter((s) => Number.parseInt(s.at) >= start)
+    .flatMap((s) => s.effects.filter((e) => e.effect !== "read").map((e) => ({ stage: Number.parseInt(s.at), ...e })));
 }
 
 /** List a @checkpoint run's steps, or show its state after one of them. */
@@ -746,6 +778,12 @@ export async function main(argv: string[]): Promise<number> {
         const runId = flags.positional[1];
         if (!runId) fail("Usage: halo resume <file.halo> <runId> [--payload '<json or word>']");
         return await cmdRun(flags, false, runId);
+      }
+      case "rewind": {
+        const runId = flags.positional[1];
+        const step = Number(last(flags, "step"));
+        if (!runId || !Number.isInteger(step)) fail("Usage: halo rewind <file.halo> <runId> --step N [--yes]");
+        return await cmdRun(flags, false, undefined, undefined, { runId, step });
       }
       case "history":
         return await cmdHistory(flags);
