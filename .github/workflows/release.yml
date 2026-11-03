@@ -126,8 +126,14 @@ jobs:
         with:
           name: release
           path: dist/release
+      # A rerun (say, after the halolang.com step failed) replaces the files of the release it already made.
       - name: GitHub release
-        run: gh release create "v$VERSION" dist/release/$VERSION/* --title "Halo $VERSION" --generate-notes --verify-tag
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" dist/release/$VERSION/* --clobber
+          else
+            gh release create "v$VERSION" dist/release/$VERSION/* --title "Halo $VERSION" --generate-notes --verify-tag
+          fi
       - name: halolang.com/dl, and the site
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
