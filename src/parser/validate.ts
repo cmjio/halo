@@ -120,7 +120,7 @@ class Validator {
         this.add("error", `Policy "${g.name}": Validate needs a field, an operator, and a value, e.g. Validate("amount", "<=", "context.data.limit")`, g.loc);
       } else if (rule.name === "Enforce" && !rule.args.every((a) => a.toUpperCase() === "JSON")) {
         this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
-      } else if (rule.name === "MatchRegex" && !validRegex(unquoteArg(rule.args[0] ?? ""))) {
+      } else if (rule.name === "MatchRegex" && !validRegex(rule.args[0] ?? "")) {
         this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
@@ -132,7 +132,7 @@ class Validator {
 
   /** Tool rules name tools by pattern ("Repo", "Repo.create_pr", "Repo.*") or effects (read, write, external). */
   private checkToolRule(g: ParseResult["policies"][number], rule: { name: string; args: string[] }) {
-    const args = rule.args.map(unquoteArg);
+    const args = rule.args;
     if (!args.length) return this.add("error", `Policy "${g.name}": ${rule.name}(...) needs at least one ${rule.name.endsWith("Effects") ? "effect" : "tool"}`, g.loc);
     if (rule.name === "AllowEffects" || rule.name === "ApproveEffects") {
       for (const e of args) if (!includes(TOOL_EFFECTS, e)) this.add("error", `Policy "${g.name}": ${rule.name}(${e}): effects are ${TOOL_EFFECTS.join(", ")}`, g.loc);
@@ -481,4 +481,3 @@ function validRegex(pattern: string): boolean {
   }
 }
 
-const unquoteArg = (s: string) => s.replace(/^(["'])(.*)\1$/, "$2");

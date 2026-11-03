@@ -227,6 +227,8 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 | 73 | **Code writer** | An agent writes code, the real tests run, and failing output goes back until they pass (run it in a sandbox) |
 | 74 | **Software team** | An architect plans modules, coders build them in parallel, an integrator wires them up, and a fixer patches until the acceptance tests pass. Built the spreadsheet engine in `examples/projects/spreadsheet` (1,400 lines, 29/29 tests, 16/16 hidden) in 4 minutes for $0.68 |
 
+[`examples/casebook/`](examples/casebook/) holds 100 more: agent designs from real work (support, finance, health, security, operations, and more), each a system prompt, its tools, and what the agent may do freely, must confirm, or must never do. The rules that have to hold are enforced by policies, gates and approvals rather than by the prompt. Their servers are fictional, so read them with `halo plan`.
+
 Every example validates, and `test/examples.test.ts` runs them.
 
 ## 🏗 Layout

@@ -6,7 +6,11 @@ import { parse, validate } from "../src/parser/index";
 import { HaloRuntime, LoopLimitError, PolicyViolation, SchemaValidationError, useTool, type MockRequest, type MockValue, type RunResult, type RuntimeConfig } from "../src/runtime/runtime";
 
 const dir = `${import.meta.dir}/../examples`;
-const files = readdirSync(dir).filter((f) => f.endsWith(".halo")).sort();
+// The casebook's 100 agent designs live in their own folder and are held to the same bar.
+const files = [
+  ...readdirSync(dir).filter((f) => f.endsWith(".halo")).sort(),
+  ...readdirSync(`${dir}/casebook`).filter((f) => f.endsWith(".halo")).sort().map((f) => `casebook/${f}`),
+];
 const tmp = mkdtempSync(join(tmpdir(), "halo-examples-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 

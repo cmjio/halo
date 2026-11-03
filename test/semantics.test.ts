@@ -455,6 +455,12 @@ describe("policies", () => {
     expect(await guarded("Enforce(JSON)", '{"ok": true}').execute("S", { x: "" })).toEqual({ ok: true });
   });
 
+  test("a MatchRegex pattern keeps the quotes at its ends", async () => {
+    const quoted = String.raw`MatchRegex("\"ok\"")`;
+    expect(await guarded(quoted, 'status "ok"').execute("S", { x: "" })).toBe('status "ok"');
+    await expect(guarded(quoted, "status ok").execute("S", { x: "" })).rejects.toThrow('Output does not match the pattern /"ok"/');
+  });
+
   test("MaxSpend stops calls once the run's budget is spent", async () => {
     const fakeFetch = (async () => Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 100_000, completion_tokens: 0 } })) as unknown as typeof fetch;
     const r = new HaloRuntime({ env: { OPENAI_API_KEY: "k" }, fetch: fakeFetch }).load(

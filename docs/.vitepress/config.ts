@@ -12,6 +12,8 @@ haloGrammar.name = 'halo'
 // A page per example, written by site/build.ts (bun site/build.ts --generate).
 const examplesSidebarPath = path.resolve(__dirname, 'generated/examples-sidebar.json')
 const examplesSidebar = fs.existsSync(examplesSidebarPath) ? JSON.parse(fs.readFileSync(examplesSidebarPath, 'utf-8')) : []
+const casebookSidebarPath = path.resolve(__dirname, 'generated/casebook-sidebar.json')
+const casebookSidebar = fs.existsSync(casebookSidebarPath) ? JSON.parse(fs.readFileSync(casebookSidebarPath, 'utf-8')) : []
 const version = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf-8')).version
 
 export default defineConfig({
@@ -63,7 +65,10 @@ export default defineConfig({
     footer: { message: 'curl -fsSL https://halolang.com/install.sh | sh' },
 
     sidebar: {
-      '/examples/': [{ text: 'Examples', link: '/examples/', items: examplesSidebar }],
+      '/examples/': [
+        { text: 'Examples', link: '/examples/', items: examplesSidebar },
+        { text: 'Casebook', link: '/examples/#casebook', collapsed: true, items: casebookSidebar },
+      ],
       '/': [
       {
         text: 'Introduction',

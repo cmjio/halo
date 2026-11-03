@@ -38,7 +38,7 @@ function header(source: string): { title: string; about: string; run?: string } 
   let head = rules.length >= 2 ? lines.slice(rules[0]! + 1, rules[1]) : [];
   if (head.length === 1 && rules.length >= 3) head = [...head, ...lines.slice(rules[1]! + 1, rules[2])];
   const text = head.map((l) => l.replace(/^\/\/ ?/, ""));
-  const title = (text[0] ?? "").replace(/^(STEP \d+|FLAGSHIP|PURPOSE)\s*:\s*/i, "").trim();
+  const title = (text[0] ?? "").replace(/^(STEP \d+|CASEBOOK \d+|FLAGSHIP|PURPOSE)\s*:\s*/i, "").trim();
   const about: string[] = [];
   let run: string[] | undefined;
   for (const l of text.slice(1)) {
@@ -50,15 +50,17 @@ function header(source: string): { title: string; about: string; run?: string } 
   return { title, about: about.join(" ").replace(/\s+/g, " ").trim(), run: run?.join("\n") };
 }
 
-const examples = readdirSync(join(root, "examples"))
+/** The numbered examples in a folder under examples/, each named by its path from there. */
+const readExamples = (folder: string) => readdirSync(join(root, "examples", folder))
   .filter((f) => /^\d+-.*\.halo$/.test(f))
   .sort()
-  .map((file) => {
+  .map((name) => {
+    const file = folder ? `${folder}/${name}` : name;
     const source = readFileSync(join(root, "examples", file), "utf8");
     const ast = parse(source);
     return {
       file,
-      number: Number(file.split("-")[0]),
+      number: Number(name.split("-")[0]),
       ...header(source),
       source,
       pipelines: ast.pipelines.map((p) => p.name),
@@ -71,6 +73,9 @@ const examples = readdirSync(join(root, "examples"))
       },
     };
   });
+const examples = readExamples("");
+// 100 agent designs, each a system prompt, its tools, and its policy tiers written as Halo.
+const casebook = readExamples("casebook");
 
 const registry = JSON.parse(readFileSync(join(root, "registry/index.json"), "utf8"));
 const packages = await Promise.all(Object.entries(registry.packages as Record<string, any>).map(async ([name, p]) => {
@@ -188,7 +193,8 @@ const fixerRun = JSON.parse(readFileSync(join(site, "data/fixer-run.json"), "utf
 const data = {
   version: pkg.version,
   builtAt: new Date().toISOString().slice(0, 10),
-  examples,
+  // The playground can open any of them.
+  examples: [...examples, ...casebook],
   packages,
   providers,
   plans: { research: planned("75-research-assistant.halo", "Research") },
@@ -238,7 +244,7 @@ const tags = (f: Record<string, boolean>) =>
     // Labels go in table cells too, where a bare | would end the cell.
     .map(([, label]) => `<span class="tag">${md(label).replace(/\|/g, "&#124;")}</span>`)
     .join(" ");
-for (const e of examples) {
+for (const e of [...examples, ...casebook]) {
   const title = e.title || e.file;
   await Bun.write(
     join(examplesDir, `${slug(e.file)}.md`),
@@ -249,9 +255,13 @@ await Bun.write(
   join(examplesDir, "index.md"),
   `---\ntitle: Examples\n---\n\n# Examples\n\n${examples.length} working examples, from hello world to a team of agents that builds a spreadsheet engine from a spec. The test suite runs every one. Each page has the full source; open any of them in the [playground](/playground).\n\n| | Example | |\n|---|---|---|\n${examples
     .map((e) => `| \`${String(e.number).padStart(2, "0")}\` | [${md(e.title || e.file).replace(/\|/g, "\\|")}](/examples/${slug(e.file)}) | ${tags(e.features)} |`)
+    .join("\n")}\n\n## Casebook\n\n${casebook.length} agent designs from real work: support, finance, health, security, operations and more. Each one is a system prompt, the tools the agent gets, and what it may do freely, must confirm, or must never do, with the rules that have to hold enforced by policies and gates rather than by the prompt. The servers they call are fictional, so \`halo plan\` shows each one offline.\n\n| | Case | |\n|---|---|---|\n${casebook
+    .map((e) => `| \`${String(e.number).padStart(3, "0")}\` | [${md(e.title || e.file).replace(/\|/g, "\\|")}](/examples/${slug(e.file)}) | ${tags(e.features)} |`)
     .join("\n")}\n`,
 );
-await Bun.write(join(generated, "examples-sidebar.json"), JSON.stringify(examples.map((e) => ({ text: `${String(e.number).padStart(2, "0")} ${e.title || e.file}`, link: `/examples/${slug(e.file)}` }))));
+const sidebar = (list: typeof examples, width: number) => list.map((e) => ({ text: `${String(e.number).padStart(width, "0")} ${e.title || e.file}`, link: `/examples/${slug(e.file)}` }));
+await Bun.write(join(generated, "examples-sidebar.json"), JSON.stringify(sidebar(examples, 2)));
+await Bun.write(join(generated, "casebook-sidebar.json"), JSON.stringify(sidebar(casebook, 3)));
 
 if (process.argv.includes("--generate")) {
   console.log(`generated docs/.vitepress/generated and ${examples.length} example pages`);

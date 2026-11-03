@@ -192,8 +192,6 @@ function argValues(value: unknown): string[] {
   return out;
 }
 
-const unquote = (s: string | undefined) => (s ?? "").replace(/^(["'])(.*)\1$/, "$2");
-
 /** Rough XML well-formedness: one root element and balanced tags. */
 function isXml(text: string): boolean {
   const t = text.trim().replace(/^<\?xml[^>]*\?>/, "").trim();
@@ -313,7 +311,7 @@ export class PolicyEngine {
         this.violate(b, `Output has no citations like [1] or [doc_id]`, "output", hooks);
       }
       if (name === "MatchRegex") {
-        const pattern = unquote(args[0]);
+        const pattern = args[0] ?? "";
         let re: RegExp;
         try {
           re = new RegExp(pattern);
@@ -337,7 +335,7 @@ export class PolicyEngine {
 
   /** `Validate("field", "<=", context.data.x.limit)`: compare a field of the (JSON) output with a context value or literal. */
   private validateField(b: BoundRule, out: unknown, hooks: PolicyHooks) {
-    const [field = "", op = "", ref = ""] = b.rule.args.map(unquote);
+    const [field = "", op = "", ref = ""] = b.rule.args;
     const obj = typeof out === "string" ? undefined : out;
     if (!obj || typeof obj !== "object") this.violate(b, `Validate: output is not JSON, so field "${field}" can't be checked`, "output", hooks);
     const actual = field.split(".").reduce<unknown>((v, k) => (v && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), obj);
@@ -394,7 +392,7 @@ export class PolicyEngine {
     for (const b of rules) {
       if (b.rule.name !== "DenyArgs") continue;
       // DenyArgs(tool, regex) checks every argument's value; DenyArgs(tool, "name", regex) checks one argument.
-      const parts = b.rule.args.map(unquote);
+      const parts = b.rule.args;
       const [pattern = "*", field, regex = ""] = parts.length >= 3 ? parts : [parts[0], undefined, parts[1]];
       if (!toolMatches(pattern, target)) continue;
       let re: RegExp;
@@ -410,14 +408,14 @@ export class PolicyEngine {
       if (hit !== undefined) this.violate(b, `${target} was refused: ${field ? `its ${field}` : "an argument"} matches /${regex}/`, "tool", hooks);
     }
     const approver = rules.find(
-      (b) => (b.rule.name === "ApproveTools" && b.rule.args.some((p) => toolMatches(unquote(p), target))) || (b.rule.name === "ApproveEffects" && b.rule.args.map(unquote).includes(effect)),
+      (b) => (b.rule.name === "ApproveTools" && b.rule.args.some((p) => toolMatches(p, target))) || (b.rule.name === "ApproveEffects" && b.rule.args.includes(effect)),
     );
     return approver ? { approve: approver.policy } : "allow";
   }
 
   private toolRefusal(rules: BoundRule[], target: string, effect: ToolEffectName): { rule: BoundRule; message: string } | undefined {
     for (const b of rules) {
-      const args = b.rule.args.map(unquote);
+      const args = b.rule.args;
       if (b.rule.name === "AllowTools" && !args.some((p) => toolMatches(p, target))) return { rule: b, message: `${target} is not in the tools policy "${b.policy}" allows` };
       if (b.rule.name === "DenyTools" && args.some((p) => toolMatches(p, target))) return { rule: b, message: `${target} is denied by policy "${b.policy}"` };
       if (b.rule.name === "AllowEffects" && !args.includes(effect)) return { rule: b, message: `${target} has effect "${effect}", which policy "${b.policy}" doesn't allow` };
