@@ -25,7 +25,9 @@ Write-Host "Installing halo $version ($asset)"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("halo-" + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
+  # A server that doesn't call SHA256SUMS text (python -m http.server, say) gets bytes back, not a string.
   $sums = (Invoke-WebRequest "$base/$version/SHA256SUMS" -UseBasicParsing).Content
+  if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
   $line = ($sums -split "`n") | Where-Object { ($_ -split '\s+')[1] -eq $asset } | Select-Object -First 1
   if (-not $line) { throw "Halo $version has no $asset build." }
   $expected = ($line -split '\s+')[0].ToLower()
