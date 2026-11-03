@@ -1,0 +1,11 @@
+{
+  "name": "halo-showcase-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "bun render.ts"
+  },
+  "dependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

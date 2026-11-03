@@ -33,6 +33,8 @@ export default defineConfig({
     ['meta', { property: 'og:title', content: 'Halo · a language for AI pipelines' }],
     ['meta', { property: 'og:description', content: 'Agents, tools, and the policies the runtime enforces on every call. Plan a run before it starts; replay it after.' }],
     ['meta', { property: 'og:url', content: 'https://halolang.com/' }],
+    ['meta', { property: 'og:image', content: 'https://halolang.com/video/halo-showcase.jpg' }],
+    ['meta', { property: 'og:video', content: 'https://halolang.com/video/halo-showcase.mp4' }],
   ],
   markdown: {
     theme: {

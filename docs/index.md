@@ -19,6 +19,12 @@ hero:
       link: /playground
 ---
 
+## Halo in a minute
+
+A pipeline is written, run with a person approving it, and stopped by a policy when its input is a prompt injection. The approval prompt, the block, and `halo plan` are the CLI's own output. The model's answer and its timings are illustrative.
+
+<video class="showcase" controls preload="metadata" playsinline poster="/video/halo-showcase.jpg" src="/video/halo-showcase.mp4"></video>
+
 ## Install
 
 ::: code-group
