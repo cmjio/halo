@@ -70,7 +70,7 @@ ANTHROPIC_API_KEY=... halo debug examples/50-github-triage.halo --arg repo=oven-
 | `\|! yield(msg: "...")` | Ask a human |
 | `~> listen(Slack.Reaction)` | Wait for an external event |
 
-Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint`, `@shadow(Primary)` (runs this agent alongside `Primary` and records its output), `@correct(2)` (when a policy rejects an answer, tells the agent why and asks again).
+Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step, for `halo history` and `halo rewind`), `@thread(user_id)` (keep state between runs, per user), `@shadow(Primary)` (runs this agent alongside `Primary` and records its output), `@correct(2)` (when a policy rejects an answer, tells the agent why and asks again).
 
 ### How a pipeline runs
 
@@ -82,6 +82,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint`, `@shadow(Primary)` (
 - A pipeline whose return type is a declared `schema` must produce matching output, or the run fails with a `SchemaValidationError`.
 - `|! yield` and `~> listen` ask your handler. With no handler, the run **pauses** (status `paused`) and `runtime.signal(runId, ...)` or `halo resume` continues it later.
 - `context.meta` records cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain over every stage.
+- In a `@thread(user_id)` pipeline, `context.thread` is state kept between runs for that user. `Thread.set`, `Thread.append` and `Thread.clear` change it, and the changes are saved when the run ends. See [Thread State](docs/guide/thread-state.md).
 
 ## 🔧 CLI
 
@@ -96,6 +97,9 @@ halo init [name]                      # a new project
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-tools)
+halo history <runId> [--step N]       # every step of a @checkpoint run, or its state after step N
+halo rewind <file.halo> <runId> --step N   # continue a @checkpoint run from a step, as a new run
+halo threads | thread <name> <key>    # list threads, show one (--reset --yes deletes its state)
 halo mcp [files|dirs]                 # serve pipelines as MCP tools over stdio
 halo search | add | remove | install | tools | pack | publish   # tool packages
 ```

@@ -68,6 +68,8 @@ pipeline Name(param: Type, ...) -> ReturnType:
     ...
 ```
 
+Directives on a pipeline: `@timeout`, `@retry`, `@correct`, `@checkpoint` (a snapshot after every stage, for `halo history` and `halo rewind`), and `@thread(input)` (state kept between runs, read as `context.thread` and changed with `Thread.set`, `Thread.append` and `Thread.clear`; see [Thread State](./thread-state.md)).
+
 A pipeline starts with an expression (a parameter, a literal, or a `context.…` path) or directly with an operator. Parameter types are labels and are not checked at runtime. The return type is checked only when it names a declared `schema`. `Result` is a common placeholder.
 
 ### Calls

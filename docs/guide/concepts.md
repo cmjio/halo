@@ -77,3 +77,10 @@ See [Pipe Operators](../reference/operators.md) for all of them.
 ## Run results
 
 A run returns `{ output, status, runId, context }`. `context.meta` has the cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain of the stages. `verifyTrace(trace)` checks that the chain is unbroken.
+
+## State that lasts
+
+A run's `context` ends with the run. Two directives keep more:
+
+- `@checkpoint` saves the run after every stage and keeps every step. `halo history <runId>` lists the steps, and `halo rewind <file> <runId> --step N` continues from any of them as a new run. See [Plan and Replay](./plan-and-replay.md#halo-history).
+- `@thread(user_id)` keeps state between runs, one thread per user. A run reads it as `context.thread`, changes it with `Thread.set`, `Thread.append` and `Thread.clear`, and saves the changes when it ends. See [Thread State](./thread-state.md).

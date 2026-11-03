@@ -9,7 +9,7 @@ agent Resilient [openai/gpt-4o, temp: 0.7]
 
 // Retry directive: retry up to 3 times, wait 5s between retries
 @retry(3, 5s)
-// Checkpoint: save state after this pipeline completes
+// Checkpoint: save the run after every stage, and keep every step
 @checkpoint
 pipeline RobustCall(data: String) -> Result:
   data
@@ -22,5 +22,10 @@ pipeline RobustCall(data: String) -> Result:
 //   delay: time to wait between retries (e.g., 5s, 1m)
 //
 // Checkpoint syntax: @checkpoint
-//   Saves pipeline state for recovery
-//   (Implementation: logs checkpoint, full persistence pending)
+//   Saves the run to .halo/checkpoints/<Pipeline>-<runId>.json after every
+//   stage, and adds each step to <Pipeline>-<runId>.steps.jsonl beside it.
+//
+//   halo run examples/16-retry-checkpoint.halo --checkpoint <file>   continue a stopped run
+//   halo history <runId>                       list every step
+//   halo history <runId> --step 1              the run's state after step 1
+//   halo rewind examples/16-retry-checkpoint.halo <runId> --step 1   continue from step 1 as a new run

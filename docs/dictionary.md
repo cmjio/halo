@@ -162,8 +162,16 @@ Annotations placed above agents or pipelines that control how they run.
 
 | Field | Value |
 |---|---|
-| **Definition** | On a pipeline: saves a snapshot after every stage (and at a closed gate) to `.halo/checkpoints` |
-| **Benefit** | Continue a failed or halted run with `halo run --checkpoint <file>` |
+| **Definition** | On a pipeline: saves a snapshot after every stage (and at a closed gate) to `.halo/checkpoints`, and keeps every step |
+| **Benefit** | Continue a failed or halted run with `halo run --checkpoint <file>`; list its steps with `halo history <runId>`; continue from any step with `halo rewind <file> <runId> --step N` |
+
+### `@thread(input, Name?)`
+
+| Field | Value |
+|---|---|
+| **Definition** | On a pipeline: keeps state between runs, one thread per value of `input` (named after the pipeline, or `Name` to share it) |
+| **Used with** | `context.thread`, and `Thread.set` / `Thread.append` / `Thread.clear` |
+| **Example** | `@thread(user_id)` |
 
 ### `@shadow(Name)`
 
@@ -212,7 +220,7 @@ Reserved functions for state mechanics.
 | Field | Value |
 |---|---|
 | **Definition** | The state of a run |
-| **Namespaces** | `context.current` (flowing value), `context.input` (arguments), `context.data` (results), `context.meta` (cost, calls, violations), `context.trace` (hash chain) |
+| **Namespaces** | `context.current` (flowing value), `context.input` (arguments), `context.data` (results), `context.meta` (cost, calls, violations), `context.trace` (hash chain), `context.thread` (state kept between runs, in a `@thread` pipeline) |
 
 ### `as`
 
@@ -229,6 +237,15 @@ Reserved functions for state mechanics.
 | **Definition** | Built-in callee for runtime utilities and events |
 | **Methods** | `Print`, `Log` (output, pass the value through), `Sleep(duration)`, `Fail(msg)`, `Value(x)` (make `x` the flowing value), `Pick(value, fields: [...], maxChars: n)` (keep only dotted fields of an object or of each list item; `labels.name` maps over a list), and the events `ResolveIncident`, `Publish`, `Distribute`, `TriggerWebhook`, `Notify` (sent to `onSystemEvent`) |
 | **Example** | `\|> System.Pick(context.data.issues.items, fields: ["number", "title", "labels.name"], maxChars: 1500) as items` |
+
+### `Thread`
+
+| Field | Value |
+|---|---|
+| **Definition** | Built-in callee that changes a `@thread` pipeline's thread state; each call passes the flowing value through, and the run saves the changes when it ends |
+| **Methods** | `set(field: value, ...)`, `append(field: value, ..., keep: n)` (add to a list, keeping the newest n), `clear("field", ...)` (or every field) |
+| **Example** | `\|> Thread.append(messages: context.data.reply, keep: 20)` |
+| **Note** | A tool, store, agent or pipeline you declare named `Thread` takes the name over |
 
 ## 6. Lexical Tokens
 

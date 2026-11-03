@@ -77,8 +77,9 @@ These files are written relative to the working directory unless you configure o
 | Path | Written by | Configure with |
 |---|---|---|
 | `.halo/runs/` | paused runs (CLI) | `FileRunStore(dir)` |
-| `.halo/checkpoints/` | `@checkpoint` | `checkpointDir` |
+| `.halo/checkpoints/` | `@checkpoint` (snapshots and step histories) | `checkpointDir` |
 | `.halo/vectors.sqlite` | `VectorStore` | `vectorPath` |
+| `.halo/threads.sqlite` | `@thread` state | `threadPath` |
 | `.halo/telemetry.db` | the CLI (Studio) | `--no-telemetry` |
 
 `File` stores write wherever they are declared.

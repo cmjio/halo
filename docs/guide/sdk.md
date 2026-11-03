@@ -34,6 +34,7 @@ result.context.trace;        // hash-chained stage trace (check it with verifyTr
 | `fetch` | Custom `fetch` (proxies, tests) |
 | `vectorPath` | SQLite file for `VectorStore` (default `.halo/vectors.sqlite`) |
 | `checkpointDir` | Where `@checkpoint` writes (default `.halo/checkpoints`) |
+| `threadPath` | SQLite file for `@thread` state (default `.halo/threads.sqlite`; `":memory:"` for tests) |
 | `runStore` | Where paused runs wait (default in-memory; `new FileRunStore(".halo/runs")` for files) |
 | `onInterrupt`, `onListen` | Answer `\|! yield` and `~> listen` |
 | `onSystemEvent` | Receives `System.Publish/Distribute/ResolveIncident/TriggerWebhook/Notify` |
