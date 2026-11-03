@@ -51,6 +51,7 @@ import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
 import { closeKvDatabases } from "./providers/index.js";
 import { LocalVectorStore } from "./vectors.js";
+import { appendStep } from "./history.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
@@ -1041,7 +1042,10 @@ export class HaloRuntime {
     const path = `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
     ctx.meta.checkpoint = path;
     // Appends to the checkpoint's log, so checkpointing every stage of a long run stays cheap.
-    await writeSnapshot(path, this.toSnapshot(ctx, nextStage));
+    const snap = this.toSnapshot(ctx, nextStage);
+    await writeSnapshot(path, snap);
+    // And keeps every step, for halo history.
+    await appendStep(path, snap);
     this.emit({ type: "checkpoint", runId: ctx.meta.runId, path });
   }
 

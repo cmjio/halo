@@ -5,6 +5,7 @@ export * from "./runtime/adapter.js";
 export * from "./runtime/router.js";
 export { SqliteTelemetry, toTelemetryRow, type TelemetryRow } from "./runtime/telemetry.js";
 export { LocalVectorStore, embed } from "./runtime/vectors.js";
+export { findSteps, readSteps, stateAt, stepsPathFor, type Step, type StepState } from "./runtime/history.js";
 
 import { parse } from "./parser/index.js";
 import { validate, type Diagnostic, type ValidateOptions } from "./parser/validate.js";

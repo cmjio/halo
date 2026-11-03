@@ -30,6 +30,7 @@ import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
 import { formatPlan, plan } from "./plan.js";
+import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { describePermissions, permissionsOf } from "./registry/manifest.js";
@@ -45,6 +46,8 @@ USAGE:
   halo resume <file.halo> <runId>       Continue a paused run (--payload '<json or word>')
   halo replay <file.halo> <runId>       Rerun a recorded run with the answers it got: no model
                                         or tool calls (--live-models or --live-tools to redo one side)
+  halo history <runId|steps file>       List every step of a @checkpoint run (--step N: the
+                                        state after step N; --json for the raw steps)
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name]                      Create a new Halo project
@@ -131,6 +134,7 @@ interface Flags {
 
 const BOOL_FLAGS = new Set(["mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
 const RECORDINGS = ".halo/recordings";
+const CHECKPOINTS = ".halo/checkpoints";
 const ALIASES: Record<string, string> = { p: "pipeline", s: "pipeline", stream: "pipeline", resume: "checkpoint", h: "help", v: "version" };
 
 function parseFlags(argv: string[]): Flags {
@@ -540,6 +544,39 @@ async function cmdPlan(flags: Flags): Promise<number> {
   return diags.some((d) => d.severity === "error") ? 1 : 0;
 }
 
+/** List a @checkpoint run's steps, or show its state after one of them. */
+async function cmdHistory(flags: Flags): Promise<number> {
+  const target = flags.positional[0];
+  if (!target) fail("Usage: halo history <runId|steps file> [--step N] [--json]");
+  const path = target.endsWith(".jsonl") ? target : findSteps(CHECKPOINTS, target);
+  const steps = await readSteps(path);
+  const stepText = last(flags, "step");
+  if (stepText !== undefined) {
+    const n = Number(stepText);
+    if (!Number.isInteger(n)) fail(`--step takes a step number, not "${stepText}"`);
+    const state = stateAt(steps, n);
+    if (flags.bools.has("json")) console.log(JSON.stringify(state, null, 2));
+    else {
+      const s = state.step;
+      console.log(bold(`Step ${s.step}: stage ${s.stage} ${s.label}`) + dim(` · ${s.at} · next stage ${s.next}${s.halted ? " · halted" : ""}`));
+      console.log(`${bold("current")} ${formatValue(state.current)}`);
+      console.log(`${bold("data")} ${JSON.stringify(state.data, null, 2)}`);
+    }
+    return 0;
+  }
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(steps, null, 2));
+    return 0;
+  }
+  console.log(dim(path));
+  for (const s of steps) {
+    const changed = [...Object.keys(s.set), ...(s.unset ?? []).map((k) => `-${k}`)];
+    const cost = s.cost > 0 ? ` $${s.cost.toFixed(4)}` : "";
+    console.log(`${bold(String(s.step).padStart(4))}  ${dim(s.at.slice(11, 23))}  ${`stage ${s.stage}`.padEnd(9)} ${s.label}${s.halted ? yellow(" ⏹ halted") : ""}${dim(cost)}${changed.length ? dim(`  → ${changed.join(", ")}`) : ""}`);
+  }
+  return 0;
+}
+
 /** Serve pipelines as MCP tools over stdio. Nothing but protocol messages may go to stdout. */
 async function cmdMcp(flags: Flags): Promise<number> {
   const files = collectFiles(flags.positional.length ? flags.positional : ["."]);
@@ -710,6 +747,8 @@ export async function main(argv: string[]): Promise<number> {
         if (!runId) fail("Usage: halo resume <file.halo> <runId> [--payload '<json or word>']");
         return await cmdRun(flags, false, runId);
       }
+      case "history":
+        return await cmdHistory(flags);
       case "init":
         return await initProject(flags.positional[0] ?? "my-halo-project");
       case "upgrade":

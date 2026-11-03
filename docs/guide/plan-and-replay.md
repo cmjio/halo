@@ -134,6 +134,24 @@ Limits:
 - `@shadow` calls aren't recorded.
 - Replay follows the recorded order per target. If parallel stages (`|*`, `each`) call the same target, they can get each other's answers.
 
+## `halo history`
+
+A pipeline with `@checkpoint` keeps every step it saved, not just the latest. Beside the checkpoint file, `.halo/checkpoints/<Pipeline>-<runId>.steps.jsonl` gets one line per stage: the stage, the value it produced, and only the `context.data` keys that stage changed.
+
+```bash
+halo history 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
+```
+
+```
+   1  14:50:18.257  stage 0   data  → data
+   2  14:50:18.263  stage 1   Resilient.prompt  → Resilient, prompt
+   3  14:50:18.265  stage 2   System.Print
+```
+
+Each line shows the step number, its time, the stage, the keys it changed, the run's cost so far, and `⏹ halted` where a gate closed. A step's number is the length of the run's trace at that point, so it matches the trace entry, and it keeps counting through loops and when the run is resumed. `--step N` prints the run's state after step N: `context.current` and the whole of `context.data`. `--json` prints the raw steps, or with `--step` the folded state. You can also pass the path to a `.steps.jsonl` file instead of a run ID.
+
+A history is a record of what the run did. Editing the checkpoint file by hand doesn't change earlier steps: the edit shows up as a change at the next step the run saves. Like recordings, histories aren't redacted, so keep `.halo/checkpoints` out of version control.
+
 ## From TypeScript
 
 `RuntimeConfig.recorder` receives each recorded call (`{ kind: "agent" | "tool" | "approval" | "yield" | "listen", target, value, toolCalls? }`) as it happens. The CLI's helpers are in `src/runtime/replay.ts`:
@@ -156,3 +174,12 @@ const again = await new HaloRuntime().load(ast).mockAll({ yield: { approved: tru
 ```
 
 `replayMocks(rec, { liveModels, liveTools, tools })` returns mocks for `mockAll`, with the same behavior as the CLI flags. Pass `tools` (the declared tool and store names) to refuse calls to tools the recording never called; without it, those would run for real. Recorded yields and listens are answered; for an older recording without them, add `yield: { approved: true }` before the replay mocks, as the CLI does.
+
+A checkpoint's step history is exported from the package too:
+
+```ts
+import { readSteps, stateAt, stepsPathFor } from "halo";
+
+const steps = await readSteps(stepsPathFor(result.context.meta.checkpoint!));
+const { data, current, step } = stateAt(steps, 2); // the run as it was after step 2
+```

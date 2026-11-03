@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "../src/parser/index";
+import { readSteps, stateAt, stepsPathFor } from "../src/runtime/history";
 import { HaloRuntime, verifyTrace, buildPrompt, PolicyViolation, type MockRequest, type RuntimeConfig } from "../src/runtime/runtime";
 
 const tmp = mkdtempSync(join(tmpdir(), "halo-semantics-"));
@@ -270,6 +271,68 @@ describe("directives", () => {
     expect(resumed.status).toBe("completed");
     expect(resumed.output).toBe("published");
     expect(resumed.context.meta.runId).toBe(first.context.meta.runId);
+  });
+
+  test("@checkpoint keeps every step: only changed keys are stored, and folding gives the state after any step", async () => {
+    let n = 0;
+    const r = rt(
+      `agent M [openai/gpt-4o]
+       @checkpoint
+       pipeline S(x: String) -> Result:
+         x |> M.draft() as draft |> M.review() as review |> M.draft() as draft`,
+      { "M.draft": () => ({ version: ++n }), "M.review": "fine" },
+    );
+    const result = await r.run("S", { x: "doc" });
+    const path = stepsPathFor(result.context.meta.checkpoint!);
+    const steps = await readSteps(path);
+    expect(steps.map((s) => [s.step, s.stage, s.label, s.next])).toEqual([
+      [1, 0, "x", 1],
+      [2, 1, "M.draft", 2],
+      [3, 2, "M.review", 3],
+      [4, 3, "M.draft", 4],
+    ]);
+    // Step 3 changed only what the review added; x and the first draft aren't stored again.
+    expect(Object.keys(steps[2]!.set).sort()).toEqual(["M", "review"]);
+    expect(stateAt(steps, 2).data.draft).toEqual({ version: 1 });
+    expect(stateAt(steps, 3)).toMatchObject({ current: "fine", data: { x: "doc", draft: { version: 1 }, review: "fine" } });
+    expect(stateAt(steps).data.draft).toEqual({ version: 2 });
+    expect(stateAt(steps).data).toEqual(result.context.data);
+    expect(() => stateAt(steps, 9)).toThrow("No step 9");
+  });
+
+  test("a run resumed in a new process goes on with its history", async () => {
+    const src = `agent M [openai/gpt-4o]
+       @checkpoint
+       pipeline S(x: String) -> Result:
+         x |> M.draft() as draft |? (context.data.draft.ready == true) |> M.publish()`;
+    // The first run halts in another process, so this one has never seen its history.
+    const script = `
+      import { parse } from "./src/parser/index";
+      import { HaloRuntime } from "./src/runtime/runtime";
+      const rt = new HaloRuntime({ env: {}, checkpointDir: ${JSON.stringify(tmp)}, logger: { log() {}, warn() {} } })
+        .load(parse(${JSON.stringify(src)})).mockAll({ "M.draft": { ready: false } });
+      console.log((await rt.run("S", { x: "doc" })).context.meta.checkpoint);`;
+    const proc = Bun.spawnSync(["bun", "-e", script], { cwd: join(import.meta.dir, "..") });
+    expect(proc.stderr.toString()).toBe("");
+    const path = proc.stdout.toString().trim();
+
+    const cp = await Bun.file(path).json();
+    cp.data.draft.ready = true;
+    await Bun.write(path, JSON.stringify(cp));
+    await rt(src, { "M.publish": "published" }).resume(path);
+
+    const steps = await readSteps(stepsPathFor(path));
+    const gate = "|? (context.data.draft.ready == true)";
+    expect(steps.map((s) => [s.step, s.label, s.halted ?? false])).toEqual([
+      [1, "x", false],
+      [2, "M.draft", false],
+      [3, gate, true],
+      [4, gate, false],
+      [5, "M.publish", false],
+    ]);
+    // Read back from the file, the history knows only the edit to the checkpoint changed at step 4.
+    expect(steps[3]!.set).toEqual({ draft: { ready: true } });
+    expect(stateAt(steps).data).toMatchObject({ x: "doc", draft: { ready: true }, M: { publish: "published" } });
   });
 
   test("@shadow with a model ref runs the same prompt on that model", async () => {
