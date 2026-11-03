@@ -51,6 +51,15 @@
   font-family: var(--vp-font-family-mono);
   font-weight: 500;
 }
+.vp-doc .showcase {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin: 16px 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: #0e1013;
+}
 
 /* Code groups: tab labels like file names and commands */
 .vp-code-group .tabs label {
