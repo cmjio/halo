@@ -351,6 +351,8 @@
 .pg-body {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  /* A content-sized row would grow past the fixed height, and .pg clips it, so the panes never scroll to the end. */
+  grid-template-rows: minmax(0, 1fr);
   height: min(680px, calc(100vh - 220px));
   min-height: 460px;
 }
@@ -418,6 +420,7 @@
 }
 .pg .tab-body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 14px 16px;
   font-size: 14px;
@@ -528,6 +531,7 @@
   }
   .pg-body {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
     height: auto;
   }
   .editor {
