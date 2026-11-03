@@ -17,6 +17,7 @@ import {
   SCHEMA_TYPES,
   SYSTEM_EVENTS,
   SYSTEM_METHODS,
+  THREAD_METHODS,
   TOOL_PROVIDERS,
   UNENFORCED_RULES,
   TOOL_RULES,
@@ -189,6 +190,8 @@ class Validator {
     if (d.name === "shadow" && args.length !== 1) this.add("error", `@shadow needs exactly one target`, loc);
     if (d.name === "shadow" && on === "pipeline") this.add("warning", `@shadow only applies to agents`, loc);
     if (d.name === "checkpoint" && on === "agent") this.add("warning", `@checkpoint only applies to pipelines`, loc);
+    if (d.name === "thread" && on === "agent") this.add("warning", `@thread only applies to pipelines`, loc);
+    if (d.name === "thread" && (args.length < 1 || args.length > 2)) this.add("error", `@thread needs the input that keys the thread, and optionally a thread name, e.g. @thread(user_id) or @thread(user_id, Support)`, loc);
   }
 
   private checkSchema(sc: SchemaDeclaration) {
@@ -208,6 +211,11 @@ class Validator {
 
   private checkPipeline(s: PipelineDeclaration) {
     for (const d of s.directives) this.checkDirective(d, s.loc, "pipeline");
+    const thread = s.directives.find((d) => d.name === "thread");
+    const keyParam = thread?.value.split(/\s*,\s*/)[0];
+    if (keyParam && !s.params.some((p) => p.name === keyParam)) {
+      this.add("error", `Pipeline "${s.name}": @thread(${keyParam}) keys the thread by an input, but "${keyParam}" is not a parameter`, s.loc);
+    }
 
     const params = new Set(s.params.map((p) => p.name));
     // Names available under context.data as the pipeline progresses.
@@ -296,6 +304,15 @@ class Validator {
       const known = includes(SYSTEM_METHODS, call.method) || includes(SYSTEM_EVENTS, call.method) || this.options.systemMethods?.includes(call.method);
       if (!known) this.add("error", `${where}: unknown System method "${call.method}"`, call.loc);
       else this.checkSystem(call, where);
+      return;
+    }
+    // A declared `Thread` (a tool, say) takes the name over from the built-in.
+    if (call.callee === "Thread" && !this.declared("Thread")) {
+      if (!includes(THREAD_METHODS, call.method)) this.add("error", `${where}: unknown Thread method "${call.method}" (use ${THREAD_METHODS.join(", ")})`, call.loc);
+      else if (call.method !== "clear" && !call.argList.some((a) => a.name && a.name !== "keep")) {
+        this.add("error", `${where}: Thread.${call.method} takes fields by name, e.g. Thread.${call.method}(${call.method === "set" ? "summary: context.data.summary" : "messages: context.data.reply, keep: 20"})`, call.loc);
+      } else if (call.method !== "append" && call.argList.some((a) => a.name === "keep")) this.add("warning", `${where}: keep: only applies to Thread.append`, call.loc);
+      this.needsThread(s, `Thread.${call.method}`, call.loc);
       return;
     }
     if (!call.method) {
@@ -425,6 +442,17 @@ class Validator {
     }
   }
 
+  private declared(name: string): boolean {
+    return [this.ast.tools, this.ast.stores, this.ast.agents, this.ast.pipelines].some((list) => list.some((d) => d.name === name));
+  }
+
+  /** Thread state belongs to a `@thread` pipeline's run, which shares it with the pipelines it calls. */
+  private needsThread(s: PipelineDeclaration, what: string, loc?: Loc) {
+    if (s.directives.some((d) => d.name === "thread")) return;
+    if (this.ast.pipelines.some((p) => p.directives.some((d) => d.name === "thread"))) return;
+    this.add("error", `Pipeline "${s.name}": ${what} needs a thread; add @thread(<input>) to the pipeline, e.g. @thread(user_id)`, loc);
+  }
+
   private checkContextRef(path: string[], s: PipelineDeclaration, data: Set<string>, loc?: Loc) {
     const [ns, key] = path;
     if (ns === undefined) return;
@@ -432,6 +460,7 @@ class Validator {
       this.add("warning", `Pipeline "${s.name}": context.${ns} is not a context namespace (use ${CONTEXT_NAMESPACES.map((n) => "context." + n).join(", ")})`, loc);
       return;
     }
+    if (ns === "thread") this.needsThread(s, "context.thread", loc);
     if (key === undefined) return;
     if (ns === "data" && !data.has(key)) {
       this.add("warning", `Pipeline "${s.name}": context.data.${key} is never set before it is read (bind a result with \`as ${key}\`)`, loc);
@@ -466,7 +495,7 @@ export function producedKeys(stage: PipelineStage): string[] {
 
 /** A call's result is stored at `context.data.<Callee>.<method>` and `context.data.<method>`. */
 function callKeys(call: CallStage): string[] {
-  if (call.callee === "System") return [];
+  if (call.callee === "System" || (call.callee === "Thread" && includes(THREAD_METHODS, call.method))) return [];
   return call.method ? [call.callee, call.method] : [call.callee];
 }
 

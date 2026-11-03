@@ -14,7 +14,7 @@
  *   halo add | remove | install | tools | search | pack | publish   (tool packages)
  */
 
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parse } from "./parser/index.js";
@@ -31,6 +31,7 @@ import pkg from "../package.json" with { type: "json" };
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
 import { formatPlan, plan, type PlanOptions } from "./plan.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
+import { ThreadStore } from "./runtime/threads.js";
 import { pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { describePermissions, permissionsOf } from "./registry/manifest.js";
@@ -50,6 +51,9 @@ USAGE:
                                         Go back to a step of a @checkpoint run and continue
                                         from there as a new run (--yes if stages after it
                                         write or call out; --mock to try it offline)
+  halo threads [--json]                 List the threads @thread pipelines keep (.halo/threads.sqlite)
+  halo thread <name> <key>              Show a thread's state and the runs that changed it
+                                        (--reset --yes deletes its state; --json)
   halo history <runId|steps file>       List every step of a @checkpoint run (--step N: the
                                         state after step N; --json for the raw steps)
   halo validate <file.halo|dir ...>     Check syntax and semantics
@@ -136,9 +140,10 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
+const THREADS = ".halo/threads.sqlite";
 const ALIASES: Record<string, string> = { p: "pipeline", s: "pipeline", stream: "pipeline", resume: "checkpoint", h: "help", v: "version" };
 
 function parseFlags(argv: string[]): Flags {
@@ -407,6 +412,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     onInterrupt: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptInterrupt : undefined,
     onListen: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptListen : undefined,
     runStore: new FileRunStore(".halo/runs"),
+    // Mock runs keep thread state in memory, so they never change a real thread.
+    threadPath: mock ? ":memory:" : THREADS,
     onEvent: (e) => {
       trace(e);
       telemetry?.handler(e);
@@ -574,6 +581,62 @@ function rerunEffects(ast: ParseResult, pipeline: string, from: number, provider
   return steps
     .filter((s) => Number.parseInt(s.at) >= start)
     .flatMap((s) => s.effects.filter((e) => e.effect !== "read").map((e) => ({ stage: Number.parseInt(s.at), ...e })));
+}
+
+function cmdThreads(flags: Flags): number {
+  if (!existsSync(THREADS)) {
+    if (flags.bools.has("json")) console.log("[]");
+    else console.log(dim(`No threads yet (${THREADS})`));
+    return 0;
+  }
+  const store = new ThreadStore(THREADS);
+  try {
+    const threads = store.list();
+    if (flags.bools.has("json")) console.log(JSON.stringify(threads, null, 2));
+    else if (!threads.length) console.log(dim("No threads"));
+    else for (const t of threads) console.log(`${bold(t.name)} ${t.key}  ${dim(`v${t.version} · ${t.runs} run(s) · ${t.updatedAt} · ${Object.keys(t.state).join(", ") || "empty"}`)}`);
+  } finally {
+    store.close();
+  }
+  return 0;
+}
+
+/** Show one thread, or reset it (which wants --yes, since nothing brings it back). */
+function cmdThread(flags: Flags): number {
+  const [name, key] = flags.positional;
+  if (!name || key === undefined) fail("Usage: halo thread <name> <key> [--json] [--reset --yes]");
+  if (!existsSync(THREADS)) fail(`No thread ${name} ${key}: there are no threads yet (${THREADS})`);
+  const store = new ThreadStore(THREADS);
+  try {
+    const t = store.get(name, key);
+    if (flags.bools.has("reset")) {
+      if (!t) fail(`No thread ${name} ${key}`);
+      if (!flags.bools.has("yes")) {
+        fail(`This deletes thread ${name} ${key} (v${t.version}, ${t.runs} run(s), fields: ${Object.keys(t.state).join(", ") || "none"}). Its log is kept. Pass --yes to delete it.`);
+      }
+      store.reset(name, key);
+      console.log(`Reset thread ${name} ${key} (it was v${t.version})`);
+      return 0;
+    }
+    const log = store.log(name, key);
+    if (!t && !log.length) fail(`No thread ${name} ${key}`);
+    if (flags.bools.has("json")) {
+      console.log(JSON.stringify({ thread: t ?? null, log }, null, 2));
+      return 0;
+    }
+    if (t) {
+      console.log(bold(`${name} ${key}`) + dim(` · v${t.version} · ${t.runs} run(s) · updated ${t.updatedAt}`));
+      console.log(JSON.stringify(t.state, null, 2));
+    } else console.log(bold(`${name} ${key}`) + dim(" · reset (no state)"));
+    console.log(bold("\nChanges, newest first"));
+    for (const e of log) {
+      const what = e.ops === "reset" ? yellow("reset") : e.ops.map((o) => (o.op === "clear" ? `clear ${o.names?.join(", ") ?? "all"}` : `${o.op} ${Object.keys(o.fields).join(", ")}`)).join("; ");
+      console.log(`  v${e.version}  ${dim(e.at)}  ${e.runId ? dim(`run ${e.runId}`) : ""}  ${what}`);
+    }
+  } finally {
+    store.close();
+  }
+  return 0;
 }
 
 /** List a @checkpoint run's steps, or show its state after one of them. */
@@ -785,6 +848,10 @@ export async function main(argv: string[]): Promise<number> {
         if (!runId || !Number.isInteger(step)) fail("Usage: halo rewind <file.halo> <runId> --step N [--yes]");
         return await cmdRun(flags, false, undefined, undefined, { runId, step });
       }
+      case "threads":
+        return cmdThreads(flags);
+      case "thread":
+        return cmdThread(flags);
       case "history":
         return await cmdHistory(flags);
       case "init":

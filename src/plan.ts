@@ -110,6 +110,10 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
       steps.push({ at, label: target, kind: "control", times, effects: [], notes: [] });
       return;
     }
+    if (stage.callee === "Thread" && !agents.has("Thread") && !tools.has("Thread") && !pipelines.has("Thread")) {
+      steps.push({ at, label: target, kind: "control", times, effects: [], notes: ["changes the thread's state, saved when the run ends"] });
+      return;
+    }
     const agent = agents.get(stage.callee);
     const tool = tools.get(stage.callee);
     if (!stage.method || (stage.implicit && !agent && pipelines.has(stage.callee))) {

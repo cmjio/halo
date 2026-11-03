@@ -52,6 +52,7 @@ import { closeChromeSessions } from "./providers/chrome.js";
 import { closeKvDatabases } from "./providers/index.js";
 import { LocalVectorStore } from "./vectors.js";
 import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
+import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } from "./threads.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
@@ -70,6 +71,8 @@ export interface ContextSnapshot {
   data: Record<string, unknown>;
   meta: RunMeta;
   trace: TraceEntry[];
+  /** For a `@thread` pipeline: its thread, and its state (as saved, once the run has ended). */
+  thread?: { name: string; key: string; version: number; state: Record<string, unknown> };
 }
 
 export interface InterruptRequest {
@@ -221,6 +224,8 @@ export interface RunSnapshot {
   loopFeedback?: ExecutionContext["loopFeedback"];
   /** An agent's tool conversation, kept while the run waits for a person to approve one of its calls. */
   sessions?: Record<number, AgentSession>;
+  /** A `@thread` run's thread: what it loaded and the changes it hasn't saved yet. */
+  thread?: ThreadContext;
 }
 
 /** Where an agent's tool conversation stopped to wait for approval: its turns so far and the calls still to run (the first is the one waiting). */
@@ -359,6 +364,8 @@ export interface RuntimeConfig {
   fetch?: typeof fetch;
   /** SQLite file for VectorStore tools. Defaults to .halo/vectors.sqlite */
   vectorPath?: string;
+  /** SQLite file for `@thread` state. Defaults to .halo/threads.sqlite */
+  threadPath?: string;
   /** Directory for @checkpoint snapshots. Defaults to .halo/checkpoints */
   checkpointDir?: string;
   /** Where paused runs wait for `signal()`. Defaults to an in-memory store. */
@@ -401,6 +408,8 @@ interface ExecutionContext {
   parent?: ExecutionContext;
   /** When this pipeline's @timeout runs out (ms since epoch). */
   deadline?: number;
+  /** A `@thread` run's thread (shared by the pipelines it calls). */
+  thread?: ThreadContext;
 }
 
 /** Thrown inside a run to pause it at a yield/listen with no handler. */
@@ -594,6 +603,7 @@ export class HaloRuntime {
   private providerInfo = new Map<string, ProviderInfo>(Object.entries(BUILTIN_PROVIDER_INFO));
   private systems = new Map<string, SystemHandler>();
   private vectorStore?: LocalVectorStore;
+  private threadStore?: ThreadStore;
   private sqlPool = new Map<string, InstanceType<typeof Bun.SQL>>();
   private runStore: RunStore;
 
@@ -722,6 +732,8 @@ export class HaloRuntime {
     closeKvDatabases();
     this.vectorStore?.close();
     this.vectorStore = undefined;
+    this.threadStore?.close();
+    this.threadStore = undefined;
     await Promise.all([...this.sqlPool.values()].map((db) => db.close()));
     this.sqlPool.clear();
   }
@@ -789,6 +801,8 @@ export class HaloRuntime {
   async resume(checkpointPath: string): Promise<RunResult> {
     const cp = await readSnapshot(checkpointPath);
     if (!cp) throw new HaloError(`No checkpoint at ${checkpointPath}`);
+    // A run that ended has saved its thread changes already; only later ones are new.
+    if (cp.thread && this.threads().savedBy(cp.thread.name, cp.thread.key, cp.meta.runId)) cp.thread.saved = cp.thread.ops.length;
     return this.runTop(this.restore(cp), cp.nextStage);
   }
 
@@ -827,6 +841,12 @@ export class HaloRuntime {
         rewoundFrom: { runId: cp.meta.runId, step: s.step },
       },
     };
+    if (cp.thread) {
+      // The thread as the old run saw it at that step. Its changes so far are saved already if the old run ended.
+      const ops = cp.thread.ops.slice(0, s.thread ?? 0);
+      const saved = this.threads().savedBy(cp.thread.name, cp.thread.key, cp.meta.runId) ? ops.length : 0;
+      snap.thread = { ...cp.thread, ops, state: applyOps(cp.thread.base, ops), saved };
+    }
     const ctx = this.restore(snap);
     // The new run's history begins with the steps it shares with the old one.
     const path = this.checkpointPath(ctx);
@@ -902,7 +922,7 @@ export class HaloRuntime {
     const pipeline = this.pipelines.get(snap.pipeline);
     if (!pipeline) throw new HaloError(`Saved run is for pipeline "${snap.pipeline}", which is not loaded`);
     const ctx = this.newContext(pipeline, snap.input, 0);
-    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback, sessions: snap.sessions });
+    Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback, sessions: snap.sessions, thread: snap.thread });
     ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
     return ctx;
   }
@@ -912,7 +932,10 @@ export class HaloRuntime {
     const base = { pipeline: ctx.pipeline.name, runId: ctx.meta.runId };
     this.emit({ type: "run", ...base, status: "start" });
     try {
+      ctx.thread ??= this.openThread(ctx);
       const result = await this.runFrom(ctx, start);
+      // A run that ended (not one that paused) saves what it changed in its thread.
+      if (ctx.thread && result.status !== "paused") result.context.thread = this.saveThread(ctx.thread, ctx.meta.runId);
       // A browser the run opened stays open only while the run may still need it.
       if (result.status !== "paused") await closeChromeSessions(ctx.meta.runId);
       this.emit({ type: "run", ...base, status: result.status, output: result.output, durationMs: ctx.meta.durationMs, cost: ctx.meta.cost });
@@ -951,7 +974,64 @@ export class HaloRuntime {
   }
 
   private snapshot(ctx: ExecutionContext): ContextSnapshot {
-    return { input: ctx.input, data: ctx.data, meta: ctx.meta, trace: ctx.trace };
+    const t = ctx.thread;
+    return { input: ctx.input, data: ctx.data, meta: ctx.meta, trace: ctx.trace, ...(t ? { thread: { name: t.name, key: t.key, version: t.version, state: t.state } } : {}) };
+  }
+
+  /** The built-in `Thread`, unless the file declares its own (e.g. `tool Thread : MCP(...)`). */
+  private isThreadCall(callee: string): boolean {
+    return callee === "Thread" && !this.isDeclared("Thread");
+  }
+
+  private threads(): ThreadStore {
+    return (this.threadStore ??= new ThreadStore(this.config.threadPath ?? ".halo/threads.sqlite"));
+  }
+
+  /** Load the thread a `@thread(param)` pipeline's run belongs to. */
+  private openThread(ctx: ExecutionContext): ThreadContext | undefined {
+    const d = findDirective(ctx.pipeline.directives, "thread");
+    if (!d || ctx.depth > 0) return undefined;
+    const [param = "", name = ctx.pipeline.name] = d.value.split(/\s*,\s*/);
+    return this.threads().open(name, threadKey(ctx.input[param], param, ctx.pipeline.name));
+  }
+
+  /** Save a run's thread changes onto the thread as it is now; returns what the run's result shows. */
+  private saveThread(t: ThreadContext, runId: string): NonNullable<ContextSnapshot["thread"]> {
+    const ops = t.ops.slice(t.saved ?? 0);
+    if (!ops.length) return { name: t.name, key: t.key, version: t.version, state: t.state };
+    const saved = this.threads().commit(t.name, t.key, ops, runId);
+    return { name: t.name, key: t.key, version: saved.version, state: saved.state };
+  }
+
+  /** `Thread.set(field: value)`, `Thread.append(field: value, keep: n)`, `Thread.clear("field")`: change the run's thread. */
+  private threadCall(stage: CallStage, ctx: ExecutionContext): unknown {
+    let top = ctx;
+    while (top.parent) top = top.parent;
+    const t = ctx.thread ?? top.thread;
+    if (!t) throw new HaloError(`Thread.${stage.method} needs a thread: add @thread(<input>) to the pipeline that runs`);
+    const { positional, named } = this.resolveArgs(stage, ctx);
+    for (const k of Object.keys(named)) if (!isSafeKey(k)) throw new HaloError(`"${k}" can't be used as a name in context.thread`, { code: "UNSAFE_NAME" });
+    let op: ThreadOp;
+    switch (stage.method) {
+      case "set":
+        op = { op: "set", fields: named };
+        break;
+      case "append": {
+        const { keep, ...fields } = named;
+        const n = keep === undefined ? undefined : asNumber(keep);
+        if (n !== undefined && !(Number.isInteger(n) && n >= 0)) throw new HaloError(`Thread.append's keep: is how many items to keep, e.g. keep: 20`);
+        op = { op: "append", fields, ...(n !== undefined ? { keep: n } : {}) };
+        break;
+      }
+      case "clear":
+        op = { op: "clear", ...(positional.length ? { names: positional.map(asText) } : {}) };
+        break;
+      default:
+        throw new HaloError(`Unknown Thread method "${stage.method}" (use set, append or clear)`);
+    }
+    t.ops.push(op);
+    t.state = applyOps(t.state, [op]);
+    return ctx.current;
   }
 
   private async runFrom(ctx: ExecutionContext, start: number): Promise<RunResult> {
@@ -1009,6 +1089,7 @@ export class HaloRuntime {
       loops,
       loopFeedback,
       ...(sessions && Object.keys(sessions).length ? { sessions } : {}),
+      ...(ctx.thread ? { thread: ctx.thread } : {}),
     };
   }
 
@@ -1159,7 +1240,9 @@ export class HaloRuntime {
     const [ns, ...rest] = path;
     // A whole container is copied: stored back into context.data, the original would contain itself.
     if (ns === undefined) return copy(this.snapshot(ctx));
-    const roots: Record<string, unknown> = { data: ctx.data, input: ctx.input, meta: ctx.meta, trace: ctx.trace, current: ctx.current };
+    let top = ctx;
+    while (top.parent) top = top.parent;
+    const roots: Record<string, unknown> = { data: ctx.data, input: ctx.input, meta: ctx.meta, trace: ctx.trace, current: ctx.current, thread: (ctx.thread ?? top.thread)?.state };
     return rest.length || ns === "current" ? getPath(roots[ns], rest) : copy(roots[ns]);
   }
 
@@ -1255,7 +1338,7 @@ export class HaloRuntime {
 
   private async callStage(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
     const value = await this.dispatchCall(stage, ctx);
-    if (stage.callee !== "System") this.store(ctx, stage.callee, stage.method, value);
+    if (stage.callee !== "System" && !this.isThreadCall(stage.callee)) this.store(ctx, stage.callee, stage.method, value);
     if (stage.bind) ctx.data[stage.bind] = value;
     return value;
   }
@@ -1278,6 +1361,7 @@ export class HaloRuntime {
 
   private dispatchCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
     if (stage.callee === "System") return this.systemCall(stage, ctx);
+    if (this.isThreadCall(stage.callee)) return Promise.resolve().then(() => this.threadCall(stage, ctx));
     const agent = this.agents.get(stage.callee);
     const tool = this.tools.get(stage.callee);
     if (!stage.method || (stage.implicit && !agent && this.pipelines.has(stage.callee))) return this.pipelineCall(stage, ctx);
@@ -2107,7 +2191,7 @@ export class HaloRuntime {
     };
     await branches(ctx.signal, (signal) => Array.from({ length: Math.min(concurrency, list.length) }, () => worker(signal)));
 
-    if (callee !== "System") this.store(ctx, callee, method, results);
+    if (callee !== "System" && !this.isThreadCall(callee)) this.store(ctx, callee, method, results);
     if (stage.bind) ctx.data[stage.bind] = results;
     return results;
   }

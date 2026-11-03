@@ -1,12 +1,15 @@
 // ── Language-level catalog of built-ins, shared by the validator and runtime ──
 
-export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct"] as const;
+export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "thread"] as const;
 
 /** Field types a `schema` can use (besides other schemas). */
 export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any"] as const;
 
 /** System methods with built-in behavior. */
 export const SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick", "Value"] as const;
+
+/** Methods of the built-in `Thread`, which changes a `@thread` pipeline's thread state. */
+export const THREAD_METHODS = ["set", "append", "clear"] as const;
 
 /** System methods that emit an event to `onSystemEvent` (logged when no handler is set). */
 export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "TriggerWebhook", "Notify"] as const;
@@ -38,7 +41,7 @@ export const REQUIRE_CHECKS = ["JSON", "XML", "Citation"] as const;
 export const UNENFORCED_RULES = ["Tone", "Anonymize", "MaxDensity"] as const;
 
 /** Top-level namespaces of `context`. */
-export const CONTEXT_NAMESPACES = ["data", "input", "meta", "trace", "current"] as const;
+export const CONTEXT_NAMESPACES = ["data", "input", "meta", "trace", "current", "thread"] as const;
 
 export function includes<T extends string>(list: readonly T[], value: string): value is T {
   return (list as readonly string[]).includes(value);

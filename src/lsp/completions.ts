@@ -1,6 +1,6 @@
 import { CompletionItemKind, type CompletionItem, type Position } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
-import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SYSTEM_EVENTS, SYSTEM_METHODS, TOOL_PROVIDERS } from "../parser/builtins.js";
+import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS } from "../parser/builtins.js";
 
 const KEYWORDS: Array<[string, string]> = [
   ["agent", "Declare an agent: agent Name [model, temp: 0.2]"],
@@ -18,7 +18,7 @@ const KEYWORDS: Array<[string, string]> = [
   ["each", "|* each(item in list) => Call(): one call per item"],
   ["else", "The fallback arm of a branch"],
   ["as", "Bind a result: ... as name → context.data.name"],
-  ["context", "context.current, context.input, context.data, context.meta"],
+  ["context", "context.current, context.input, context.data, context.meta, context.thread"],
 ];
 
 /** Keywords and declared names, plus System methods after `System.` and directives after `@`. */
@@ -28,6 +28,9 @@ export function getCompletions(sourceText: string, position: Position): Completi
 
   if (/System\.\w*$/.test(before)) {
     return [...SYSTEM_METHODS, ...SYSTEM_EVENTS].map((m) => ({ label: m, kind: CompletionItemKind.Method, detail: `System.${m}` }));
+  }
+  if (/\bThread\.\w*$/.test(before)) {
+    return THREAD_METHODS.map((m) => ({ label: m, kind: CompletionItemKind.Method, detail: `Thread.${m}` }));
   }
   if (/@\w*$/.test(before)) return DIRECTIVES.map((d) => ({ label: d, kind: CompletionItemKind.Keyword, detail: `@${d}` }));
   if (/:\s*\w*$/.test(before) && /^\s*(tool|store)\b/.test(line)) {

@@ -9,6 +9,7 @@ Directives go before an `agent` or `pipeline` declaration. Unknown directives pr
 | `@correct(n)` | the agent's policy failures | every agent in the pipeline |
 | `@checkpoint` | — | snapshot after every stage |
 | `@shadow(target)` | run alongside another agent | — |
+| `@thread(input, Name?)` | — | keep state between runs, per value of `input` |
 
 Durations are `ms`, `s`, `m`, `h`, or `d`: `500ms`, `30s`, `5m`.
 
@@ -63,6 +64,16 @@ pipeline LongJob(data: String) -> Result:
 ```
 
 After every stage, and when a gate halts, the run is written to `.halo/checkpoints/<Pipeline>-<runId>.json` (`checkpointDir` in `RuntimeConfig`). Continue with `halo run file.halo --checkpoint <path>` or `runtime.resume(path)`. A run resumed from a halted gate evaluates that gate again. Checkpoints are written only for the top-level pipeline.
+
+## `@thread`
+
+```halo
+@thread(user_id)
+pipeline Chat(user_id: String, msg: String) -> Result:
+  msg |> Bot.reply("{{context.thread.summary}} / {{msg}}") |> Thread.append(messages: msg, keep: 20)
+```
+
+Each value of `user_id` has its own thread: state that lasts from one run to the next, read as `context.thread` and changed with `Thread.set`, `Thread.append` and `Thread.clear`. Changes are saved when the run completes or halts, applied to the thread as it is then. A second argument names the thread, so pipelines can share it: `@thread(ticket_id, Support)`. See [Thread State](/guide/thread-state).
 
 ## `@shadow`
 

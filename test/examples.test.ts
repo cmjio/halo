@@ -18,7 +18,7 @@ const quiet = { log() {}, warn() {} };
 
 async function load(file: string, config: RuntimeConfig = {}, mocks: Record<string, MockValue> = {}) {
   const ast = parse(await Bun.file(`${dir}/${file}`).text());
-  const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", checkpointDir: tmp, logger: quiet, onInterrupt: () => "approve", ...config });
+  const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", threadPath: ":memory:", checkpointDir: tmp, logger: quiet, onInterrupt: () => "approve", ...config });
   rt.load(ast).mockAll(mocks);
   return { ast, rt };
 }

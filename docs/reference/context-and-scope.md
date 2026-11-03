@@ -1,6 +1,6 @@
 # Context & Scope
 
-Every run has a `context` with five namespaces:
+Every run has a `context` with these namespaces:
 
 | Path | Contents |
 |---|---|
@@ -9,6 +9,7 @@ Every run has a `context` with five namespaces:
 | `context.data` | Arguments, call results, and `as` bindings |
 | `context.meta` | `runId`, `pipeline`, `startedAt`, `finishedAt`, `durationMs`, `cost`, `tokens`, `calls`, `violations`, `shadows`, `halted`, `paused`, `checkpoint`, `rewoundFrom` |
 | `context.trace` | One entry per stage, each with a SHA-256 hash linking it to the previous entry |
+| `context.thread` | In a `@thread` pipeline: the thread's state, kept between runs ([Thread State](/guide/thread-state)) |
 
 ## Where results go
 

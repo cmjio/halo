@@ -108,6 +108,7 @@ export default defineConfig({
           { text: 'Tool Packages', link: '/guide/tool-packages' },
           { text: 'Package Registry', link: '/packages' },
           { text: 'Plan and Replay', link: '/guide/plan-and-replay' },
+          { text: 'Thread State', link: '/guide/thread-state' },
         ]
       },
       {

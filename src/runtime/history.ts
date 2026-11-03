@@ -35,6 +35,8 @@ export interface Step {
   tokens: { prompt: number; completion: number };
   /** How many calls the run had made by this step. */
   calls: number;
+  /** How many thread changes (`Thread.set`, ...) the run had made by this step. */
+  thread?: number;
   loops?: RunSnapshot["loops"];
   loopFeedback?: RunSnapshot["loopFeedback"];
 }
@@ -95,6 +97,7 @@ export async function appendStep(corePath: string, snap: RunSnapshot): Promise<v
     cost: snap.meta.cost,
     tokens: snap.meta.tokens,
     calls: snap.meta.calls.length,
+    ...(snap.thread ? { thread: snap.thread.ops.length } : {}),
     ...(snap.loops && Object.keys(snap.loops).length ? { loops: snap.loops } : {}),
     ...(snap.loopFeedback ? { loopFeedback: snap.loopFeedback } : {}),
   };

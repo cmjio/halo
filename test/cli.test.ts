@@ -67,6 +67,30 @@ pipeline S(x: String) -> Result:
     expect(cliIn(dir, "history", "no-such-run").err).toContain("No step history for run no-such-run");
   });
 
+  test("threads and thread show what @thread runs kept, and a reset wants --yes", async () => {
+    const dir = mkdtempSync(join(work, "threads-"));
+    await Bun.write(join(dir, "t.halo"), `@thread(user_id)\npipeline Visit(user_id: String, page: String) -> Result:\n  page |> Thread.append(pages: page) |> System.Value(context.thread.pages)`);
+    expect(cliIn(dir, "threads").out).toContain("No threads yet");
+    expect(cliIn(dir, "run", "t.halo", "--arg", "user_id=ana", "--arg", "page=home").code).toBe(0);
+    const second = cliIn(dir, "run", "t.halo", "--arg", "user_id=ana", "--arg", "page=pricing", "--json");
+    expect(JSON.parse(second.out).output).toEqual(["home", "pricing"]);
+    // A mock run never touches real threads.
+    expect(cliIn(dir, "run", "t.halo", "--arg", "user_id=ana", "--arg", "page=mock", "--mock").code).toBe(0);
+
+    const list = cliIn(dir, "threads");
+    expect(list.out).toMatch(/Visit ana .*v2 · 2 run\(s\).*pages/);
+    const shown = JSON.parse(cliIn(dir, "thread", "Visit", "ana", "--json").out);
+    expect(shown.thread.state).toEqual({ pages: ["home", "pricing"] });
+    expect(shown.log.map((e: { version: number }) => e.version)).toEqual([2, 1]);
+
+    const refused = cliIn(dir, "thread", "Visit", "ana", "--reset");
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("Pass --yes to delete it");
+    expect(cliIn(dir, "thread", "Visit", "ana", "--reset", "--yes").out).toContain("Reset thread Visit ana (it was v2)");
+    expect(cliIn(dir, "thread", "Visit", "ana").out).toContain("reset (no state)");
+    expect(JSON.parse(cliIn(dir, "run", "t.halo", "--arg", "user_id=ana", "--arg", "page=again", "--json").out).output).toEqual(["again"]);
+  });
+
   test("run --json returns the full result", () => {
     const r = cli("run", "examples/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
     const result = JSON.parse(r.out);
