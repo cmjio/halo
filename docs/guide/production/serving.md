@@ -45,7 +45,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `files` | `.halo` files or folders to load (command-line paths take precedence). Default: the current folder |
 | `port`, `host` | Where to listen. Default `127.0.0.1:8080` |
 | `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one |
-| `publicUrl` | The address people reach the server at, used in approval links |
+| `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used |
 | `schedules` | Start `pipeline` with `args` on a cron schedule |
 | `webhooks` | `POST /hooks/<path>` starts `pipeline` |
 | `watches` | Start `pipeline` when a URL, file, or command's output changes |
@@ -150,6 +150,7 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 | `GET /api/runs/<id>` | A run's events, and `paused` (`waitingFor`, `message`, `approveUrl`) while it waits |
 | `POST /api/runs/<id>/signal` | Resume a paused run. Body `{"answer": "approve"}`, or `{"payload": {...}, "event": "Slack.Reaction"}` |
 | `GET /api/health` | `{"ok": true, "pipelines": n}` |
+| `GET /healthz` | `{"ok": true}`, without the token, for health checks |
 
 ```bash
 curl -X POST localhost:8080/api/pipelines/TriageIssues/runs \

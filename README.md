@@ -49,6 +49,15 @@ Answer `label` instead of `approve` and it also adds each issue's suggested labe
 ANTHROPIC_API_KEY=... halo debug examples/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
 ```
 
+### 📦 Start from a blueprint
+
+A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it.
+
+```bash
+halo init my-inbox --template support-inbox && cd my-inbox
+halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+```
+
 ## 🧠 The language
 
 | Declaration | Example |
@@ -89,11 +98,11 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 ```bash
 halo run <file.halo> [--pipeline Name] [--arg k=v ...] [--args '<json>'] [--json]
 halo debug <file.halo> ...            # same, with every stage, prompt, and model call
-halo test <file.halo> ...             # offline: --mock --auto-approve
+halo test <file.halo> ...             # offline: --mock --auto-approve (--mocks answers.json, --body webhook.json)
 halo resume <file.halo> <runId> --payload approve   # continue a paused run
 halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
-halo init [name]                      # a new project
+halo init [name] [--template support-inbox]   # a new project, or a deployable blueprint
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-tools)

@@ -41,7 +41,7 @@ export interface ServeConfig {
   host?: string;
   /** API token (or set HALO_SERVE_TOKEN). Required for every /api request when set. */
   token?: string;
-  /** Base URL for approval links, e.g. https://halo.example.com. Default: the server's own address. */
+  /** Base URL for approval links, e.g. https://halo.example.com, or "Env.X". Default: HALO_PUBLIC_URL, else the server's own address. */
   publicUrl?: string;
   schedules?: Array<{ pipeline: string; cron: string; args?: Record<string, unknown> }>;
   /** POST /hooks/<path> starts <pipeline>. With a secret, requests must carry it (or a GitHub signature). */
@@ -133,7 +133,8 @@ function escapeHtml(s: string): string {
 }
 
 /** Arguments for a pipeline from a JSON body: matching fields by name, else the whole body as the only parameter. */
-function argsFromBody(decl: PipelineDeclaration, body: unknown): Record<string, unknown> {
+/** A webhook body as a pipeline's arguments: its matching fields, or the whole body for a one-parameter pipeline. */
+export function argsFromBody(decl: PipelineDeclaration, body: unknown): Record<string, unknown> {
   const params = decl.params.map((p) => p.name);
   if (body && typeof body === "object" && !Array.isArray(body)) {
     const obj = body as Record<string, unknown>;
@@ -147,6 +148,10 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const env = options.env ?? Bun.env;
   const logger = options.logger ?? console;
   const fromEnv = (v: string | undefined) => (v && /^Env\.\w+$/.test(v) ? env[v.slice(4)] : v);
+  // The public address differs per deployment: it can name a variable, or come from HALO_PUBLIC_URL.
+  const publicUrl = fromEnv(options.publicUrl) || env.HALO_PUBLIC_URL || undefined;
+  if (publicUrl && !/^https?:\/\/[^/]/.test(publicUrl)) throw new ServeError(`publicUrl "${publicUrl}" must be an http(s) URL`);
+  options = { ...options, publicUrl };
   const host = options.host ?? "127.0.0.1";
   const token = fromEnv(options.token) ?? env.HALO_SERVE_TOKEN;
   // A token that names an unset variable must not silently turn into "no token".
@@ -549,6 +554,9 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
             return approvalPage(runId, url, "work" in outcome ? `Thanks. The run continues with “${answer}”.` : "This step was already answered.");
           }
         }
+
+        // For load balancers and hosts' health checks: no token, and nothing about the pipelines.
+        if (path === "/healthz" && req.method === "GET") return json({ ok: true });
 
         if (path === "/slack/actions" && req.method === "POST") return slackAction(req);
 
