@@ -7,7 +7,7 @@
  *   halo resume <file.halo> <runId> --payload '<json|word>'
  *   halo validate <file.halo | dir ...>
  *   halo parse <file.halo>
- *   halo init [name]
+ *   halo init [name] [--template <blueprint>]
  *   halo serve [files or folders] [--port 8080]
  *   halo plan <file.halo>              (what a run could do, before it runs)
  *   halo mcp <files or folders>        (serve pipelines as MCP tools over stdio)
@@ -24,7 +24,7 @@ import { AdapterRegistry } from "./runtime/adapter.js";
 import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type ListenRequest, type RunResult, type RuntimeEvent } from "./runtime/runtime.js";
 import { SqliteTelemetry } from "./runtime/telemetry.js";
 import { initProject } from "./init.js";
-import { loadServeConfig, startServer, ServeError } from "./serve/server.js";
+import { argsFromBody, loadServeConfig, startServer, ServeError } from "./serve/server.js";
 import { nextRun, parseCron } from "./serve/cron.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
@@ -58,7 +58,8 @@ USAGE:
                                         state after step N; --json for the raw steps)
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
-  halo init [name]                      Create a new Halo project
+  halo init [name] [--template <name>]  Create a new Halo project, or a deployable app from a
+                                        blueprint (support-inbox)
   halo upgrade                          Update an installed halo to the latest release
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
@@ -81,6 +82,9 @@ RUN OPTIONS:
   --arg <key=value>      Input argument (repeatable; values parse as JSON when possible)
   --args '<json>'        Input arguments as a JSON object
   --mock                 Mock every agent and tool call (no network, no API keys)
+  --mocks <file.json>    Canned answers by target ("Agent.method", "Tool", "yield", ...);
+                         "live" on a tool runs it for real under --mock
+  --body <file.json>     Arguments from a JSON body, the way a webhook maps it
   --auto-approve         Approve every |! yield and ~> listen automatically
   --checkpoint <file>    Resume from a @checkpoint snapshot
   --api-key <key>        API key for any provider without its own env var
@@ -349,15 +353,48 @@ async function promptListen(req: ListenRequest): Promise<unknown> {
   return answer ? toEvent(answer) : AUTO_EVENT;
 }
 
-function mockRuntime(rt: HaloRuntime, ast: ParseResult): void {
+function mockRuntime(rt: HaloRuntime, ast: ParseResult, live: Set<string> = new Set()): void {
   const preview = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").slice(0, 80);
   const mocks: Record<string, unknown> = {
     "*": (req: { target: string; prompt?: string }) => `[mock ${req.target}] ${preview(req.prompt)}`,
   };
   for (const t of [...ast.tools, ...ast.stores]) {
+    if (live.has(t.name)) continue;
     mocks[t.name] = (req: { target: string; args: unknown[]; named: Record<string, unknown> }) => ({ mock: true, tool: req.target, named: req.named });
   }
   rt.mockAll(mocks);
+}
+
+/**
+ * `--mocks <file.json>`: canned answers, keyed like `runtime.mockAll` (`Agent.method`, `Agent`,
+ * `Tool.method`, `Tool`, `*`, `yield`, a listen target). The value `"live"` on a tool's name runs
+ * that tool for real under --mock (e.g. a local KV or VectorStore), so a test can use real state.
+ */
+async function readMocks(file: string, ast: ParseResult, source: string): Promise<{ mocks: Record<string, unknown>; live: Set<string> }> {
+  const f = Bun.file(file);
+  if (!(await f.exists())) fail(`Mocks file not found: ${file}`);
+  let data: unknown;
+  try {
+    data = await f.json();
+  } catch (e) {
+    fail(`Mocks file ${file} is not valid JSON: ${e instanceof Error ? e.message : e}`);
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) fail(`Mocks file ${file} must be a JSON object of target → answer`);
+  const tools = new Set([...ast.tools, ...ast.stores].map((t) => t.name));
+  const names = new Set([...tools, ...ast.agents.map((a) => a.name)]);
+  const mocks: Record<string, unknown> = {};
+  const live = new Set<string>();
+  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+    // A listen target (Slack.Reaction) isn't declared, but it is written in the file.
+    if (key !== "*" && key !== "yield" && !names.has(key.split(".")[0]!) && !source.includes(key)) {
+      console.error(yellow(`Warning: mock "${key}" in ${file} matches no agent, tool, or listen target`));
+    }
+    if (value === "live") {
+      if (!tools.has(key)) fail(`"live" in ${file} needs a tool or store name, got "${key}"`);
+      live.add(key);
+    } else mocks[key] = value;
+  }
+  return { mocks, live };
 }
 
 function tracer(debug: boolean): (e: RuntimeEvent) => void {
@@ -395,6 +432,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   if (diags.some((d) => d.severity === "error")) return 1;
 
   const mock = flags.bools.has("mock");
+  const mocksPath = last(flags, "mocks");
+  const fileMocks = mocksPath ? await readMocks(mocksPath, ast, await Bun.file(path).text()) : undefined;
   const autoApprove = flags.bools.has("auto-approve");
   const routerJson = last(flags, "router");
   const telemetry = flags.bools.has("no-telemetry") ? undefined : new SqliteTelemetry(".halo/telemetry.db");
@@ -403,7 +442,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   // Every real run keeps a recording, so it can be replayed (a resumed run adds to its own).
   const runId = resumeRun ?? crypto.randomUUID();
   // A rewound run's recording would miss what came before its step, so it couldn't be replayed.
-  const recorder = mock || replaying || rewind || flags.bools.has("no-record") || last(flags, "checkpoint") ? undefined : new Recorder(RECORDINGS, runId);
+  const recorder = mock || fileMocks || replaying || rewind || flags.bools.has("no-record") || last(flags, "checkpoint") ? undefined : new Recorder(RECORDINGS, runId);
   const rt = new HaloRuntime({
     recorder: recorder?.record,
     apiKey: last(flags, "api-key"),
@@ -420,7 +459,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     },
   }).load(ast);
   registerInstalled(rt, await installed());
-  if (mock) mockRuntime(rt, ast);
+  if (mock) mockRuntime(rt, ast, fileMocks?.live);
+  if (fileMocks) rt.mockAll(fileMocks.mocks);
   if (replaying) {
     const tools = [...ast.tools, ...ast.stores].map((t) => t.name);
     // Recordings from before yields were recorded approve them, as halo test does.
@@ -456,7 +496,14 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
       result = await rt.run(replaying.pipeline, replaying.args);
     } else {
       const pipeline = pickStream(ast, last(flags, "pipeline"));
-      const args = inputArgs(flags);
+      // --body <file.json>: the arguments a webhook would get from that body; --arg/--args add to them.
+      const bodyPath = last(flags, "body");
+      let body: unknown;
+      if (bodyPath) {
+        if (!(await Bun.file(bodyPath).exists())) fail(`Body file not found: ${bodyPath}`);
+        body = await Bun.file(bodyPath).json().catch((e: unknown) => fail(`Body file ${bodyPath} is not valid JSON: ${e instanceof Error ? e.message : e}`));
+      }
+      const args = { ...(bodyPath ? argsFromBody(pipeline, body) : {}), ...inputArgs(flags) };
       const missing = pipeline.params.filter((p) => !(p.name in args)).map((p) => p.name);
       if (missing.length) {
         fail(`Missing argument(s) for ${pipeline.name}(${pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ")}): ${missing.join(", ")}\n  Pass them with ${missing.map((m) => `--arg ${m}=...`).join(" ")}`);
@@ -855,7 +902,8 @@ export async function main(argv: string[]): Promise<number> {
       case "history":
         return await cmdHistory(flags);
       case "init":
-        return await initProject(flags.positional[0] ?? "my-halo-project");
+        const template = last(flags, "template");
+        return await initProject(flags.positional[0] ?? template ?? "my-halo-project", console, template);
       case "upgrade":
         return await cmdUpgrade();
       case "serve":

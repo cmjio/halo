@@ -1,0 +1,10 @@
+{
+  "files": ["pipelines/"],
+  "webhooks": [
+    { "path": "email", "pipeline": "HandleEmail", "secret": "Env.INBOUND_WEBHOOK_SECRET" }
+  ],
+  "watches": [
+    { "pipeline": "IndexKnowledge", "command": "find knowledge -type f -exec cksum {} +", "every": "1m", "runOnStart": true }
+  ],
+  "notify": { "slack": "Env.SLACK_WEBHOOK_URL" }
+}

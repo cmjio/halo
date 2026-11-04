@@ -8,9 +8,27 @@ halo test pipeline.halo --arg topic=x       # = halo run --mock --auto-approve
 halo debug pipeline.halo --arg topic=x --mock   # show each stage, prompt, and value
 ```
 
-With `--mock`, every agent call returns `[mock Agent.method] <prompt preview>`, and every tool or store call returns `{ mock: true, tool, named }`. Nothing touches the network, and no API key is needed. Because mocked stores return nothing, equipped stores add no context. `--auto-approve` answers every `yield` and `listen` with an approval. This checks the plumbing (names, templates, gates, the order of stages), but it can't check answer quality. Mocked answers are plain text, so a gate that reads a field of an answer usually halts. A pipeline that returns a `schema`, or an agent that requires `Require(JSON)`, fails under `--mock`. Use `mockAll` with JSON answers for those.
+With `--mock`, every agent call returns `[mock Agent.method] <prompt preview>`, and every tool or store call returns `{ mock: true, tool, named }`. Nothing touches the network, and no API key is needed. Because mocked stores return nothing, equipped stores add no context. `--auto-approve` answers every `yield` and `listen` with an approval. This checks the plumbing (names, templates, gates, the order of stages), but it can't check answer quality. Mocked answers are plain text, so a gate that reads a field of an answer usually halts. A pipeline that returns a `schema`, or an agent that requires `Require(JSON)`, fails under `--mock`. Give those JSON answers with `--mocks` (below), or `mockAll` in a test.
 
 `halo test` does not read `.test.halo` files or `mocks.json`, and Halo has no test syntax of its own. For assertions, use `bun test`.
+
+### Canned answers and webhook bodies
+
+```bash
+halo test support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+```
+
+`--mocks <file.json>` gives answers by target, with the same keys as `mockAll`: `"Agent.method"`, `"Agent"`, `"Tool.method"`, `"Tool"`, `"*"`, `"yield"`, or a listen target. A value of `"live"` on a tool or store's name runs that tool for real under `--mock`, which suits local ones (`KV`, `Workspace`, `Documents`, `VectorStore`): the test then searches a real index and reads real files, while models and network calls stay mocked. A key that names no agent, tool or listen target in the file prints a warning. Without `--mock`, `--mocks` mocks only the targets it names and everything else runs for real, for example to try a pipeline with real models but no email sent.
+
+```json
+{
+  "Knowledge": "live",
+  "Triager.classify": { "category": "how-to", "confidence": 0.9 },
+  "Mail.send": { "sent": true, "id": "mock" }
+}
+```
+
+`--body <file.json>` builds the arguments from a JSON body the way a `halo serve` webhook does: its fields that match the pipeline's parameters, or, for a pipeline with one parameter the body doesn't name, the whole body. `--arg` and `--args` add to them.
 
 ## With `bun test`
 

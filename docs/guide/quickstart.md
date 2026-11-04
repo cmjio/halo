@@ -40,6 +40,8 @@ This creates:
 - `.gitignore`: ignores `.env` and `.halo/` (paused runs, telemetry, the local vector store)
 - `README.md`
 
+To start from a complete app instead (a webhook, approvals, deployment files and offline tests), use a [blueprint](./production/blueprints.md): `halo init my-inbox --template support-inbox`.
+
 ## 3. Set an API key
 
 Each provider reads its own variable. Set the ones for the models you use:

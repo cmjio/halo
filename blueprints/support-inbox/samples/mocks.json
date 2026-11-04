@@ -1,0 +1,22 @@
+{
+  "Articles": "live",
+  "Reader": "live",
+  "Knowledge": "live",
+  "Replies": "live",
+  "Seen.get": null,
+  "Seen.set": { "key": "sample", "set": true },
+  "Mail.send": { "sent": true, "id": "mock-email-id", "to": ["dana@example.com"] },
+  "Triager.classify": {
+    "category": "account",
+    "urgency": "normal",
+    "language": "en",
+    "summary": "An invited teammate never received the invite email.",
+    "confidence": 0.9
+  },
+  "Writer.draft_reply": {
+    "reply": "Hi Dana,\n\nSorry your new designer hasn't received her invite. Invite links expire after 7 days, so the quickest fix is to go to Settings → Members, find her name and click Resend. Ask her to check her spam folder too, and if your company filters email, her IT team may need to allow mail from our domain.\n\nThe support team",
+    "sources": ["inviting-teammates.md"],
+    "covered": true,
+    "note_for_reviewer": ""
+  }
+}

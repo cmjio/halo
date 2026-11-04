@@ -2,7 +2,7 @@
 
 The runtime needs **Bun**. It uses `Bun.file`, `Bun.CryptoHasher`, `bun:sqlite`, `Bun.SQL`, and `Bun.spawn`. Node-based hosts can't run it, including Next.js on Node, AWS Lambda's Node runtimes, and Cloudflare Workers. Any host that runs a Bun process works: a VM, a container (`oven/bun`), or a PaaS that runs Docker images.
 
-The simplest way to run pipelines as a service is [`halo serve`](./serving.md): an HTTP API, webhooks, schedules, approval links, and Studio in one process. The options below are for running pipelines yourself.
+The simplest way to run pipelines as a service is [`halo serve`](./serving.md): an HTTP API, webhooks, schedules, approval links, and Studio in one process. The options below are for running pipelines yourself. For a worked example with a `Dockerfile`, a Fly.io config and a volume for paused runs, start from a [blueprint](./blueprints.md).
 
 ## Option 1: run the CLI
 
