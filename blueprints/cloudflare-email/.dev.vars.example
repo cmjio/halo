@@ -1,0 +1,9 @@
+# Secrets for the Worker. For `wrangler dev`, copy this file to .dev.vars.
+# For the deployed Worker, set each one with: npx wrangler secret put <NAME>
+
+# The model provider, passed to the Halo container (swap the models in pipelines/email.halo to use another).
+ANTHROPIC_API_KEY=
+# Protects Halo's API inside the container; only the Worker uses it. Make one with: openssl rand -hex 24
+HALO_SERVE_TOKEN=
+# Signs the review links in the reviewer's email. openssl rand -hex 24
+REVIEW_SECRET=

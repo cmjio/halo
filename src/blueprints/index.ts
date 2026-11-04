@@ -64,6 +64,26 @@ import wm5 from "../../blueprints/web-monitor/halo.json" with { type: "text" };
 import wm6 from "../../blueprints/web-monitor/pipelines/monitor.halo" with { type: "text" };
 import wm7 from "../../blueprints/web-monitor/samples/mocks.json" with { type: "text" };
 import wm8 from "../../blueprints/web-monitor/samples/sources.json" with { type: "text" };
+// cloudflare-email
+import ce0 from "../../blueprints/cloudflare-email/.dev.vars.example" with { type: "text" };
+import ce1 from "../../blueprints/cloudflare-email/.env.example" with { type: "text" };
+import ce2 from "../../blueprints/cloudflare-email/.gitignore" with { type: "text" };
+import ce3 from "../../blueprints/cloudflare-email/Dockerfile" with { type: "text" };
+import ce4 from "../../blueprints/cloudflare-email/README.md" with { type: "text" };
+import ce5 from "../../blueprints/cloudflare-email/halo.json" with { type: "text" };
+import ce6 from "../../blueprints/cloudflare-email/knowledge/billing.md" with { type: "text" };
+import ce7 from "../../blueprints/cloudflare-email/knowledge/exporting-data.md" with { type: "text" };
+import ce8 from "../../blueprints/cloudflare-email/knowledge/inviting-teammates.md" with { type: "text" };
+import ce9 from "../../blueprints/cloudflare-email/knowledge/password-reset.md" with { type: "text" };
+import ce10 from "../../blueprints/cloudflare-email/package.json" with { type: "text" };
+import ce11 from "../../blueprints/cloudflare-email/pipelines/email.halo" with { type: "text" };
+import ce12 from "../../blueprints/cloudflare-email/samples/email.json" with { type: "text" };
+import ce13 from "../../blueprints/cloudflare-email/samples/mocks.json" with { type: "text" };
+import ce14 from "../../blueprints/cloudflare-email/tsconfig.json" with { type: "text" };
+// @ts-expect-error: inbox.ts has no default export, but imported as text it is all default.
+import ce15 from "../../blueprints/cloudflare-email/worker/inbox.ts" with { type: "text" };
+import ce16 from "../../blueprints/cloudflare-email/worker/index.ts" with { type: "text" };
+import ce17 from "../../blueprints/cloudflare-email/wrangler.jsonc" with { type: "text" };
 
 export interface Blueprint {
   name: string;
@@ -178,6 +198,33 @@ export const BLUEPRINTS: Record<string, Blueprint> = {
       "samples/sources.json": text(wm8),
     },
   },
+  "cloudflare-email": {
+    name: "cloudflare-email",
+    description: "Email to your domain → a Cloudflare Worker → Halo in a Container drafts a reply → a person approves → sent by Cloudflare",
+    next: [
+      "halo test pipelines/email.halo -p DraftReply --body samples/email.json --mocks samples/mocks.json",
+    ],
+    files: {
+      ".dev.vars.example": text(ce0),
+      ".env.example": text(ce1),
+      ".gitignore": text(ce2),
+      Dockerfile: text(ce3),
+      "README.md": text(ce4),
+      "halo.json": text(ce5),
+      "knowledge/billing.md": text(ce6),
+      "knowledge/exporting-data.md": text(ce7),
+      "knowledge/inviting-teammates.md": text(ce8),
+      "knowledge/password-reset.md": text(ce9),
+      "package.json": text(ce10),
+      "pipelines/email.halo": text(ce11),
+      "samples/email.json": text(ce12),
+      "samples/mocks.json": text(ce13),
+      "tsconfig.json": text(ce14),
+      "worker/inbox.ts": text(ce15),
+      "worker/index.ts": text(ce16),
+      "wrangler.jsonc": text(ce17),
+    },
+  },
 };
 
 /** A project's files from a blueprint, with the project's name and this CLI's version filled in. */
@@ -188,7 +235,8 @@ export function blueprintFiles(blueprint: Blueprint, project: string, version: s
   for (const [path, content] of Object.entries(blueprint.files)) {
     let c = content;
     if (path === "Dockerfile") c = c.replace(/^ARG HALO_VERSION=.*$/m, `ARG HALO_VERSION=${version}`);
-    if (path === "fly.toml") c = c.replaceAll(blueprint.name, app);
+    // The app name: Fly.io's, and the Worker's (which is also in its workers.dev URL).
+    if (path === "fly.toml" || path === "wrangler.jsonc" || path === "package.json") c = c.replaceAll(blueprint.name, app);
     out[path] = c;
   }
   return out;

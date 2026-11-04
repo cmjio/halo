@@ -1,0 +1,5 @@
+.env
+.dev.vars
+.halo/
+.wrangler/
+node_modules/

@@ -51,7 +51,7 @@ ANTHROPIC_API_KEY=... halo debug examples/50-github-triage.halo --arg repo=oven-
 
 ### 📦 Start from a blueprint
 
-A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`.
+A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml` (or `wrangler.jsonc` for Cloudflare).
 
 | Blueprint | Trigger | What it does |
 |---|---|---|
@@ -60,6 +60,7 @@ A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample dat
 | [`incident-responder`](blueprints/incident-responder) | Sentry webhook | Reads the stack trace, recent commits and past incidents, then opens a Linear issue and posts the likely cause in Slack |
 | [`customer-chat`](blueprints/customer-chat) | your backend, over the API | Answers customers about their own orders (Postgres) with per-customer memory, and hands off to Slack |
 | [`web-monitor`](blueprints/web-monitor) | hourly and daily schedules | Notes changes that matter on pages you watch, and emails one digest each weekday |
+| [`cloudflare-email`](blueprints/cloudflare-email) | email to your domain | The support inbox on Cloudflare: a Worker and Durable Object hold the inbox, Halo drafts in a Container, and Cloudflare sends the approved reply |
 
 ```bash
 halo init my-inbox --template support-inbox && cd my-inbox

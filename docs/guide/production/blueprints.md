@@ -16,6 +16,7 @@ halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mock
 | [`incident-responder`](#incident-responder) | Sentry webhook | Sentry, GitHub, Linear, Slack | Yes: it only writes to your own tools |
 | [`customer-chat`](#customer-chat) | your backend, over the API | Postgres, Slack | Yes, and it hands off what it can't do |
 | [`web-monitor`](#web-monitor) | schedules | the web, Resend | Yes |
+| [`cloudflare-email`](#cloudflare-email-agent) | email to your domain | Cloudflare Workers, Durable Objects, Containers, Email Routing and Sending | No: a person sends every reply |
 
 Each blueprint follows the same layout, so once you've read one you know where everything is in the next:
 
@@ -27,6 +28,8 @@ Each blueprint follows the same layout, so once you've read one you know where e
 | `.env.example` | Every key it needs, and where to get each |
 | `Dockerfile`, `fly.toml` | Deployment. The image installs the `halo` version that created the project, and validates the pipelines while it builds |
 | `README.md` | Trying it offline, running it for real, connecting the outside service, deploying, and making it yours |
+
+`cloudflare-email` deploys to Cloudflare instead, so it has a `wrangler.jsonc` and a Worker (`worker/`) in place of `fly.toml`.
 
 ## Support inbox
 
@@ -85,6 +88,16 @@ It shows:
 - **Spending only on change:** an unchanged page costs no model call.
 - **A queue in a store:** changes are tagged `pending` until the digest sends them, so a failed send loses nothing, and each one stays searchable afterwards.
 
+## Cloudflare email agent
+
+`--template cloudflare-email`. The same job as the support inbox, built on Cloudflare: Email Routing hands each email to a Worker, which stores it in a Durable Object. The Durable Object's alarm asks Halo, running under `halo serve` in a Cloudflare Container, for a triage and a draft (`DraftReply`). The reviewer gets an email with a signed link to a review page the Worker serves, and the reply goes out through Cloudflare Email Sending when they click Send. `wrangler deploy` builds and ships all of it.
+
+It shows:
+
+- **Halo inside a larger app:** the Worker calls the HTTP API (`wait: true`) and reads a completed run's output, a `halted` run (spam) and an `error` run (a policy stopped it).
+- **Running where the disk doesn't last:** a Container's disk is wiped whenever it sleeps, so the inbox, deduplication and approvals live in the Durable Object, and the `Dockerfile` builds the article index into the image.
+- **A pipeline that can't send:** it has no mail tool. Only the Worker sends, after a person approves.
+
 ## Tested in CI
 
-`test/blueprints.test.ts` checks every blueprint: the CLI bundles exactly its files, every pipeline passes `halo validate --strict`, and its offline commands run. It also runs each one's behavior with canned answers: for example, approval, edits, rejection, retries, spam and injection for the support inbox, and duplicate deliveries, hand-offs and the digest queue for the others.
+`test/blueprints.test.ts` checks every blueprint: the CLI bundles exactly its files, every pipeline passes `halo validate --strict`, and its offline commands run. It also runs each one's behavior with canned answers: for example, approval, edits, rejection, retries, spam and injection for the support inbox, and duplicate deliveries, hand-offs and the digest queue for the others. For `cloudflare-email`, it checks the pipeline and the exact API exchange the Worker relies on; the Worker itself is checked by its own `npm run typecheck`, which CI doesn't run.

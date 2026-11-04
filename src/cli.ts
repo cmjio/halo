@@ -60,7 +60,8 @@ USAGE:
   halo parse <file.halo>                Print the AST as JSON
   halo init [name] [--template <name>]  Create a new Halo project, or a deployable app from a
                                         blueprint: support-inbox, github-triage,
-                                        incident-responder, customer-chat, web-monitor
+                                        incident-responder, customer-chat, web-monitor,
+                                        cloudflare-email
   halo upgrade                          Update an installed halo to the latest release
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /

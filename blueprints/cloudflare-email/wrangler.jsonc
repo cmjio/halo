@@ -1,0 +1,40 @@
+// The Worker, the inbox and the Halo container, deployed together with `wrangler deploy`.
+// README.md walks through the setup (Email Routing, Email Sending, secrets).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cloudflare-email",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+
+  // Halo: pipelines/email.halo under `halo serve`, built from the Dockerfile.
+  // One instance is plenty for an inbox; it sleeps after 10 idle minutes.
+  "containers": [
+    { "class_name": "HaloContainer", "image": "./Dockerfile", "instance_type": "basic", "max_instances": 1 }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "HALO", "class_name": "HaloContainer" },
+      { "name": "INBOX", "class_name": "Inbox" }
+    ]
+  },
+  "exports": {
+    "HaloContainer": { "type": "durable-object", "storage": "sqlite" },
+    "Inbox": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // Sends the replies and the reviewer's notices. SUPPORT_FROM's domain must be onboarded:
+  //   npx wrangler email sending enable yourdomain.com
+  "send_email": [{ "name": "EMAIL" }],
+
+  "vars": {
+    // The address customers write to (route it to this Worker), and the replies' sender.
+    "SUPPORT_FROM": "support@yourdomain.com",
+    "SUPPORT_NAME": "Support",
+    // Who reviews drafts: each one arrives here with a link to the review page.
+    "REVIEWER_EMAIL": "you@yourdomain.com",
+    // This Worker's URL, for those links (wrangler deploy prints it).
+    "PUBLIC_URL": "https://cloudflare-email.your-subdomain.workers.dev"
+  }
+  // Secrets: ANTHROPIC_API_KEY, HALO_SERVE_TOKEN, REVIEW_SECRET (see .dev.vars.example).
+}
