@@ -44,8 +44,8 @@ export interface ServeConfig {
   /** Base URL for approval links, e.g. https://halo.example.com, or "Env.X". Default: HALO_PUBLIC_URL, else the server's own address. */
   publicUrl?: string;
   schedules?: Array<{ pipeline: string; cron: string; args?: Record<string, unknown> }>;
-  /** POST /hooks/<path> starts <pipeline>. With a secret, requests must carry it (or a GitHub signature). */
-  webhooks?: Array<{ path: string; pipeline: string; secret?: string }>;
+  /** POST /hooks/<path> starts <pipeline>, with `args` and the body. With a secret, requests must carry it (or a GitHub signature). */
+  webhooks?: Array<{ path: string; pipeline: string; secret?: string; args?: Record<string, unknown> }>;
   /** Where to announce paused runs: a Slack incoming-webhook URL. */
   notify?: { slack?: string };
   /** Start pipelines when a URL, file, or command's output changes (see watch.ts). */
@@ -132,16 +132,20 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-/** Arguments for a pipeline from a JSON body: matching fields by name, else the whole body as the only parameter. */
-/** A webhook body as a pipeline's arguments: its matching fields, or the whole body for a one-parameter pipeline. */
-export function argsFromBody(decl: PipelineDeclaration, body: unknown): Record<string, unknown> {
-  const params = decl.params.map((p) => p.name);
+/**
+ * A JSON body as a pipeline's arguments: its fields that match parameter names, or, when none
+ * do and one parameter is left, the whole body as that parameter. `fixed` arguments (a webhook's
+ * `args` in halo.json) are always passed, and a body can't override them.
+ */
+export function argsFromBody(decl: PipelineDeclaration, body: unknown, fixed: Record<string, unknown> = {}): Record<string, unknown> {
+  const params = decl.params.map((p) => p.name).filter((p) => !Object.hasOwn(fixed, p));
+  let args: Record<string, unknown> = {};
   if (body && typeof body === "object" && !Array.isArray(body)) {
     const obj = body as Record<string, unknown>;
-    const args = Object.fromEntries(params.filter((p) => Object.hasOwn(obj, p)).map((p) => [p, obj[p]]));
-    if (Object.keys(args).length || params.length !== 1) return args;
+    args = Object.fromEntries(params.filter((p) => Object.hasOwn(obj, p)).map((p) => [p, obj[p]]));
   }
-  return params.length === 1 && body !== undefined ? { [params[0]!]: body } : {};
+  if (!Object.keys(args).length && params.length === 1 && body !== undefined) args = { [params[0]!]: body };
+  return { ...args, ...fixed };
 }
 
 export async function startServer(options: ServeOptions = {}): Promise<HaloServer> {
@@ -219,16 +223,18 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     entry(s.pipeline);
     schedules.push({ pipeline: s.pipeline, cron: parseCron(s.cron), args: s.args ?? {} });
   }
-  const webhooks = new Map<string, { pipeline: string; secret?: string }>();
+  const webhooks = new Map<string, { pipeline: string; secret?: string; args: Record<string, unknown> }>();
   for (const w of options.webhooks ?? []) {
-    entry(w.pipeline);
+    const params = entry(w.pipeline).decl.params.map((p) => p.name);
+    const unknown = Object.keys(w.args ?? {}).filter((a) => !params.includes(a));
+    if (unknown.length) throw new ServeError(`Webhook for ${w.pipeline} has args ${unknown.map((a) => `"${a}"`).join(", ")}, but ${w.pipeline} takes (${params.join(", ")})`);
     const path = w.path.replace(/^\/+|\/+$/g, "");
     if (!/^[\w./-]+$/.test(path)) throw new ServeError(`Webhook path "${w.path}" may only use letters, digits, _ . / -`);
     const secret = fromEnv(w.secret);
     // A secret that names an unset variable must not silently turn into "no secret".
     if (w.secret !== undefined && !secret) throw new ServeError(`Webhook /hooks/${path} has secret "${w.secret}", but it is empty or not set`);
     if (secret === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
-    webhooks.set(path, { pipeline: w.pipeline, secret });
+    webhooks.set(path, { pipeline: w.pipeline, secret, args: w.args ?? {} });
   }
   const slackUrl = fromEnv(options.notify?.slack);
   const slackSecret = fromEnv(options.slack?.signingSecret);
@@ -584,7 +590,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           } catch {
             return json({ error: "Webhook body must be JSON" }, 400);
           }
-          const runId = start(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`);
+          const runId = start(target.pipeline, argsFromBody(entry(target.pipeline).decl, body, target.args), `webhook /hooks/${hook[1]}`);
           return json({ runId, status: "running" }, 202);
         }
 

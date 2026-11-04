@@ -1,0 +1,18 @@
+{
+  "action": "created",
+  "data": {
+    "issue": {
+      "id": "4815162342",
+      "shortId": "API-7K",
+      "title": "TypeError: Cannot read properties of undefined (reading 'currency')",
+      "culprit": "POST /v1/invoices (src/billing/invoice.ts in buildInvoice)",
+      "level": "error",
+      "status": "unresolved",
+      "permalink": "https://acme.sentry.io/issues/4815162342/",
+      "project": { "slug": "api", "name": "api" },
+      "firstSeen": "2026-11-04T09:12:00Z",
+      "count": "37"
+    }
+  },
+  "actor": { "type": "application", "id": "sentry", "name": "Sentry" }
+}

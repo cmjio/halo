@@ -1,0 +1,13 @@
+{
+  "Docs": "live",
+  "Orders.query": [
+    { "id": "A-1042", "status": "shipped", "total_cents": 5400, "currency": "GBP", "placed_at": "2026-11-01T10:12:00Z", "shipped_at": "2026-11-02T09:30:00Z", "carrier": "Royal Mail", "tracking_number": "RM123456789GB" },
+    { "id": "A-0977", "status": "delivered", "total_cents": 2200, "currency": "GBP", "placed_at": "2026-09-25T15:40:00Z", "shipped_at": "2026-09-26T08:00:00Z", "carrier": "DPD", "tracking_number": "15501234567890" }
+  ],
+  "Assistant.reply": {
+    "reply": "Hi! Your order A-1042 shipped on 2 November with Royal Mail, tracking number RM123456789GB. UK deliveries usually take 2-4 working days, so it should arrive soon.",
+    "handoff": false,
+    "handoff_reason": ""
+  },
+  "Team.post": { "ok": true, "channel": "C0000", "ts": "1" }
+}

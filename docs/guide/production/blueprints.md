@@ -9,6 +9,14 @@ halo test pipelines/support.halo -p IndexKnowledge --mocks samples/mocks.json
 halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
 ```
 
+| Blueprint | Trigger | Integrations | Runs on its own? |
+|---|---|---|---|
+| [`support-inbox`](#support-inbox) | inbound email webhook | Resend, Slack | No: a person approves every reply |
+| [`github-triage`](#github-triage) | GitHub webhook, weekly schedule | GitHub, Slack | Labels on its own; comments wait for a person |
+| [`incident-responder`](#incident-responder) | Sentry webhook | Sentry, GitHub, Linear, Slack | Yes: it only writes to your own tools |
+| [`customer-chat`](#customer-chat) | your backend, over the API | Postgres, Slack | Yes, and it hands off what it can't do |
+| [`web-monitor`](#web-monitor) | schedules | the web, Resend | Yes |
+
 Each blueprint follows the same layout, so once you've read one you know where everything is in the next:
 
 | File | What it holds |
@@ -32,4 +40,51 @@ It shows:
 - **A person in the loop:** every reply waits at `|! yield`, and the reviewer can send edited text with `{"approved": true, "reply": "..."}`. Sending is inside the same pipeline, so nothing can send mail through the API or MCP without that approval.
 - **Deployment:** a container with a volume for `.halo/` (paused runs survive a redeploy), `HALO_SERVE_TOKEN` for the API, `HALO_PUBLIC_URL` for approval links, and `GET /healthz` for health checks.
 
-The blueprint's source is [`blueprints/support-inbox`](https://github.com/cmjio/halo/tree/main/blueprints/support-inbox), and `test/blueprints.test.ts` runs it in CI: approval, edited replies, rejection, retries, spam, and an injection attempt.
+Source: [`blueprints/support-inbox`](https://github.com/cmjio/halo/tree/main/blueprints/support-inbox).
+
+## GitHub triage
+
+`--template github-triage`. GitHub's "issues" webhook (`POST /hooks/github`, checked with GitHub's signature) starts `TriageIssue` for each new issue. Halo finds similar earlier issues, classifies the new one, and applies labels right away. When the issue looks like a duplicate or is missing details, `AskAuthor` drafts a comment and waits for a person before posting it. A schedule runs `WeeklyReport` on Monday mornings and posts a summary of open issues to Slack.
+
+It shows:
+
+- **Two levels of autonomy in one workflow:** labels are cheap to undo, so they're applied at once; a public comment waits at `|! yield`.
+- **A pipeline that's safe to expose:** `AskAuthor` is callable from the API and MCP, and still pauses for approval there.
+- **Webhook plus schedule:** the same service reacts to events and runs a weekly job (`schedules` with `args`).
+- **Memory across runs:** a `VectorStore` of every triaged issue, used to spot duplicates.
+
+## Incident responder
+
+`--template incident-responder`. A Sentry internal integration's issue webhook (`POST /hooks/sentry`) starts `HandleAlert` for each new error. In parallel, Halo reads the error's latest stack trace from Sentry, the latest commits from GitHub, and similar past incidents; an investigator agent names the likely cause, suspect commits and first steps; then Halo opens a Linear issue and posts the summary in Slack.
+
+It shows:
+
+- **Fan-out over several APIs:** `|*` runs the Sentry, GitHub and store calls at once, each a plain `REST` tool with a token.
+- **Settings outside the pipeline:** the webhook's `args` in `halo.json` pass the Sentry org and GitHub repo with every body (see [Webhooks](./serving.md#webhooks)).
+- **Trimming big payloads:** `System.Pick` keeps the stack frames and commit fields the model needs, from responses that are tens of kilobytes.
+- **Running unattended:** it only reads from Sentry and GitHub and only writes to your own Linear and Slack, so it needs no approval.
+
+## Customer chat
+
+`--template customer-chat`. Your backend calls `POST /api/pipelines/Chat/runs` with `wait: true`, the customer's id from your login session, and their message. `Chat` reads that customer's recent orders from Postgres and your store policies, answers with the conversation so far, and, for refunds, damaged items, complaints or anything it isn't sure of, hands off to your team in Slack.
+
+It shows:
+
+- **Per-user state:** `@thread(user_id)` keeps each customer's conversation; `Thread.append` and `Thread.set` change it.
+- **Scoped data access:** the SQL is written in the pipeline with `params: [user_id]`, never by the model, and the `PostgreSQL` tool refuses anything but `SELECT`.
+- **Money rules:** it can't move money; refunds go to a person. A per-message `MaxSpend` caps cost.
+- **Serving to an app:** the HTTP API with `HALO_SERVE_TOKEN`, called from your server, not the browser.
+
+## Web monitor
+
+`--template web-monitor`. A schedule runs `CheckAll` every hour with the pages listed in `halo.json`. For each page, `CheckSource` reads its text and compares it with the last reading kept in `KV`; only a page whose text changed goes to a model, which decides whether the change matters. Changes that matter are noted in a store, and `SendDigest` emails them every weekday morning, then clears what it sent.
+
+It shows:
+
+- **Schedules with data:** the list of pages is the schedule's `args`.
+- **Spending only on change:** an unchanged page costs no model call.
+- **A queue in a store:** changes are tagged `pending` until the digest sends them, so a failed send loses nothing, and each one stays searchable afterwards.
+
+## Tested in CI
+
+`test/blueprints.test.ts` checks every blueprint: the CLI bundles exactly its files, every pipeline passes `halo validate --strict`, and its offline commands run. It also runs each one's behavior with canned answers: for example, approval, edits, rejection, retries, spam and injection for the support inbox, and duplicate deliveries, hand-offs and the digest queue for the others.

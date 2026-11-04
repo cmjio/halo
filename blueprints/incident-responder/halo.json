@@ -1,0 +1,11 @@
+{
+  "files": ["pipelines/"],
+  "webhooks": [
+    {
+      "path": "sentry",
+      "pipeline": "HandleAlert",
+      "secret": "Env.SENTRY_WEBHOOK_SECRET",
+      "args": { "org": "acme", "repo": "acme/api" }
+    }
+  ]
+}

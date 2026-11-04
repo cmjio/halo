@@ -1,0 +1,6 @@
+{
+  "sources": [
+    { "name": "Rival pricing", "url": "https://example.com/pricing", "watch_for": "plan prices, plan limits, new or removed plans" },
+    { "name": "Rival changelog", "url": "https://example.com/changelog", "watch_for": "new features, especially anything about exports or integrations" }
+  ]
+}

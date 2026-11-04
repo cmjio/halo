@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CronError, cronMatches, nextRun, parseCron } from "../src/serve/cron";
-import { startServer, ServeError, type HaloServer, type ServeOptions } from "../src/serve/server";
+import { argsFromBody, startServer, ServeError, type HaloServer, type ServeOptions } from "../src/serve/server";
+import { parse } from "../src/parser/index";
 import type { MockRequest } from "../src/runtime/runtime";
 
 const tmp = mkdtempSync(join(tmpdir(), "halo-serve-"));
@@ -345,6 +346,18 @@ describe("halo serve", () => {
     } finally {
       await s.stop();
     }
+  });
+
+  test("a webhook's args are passed with its body, and the body can't override them", async () => {
+    const decl = parse(`pipeline P(org: String, repo: String, event: JSON) -> Result:\n  event |> System.Value(event)`).pipelines[0]!;
+    const body = { action: "created", data: { id: "1" } };
+    // One parameter left: it gets the whole body
+    expect(argsFromBody(decl, body, { org: "acme", repo: "acme/api" })).toEqual({ org: "acme", repo: "acme/api", event: body });
+    // Fields matching by name still win, and fixed args beat the body
+    expect(argsFromBody(decl, { event: 1, org: "evil" }, { org: "acme", repo: "acme/api" })).toEqual({ org: "acme", repo: "acme/api", event: 1 });
+    // Without fixed args, unchanged: no match and several parameters → nothing
+    expect(argsFromBody(decl, body)).toEqual({});
+    await expect(serve({ webhooks: [{ path: "x", pipeline: "Quick", args: { m: 1 } }] })).rejects.toThrow(`Webhook for Quick has args "m", but Quick takes (n)`);
   });
 
   test("bad config fails at startup with a clear message", async () => {

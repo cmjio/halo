@@ -59,7 +59,8 @@ USAGE:
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name] [--template <name>]  Create a new Halo project, or a deployable app from a
-                                        blueprint (support-inbox)
+                                        blueprint: support-inbox, github-triage,
+                                        incident-responder, customer-chat, web-monitor
   halo upgrade                          Update an installed halo to the latest release
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
@@ -503,7 +504,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
         if (!(await Bun.file(bodyPath).exists())) fail(`Body file not found: ${bodyPath}`);
         body = await Bun.file(bodyPath).json().catch((e: unknown) => fail(`Body file ${bodyPath} is not valid JSON: ${e instanceof Error ? e.message : e}`));
       }
-      const args = { ...(bodyPath ? argsFromBody(pipeline, body) : {}), ...inputArgs(flags) };
+      // --arg values are passed like a webhook's `args` in halo.json: alongside the body.
+      const args = bodyPath ? argsFromBody(pipeline, body, inputArgs(flags)) : inputArgs(flags);
       const missing = pipeline.params.filter((p) => !(p.name in args)).map((p) => p.name);
       if (missing.length) {
         fail(`Missing argument(s) for ${pipeline.name}(${pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ")}): ${missing.join(", ")}\n  Pass them with ${missing.map((m) => `--arg ${m}=...`).join(" ")}`);

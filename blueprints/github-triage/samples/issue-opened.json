@@ -1,0 +1,12 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 42,
+    "title": "CSV export hangs on large workspaces",
+    "body": "When I export a workspace with ~50k rows the download never starts. Smaller workspaces work fine.",
+    "html_url": "https://github.com/acme/api/issues/42",
+    "user": { "login": "dana", "type": "User" }
+  },
+  "repository": { "full_name": "acme/api" },
+  "sender": { "login": "dana", "type": "User" }
+}

@@ -1,0 +1,36 @@
+{
+  "Incidents": "live",
+  "Seen": "live",
+  "Sentry.latest_event": {
+    "message": "",
+    "platform": "node",
+    "release": { "version": "api@2026.11.04-1" },
+    "tags": [{ "key": "environment", "value": "production" }, { "key": "url", "value": "/v1/invoices" }],
+    "entries": [{
+      "type": "exception",
+      "data": { "values": [{
+        "type": "TypeError",
+        "value": "Cannot read properties of undefined (reading 'currency')",
+        "stacktrace": { "frames": [
+          { "filename": "src/routes/invoices.ts", "function": "createInvoice", "lineNo": 41, "inApp": true, "context_line": "  const invoice = buildInvoice(customer, items);" },
+          { "filename": "src/billing/invoice.ts", "function": "buildInvoice", "lineNo": 88, "inApp": true, "context_line": "  const currency = customer.plan.currency;" }
+        ] }
+      }] }
+    }]
+  },
+  "Code.commits": [
+    { "sha": "9f2c1ab7e4", "html_url": "https://github.com/acme/api/commit/9f2c1ab7e4", "commit": { "message": "Let customers on legacy plans be invoiced without a plan record", "author": { "name": "Sam", "date": "2026-11-04T08:55:00Z" } } },
+    { "sha": "41d0e93c22", "html_url": "https://github.com/acme/api/commit/41d0e93c22", "commit": { "message": "Docs: update README", "author": { "name": "Lee", "date": "2026-11-03T16:10:00Z" } } }
+  ],
+  "Investigator.investigate": {
+    "severity": "sev2",
+    "summary": "Creating an invoice fails with a TypeError for customers without a plan record. It started at 09:12, 37 times so far.",
+    "likely_cause": "buildInvoice in src/billing/invoice.ts reads customer.plan.currency, but since 9f2c1ab legacy customers can reach it with no plan.",
+    "suspect_commits": "- [9f2c1ab](https://github.com/acme/api/commit/9f2c1ab7e4): lets customers without a plan record reach invoicing",
+    "first_steps": "- [ ] Fall back to the account's currency when customer.plan is missing\n- [ ] Or revert 9f2c1ab\n- [ ] Re-run the failed invoices",
+    "seen_before": "",
+    "confidence": 0.8
+  },
+  "Tickets.create_issue": { "id": "ENG-512", "url": "https://linear.app/acme/issue/ENG-512" },
+  "Team.post": { "ok": true, "channel": "C0000", "ts": "1" }
+}

@@ -51,7 +51,15 @@ ANTHROPIC_API_KEY=... halo debug examples/50-github-triage.halo --arg repo=oven-
 
 ### 📦 Start from a blueprint
 
-A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it.
+A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`.
+
+| Blueprint | Trigger | What it does |
+|---|---|---|
+| [`support-inbox`](blueprints/support-inbox) | inbound email webhook | Drafts a reply from your help articles; a person approves or edits it before Resend sends it |
+| [`github-triage`](blueprints/github-triage) | GitHub webhook, weekly schedule | Labels new issues, asks authors for missing details after approval, and posts a weekly summary to Slack |
+| [`incident-responder`](blueprints/incident-responder) | Sentry webhook | Reads the stack trace, recent commits and past incidents, then opens a Linear issue and posts the likely cause in Slack |
+| [`customer-chat`](blueprints/customer-chat) | your backend, over the API | Answers customers about their own orders (Postgres) with per-customer memory, and hands off to Slack |
+| [`web-monitor`](blueprints/web-monitor) | hourly and daily schedules | Notes changes that matter on pages you watch, and emails one digest each weekday |
 
 ```bash
 halo init my-inbox --template support-inbox && cd my-inbox
@@ -102,7 +110,7 @@ halo test <file.halo> ...             # offline: --mock --auto-approve (--mocks 
 halo resume <file.halo> <runId> --payload approve   # continue a paused run
 halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
-halo init [name] [--template support-inbox]   # a new project, or a deployable blueprint
+halo init [name] [--template <blueprint>]     # a new project, or a deployable blueprint
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-tools)

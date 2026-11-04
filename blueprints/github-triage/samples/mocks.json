@@ -1,0 +1,21 @@
+{
+  "History": "live",
+  "Seen": "live",
+  "Triager.classify": {
+    "labels": ["bug", "needs-info"],
+    "priority": "p2",
+    "summary": "CSV export never starts for a workspace with about 50,000 rows.",
+    "duplicate_of": null,
+    "missing": "The app version, the browser, and whether the export fails or keeps loading.",
+    "confidence": 0.85
+  },
+  "Repo.add_labels": { "labels": ["bug", "needs-info"] },
+  "Writer.draft_comment": "Thanks for the report, @dana! To dig in, could you tell us:\n\n- [ ] the app version\n- [ ] your browser\n- [ ] whether the export fails with an error or keeps loading",
+  "Repo.comment": { "id": 1, "url": "https://github.com/acme/api/issues/42#issuecomment-1" },
+  "Repo.list_issues": [
+    { "number": 42, "title": "CSV export hangs on large workspaces", "html_url": "https://github.com/acme/api/issues/42", "labels": [{ "name": "bug" }], "comments": 0, "created_at": "2026-11-02T10:00:00Z" },
+    { "number": 40, "title": "Dark mode for the dashboard", "html_url": "https://github.com/acme/api/issues/40", "labels": [{ "name": "feature" }], "comments": 3, "created_at": "2026-10-28T10:00:00Z" }
+  ],
+  "Reporter.weekly_report": "2 open issues, no pull requests.\n• <https://github.com/acme/api/issues/42|#42 CSV export hangs on large workspaces> (bug, no reply yet)\n• <https://github.com/acme/api/issues/40|#40 Dark mode for the dashboard> (feature)\nSuggestion: reproduce #42 with a 50k-row workspace.",
+  "Team.post": { "ok": true, "channel": "C0000", "ts": "1" }
+}

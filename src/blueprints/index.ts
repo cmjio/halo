@@ -5,20 +5,65 @@
  */
 
 // .json and .toml files are imported as text too; TypeScript only knows their parsed types.
-import siReadme from "../../blueprints/support-inbox/README.md" with { type: "text" };
-import siHaloJson from "../../blueprints/support-inbox/halo.json" with { type: "text" };
-import siEnv from "../../blueprints/support-inbox/.env.example" with { type: "text" };
-import siGitignore from "../../blueprints/support-inbox/.gitignore" with { type: "text" };
-import siDockerfile from "../../blueprints/support-inbox/Dockerfile" with { type: "text" };
-import siFly from "../../blueprints/support-inbox/fly.toml" with { type: "text" };
-import siPipeline from "../../blueprints/support-inbox/pipelines/support.halo" with { type: "text" };
-import siBilling from "../../blueprints/support-inbox/knowledge/billing.md" with { type: "text" };
-import siExport from "../../blueprints/support-inbox/knowledge/exporting-data.md" with { type: "text" };
-import siInvite from "../../blueprints/support-inbox/knowledge/inviting-teammates.md" with { type: "text" };
-import siPassword from "../../blueprints/support-inbox/knowledge/password-reset.md" with { type: "text" };
-import siEmail from "../../blueprints/support-inbox/samples/email.json" with { type: "text" };
-import siInjection from "../../blueprints/support-inbox/samples/email-injection.json" with { type: "text" };
-import siMocks from "../../blueprints/support-inbox/samples/mocks.json" with { type: "text" };
+// test/blueprints.test.ts checks that each list matches its folder exactly.
+// support-inbox
+import si0 from "../../blueprints/support-inbox/.env.example" with { type: "text" };
+import si1 from "../../blueprints/support-inbox/.gitignore" with { type: "text" };
+import si2 from "../../blueprints/support-inbox/Dockerfile" with { type: "text" };
+import si3 from "../../blueprints/support-inbox/README.md" with { type: "text" };
+import si4 from "../../blueprints/support-inbox/fly.toml" with { type: "text" };
+import si5 from "../../blueprints/support-inbox/halo.json" with { type: "text" };
+import si6 from "../../blueprints/support-inbox/knowledge/billing.md" with { type: "text" };
+import si7 from "../../blueprints/support-inbox/knowledge/exporting-data.md" with { type: "text" };
+import si8 from "../../blueprints/support-inbox/knowledge/inviting-teammates.md" with { type: "text" };
+import si9 from "../../blueprints/support-inbox/knowledge/password-reset.md" with { type: "text" };
+import si10 from "../../blueprints/support-inbox/pipelines/support.halo" with { type: "text" };
+import si11 from "../../blueprints/support-inbox/samples/email-injection.json" with { type: "text" };
+import si12 from "../../blueprints/support-inbox/samples/email.json" with { type: "text" };
+import si13 from "../../blueprints/support-inbox/samples/mocks.json" with { type: "text" };
+// github-triage
+import gt0 from "../../blueprints/github-triage/.env.example" with { type: "text" };
+import gt1 from "../../blueprints/github-triage/.gitignore" with { type: "text" };
+import gt2 from "../../blueprints/github-triage/Dockerfile" with { type: "text" };
+import gt3 from "../../blueprints/github-triage/README.md" with { type: "text" };
+import gt4 from "../../blueprints/github-triage/fly.toml" with { type: "text" };
+import gt5 from "../../blueprints/github-triage/halo.json" with { type: "text" };
+import gt6 from "../../blueprints/github-triage/pipelines/triage.halo" with { type: "text" };
+import gt7 from "../../blueprints/github-triage/samples/issue-opened.json" with { type: "text" };
+import gt8 from "../../blueprints/github-triage/samples/mocks.json" with { type: "text" };
+// incident-responder
+import ir0 from "../../blueprints/incident-responder/.env.example" with { type: "text" };
+import ir1 from "../../blueprints/incident-responder/.gitignore" with { type: "text" };
+import ir2 from "../../blueprints/incident-responder/Dockerfile" with { type: "text" };
+import ir3 from "../../blueprints/incident-responder/README.md" with { type: "text" };
+import ir4 from "../../blueprints/incident-responder/fly.toml" with { type: "text" };
+import ir5 from "../../blueprints/incident-responder/halo.json" with { type: "text" };
+import ir6 from "../../blueprints/incident-responder/pipelines/incidents.halo" with { type: "text" };
+import ir7 from "../../blueprints/incident-responder/samples/mocks.json" with { type: "text" };
+import ir8 from "../../blueprints/incident-responder/samples/sentry-issue.json" with { type: "text" };
+// customer-chat
+import cc0 from "../../blueprints/customer-chat/.env.example" with { type: "text" };
+import cc1 from "../../blueprints/customer-chat/.gitignore" with { type: "text" };
+import cc2 from "../../blueprints/customer-chat/Dockerfile" with { type: "text" };
+import cc3 from "../../blueprints/customer-chat/README.md" with { type: "text" };
+import cc4 from "../../blueprints/customer-chat/db/schema.sql" with { type: "text" };
+import cc5 from "../../blueprints/customer-chat/fly.toml" with { type: "text" };
+import cc6 from "../../blueprints/customer-chat/halo.json" with { type: "text" };
+import cc7 from "../../blueprints/customer-chat/pipelines/chat.halo" with { type: "text" };
+import cc8 from "../../blueprints/customer-chat/policies/store-policies.md" with { type: "text" };
+import cc9 from "../../blueprints/customer-chat/samples/message.json" with { type: "text" };
+import cc10 from "../../blueprints/customer-chat/samples/mocks.json" with { type: "text" };
+import cc11 from "../../blueprints/customer-chat/samples/refund.json" with { type: "text" };
+// web-monitor
+import wm0 from "../../blueprints/web-monitor/.env.example" with { type: "text" };
+import wm1 from "../../blueprints/web-monitor/.gitignore" with { type: "text" };
+import wm2 from "../../blueprints/web-monitor/Dockerfile" with { type: "text" };
+import wm3 from "../../blueprints/web-monitor/README.md" with { type: "text" };
+import wm4 from "../../blueprints/web-monitor/fly.toml" with { type: "text" };
+import wm5 from "../../blueprints/web-monitor/halo.json" with { type: "text" };
+import wm6 from "../../blueprints/web-monitor/pipelines/monitor.halo" with { type: "text" };
+import wm7 from "../../blueprints/web-monitor/samples/mocks.json" with { type: "text" };
+import wm8 from "../../blueprints/web-monitor/samples/sources.json" with { type: "text" };
 
 export interface Blueprint {
   name: string;
@@ -40,20 +85,97 @@ export const BLUEPRINTS: Record<string, Blueprint> = {
       "halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json",
     ],
     files: {
-      "README.md": text(siReadme),
-      "halo.json": text(siHaloJson),
-      ".env.example": text(siEnv),
-      ".gitignore": text(siGitignore),
-      Dockerfile: text(siDockerfile),
-      "fly.toml": text(siFly),
-      "pipelines/support.halo": text(siPipeline),
-      "knowledge/billing.md": text(siBilling),
-      "knowledge/exporting-data.md": text(siExport),
-      "knowledge/inviting-teammates.md": text(siInvite),
-      "knowledge/password-reset.md": text(siPassword),
-      "samples/email.json": text(siEmail),
-      "samples/email-injection.json": text(siInjection),
-      "samples/mocks.json": text(siMocks),
+      ".env.example": text(si0),
+      ".gitignore": text(si1),
+      Dockerfile: text(si2),
+      "README.md": text(si3),
+      "fly.toml": text(si4),
+      "halo.json": text(si5),
+      "knowledge/billing.md": text(si6),
+      "knowledge/exporting-data.md": text(si7),
+      "knowledge/inviting-teammates.md": text(si8),
+      "knowledge/password-reset.md": text(si9),
+      "pipelines/support.halo": text(si10),
+      "samples/email-injection.json": text(si11),
+      "samples/email.json": text(si12),
+      "samples/mocks.json": text(si13),
+    },
+  },
+  "github-triage": {
+    name: "github-triage",
+    description: "New GitHub issues → labeled → a comment for duplicates or missing details, after approval → a weekly Slack summary",
+    next: [
+      "halo test pipelines/triage.halo -p TriageIssue --body samples/issue-opened.json --mocks samples/mocks.json",
+      "halo test pipelines/triage.halo -p WeeklyReport --arg repo=acme/api --mocks samples/mocks.json",
+    ],
+    files: {
+      ".env.example": text(gt0),
+      ".gitignore": text(gt1),
+      Dockerfile: text(gt2),
+      "README.md": text(gt3),
+      "fly.toml": text(gt4),
+      "halo.json": text(gt5),
+      "pipelines/triage.halo": text(gt6),
+      "samples/issue-opened.json": text(gt7),
+      "samples/mocks.json": text(gt8),
+    },
+  },
+  "incident-responder": {
+    name: "incident-responder",
+    description: "New Sentry errors → stack trace, recent commits and past incidents → likely cause → a Linear issue and a Slack summary",
+    next: [
+      "halo test pipelines/incidents.halo -p HandleAlert --body samples/sentry-issue.json --arg org=acme --arg repo=acme/api --mocks samples/mocks.json",
+    ],
+    files: {
+      ".env.example": text(ir0),
+      ".gitignore": text(ir1),
+      Dockerfile: text(ir2),
+      "README.md": text(ir3),
+      "fly.toml": text(ir4),
+      "halo.json": text(ir5),
+      "pipelines/incidents.halo": text(ir6),
+      "samples/mocks.json": text(ir7),
+      "samples/sentry-issue.json": text(ir8),
+    },
+  },
+  "customer-chat": {
+    name: "customer-chat",
+    description: "A chat assistant for your site: per-customer memory, their orders from Postgres, your policies, and hand-off to Slack",
+    next: [
+      "halo test pipelines/chat.halo -p Chat --body samples/message.json --mocks samples/mocks.json",
+    ],
+    files: {
+      ".env.example": text(cc0),
+      ".gitignore": text(cc1),
+      Dockerfile: text(cc2),
+      "README.md": text(cc3),
+      "db/schema.sql": text(cc4),
+      "fly.toml": text(cc5),
+      "halo.json": text(cc6),
+      "pipelines/chat.halo": text(cc7),
+      "policies/store-policies.md": text(cc8),
+      "samples/message.json": text(cc9),
+      "samples/mocks.json": text(cc10),
+      "samples/refund.json": text(cc11),
+    },
+  },
+  "web-monitor": {
+    name: "web-monitor",
+    description: "Watched web pages → changes that matter → one email digest every weekday morning",
+    next: [
+      // Then README.md walks through a change and the digest.
+      "halo test pipelines/monitor.halo -p CheckAll --body samples/sources.json --mocks samples/mocks.json",
+    ],
+    files: {
+      ".env.example": text(wm0),
+      ".gitignore": text(wm1),
+      Dockerfile: text(wm2),
+      "README.md": text(wm3),
+      "fly.toml": text(wm4),
+      "halo.json": text(wm5),
+      "pipelines/monitor.halo": text(wm6),
+      "samples/mocks.json": text(wm7),
+      "samples/sources.json": text(wm8),
     },
   },
 };

@@ -1,0 +1,15 @@
+{
+  "Last": "live",
+  "Changes": "live",
+  "Page.fetch": {
+    "url": "https://example.com/pricing",
+    "title": "Pricing",
+    "content": "Starter £9/month: 3 projects. Team £29/month: unlimited projects, SSO."
+  },
+  "Analyst.compare": {
+    "matters": true,
+    "summary": "Team went from £25 to £29 a month and now includes SSO."
+  },
+  "Editor.write_digest": "1 change on a watched page today.\n\nRival pricing (https://example.com/pricing)\n- Team went from £25 to £29 a month and now includes SSO.",
+  "Mail.send": { "sent": true, "id": "mock-email-id", "to": ["team@example.com"] }
+}

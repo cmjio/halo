@@ -28,7 +28,7 @@ halo test support.halo -p HandleEmail --body samples/email.json --mocks samples/
 }
 ```
 
-`--body <file.json>` builds the arguments from a JSON body the way a `halo serve` webhook does: its fields that match the pipeline's parameters, or, for a pipeline with one parameter the body doesn't name, the whole body. `--arg` and `--args` add to them.
+`--body <file.json>` builds the arguments from a JSON body the way a `halo serve` webhook does: its fields that match the pipeline's parameters, or, for a pipeline with one parameter the body doesn't name, the whole body. `--arg` and `--args` are passed alongside, like a webhook's `args` in `halo.json`: they win over the body, and the parameters they fill don't count, so `--body alert.json --arg org=acme --arg repo=acme/api` gives the whole body to the one parameter left.
 
 ## With `bun test`
 

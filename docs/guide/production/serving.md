@@ -30,7 +30,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
     { "pipeline": "TriageIssues", "cron": "0 9 * * 1-5", "args": { "repo": "acme/api", "limit": 10 } }
   ],
   "webhooks": [
-    { "path": "github", "pipeline": "TriageIssues", "secret": "Env.GITHUB_WEBHOOK_SECRET" }
+    { "path": "github", "pipeline": "TriageIssues", "secret": "Env.GITHUB_WEBHOOK_SECRET", "args": { "limit": 10 } }
   ],
   "watches": [
     { "pipeline": "OnRelease", "command": "git ls-remote --tags origin", "every": "5m" }
@@ -47,7 +47,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one |
 | `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used |
 | `schedules` | Start `pipeline` with `args` on a cron schedule |
-| `webhooks` | `POST /hooks/<path>` starts `pipeline` |
+| `webhooks` | `POST /hooks/<path>` starts `pipeline`, with optional fixed `args` |
 | `watches` | Start `pipeline` when a URL, file, or command's output changes |
 | `notify.slack` | A Slack incoming-webhook URL to announce paused runs |
 | `slack.signingSecret` | Your Slack app's signing secret. Adds Approve / Reject buttons to the announcements, answered at `POST /slack/actions`. If it names a variable that is empty or not set, the server refuses to start |
@@ -68,6 +68,8 @@ Standard 5-field cron in the server's local time: minute, hour, day of month, mo
 ### Webhooks
 
 The JSON body becomes the pipeline's arguments: fields that match parameter names are passed by name, and a pipeline with a single parameter that isn't in the body gets the whole body (handy for GitHub or Stripe events).
+
+`args` adds fixed arguments to every request, for settings that don't come in the body (an organization, a repo). The body can't override them, and a parameter they fill doesn't count when deciding which one gets the whole body: `HandleAlert(org, repo, alert)` with `"args": { "org": "acme", "repo": "acme/api" }` gets the body as `alert`. `halo serve` refuses to start when `args` names a parameter the pipeline doesn't have. `halo test --body` treats `--arg` values the same way.
 
 With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup. It still refuses requests a web page sends through someone's browser: an `Origin` other than localhost or `publicUrl`, and, when listening on localhost, a `Host` that isn't (DNS rebinding).
 

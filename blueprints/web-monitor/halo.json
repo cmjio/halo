@@ -1,0 +1,16 @@
+{
+  "files": ["pipelines/"],
+  "schedules": [
+    {
+      "pipeline": "CheckAll",
+      "cron": "0 * * * *",
+      "args": {
+        "sources": [
+          { "name": "Bun releases", "url": "https://github.com/oven-sh/bun/releases", "watch_for": "new releases and breaking changes" },
+          { "name": "Anthropic status", "url": "https://status.anthropic.com", "watch_for": "incidents and degraded service" }
+        ]
+      }
+    },
+    { "pipeline": "SendDigest", "cron": "0 8 * * 1-5" }
+  ]
+}

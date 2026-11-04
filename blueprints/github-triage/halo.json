@@ -1,0 +1,10 @@
+{
+  "files": ["pipelines/"],
+  "webhooks": [
+    { "path": "github", "pipeline": "TriageIssue", "secret": "Env.GITHUB_WEBHOOK_SECRET" }
+  ],
+  "schedules": [
+    { "pipeline": "WeeklyReport", "cron": "0 9 * * 1", "args": { "repo": "acme/api" } }
+  ],
+  "notify": { "slack": "Env.SLACK_WEBHOOK_URL" }
+}

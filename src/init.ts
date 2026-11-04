@@ -63,8 +63,9 @@ halo serve                        # an API, schedules, approvals, and Studio at 
 
 /** The blueprints `--template` accepts, one per line, for help and errors. */
 export function listTemplates(): string {
+  const width = Math.max(...Object.keys(BLUEPRINTS).map((n) => n.length)) + 2;
   return Object.values(BLUEPRINTS)
-    .map((b) => `  ${b.name.padEnd(16)} ${b.description}`)
+    .map((b) => `  ${b.name.padEnd(width)}${b.description}`)
     .join("\n");
 }
 
