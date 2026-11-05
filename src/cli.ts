@@ -24,7 +24,7 @@ import { AdapterRegistry } from "./runtime/adapter.js";
 import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type ListenRequest, type RunResult, type RuntimeEvent } from "./runtime/runtime.js";
 import { SqliteTelemetry } from "./runtime/telemetry.js";
 import { initProject } from "./init.js";
-import { argsFromBody, loadServeConfig, startServer, ServeError } from "./serve/server.js";
+import { argsFromBody, listenAddress, loadServeConfig, startServer, ServeError, type ServeConfig } from "./serve/server.js";
 import { nextRun, parseCron } from "./serve/cron.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
@@ -105,8 +105,10 @@ RESUME OPTIONS:
   --event <name>         What the run is waiting for (default: whatever it is waiting for)
 
 SERVE OPTIONS:
-  --port <n>             Port (default 8080)
-  --host <addr>          Interface (default 127.0.0.1; others need HALO_SERVE_TOKEN)
+  --port <n>             Port (default: PORT, then halo.json's port, then 8080)
+  --host <addr>          Interface (default: HALO_HOST, then halo.json's host, then 127.0.0.1,
+                         or 0.0.0.0 when PORT is set; anything but localhost needs
+                         HALO_SERVE_TOKEN)
   --config <file>        Config file (default ./halo.json if present): schedules,
                          webhooks, notify.slack, publicUrl, files
   --no-studio            Don't serve Halo Studio
@@ -564,15 +566,17 @@ function stageAt(ast: ParseResult, pipeline: string, index: number): string {
 }
 
 async function cmdServe(flags: Flags): Promise<number> {
-  const config = await loadServeConfig(last(flags, "config"));
-  const port = last(flags, "port");
   let server;
+  let config: ServeConfig;
   try {
+    config = await loadServeConfig(last(flags, "config"));
+    const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
     server = await startServer({
       ...config,
       files: flags.positional.length ? flags.positional : config.files,
-      port: port !== undefined ? Number(port) : config.port,
-      host: last(flags, "host") ?? config.host,
+      port: listen.port,
+      host: listen.host,
+      hostFrom: listen.from,
       studio: !flags.bools.has("no-studio"),
     });
   } catch (err) {
@@ -774,6 +778,16 @@ const compiled = () => Bun.main.startsWith("/$bunfs/") || /[\\/]~BUN[\\/]/.test(
 async function cmdUpgrade(): Promise<number> {
   if (!compiled()) {
     console.log(`This halo runs from a checkout of the source (${process.execPath} ${Bun.main}); update it with git pull.`);
+    return 0;
+  }
+  // The npm package and the container image set this, because replacing the binary in place would fight them.
+  const by = process.env.HALO_INSTALLED_BY;
+  if (by === "npm") {
+    console.log(`This halo was installed with npm. Update it there: npm install @halolang/halo@latest (or bun add, pnpm add, yarn add).`);
+    return 0;
+  }
+  if (by === "docker") {
+    console.log(`This halo is in the ghcr.io/cmjio/halo image. Use a newer image tag instead (docker pull ghcr.io/cmjio/halo:latest).`);
     return 0;
   }
   const latest = (await (await fetch("https://halolang.com/dl/latest.json")).json()) as { version: string };

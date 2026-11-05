@@ -1,0 +1,104 @@
+# Use Halo in a GitHub Actions workflow:
+#
+#   - uses: cmjio/halo@v0.5.0          # installs halo 0.5.0 and puts it on PATH
+#     with:
+#       command: validate --strict pipelines/
+#   - run: halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+#
+# Works on Linux, macOS and Windows runners. The binary is cached per version, so later runs
+# skip the download. Pin the action to a release tag: that tag is the version it installs.
+name: Halo
+description: Install the halo CLI, and optionally run a halo command (validate, test, run, plan).
+author: cmjio
+branding:
+  icon: circle
+  color: blue
+
+inputs:
+  version:
+    description: The Halo version to install, like 0.5.0. Default the version of the tag you used (cmjio/halo@v0.5.0), else the latest release.
+    required: false
+    default: ""
+  command:
+    description: A halo command to run after installing, without the leading "halo", such as "validate --strict pipelines/" or "test main.halo --arg topic=tides".
+    required: false
+    default: ""
+  working-directory:
+    description: Where to run the command.
+    required: false
+    default: "."
+
+outputs:
+  version:
+    description: The installed Halo version.
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: version
+      name: Choose the Halo version
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        version="${INPUT_VERSION#v}"
+        if [ -z "$version" ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          version="${ACTION_REF#v}"
+        fi
+        if [ -z "$version" ]; then
+          version=$(curl -fsSL --retry 3 https://halolang.com/dl/latest.json | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+        fi
+        if [ -z "$version" ]; then
+          echo "::error::Couldn't find the latest Halo version at https://halolang.com/dl/latest.json. Set the version input."
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "dir=$RUNNER_TOOL_CACHE/halo/$version" >> "$GITHUB_OUTPUT"
+
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.version.outputs.dir }}
+        key: halo-${{ steps.version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install halo ${{ steps.version.outputs.version }}
+      if: steps.cache.outputs.cache-hit != 'true' && runner.os != 'Windows'
+      shell: bash
+      env:
+        HALO_VERSION: ${{ steps.version.outputs.version }}
+        HALO_INSTALL: ${{ steps.version.outputs.dir }}
+        HALO_NO_MODIFY_PATH: "1"
+      run: curl -fsSL --retry 3 https://halolang.com/install.sh | sh
+
+    - name: Install halo ${{ steps.version.outputs.version }}
+      if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
+      shell: pwsh
+      env:
+        HALO_VERSION: ${{ steps.version.outputs.version }}
+        HALO_INSTALL: ${{ steps.version.outputs.dir }}
+        HALO_NO_MODIFY_PATH: "1"
+      run: irm https://halolang.com/install.ps1 | iex
+
+    - name: Put halo on PATH
+      shell: bash
+      env:
+        DIR: ${{ steps.version.outputs.dir }}
+        WANT: ${{ steps.version.outputs.version }}
+      run: |
+        echo "$DIR/bin" >> "$GITHUB_PATH"
+        got=$("$DIR/bin/halo" --version)
+        if [ "$got" != "$WANT" ]; then
+          echo "::error::Installed halo reports version $got, expected $WANT"
+          exit 1
+        fi
+
+    - name: halo ${{ inputs.command }}
+      if: inputs.command != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COMMAND: ${{ inputs.command }}
+        NO_COLOR: "1"
+      run: eval "halo $COMMAND"

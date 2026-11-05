@@ -57,6 +57,55 @@ jobs:
           printf 'tool Js : Code(lang: "ts")\npipeline P(x: String) -> Result:\n  x |> Js.run(code: "return 6 * 7")\n' > code.halo
           env -i PATH=/usr/bin:/bin HOME="$PWD" "$H" run code.halo --arg x=1 --no-record --no-telemetry | grep '"result": 42'
 
+  image:
+    name: Container image works
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun build index.ts --compile --minify --target=bun-linux-x64-baseline --outfile ctx/amd64/halo
+      - run: docker build --platform linux/amd64 -t halo:ci -f docker/Dockerfile ctx
+      - run: bash docker/smoke-test.sh halo:ci "$(jq -r .version package.json)"
+
+  action:
+    name: GitHub Action installs halo (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: halo
+        uses: ./
+        with:
+          command: validate examples/01-hello.halo
+      - name: halo is on PATH for later steps
+        shell: bash
+        run: |
+          test "$(halo --version)" = "${{ steps.halo.outputs.version }}"
+          halo test examples/01-hello.halo --arg name=CI
+
+  npm:
+    name: npm package runs halo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun build index.ts --compile --minify --target=bun-linux-x64 --outfile dist/release/ci/halo-linux-x64
+      - run: bun scripts/npm.ts --from dist/release/ci --only linux-x64
+      - name: npx halo works in a Node project, with no Bun on PATH
+        run: bash npm/smoke-test.sh dist/npm
+
   site:
     name: Site builds
     runs-on: ubuntu-latest

@@ -2,7 +2,72 @@
 
 The runtime needs **Bun**. It uses `Bun.file`, `Bun.CryptoHasher`, `bun:sqlite`, `Bun.SQL`, and `Bun.spawn`. Node-based hosts can't run it, including Next.js on Node, AWS Lambda's Node runtimes, and Cloudflare Workers. Any host that runs a Bun process works: a VM, a container (`oven/bun`), or a PaaS that runs Docker images.
 
-The simplest way to run pipelines as a service is [`halo serve`](./serving.md): an HTTP API, webhooks, schedules, approval links, and Studio in one process. The options below are for running pipelines yourself. For a worked example with a `Dockerfile`, a Fly.io config and a volume for paused runs, start from a [blueprint](./blueprints.md).
+The simplest way to run pipelines as a service is [`halo serve`](./serving.md): an HTTP API, webhooks, schedules, approval links, and Studio in one process. For a worked example with a `Dockerfile`, a Fly.io config and a volume for paused runs, start from a [blueprint](./blueprints.md).
+
+## Use what you already have
+
+Each of these is one line or one step in a setup you already run. They ship from Halo 0.5.0.
+
+| You already use | Add Halo with |
+|---|---|
+| Docker, or any host that runs images | `docker run -p 8080:8080 -v "$PWD:/app" -e HALO_SERVE_TOKEN -e ANTHROPIC_API_KEY ghcr.io/cmjio/halo` |
+| Render, Railway, Heroku, Cloud Run, Fly | A Dockerfile of two lines (below). `halo serve` reads `PORT` and the platform's public address |
+| GitHub Actions | `uses: cmjio/halo@v0.5.0`, then `halo` in any later step |
+| npm, pnpm, Yarn or Bun | `npm install --save-dev @halolang/halo`, then `npx halo ...` |
+| cron, a shell script, a CI job | `halo run flow.halo --json` (install with `curl -fsSL https://halolang.com/install.sh \| sh`) |
+| Another service, in any language | `POST /api/pipelines/<name>/runs` on `halo serve`, or a webhook |
+| Claude, Cursor, other MCP clients | `halo mcp`, or `/mcp` on `halo serve` |
+
+### The container image
+
+`ghcr.io/cmjio/halo` is Debian slim with the `halo` binary, `git` and `pdftotext`, for `linux/amd64` and `linux/arm64`. It runs `halo serve` in `/app` as user `halo` (uid 1000), with `PORT=8080`. Tags: the version (`0.5.0`), the minor version (`0.5`), and `latest`.
+
+```bash
+# Serve the pipelines in this folder
+docker run -p 8080:8080 -v "$PWD:/app" \
+  -e HALO_SERVE_TOKEN=change-me -e ANTHROPIC_API_KEY ghcr.io/cmjio/halo
+
+# Any other command
+docker run --rm -v "$PWD:/app" ghcr.io/cmjio/halo test main.halo --arg topic=tides
+```
+
+To deploy to a host that builds from a Dockerfile:
+
+```dockerfile
+FROM ghcr.io/cmjio/halo:0.5
+COPY --chown=halo . .
+```
+
+- It refuses to serve without `HALO_SERVE_TOKEN`, because it listens on every interface inside the container.
+- Paused runs, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart.
+- On Linux, a bind-mounted folder must be writable by uid 1000. Otherwise add `--user "$(id -u)"`.
+- `halo upgrade` doesn't replace the binary in the image. Use a newer tag.
+
+### GitHub Actions
+
+```yaml
+- uses: cmjio/halo@v0.5.0
+  with:
+    command: validate --strict pipelines/
+- run: halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+```
+
+The action installs the version of the tag you use (or `version:`), caches it, and puts `halo` on `PATH` for later steps, on Linux, macOS and Windows runners. `command` is optional. Its output `version` is the installed version.
+
+### npm
+
+```bash
+npx @halolang/halo init my-project       # without installing
+npm install --save-dev @halolang/halo    # then npx halo, or halo in package.json scripts
+```
+
+The package is a small launcher. npm installs the standalone binary for your machine as an optional dependency (`@halolang/halo-<platform>`), so it needs no Bun. It covers macOS, Linux (glibc and musl, x64 and arm64) and Windows x64. If your install omits optional dependencies, or your x64 CPU lacks AVX2, use the install script instead. Update with your package manager; `halo upgrade` says so.
+
+The npm package is the CLI only. To use Halo as a library in a Bun app, see [Option 2](#option-2-embed-the-runtime-in-a-bun-server).
+
+## Running pipelines yourself
+
+The options below run pipelines from your own process instead of `halo serve`.
 
 ## Option 1: run the CLI
 

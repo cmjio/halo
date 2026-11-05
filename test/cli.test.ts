@@ -212,3 +212,45 @@ pipeline Approve(doc: String) -> Result:
     expect(typeof mod.HaloRuntime).toBe("function");
   });
 });
+
+describe("halo serve on a hosting platform", () => {
+  async function serveWith(env: Record<string, string>) {
+    const dir = mkdtempSync(join(work, "paas-"));
+    await Bun.write(join(dir, "flow.halo"), `agent A [ollama/llama3.2]\npipeline P(x: String) -> Result:\n  x |> A.say()\n`);
+    const p = Bun.spawn(["bun", join(root, "index.ts"), "serve", "--no-studio"], {
+      cwd: dir,
+      env: { ...Bun.env, NO_COLOR: "1", HALO_SERVE_TOKEN: "", HALO_HOST: "", PORT: "", ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return p;
+  }
+
+  test("PORT without a token refuses to start, and says why", async () => {
+    const p = await serveWith({ PORT: "0" });
+    expect(await p.exited).toBe(1);
+    const err = await new Response(p.stderr).text();
+    expect(err).toContain("Refusing to listen on 0.0.0.0 without a token");
+    expect(err).toContain("PORT is set");
+  });
+
+  test("PORT with a token listens on every interface, at that port", async () => {
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    const p = await serveWith({ PORT: String(port), HALO_SERVE_TOKEN: "tok" });
+    try {
+      const reader = p.stdout.getReader();
+      let out = "";
+      while (!out.includes("API")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out += new TextDecoder().decode(value);
+      }
+      expect(out).toContain(`at http://0.0.0.0:${port}`);
+      const res = await fetch(`http://127.0.0.1:${port}/api/pipelines`, { headers: { Authorization: "Bearer tok" } });
+      expect(res.status).toBe(200);
+    } finally {
+      p.kill();
+      await p.exited;
+    }
+  });
+});

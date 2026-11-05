@@ -17,7 +17,14 @@ The [Release workflow](workflows/release.yml) then:
    local copy of the release, and runs `halo init` and `halo test` with it;
 4. if all of that passes: creates the GitHub release with the binaries and `SHA256SUMS`,
    uploads the same files to halolang.com/dl (so `curl … | sh` and `halo upgrade` get the
-   new version), and redeploys the site.
+   new version), and redeploys the site;
+5. builds the container image from the Linux binaries, runs `docker/smoke-test.sh` on it,
+   and pushes `ghcr.io/cmjio/halo:<version>`, `:<major.minor>` and `:latest` (amd64 and arm64);
+6. builds the npm packages (`bun scripts/npm.ts`), runs `npm/smoke-test.sh` on the linux-x64
+   one, and publishes `@halolang/halo-<platform>` and then `@halolang/halo`, with provenance.
+
+The tag is also how people pin the GitHub Action (`uses: cmjio/halo@v0.5.0`): `action.yml`
+at the repository root installs the version of the tag it's used at.
 
 A version's files are cached forever once published, so a fix is a new version. Every push
 and pull request also runs [CI](workflows/ci.yml): typecheck, tests on Linux and macOS, the
@@ -33,6 +40,14 @@ Publishing to halolang.com needs a Cloudflare API token, stored as a repository 
 2. `gh secret set CLOUDFLARE_API_TOKEN` and paste it.
 
 The account id is set as the repository variable `CLOUDFLARE_ACCOUNT_ID`.
+
+**npm.** Create the `halolang` organization on npmjs.com, then an automation (or granular,
+publish-only) access token for it, and `gh secret set NPM_TOKEN`. Without the secret the npm
+job warns and skips, and the rest of the release still ships.
+
+**Container image.** Nothing to set up: the workflow pushes with its own `GITHUB_TOKEN`.
+After the first release, open the `halo` package under the account's GitHub Packages, and
+change its visibility to public so `docker pull` works without signing in.
 
 ## By hand
 

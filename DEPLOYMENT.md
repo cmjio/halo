@@ -2,6 +2,17 @@
 
 Halo needs **Bun**. The runtime uses `Bun.file`, `Bun.CryptoHasher`, `bun:sqlite`, `Bun.SQL`, and `Bun.spawn`, so Node-only hosts can't run it. That includes Next.js on Node, AWS Lambda's Node runtimes, and Cloudflare Workers. Any VM, container, or PaaS that runs a Bun process works. The full guide is in `docs/guide/production/deploying.md`.
 
+## The quickest ways
+
+From 0.5.0, without writing a Dockerfile:
+
+- **Any host that runs images**: `ghcr.io/cmjio/halo` runs `halo serve` on `/app`. Set `HALO_SERVE_TOKEN` and your provider keys, and mount a volume at `/app/.halo` for paused runs. To build on it: `FROM ghcr.io/cmjio/halo:0.5` then `COPY --chown=halo . .`.
+- **Render, Railway, Heroku, Cloud Run, Fly**: `halo serve` takes the port from `PORT`, listens on every interface when `PORT` is set (which needs `HALO_SERVE_TOKEN`), and uses the platform's public address in approval links.
+- **GitHub Actions**: `uses: cmjio/halo@v0.5.0`, then `halo validate`, `halo test` or `halo run` in any step.
+- **npm**: `npm install --save-dev @halolang/halo`, then `npx halo`. The binary comes with it, so no Bun is needed.
+
+Details: `docs/guide/production/deploying.md`.
+
 ## Local models (no API key)
 
 ```bash

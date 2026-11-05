@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CronError, cronMatches, nextRun, parseCron } from "../src/serve/cron";
-import { startServer, ServeError, type HaloServer, type ServeOptions } from "../src/serve/server";
+import { listenAddress, platformPublicUrl, startServer, ServeError, type HaloServer, type ServeOptions } from "../src/serve/server";
 import type { MockRequest } from "../src/runtime/runtime";
 
 const tmp = mkdtempSync(join(tmpdir(), "halo-serve-"));
@@ -499,5 +499,78 @@ describe("watches, Slack buttons, and MCP", () => {
     } finally {
       await s.stop();
     }
+  });
+});
+
+describe("where halo serve listens", () => {
+  test("defaults: halo.json, else nothing (127.0.0.1:8080 in startServer)", () => {
+    expect(listenAddress({}, {}, {})).toEqual({ port: undefined, host: undefined, from: undefined });
+    expect(listenAddress({}, { port: 9000, host: "127.0.0.1" }, {})).toEqual({ port: 9000, host: "127.0.0.1", from: undefined });
+  });
+
+  test("PORT, as hosting platforms set it, wins over halo.json and means every interface", () => {
+    expect(listenAddress({}, { port: 9000 }, { PORT: "10000" })).toEqual({ port: 10000, host: "0.0.0.0", from: "PORT" });
+  });
+
+  test("an explicit host wins over the PORT default: flag, then HALO_HOST, then halo.json", () => {
+    expect(listenAddress({ host: "::1" }, { host: "127.0.0.1" }, { PORT: "10000", HALO_HOST: "10.0.0.2" }).host).toBe("::1");
+    expect(listenAddress({}, { host: "127.0.0.1" }, { PORT: "10000", HALO_HOST: "10.0.0.2" }).host).toBe("10.0.0.2");
+    expect(listenAddress({}, { host: "127.0.0.1" }, { PORT: "10000" })).toEqual({ port: 10000, host: "127.0.0.1", from: undefined });
+  });
+
+  test("--port wins over PORT, and then the host stays local", () => {
+    expect(listenAddress({ port: "3000" }, {}, { PORT: "10000" })).toEqual({ port: 3000, host: undefined, from: undefined });
+  });
+
+  test("a bad port says where it came from", () => {
+    expect(() => listenAddress({}, {}, { PORT: "eighty" })).toThrow(`PORT must be a port number from 0 to 65535, not "eighty"`);
+    expect(() => listenAddress({ port: "70000" }, {}, {})).toThrow(`--port must be`);
+    expect(() => listenAddress({}, { port: -1 }, {})).toThrow(`halo.json port must be`);
+    expect(listenAddress({}, {}, { PORT: "  " }).port).toBeUndefined();
+  });
+
+  test("off localhost because of PORT, the refusal says how to stay local", async () => {
+    const dir = mkdtempSync(join(tmp, "port-"));
+    await Bun.write(join(dir, "flow.halo"), FLOW);
+    const err = await startServer({ files: [dir], port: 0, host: "0.0.0.0", hostFrom: "PORT", stateDir: join(dir, ".halo"), scheduler: false, logger: quiet, env: {} }).catch((e) => e);
+    expect(err).toBeInstanceOf(ServeError);
+    expect(err.message).toContain("set HALO_HOST=127.0.0.1");
+  });
+});
+
+describe("approval links on a hosting platform", () => {
+  test("the public address comes from the platform's own variables", () => {
+    expect(platformPublicUrl({ RENDER_EXTERNAL_URL: "https://inbox.onrender.com" })).toBe("https://inbox.onrender.com");
+    expect(platformPublicUrl({ RAILWAY_PUBLIC_DOMAIN: "inbox.up.railway.app" })).toBe("https://inbox.up.railway.app");
+    expect(platformPublicUrl({ FLY_APP_NAME: "inbox" })).toBe("https://inbox.fly.dev");
+    expect(platformPublicUrl({})).toBeUndefined();
+  });
+
+  test("HALO_PUBLIC_URL wins over the platform's address, and links use it", async () => {
+    const s = await serve({ env: { HALO_PUBLIC_URL: "https://halo.example.com", FLY_APP_NAME: "inbox" } });
+    try {
+      const runId = s.start("Draft", { topic: "x" }, "test");
+      await s.settled(runId);
+      expect(await s.approvalUrl(runId)).toStartWith("https://halo.example.com/approve/");
+    } finally {
+      await s.stop();
+    }
+    const f = await serve({ env: { FLY_APP_NAME: "inbox" } });
+    try {
+      const runId = f.start("Draft", { topic: "x" }, "test");
+      await f.settled(runId);
+      expect(await f.approvalUrl(runId)).toStartWith("https://inbox.fly.dev/approve/");
+    } finally {
+      await f.stop();
+    }
+  });
+
+  test("listening everywhere with no public address warns that links won't open", async () => {
+    const warnings: string[] = [];
+    const dir = mkdtempSync(join(tmp, "warn-"));
+    await Bun.write(join(dir, "flow.halo"), FLOW);
+    const s = await startServer({ files: [dir], port: 0, host: "0.0.0.0", token: "t", stateDir: join(dir, ".halo"), scheduler: false, env: {}, logger: { ...quiet, warn: (m: string) => warnings.push(m) } });
+    await s.stop();
+    expect(warnings.join("\n")).toContain("Set HALO_PUBLIC_URL");
   });
 });
