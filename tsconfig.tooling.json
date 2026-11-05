@@ -1,0 +1,17 @@
+{
+  // The repo's build, release and site code: everything outside the CLI (tsconfig.json)
+  // and the studio (studio/tsconfig.json). DOM is in lib for the site's browser code.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable"]
+  },
+  "include": [
+    "scripts/**/*.ts",
+    "registry/**/*.ts",
+    "site/**/*.ts",
+    "docs/.vitepress/**/*.ts",
+    // Shims for non-TS imports the code above pulls in from src (blueprints, skills' .md)
+    "src/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "**/node_modules", "site/dist", "docs/.vitepress/cache", "docs/.vitepress/dist"]
+}
