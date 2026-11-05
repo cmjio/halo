@@ -20,3 +20,7 @@ export function compile(source: string, options?: ValidateOptions): { ast: Parse
   const diagnostics = validate(ast, options);
   return { ast, diagnostics, ok: !diagnostics.some((d) => d.severity === "error") };
 }
+
+// Built-in agent presets and skills.
+export { AGENT_PRESETS, PRESET_NAMES, applyPreset, findPreset, type AgentPreset } from "./runtime/presets.js";
+export { BUILTIN_SKILLS, findSkill, loadSkillDir, parseSkill, skillCatalog, type Skill } from "./runtime/skills.js";

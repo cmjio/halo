@@ -421,7 +421,8 @@ describe("Documents", () => {
 test("every provider has info, with an effect for each method", () => {
   expect(Object.keys(LOCAL_PROVIDER_INFO).sort()).toEqual(Object.keys(LOCAL_PROVIDERS).sort());
   const effects = Object.fromEntries(
-    Object.entries(LOCAL_PROVIDER_INFO).flatMap(([p, info]) => (info.methods as Array<{ name: string; effect: string }>).map((m) => [`${p}.${m.name}`, m.effect])),
+    // The newer providers (Clock, Calc, Data, Git, WebSearch, Skills) are covered in builtins-kit.test.ts.
+    Object.entries(LOCAL_PROVIDER_INFO).filter(([p]) => ["Workspace", "KV", "Code", "Documents"].includes(p)).flatMap(([p, info]) => (info.methods as Array<{ name: string; effect: string }>).map((m) => [`${p}.${m.name}`, m.effect])),
   );
   expect(effects).toEqual({
     "Workspace.read": "read",

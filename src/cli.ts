@@ -29,6 +29,8 @@ import { nextRun, parseCron } from "./serve/cron.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
+import { AGENT_PRESETS } from "./runtime/presets.js";
+import { findSkill, skillCatalog, skillFiles } from "./runtime/skills.js";
 import { formatPlan, plan, type PlanOptions } from "./plan.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
@@ -74,6 +76,8 @@ TOOL PACKAGES:
   halo install [--trust]                Install everything halo.lock pins (--trust: also the
                                         packages that run code; trust is never read from the lock)
   halo tools [--json]                   List every tool provider and its methods
+  halo agents [--json]                  List the built-in agent presets (agent X [model, preset: Name])
+  halo skills [name] [--dir skills]     List skills (yours and built-in), or print one
   halo pack <dir>                       Bundle a package folder into a .halotool file
   halo publish <file.halotool> --registry <index.json>   Add it to a registry index
 
@@ -144,7 +148,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "no-builtin"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -834,6 +838,42 @@ async function cmdTools(flags: Flags): Promise<number> {
   return 0;
 }
 
+function cmdAgents(flags: Flags): number {
+  const rows = Object.values(AGENT_PRESETS).map((p) => ({ name: p.name, summary: p.summary, settings: p.params, skills: p.skills ?? [], returns: p.returns ?? null }));
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(rows, null, 2));
+    return 0;
+  }
+  for (const r of rows) {
+    console.log(`${bold(r.name)}  ${r.summary}`);
+    const extra = [Object.entries(r.settings).map(([k, v]) => `${k}: ${v}`).join(", "), r.skills.length ? `skills: ${r.skills.join(", ")}` : "", r.returns ? `returns ${r.returns}` : ""].filter(Boolean);
+    console.log(dim(`  ${extra.join(" · ")}`));
+  }
+  console.log(dim(`\nUse one: agent Reviewer [anthropic/claude-sonnet-4-5, preset: CodeReviewer]`));
+  return 0;
+}
+
+function cmdSkills(flags: Flags): number {
+  const dirs = flags.values.get("dir") ?? ["skills"];
+  const catalog = skillCatalog(dirs, !flags.bools.has("no-builtin"));
+  const name = flags.positional[0];
+  if (name) {
+    const skill = findSkill(catalog, name);
+    if (!skill) fail(`No skill named "${name}" (there are: ${catalog.map((s) => s.name).join(", ") || "none"})`);
+    if (flags.bools.has("json")) console.log(JSON.stringify({ ...skill, files: skillFiles(skill) }, null, 2));
+    else console.log(`${bold(skill.name)} ${dim(`(${skill.source === "builtin" ? "built in" : skill.source})`)}\n${dim(skill.description)}\n\n${skill.instructions}`);
+    return 0;
+  }
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(catalog.map((s) => ({ name: s.name, description: s.description, source: s.source })), null, 2));
+    return 0;
+  }
+  if (!catalog.length) console.log("No skills found.");
+  for (const s of catalog) console.log(`${bold(s.name)} ${dim(`(${s.source === "builtin" ? "built in" : relative(process.cwd(), s.source) || "."})`)}\n  ${s.description}`);
+  console.log(dim(`\nGive an agent a skill with skills: "name" (on the agent or a call), or let it choose: tool Kit : Skills("./skills")`));
+  return 0;
+}
+
 async function cmdSearch(flags: Flags): Promise<number> {
   const index = await registryIndex(flags);
   const found = await search(index, flags.positional.join(" "));
@@ -934,6 +974,10 @@ export async function main(argv: string[]): Promise<number> {
       }
       case "tools":
         return await cmdTools(flags);
+      case "agents":
+        return cmdAgents(flags);
+      case "skills":
+        return cmdSkills(flags);
       case "search":
         return await cmdSearch(flags);
       case "pack":

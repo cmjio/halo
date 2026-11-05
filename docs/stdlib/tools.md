@@ -16,6 +16,13 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `KV` | A key-value store in a local SQLite file (see [Local Tools](./local-tools.md)) |
 | `Code` | Run a JavaScript, TypeScript or Python snippet in its own process (see [Local Tools](./local-tools.md)) |
 | `Documents` | Text from text, HTML, CSV, JSON, Word and PDF files (see [Local Tools](./local-tools.md)) |
+| `Clock` | The date and time, date arithmetic, timezones (see [Utility Tools](./utility-tools.md)) |
+| `Calc` | Exact arithmetic expressions and statistics (see [Utility Tools](./utility-tools.md)) |
+| `Data` | Filter, sort, group, aggregate, join and diff JSON; CSV (see [Utility Tools](./utility-tools.md)) |
+| `Git` | Read a local git repository; commit with `write: true` (see [Utility Tools](./utility-tools.md)) |
+| `WebSearch` | Web search through Brave, Tavily, Serper or Exa (see [Utility Tools](./utility-tools.md)) |
+| `Skills` | A library of instructions an agent loads when it needs them (see [Skills](./skills.md)) |
+| `Remote` | A remote computer: a server over SSH, or a cloud sandbox (E2B, Daytona) for the run (see [Remote Computers](./remote.md)) |
 | `MCP` | Any Model Context Protocol server's tools (see [MCP](../guide/integrations/mcp.md)) |
 | `Slack`, `Email`, `GitHub`, `Linear`, `Figma` | API clients for those services |
 
