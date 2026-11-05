@@ -126,8 +126,12 @@ describe("Remote over SSH", () => {
   });
 
   test("timeouts kill the command", async () => {
-    const r = await ssh("run", { command: "sleep 5", timeout_ms: 1000 });
+    // `; true` makes every shell fork sleep, which then holds the output pipe after the kill.
+    const started = Date.now();
+    const r = await ssh("run", { command: "echo started; sleep 5; true", timeout_ms: 1000 });
     expect(r.timedOut).toBe(true);
+    expect(r.stdout).toBe("started");
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 
   test("write, read, list", async () => {

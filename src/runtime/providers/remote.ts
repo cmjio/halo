@@ -136,6 +136,31 @@ function expandHome(path: string): string {
   return path.startsWith("~/") ? `${process.env.HOME ?? ""}${path.slice(1)}` : path;
 }
 
+/** Read a stream into memory, so whatever arrived can be taken even if it never ends. */
+function collect(stream: ReadableStream<Uint8Array>) {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  const done = (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        chunks.push(value);
+      }
+    } catch {}
+  })();
+  return {
+    done,
+    stop: () => void reader.cancel().catch(() => {}),
+    bytes: () => {
+      const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+      let at = 0;
+      for (const c of chunks) (out.set(c, at), (at += c.length));
+      return out;
+    },
+  };
+}
+
 function sshMachine(call: ToolCall, spec: string): Machine {
   let target: SshTarget;
   try {
@@ -167,8 +192,15 @@ function sshMachine(call: ToolCall, spec: string): Machine {
         proc.stdin.write(opts.stdin);
         await proc.stdin.end();
       }
-      const [out, err, exitCode] = await Promise.all([new Response(proc.stdout).bytes(), new Response(proc.stderr).text(), proc.exited]);
-      return { out, err, exitCode, timedOut };
+      const out = collect(proc.stdout);
+      const err = collect(proc.stderr);
+      const exitCode = await proc.exited;
+      // A killed ssh can leave a child holding its pipes open; don't wait on them past a moment.
+      const grace = timedOut || opts.signal.aborted ? 500 : 30_000;
+      await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(grace)]);
+      out.stop();
+      err.stop();
+      return { out: out.bytes(), err: new TextDecoder().decode(err.bytes()), exitCode, timedOut };
     } finally {
       clearTimeout(timer);
       opts.signal.removeEventListener("abort", kill);
