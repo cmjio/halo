@@ -9,7 +9,13 @@ image="$1"
 want="${2:-}"
 work="$(mktemp -d)"
 chmod 777 "$work"
-trap 'docker rm -f halo-smoke >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+cleanup() {
+  docker rm -f halo-smoke >/dev/null 2>&1 || true
+  # The container wrote these as uid 1000, which may not be this user (CI runners are 1001).
+  docker run --rm --user 0 --entrypoint rm -v "$work:/w" "$image" -rf /w/demo >/dev/null 2>&1 || true
+  rm -rf "$work" || true
+}
+trap cleanup EXIT
 
 echo "--- version"
 got="$(docker run --rm "$image" --version)"
