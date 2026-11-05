@@ -24,6 +24,8 @@ This installs `halo`, a single standalone binary with Bun built in, so nothing e
 
 On Alpine, install the C++ runtime first: `apk add libstdc++ libgcc`. To uninstall, delete `~/.halo/bin` and the `PATH` line the installer added.
 
+Already using npm, Docker or GitHub Actions? `npx @halolang/halo`, `docker run ghcr.io/cmjio/halo` and `uses: cmjio/halo` work too (from 0.5.0). See [Use what you already have](./production/deploying.md#use-what-you-already-have).
+
 To work on Halo itself, run it from source: `git clone https://github.com/cmjio/halo && cd halo && bun install && bun link`, and `halo` runs your checkout.
 
 ## 2. Create a project

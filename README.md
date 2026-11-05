@@ -30,7 +30,21 @@ cp .env.example .env                           # add your API key
 halo run main.halo --arg topic="tide pools"    # for real
 ```
 
-The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it. To work on Halo itself: `git clone https://github.com/cmjio/halo && cd halo && bun install && bun link`. Docs and playground: [halolang.com](https://halolang.com).
+The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it.
+
+From 0.5.0 it also fits whatever you already run:
+
+```bash
+npx @halolang/halo init my-project                        # npm, pnpm, Yarn, Bun
+docker run -p 8080:8080 -v "$PWD:/app" -e HALO_SERVE_TOKEN -e ANTHROPIC_API_KEY ghcr.io/cmjio/halo   # serve this folder
+```
+
+```yaml
+- uses: cmjio/halo@v0.5.0          # GitHub Actions: halo on PATH for later steps
+  with: { command: validate --strict pipelines/ }
+```
+
+`halo serve` reads `PORT` (and listens on every interface, with a token) on Render, Railway, Heroku, Cloud Run and Fly. See [Use what you already have](docs/guide/production/deploying.md#use-what-you-already-have). To work on Halo itself: `git clone https://github.com/cmjio/halo && cd halo && bun install && bun link`. Docs and playground: [halolang.com](https://halolang.com).
 
 Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 

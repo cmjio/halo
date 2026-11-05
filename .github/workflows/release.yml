@@ -6,6 +6,8 @@
 #      install.ps1 from a local copy of the release, the way users install them
 #   3. publish: a GitHub release with the binaries and SHA256SUMS, the same files to
 #      halolang.com/dl (R2), then the site
+#   4. image: ghcr.io/cmjio/halo for amd64 and arm64, from the Linux binaries (docker/)
+#   5. npm: @halolang/halo and its per-platform binary packages (scripts/npm.ts, npm/)
 #
 # Publishing to halolang.com needs the CLOUDFLARE_API_TOKEN secret and the
 # CLOUDFLARE_ACCOUNT_ID variable (see .github/RELEASING.md).
@@ -107,6 +109,92 @@ jobs:
           & $halo test main.halo --arg topic=tides
           if ($LASTEXITCODE -ne 0) { throw 'halo test failed' }
           Stop-Process -Id $server.Id
+
+  # ghcr.io/cmjio/halo:<version>, :<major.minor> and :latest, for amd64 and arm64, from the
+  # binaries built above. The amd64 image uses the baseline build, so it runs on any x64 CPU.
+  image:
+    needs: [build, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: Lay out the binaries by architecture
+        run: |
+          mkdir -p ctx/amd64 ctx/arm64
+          cp "dist/release/$VERSION/halo-linux-x64-baseline" ctx/amd64/halo
+          cp "dist/release/$VERSION/halo-linux-arm64" ctx/arm64/halo
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/halo"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          echo "TAGS=$image:$VERSION,$image:${VERSION%.*},$image:latest" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: The amd64 image runs
+        run: |
+          docker buildx build --platform linux/amd64 --load -t halo:test -f docker/Dockerfile ctx
+          bash docker/smoke-test.sh halo:test "$VERSION"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.TAGS }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.description=Halo: serve and run .halo pipelines
+            org.opencontainers.image.licenses=MIT
+
+  # @halolang/halo and its @halolang/halo-<platform> binary packages (scripts/npm.ts), with
+  # provenance. Needs the NPM_TOKEN secret; without it this job warns and skips npm.
+  npm:
+    needs: [build, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - run: bun scripts/npm.ts
+      - name: The packages install and run (linux-x64)
+        run: |
+          rm -rf dist/npm-check && mkdir dist/npm-check
+          cp -r dist/npm/halo dist/npm/halo-linux-x64 dist/npm-check/
+          node -e 'const f="dist/npm-check/halo/package.json",p=require("./"+f);p.optionalDependencies={"@halolang/halo-linux-x64":p.version};require("fs").writeFileSync(f,JSON.stringify(p,null,2))'
+          bash npm/smoke-test.sh dist/npm-check
+      - name: Publish to npm
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::Set the NPM_TOKEN secret to publish @halolang/halo to npm (see .github/RELEASING.md). Skipped npm."
+            exit 0
+          fi
+          bun scripts/npm.ts --publish
 
   publish:
     needs: [build, macos, windows]

@@ -43,9 +43,9 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | Key | Meaning |
 |---|---|
 | `files` | `.halo` files or folders to load (command-line paths take precedence). Default: the current folder |
-| `port`, `host` | Where to listen. Default `127.0.0.1:8080` |
+| `port`, `host` | Where to listen. Default `127.0.0.1:8080`. `PORT` and `HALO_HOST` in the environment win over these, and `--port` and `--host` win over everything (see [On a hosting platform](#on-a-hosting-platform)) |
 | `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one |
-| `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used |
+| `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used, then the address Render, Railway or Fly gives the app |
 | `schedules` | Start `pipeline` with `args` on a cron schedule |
 | `webhooks` | `POST /hooks/<path>` starts `pipeline` |
 | `watches` | Start `pipeline` when a URL, file, or command's output changes |
@@ -159,7 +159,7 @@ curl -X POST localhost:8080/api/pipelines/TriageIssues/runs \
 
 ## Security
 
-- It listens on `127.0.0.1` by default. To listen on any other interface you must set `HALO_SERVE_TOKEN` (or `token`); it refuses to start otherwise, because the API starts runs that spend money and run data includes prompts and answers.
+- It listens on `127.0.0.1` by default (on `0.0.0.0` when `PORT` is set). To listen on any other interface you must set `HALO_SERVE_TOKEN` (or `token`); it refuses to start otherwise, because the API starts runs that spend money and run data includes prompts and answers.
 - Web pages can't drive the API from a browser. A request with an `Origin` other than localhost or `publicUrl` is refused, and so is a `POST` that isn't JSON (the kind a page can send without asking). The `Host` header must be localhost, the address it listens on, or `publicUrl`'s host, which stops DNS rebinding (a site pointing its own name at `127.0.0.1`).
 - `/mcp` has the same `Origin`, `Host` and JSON checks as `/api`, and needs the token when one is set (see [MCP](../integrations/mcp.md#http)).
 - `/slack/actions` accepts only requests signed with `slack.signingSecret`.
@@ -169,3 +169,14 @@ curl -X POST localhost:8080/api/pipelines/TriageIssues/runs \
 ## Running it in production
 
 Run `halo serve` under a process manager (systemd, Docker, or a PaaS that runs containers) with the provider keys in its environment and `stateDir` on persistent storage. On `SIGTERM` it stops accepting requests and waits for running pipelines to reach a stopping point. Runs that are paused stay paused and continue after a restart.
+
+The [`ghcr.io/cmjio/halo` image](./deploying.md#the-container-image) runs `halo serve` on `/app`, so most hosts need no Dockerfile of your own.
+
+### On a hosting platform
+
+Render, Railway, Heroku, Cloud Run, Fly and similar hosts set `PORT` and expect the app to answer on it from outside the container. `halo serve` follows that:
+
+- `PORT` sets the port, over `halo.json`'s `port`. `--port` still wins.
+- When `PORT` is set and nothing names a host, it listens on `0.0.0.0`. That needs `HALO_SERVE_TOKEN`, as any address but localhost does, and it refuses to start without one. Set `HALO_HOST=127.0.0.1` to keep it local, for example behind a sidecar proxy.
+- Approval links use `publicUrl`, then `HALO_PUBLIC_URL`, then the address the platform gives the app: `RENDER_EXTERNAL_URL` on Render, `https://$RAILWAY_PUBLIC_DOMAIN` on Railway, `https://$FLY_APP_NAME.fly.dev` on Fly. With none of them, it warns at startup that links will point at an address people can't open.
+- Paused runs are files in `stateDir` (`.halo`). On a host without a persistent disk they're lost when the app restarts, so attach a volume at `/app/.halo` (Fly volumes, Render disks, Railway volumes).

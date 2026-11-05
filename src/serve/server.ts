@@ -71,6 +71,8 @@ export interface ServeOptions extends ServeConfig {
   onRuntime?: (runtime: HaloRuntime, file: string) => void;
   /** Serve Halo Studio at /. Default true. */
   studio?: boolean;
+  /** Set to "PORT" when the host was chosen because PORT is set (see listenAddress), to explain a refusal. */
+  hostFrom?: string;
   /** Start the cron timer. Default true (tests call tick() instead). */
   scheduler?: boolean;
   logger?: Pick<Console, "log" | "warn" | "error">;
@@ -149,7 +151,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const logger = options.logger ?? console;
   const fromEnv = (v: string | undefined) => (v && /^Env\.\w+$/.test(v) ? env[v.slice(4)] : v);
   // The public address differs per deployment: it can name a variable, or come from HALO_PUBLIC_URL.
-  const publicUrl = fromEnv(options.publicUrl) || env.HALO_PUBLIC_URL || undefined;
+  const publicUrl = fromEnv(options.publicUrl) || env.HALO_PUBLIC_URL || platformPublicUrl(env);
   if (publicUrl && !/^https?:\/\/[^/]/.test(publicUrl)) throw new ServeError(`publicUrl "${publicUrl}" must be an http(s) URL`);
   options = { ...options, publicUrl };
   const host = options.host ?? "127.0.0.1";
@@ -157,7 +159,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   // A token that names an unset variable must not silently turn into "no token".
   if (options.token !== undefined && !token) throw new ServeError(`The API token "${options.token}" is empty or not set`);
   if (!LOOPBACK.has(host) && !token) {
-    throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)`);
+    const why = options.hostFrom === "PORT" ? " (PORT is set, so Halo listens on every interface; set HALO_HOST=127.0.0.1 to keep it local)" : "";
+    throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)${why}`);
   }
 
   const stateDir = resolve(options.stateDir ?? ".halo");
@@ -659,6 +662,9 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
   });
 
   baseUrl = `http://${host.includes(":") ? `[${host}]` : host}:${server.port}`;
+  if (!options.publicUrl && (host === "0.0.0.0" || host === "::")) {
+    logger.warn(`Approval links will point at ${baseUrl}, which people can't open. Set HALO_PUBLIC_URL (or publicUrl in halo.json) to the address they reach this server at.`);
+  }
 
   // Check schedules at the top of every minute.
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -700,6 +706,50 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 function describePipeline(e: Entry): string {
   const params = e.decl.params.map((p) => `${p.name}: ${p.type}`).join(", ");
   return `Halo pipeline ${e.name}(${params})${e.decl.returnType ? ` -> ${e.decl.returnType}` : ""} from ${e.file}. Runs it and returns its output.`;
+}
+
+/**
+ * The address a hosting platform gives this app, from the variables it sets, for approval
+ * links when neither publicUrl nor HALO_PUBLIC_URL says. Render gives a URL, Railway a
+ * domain, and Fly the app's name (served at <name>.fly.dev).
+ */
+export function platformPublicUrl(env: Record<string, string | undefined>): string | undefined {
+  if (env.RENDER_EXTERNAL_URL) return env.RENDER_EXTERNAL_URL;
+  if (env.RAILWAY_PUBLIC_DOMAIN) return `https://${env.RAILWAY_PUBLIC_DOMAIN}`;
+  if (env.FLY_APP_NAME) return `https://${env.FLY_APP_NAME}.fly.dev`;
+  return undefined;
+}
+
+/**
+ * Where `halo serve` listens, from (highest first) its flags, the environment, and halo.json.
+ *
+ * Hosting platforms (Render, Railway, Heroku, Cloud Run, Fly, ...) say which port to use in
+ * PORT and expect the app on every interface. So PORT wins over halo.json's port, and when
+ * it's set and nothing names a host, Halo listens on 0.0.0.0, which still needs a token.
+ * HALO_HOST names the interface explicitly.
+ */
+export function listenAddress(
+  flags: { port?: string; host?: string },
+  config: Pick<ServeConfig, "port" | "host">,
+  env: Record<string, string | undefined>,
+): { port?: number; host?: string; from?: string } {
+  const portFromEnv = env.PORT?.trim() || undefined;
+  const raw = flags.port ?? portFromEnv ?? (config.port !== undefined ? String(config.port) : undefined);
+  let port: number | undefined;
+  if (raw !== undefined) {
+    port = Number(raw);
+    if (!/^\d+$/.test(raw.trim()) || port > 65535) {
+      throw new ServeError(`${flags.port !== undefined ? "--port" : raw === portFromEnv ? "PORT" : "halo.json port"} must be a port number from 0 to 65535, not "${raw}"`);
+    }
+  }
+  const hostFromEnv = env.HALO_HOST?.trim() || undefined;
+  let host = flags.host ?? hostFromEnv ?? config.host;
+  let from: string | undefined;
+  if (host === undefined && flags.port === undefined && portFromEnv !== undefined) {
+    host = "0.0.0.0";
+    from = "PORT";
+  }
+  return { port, host, from };
 }
 
 export async function loadServeConfig(path?: string): Promise<ServeConfig> {
