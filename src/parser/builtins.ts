@@ -16,7 +16,7 @@ export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "Trigg
 
 export const TOOL_PROVIDERS = [
   "REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "GitHub", "Linear", "Figma",
-  "MCP", "Chrome", "Workspace", "KV", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote",
+  "MCP", "Chrome", "Workspace", "KV", "SQLite", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote",
 ] as const;
 
 /** Content categories detectable by `Block(...)`. */

@@ -14,6 +14,7 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `VectorStore` | Searchable memory, with hashed or model embeddings, in SQLite or Postgres (see [Stores](./stores.md) and [Embeddings](./embeddings.md)) |
 | `Workspace` | Read, search and edit files in one folder (see [Local Tools](./local-tools.md)) |
 | `KV` | A key-value store in a local SQLite file (see [Local Tools](./local-tools.md)) |
+| `SQLite` | A SQLite database file in the project: parameterised reads and writes, read-only by default (see [SQLite](./sqlite.md)) |
 | `Code` | Run a JavaScript, TypeScript or Python snippet in its own process (see [Local Tools](./local-tools.md)) |
 | `Documents` | Text from text, HTML, CSV, JSON, Word and PDF files (see [Local Tools](./local-tools.md)) |
 | `Clock` | The date and time, date arithmetic, timezones (see [Utility Tools](./utility-tools.md)) |
@@ -58,7 +59,7 @@ pipeline Orders(customer: String) -> Result:
   customer |> DB.query(sql: "SELECT id, total FROM orders WHERE customer = $1", params: [customer])
 ```
 
-Pass the SQL as `sql:`, `query:`, or the first positional argument. `params:` binds `$1`, `$2`, and so on. The result is a list of rows. Statements other than `SELECT`/`WITH`/`SHOW`/`EXPLAIN`/`VALUES`/`TABLE` are refused unless the tool is declared with `readOnly: false`. Bun's `Bun.SQL` handles the connection.
+Pass the SQL as `sql:`, `query:`, or the first positional argument. `params:` binds `$1`, `$2`, and so on. The result is a list of rows. Statements other than `SELECT`/`WITH`/`SHOW`/`EXPLAIN`/`VALUES`/`TABLE` are refused unless the tool is declared with `readOnly: false`. Bun's `Bun.SQL` handles the connection. For a database file in the project folder, use [`SQLite`](./sqlite.md), whose reads and writes are separate methods with their own effects.
 
 ## `Bash`
 

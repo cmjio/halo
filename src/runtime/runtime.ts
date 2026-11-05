@@ -50,7 +50,8 @@ import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
 import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
 import { closeRemoteSessions } from "./providers/remote.js";
-import { closeKvDatabases } from "./providers/index.js";
+import { closeKvDatabases, closeSqliteDatabases } from "./providers/index.js";
+import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "../parser/sql.js";
 import { LocalVectorStore } from "./vectors.js";
 import { applyPreset, skillNames } from "./presets.js";
 import { withSandbox } from "./sandbox-agents.js";
@@ -761,6 +762,7 @@ export class HaloRuntime {
   async close(): Promise<void> {
     await Promise.all([closeMcpClients(), closeChromeSessions(), closeRemoteSessions()]);
     closeKvDatabases();
+    closeSqliteDatabases();
     this.vectorStore?.close();
     this.vectorStore = undefined;
     this.threadStore?.close();
@@ -1390,6 +1392,13 @@ export class HaloRuntime {
     if (!Object.hasOwn(ctx.input, method) && !this.isDeclared(method)) ctx.data[method] = value;
   }
 
+  /** A SQLite call's SQL must be written out, with values in params: (validate says so too; this covers the SDK). */
+  private checkSql(tool: ToolDeclaration, stage: CallStage, positional: boolean): void {
+    if (!PARAMETERISED_SQL_PROVIDERS.has(tool.provider)) return;
+    const problem = sqlArgProblem(stage.argList, positional);
+    if (problem) throw new HaloError(`${tool.name}.${stage.method}: ${problem}`, { code: "TOOL_ARGUMENT" });
+  }
+
   private dispatchCall(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
     if (stage.callee === "System") return this.systemCall(stage, ctx);
     if (this.isThreadCall(stage.callee)) return Promise.resolve().then(() => this.threadCall(stage, ctx));
@@ -1397,6 +1406,7 @@ export class HaloRuntime {
     const tool = this.tools.get(stage.callee);
     if (!stage.method || (stage.implicit && !agent && this.pipelines.has(stage.callee))) return this.pipelineCall(stage, ctx);
     if (tool) {
+      this.checkSql(tool, stage, true);
       // Values inserted into a shell command are shell-quoted, so they can't run as commands.
       const { positional, named } = this.resolveArgs(stage, ctx, { shell: shellArgs(tool.provider) });
       return this.toolCall(tool, stage.method, positional, named, ctx, false);
@@ -1568,6 +1578,7 @@ export class HaloRuntime {
       const tool = this.tools.get(toolName);
       if (!tool) throw new HaloError(`${target} uses undefined tool "${toolName}"`);
       if (!agent.equips?.includes(toolName)) throw new HaloError(`Agent "${agent.name}" is not equipped with tool "${toolName}" (add \`equips ${toolName}\`)`);
+      this.checkSql(tool, stage, false);
       toolResult = await this.toolCall(tool, stage.method, inputs, params, ctx, true);
       this.store(ctx, toolName, stage.method, toolResult);
     }

@@ -3,6 +3,7 @@
  *
  *   tool Files : Workspace("./src", write: true)   read, write, edit, list, glob, search, delete, mkdir
  *   tool Cache : KV(".halo/kv.sqlite")             get, set, delete, list, incr
+ *   tool Shop  : SQLite("data/shop.db", write: true) query, get, tables, execute
  *   tool Py    : Code("python", timeout_ms: 10000)  run
  *   tool Docs  : Documents(root: "./inbox")        extract
  *   tool Time  : Clock(timezone: "UTC")            now, add, diff, format, parse
@@ -25,14 +26,17 @@ import { webSearch } from "./search.js";
 import { SKILLS_INFO, skills } from "./skills.js";
 import { documents } from "./documents.js";
 import { kv } from "./kv.js";
+import { sqlite } from "./sqlite.js";
 import { workspace } from "./workspace.js";
 
 export { closeKvDatabases } from "./kv.js";
+export { closeSqliteDatabases } from "./sqlite.js";
 export { closeRemoteSessions } from "./remote.js";
 
 export const LOCAL_PROVIDERS: Record<string, ToolProvider> = {
   Workspace: workspace,
   KV: kv,
+  SQLite: sqlite,
   Code: codeRunner,
   Documents: documents,
   Clock: clock,
@@ -53,6 +57,10 @@ const anyValue: JsonSchema = { description: "Any JSON value." };
 const tz: JsonSchema = { type: "string", description: 'IANA timezone, like "Europe/London" (default the tool\'s, or UTC).' };
 const dateArg = (description: string): JsonSchema => ({ type: ["string", "number"], description: `${description} ISO 8601, or unix milliseconds.` });
 const strings = (description: string): JsonSchema => ({ type: "array", items: { type: "string" }, description });
+const sqlParams: JsonSchema = {
+  type: ["array", "object"],
+  description: "Values for the placeholders: a list for ? (or ?1, ?2), a record for :name. Lists and records inside are stored as JSON text.",
+};
 const listArg: JsonSchema = { type: "array", description: "A list of records." };
 const whereArg: JsonSchema = { type: ["object", "string"], description: "Conditions, all of which must hold: { path: value } or { path: { op: value } }, or text like \"total > 100 && status == 'paid'\"." };
 
@@ -183,6 +191,52 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
           by: { type: "number", description: "Amount to add (default 1; negative to subtract)." },
           ttl: { type: ["string", "number"], description: "Expiry for a key this creates (an existing key keeps its own)." },
         }, ["key"]),
+        effect: "write",
+      },
+    ],
+  },
+
+  SQLite: {
+    description:
+      "A local SQLite database. Write SQL with ? or :name placeholders and pass the values in params (never put values in the SQL text). One statement per call. query, get and tables only read; execute changes data, and needs the tool declared with write: true.",
+    methods: [
+      {
+        name: "query",
+        description: "Run a SELECT (or WITH ... SELECT) and return its rows as a list of records. The database can't be changed through this method. More rows than limit is an error: add a LIMIT.",
+        params: object(
+          {
+            sql: { type: "string", description: 'One SQL statement, e.g. "SELECT * FROM orders WHERE status = :status".' },
+            params: sqlParams,
+            limit: { type: "integer", minimum: 1, maximum: 100000, description: "Most rows to return (default 1000)." },
+          },
+          ["sql"],
+        ),
+        effect: "read",
+      },
+      {
+        name: "get",
+        description: "Run a SELECT and return its first row as a record, or null when there is none.",
+        params: object({ sql: { type: "string", description: "One SQL statement." }, params: sqlParams }, ["sql"]),
+        effect: "read",
+      },
+      {
+        name: "tables",
+        description: "The database's tables and views, with their columns: [{ name, type, columns: [{ name, type, not_null?, primary_key?, default? }] }].",
+        params: object({}),
+        effect: "read",
+      },
+      {
+        name: "execute",
+        description:
+          "Run one INSERT, UPDATE, DELETE, CREATE, ALTER or DROP statement. With batch (a list of params, one per row), runs it once per row in a single transaction. Returns { changes, last_insert_rowid }, plus rows for a statement with RETURNING.",
+        params: object(
+          {
+            sql: { type: "string", description: 'One SQL statement, e.g. "INSERT INTO notes (title, body) VALUES (:title, :body)".' },
+            params: sqlParams,
+            batch: { type: "array", items: { type: ["array", "object"] }, description: "Run the statement once per item, each item being that row's params." },
+          },
+          ["sql"],
+        ),
         effect: "write",
       },
     ],

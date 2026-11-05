@@ -27,6 +27,7 @@ import {
 } from "./builtins.js";
 import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
 import { sandboxProblem } from "../runtime/sandbox-agents.js";
+import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 
 export interface Diagnostic {
   severity: "error" | "warning";
@@ -76,6 +77,7 @@ class Validator {
     for (const t of this.tools.values()) {
       const known = includes(TOOL_PROVIDERS, t.provider) || this.options.toolProviders?.includes(t.provider);
       if (!known) this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
+      if (t.provider === "SQLite") this.checkSqliteTool(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
     for (const sc of this.ast.schemas) this.checkSchema(sc);
@@ -86,6 +88,19 @@ class Validator {
       return !seen.has(key) && !!seen.add(key);
     });
     return this.diags.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
+  }
+
+  /** A SQLite database file is relative to the project folder and stays inside it. */
+  private checkSqliteTool(t: { name: string; argList: Arg[]; loc?: Loc }) {
+    const path = t.argList.find((a) => !a.name)?.value ?? t.argList.find((a) => a.name === "path")?.value;
+    if (path?.kind !== "string" || path.value === ":memory:") return;
+    const p = path.value;
+    // Walk the segments (no node:path: the validator also runs in the browser playground).
+    let depth = 0;
+    const climbs = p.split(/[\\/]/).some((seg) => (depth += seg === ".." ? -1 : seg === "." || seg === "" ? 0 : 1) < 0);
+    if (/^([\\/~]|[a-zA-Z]:)/.test(p) || climbs) {
+      this.add("error", `Tool "${t.name}": SQLite database "${p}" must be a path inside the project folder (relative, not climbing out with ..)`, t.loc);
+    }
   }
 
   private checkDuplicates() {
@@ -345,6 +360,8 @@ class Validator {
           this.add("error", `${where}: ${target} uses undefined tool "${toolName ?? "?"}"`, call.loc);
         } else if (!agent.equips?.includes(toolName)) {
           this.add("error", `${where}: agent "${agent.name}" is not equipped with tool "${toolName}" (add \`equips ${toolName}\`)`, call.loc);
+        } else if (PARAMETERISED_SQL_PROVIDERS.has(this.tools.get(toolName)!.provider)) {
+          this.checkSql(this.tools.get(toolName)!, call, where, false);
         }
       }
       return;
@@ -352,6 +369,7 @@ class Validator {
     const tool = this.tools.get(call.callee);
     if (tool) {
       if (tool.provider === "Bash") this.checkShell(call, where);
+      if (PARAMETERISED_SQL_PROVIDERS.has(tool.provider)) this.checkSql(tool, call, where, true);
       return;
     }
     if (call.implicit && this.pipelines.has(call.callee)) return;
@@ -371,6 +389,16 @@ class Validator {
     }
     const steps = call.argList.find((a) => a.name === "max_steps");
     if (steps && !(steps.value.kind === "number" && steps.value.value >= 0)) this.add("error", `${where}: max_steps needs a number`, call.loc);
+  }
+
+  /** A SQLite call: parameterised SQL only, and execute only on a tool declared with write: true. */
+  private checkSql(tool: { name: string; argList: Arg[] }, call: CallStage, where: string, positional: boolean) {
+    const problem = sqlArgProblem(call.argList, positional);
+    if (problem) this.add("error", `${where}: ${call.callee}.${call.method}: ${problem}`, call.loc);
+    const write = tool.argList.find((a) => a.name === "write")?.value;
+    if (call.method === "execute" && !(write?.kind === "bool" && write.value)) {
+      this.add("error", `${where}: ${call.callee}.execute changes the database, but tool "${tool.name}" isn't declared with write: true`, call.loc);
+    }
   }
 
   /**
