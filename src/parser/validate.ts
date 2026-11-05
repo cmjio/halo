@@ -25,6 +25,8 @@ import {
   includes,
   parseDuration,
 } from "./builtins.js";
+import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
+import { sandboxProblem } from "../runtime/sandbox-agents.js";
 
 export interface Diagnostic {
   severity: "error" | "warning";
@@ -156,6 +158,11 @@ class Validator {
     }
     for (const e of m.equips ?? []) {
       if (!this.tools.has(e)) this.add("error", `Agent "${m.name}" equips undefined tool "${e}"`, m.loc);
+    }
+    const sandbox = sandboxProblem(m, this.tools);
+    if (sandbox) this.add("error", sandbox, m.loc);
+    if (m.params.preset !== undefined && !findPreset(m.params.preset)) {
+      this.add("error", `Agent "${m.name}": unknown preset "${m.params.preset}" (use ${PRESET_NAMES.join(", ")})`, m.loc);
     }
     if (this.options.canHandleModel && !this.options.canHandleModel(m.modelId)) {
       this.add("warning", `Agent "${m.name}": no adapter handles model "${m.modelId}"`, m.loc);

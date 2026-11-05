@@ -114,14 +114,14 @@ describe("registries and installs", () => {
   });
 
   test("a package that runs code needs --trust, and stays untrusted in the lock without it", async () => {
-    const dir = writePackage(join(fresh(), "clock"), { name: "clock", version: "1.0.0", description: "d", providers: { Clock: { kind: "module", description: "d", entry: "index.ts" } } }, {
+    const dir = writePackage(join(fresh(), "clock"), { name: "clock", version: "1.0.0", description: "d", providers: { Ticker: { kind: "module", description: "d", entry: "index.ts" } } }, {
       "index.ts": `export const provider = async (call) => ({ method: call.method, zone: call.named.zone }); export const info = { methods: [{ name: "now", description: "now", effect: "read" }] };`,
     });
     const root = fresh();
     await expect(install({ root, builtins }, dir)).rejects.toThrow(/--trust/);
     await install({ root, builtins }, dir, { trust: true });
     const [p] = await loadInstalled(root);
-    const rt = new HaloRuntime({ env: {}, logger: { log() {}, warn() {} } }).load(parse(`tool C : Clock()\npipeline P(x: String) -> Result:\n  x |> C.now(zone: "UTC")`));
+    const rt = new HaloRuntime({ env: {}, logger: { log() {}, warn() {} } }).load(parse(`tool C : Ticker()\npipeline P(x: String) -> Result:\n  x |> C.now(zone: "UTC")`));
     rt.registerToolProvider(p!.name, p!.provider, p!.info);
     expect(await rt.execute("P", { x: "" })).toEqual({ method: "now", zone: "UTC" });
     // Trust belongs to this machine and that exact checksum: a lock can't grant it.
@@ -130,7 +130,7 @@ describe("registries and installs", () => {
     writeFileSync(join(other, "halo.lock"), readFileSync(join(root, "halo.lock")));
     await expect(installFromLock({ root: other, builtins })).rejects.toThrow(/halo install --trust/);
     await installFromLock({ root: other, builtins }, { trust: true });
-    expect((await loadInstalled(other)).map((p) => p.name)).toEqual(["Clock"]);
+    expect((await loadInstalled(other)).map((p) => p.name)).toEqual(["Ticker"]);
     rmSync(join(other, ".halo/trust.json"));
     await expect(loadInstalled(other)).rejects.toThrow(/hasn't trusted this version/);
   });

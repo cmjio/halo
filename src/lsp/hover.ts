@@ -1,5 +1,6 @@
 import { MarkupKind, type Hover, type Position } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
+import { findPreset } from "../runtime/presets.js";
 
 const OPERATORS: Record<string, string> = {
   "|>": "**Pipe**: run a call on the current value.",
@@ -33,6 +34,8 @@ export function getHover(sourceText: string, position: Position): Hover | null {
     const lines = [`**agent ${agent.name}** — \`${agent.modelId}\``];
     const params = Object.entries(agent.params).map(([k, v]) => `${k}: ${v}`);
     if (params.length) lines.push(params.join(", "));
+    const preset = agent.params.preset ? findPreset(agent.params.preset) : undefined;
+    if (preset) lines.push(`Preset **${preset.name}**: ${preset.summary}${preset.returns ? `. Returns \`${preset.returns}\`` : ""}${preset.skills?.length ? `. Skills: ${preset.skills.join(", ")}` : ""}`);
     if (agent.system) lines.push(`> ${agent.system.split("\n").join("\n> ")}`);
     if (agent.equips?.length) lines.push(`equips ${agent.equips.join(", ")}`);
     if (agent.requires?.length) lines.push(`requires ${agent.requires.join(", ")}`);

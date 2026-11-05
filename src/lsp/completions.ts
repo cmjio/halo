@@ -1,5 +1,6 @@
 import { CompletionItemKind, type CompletionItem, type Position } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
+import { AGENT_PRESETS } from "../runtime/presets.js";
 import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS } from "../parser/builtins.js";
 
 const KEYWORDS: Array<[string, string]> = [
@@ -31,6 +32,18 @@ export function getCompletions(sourceText: string, position: Position): Completi
   }
   if (/\bThread\.\w*$/.test(before)) {
     return THREAD_METHODS.map((m) => ({ label: m, kind: CompletionItemKind.Method, detail: `Thread.${m}` }));
+  }
+  if (/\bpreset:\s*\w*$/.test(before)) {
+    return Object.values(AGENT_PRESETS).map((p) => ({ label: p.name, kind: CompletionItemKind.EnumMember, detail: p.summary, documentation: p.returns ? `Returns JSON: ${p.returns}` : undefined }));
+  }
+  if (/\bsandbox:\s*"?\w*$/.test(before)) {
+    // Read from the text, since the line being typed usually doesn't parse yet.
+    const remotes = [...sourceText.matchAll(/^\s*tool\s+(\w+)\s*:\s*Remote\b/gm)].map((m) => ({ label: m[1]!, kind: CompletionItemKind.Variable, detail: "Remote tool (shared with the pipeline)" }));
+    return [
+      { label: '"e2b"', kind: CompletionItemKind.EnumMember, detail: "Its own E2B sandbox for each run (E2B_API_KEY)" },
+      { label: '"daytona"', kind: CompletionItemKind.EnumMember, detail: "Its own Daytona sandbox for each run (DAYTONA_API_KEY)" },
+      ...remotes,
+    ];
   }
   if (/@\w*$/.test(before)) return DIRECTIVES.map((d) => ({ label: d, kind: CompletionItemKind.Keyword, detail: `@${d}` }));
   if (/:\s*\w*$/.test(before) && /^\s*(tool|store)\b/.test(line)) {

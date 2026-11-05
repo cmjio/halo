@@ -7,6 +7,8 @@
  * which calls need a person's approval, and the spend limits that apply.
  */
 
+import { applyPreset } from "./runtime/presets.js";
+import { withSandbox } from "./runtime/sandbox-agents.js";
 import type { Agent, CallStage, ParseResult, PipelineDeclaration, PipelineStage } from "./parser/types.js";
 import { AdapterRegistry } from "./runtime/adapter.js";
 import { toolMatches } from "./runtime/policies.js";
@@ -54,8 +56,22 @@ const ASSUMED_INPUT_TOKENS = 2000;
 export function plan(ast: ParseResult, pipelineName: string, options: PlanOptions): Plan {
   const adapters = options.adapters ?? new AdapterRegistry();
   const pipelines = new Map(ast.pipelines.map((p) => [p.name, p]));
-  const agents = new Map(ast.agents.map((a) => [a.name, a]));
+  // A preset's settings (max_steps, tools: auto) count; an unknown preset is validate's to report.
   const tools = new Map([...ast.tools, ...ast.stores].map((t) => [t.name, t]));
+  const declared = new Map(tools);
+  const agents = new Map(ast.agents.map((a) => {
+    let agent = a;
+    try {
+      agent = applyPreset(a);
+    } catch {}
+    // A sandbox: is a tool the agent may call; a bad one is validate's to report.
+    try {
+      const sandboxed = withSandbox(agent, declared);
+      if (sandboxed.tool) tools.set(sandboxed.tool.name, sandboxed.tool);
+      agent = sandboxed.agent;
+    } catch {}
+    return [a.name, agent];
+  }));
   const policies = new Map(ast.policies.map((p) => [p.name, p]));
   const steps: PlanStep[] = [];
   let unbounded = false;

@@ -81,6 +81,14 @@ halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mock
 
 Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step, for `halo history` and `halo rewind`), `@thread(user_id)` (keep state between runs, per user), `@shadow(Primary)` (runs this agent alongside `Primary` and records its output), `@correct(2)` (when a policy rejects an answer, tells the agent why and asks again).
 
+### Built in: tools, agents, and skills
+
+- **Tools** that need no account: `Workspace`, `KV`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a cloud sandbox from E2B or Daytona that lasts one run), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
+- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Twelve ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
+- **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
+
+See [`examples/78-builtin-kit.halo`](examples/78-builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
+
 ### How a pipeline runs
 
 - The flowing value is `context.current`. Each call's result is also stored at `context.data.<Callee>.<method>`, at `context.data.<method>`, and at any `as` binding. Pipeline arguments are bare names (`lang`) and `context.input.lang`.
@@ -110,6 +118,7 @@ halo history <runId> [--step N]       # every step of a @checkpoint run, or its 
 halo rewind <file.halo> <runId> --step N   # continue a @checkpoint run from a step, as a new run
 halo threads | thread <name> <key>    # list threads, show one (--reset --yes deletes its state)
 halo mcp [files|dirs]                 # serve pipelines as MCP tools over stdio
+halo agents | skills [name]           # the built-in agent presets; skills (yours and built-in)
 halo search | add | remove | install | tools | pack | publish   # tool packages
 ```
 

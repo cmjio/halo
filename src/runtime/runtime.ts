@@ -49,8 +49,13 @@ import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
 import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
 import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
+import { closeRemoteSessions } from "./providers/remote.js";
 import { closeKvDatabases } from "./providers/index.js";
 import { LocalVectorStore } from "./vectors.js";
+import { applyPreset, skillNames } from "./presets.js";
+import { withSandbox } from "./sandbox-agents.js";
+import { findSkill, skillCatalog, skillPrompt } from "./skills.js";
+import { skillSources } from "./providers/skills.js";
 import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
 import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } from "./threads.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
@@ -445,7 +450,17 @@ interface ToolKit {
 }
 
 /** Named args on an agent call that configure the request rather than the prompt. */
-const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system", "tools", "max_steps", "tool_result_chars"]);
+/**
+ * Which of a tool call's arguments are shell commands, whose {{placeholders}} are quoted
+ * for the spot they fill: every argument of Bash, and Remote's `command`.
+ */
+function shellArgs(provider: string | undefined): (name: string | undefined) => boolean {
+  if (provider === "Bash") return () => true;
+  if (provider === "Remote") return (name) => name === "command";
+  return () => false;
+}
+
+const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "system", "tools", "max_steps", "tool_result_chars", "skills"]);
 const DEFAULT_MAX_STEPS = 10;
 const DEFAULT_TOOL_RESULT_CHARS = 16_000;
 
@@ -631,7 +646,6 @@ export class HaloRuntime {
   /** Load a parsed program into the runtime. */
   load(ast: ParseResult): this {
     if (ast.errors.length > 0) throw new HaloError(`Cannot load a program with parse errors:\n  ${ast.errors.join("\n  ")}`);
-    for (const m of ast.agents) this.agents.set(m.name, m);
     for (const s of ast.pipelines) {
       for (const stage of s.pipeline) {
         const unsafe = producedKeys(stage).find((k) => !isSafeKey(k));
@@ -641,6 +655,23 @@ export class HaloRuntime {
     }
     for (const g of ast.policies) this.policies.set(g.name, g);
     for (const t of [...ast.tools, ...ast.stores]) this.tools.set(t.name, t);
+    const declared = new Map(this.tools);
+    for (const m of ast.agents) {
+      let agent: Agent;
+      try {
+        agent = applyPreset(m);
+      } catch (err) {
+        throw new HaloError((err as Error).message, { code: "UNKNOWN_PRESET" });
+      }
+      try {
+        const sandboxed = withSandbox(agent, declared);
+        agent = sandboxed.agent;
+        if (sandboxed.tool) this.tools.set(sandboxed.tool.name, sandboxed.tool);
+      } catch (err) {
+        throw new HaloError((err as Error).message, { code: "BAD_SANDBOX" });
+      }
+      this.agents.set(m.name, agent);
+    }
     for (const sc of ast.schemas) this.schemas.set(sc.name, sc);
     this.indexShadows();
     return this;
@@ -728,7 +759,7 @@ export class HaloRuntime {
   /** Release database handles. */
   /** Release databases, and stop MCP servers this process started (they are shared by every runtime in it). */
   async close(): Promise<void> {
-    await Promise.all([closeMcpClients(), closeChromeSessions()]);
+    await Promise.all([closeMcpClients(), closeChromeSessions(), closeRemoteSessions()]);
     closeKvDatabases();
     this.vectorStore?.close();
     this.vectorStore = undefined;
@@ -936,12 +967,12 @@ export class HaloRuntime {
       const result = await this.runFrom(ctx, start);
       // A run that ended (not one that paused) saves what it changed in its thread.
       if (ctx.thread && result.status !== "paused") result.context.thread = this.saveThread(ctx.thread, ctx.meta.runId);
-      // A browser the run opened stays open only while the run may still need it.
-      if (result.status !== "paused") await closeChromeSessions(ctx.meta.runId);
+      // A browser or sandbox the run opened stays open only while the run may still need it.
+      if (result.status !== "paused") await Promise.all([closeChromeSessions(ctx.meta.runId), closeRemoteSessions(ctx.meta.runId)]);
       this.emit({ type: "run", ...base, status: result.status, output: result.output, durationMs: ctx.meta.durationMs, cost: ctx.meta.cost });
       return result;
     } catch (err) {
-      await closeChromeSessions(ctx.meta.runId);
+      await Promise.all([closeChromeSessions(ctx.meta.runId), closeRemoteSessions(ctx.meta.runId)]);
       this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost });
       throw err;
     }
@@ -1304,12 +1335,12 @@ export class HaloRuntime {
     return this.tools.has(name) || this.agents.has(name) || this.pipelines.has(name) || this.policies.has(name);
   }
 
-  private resolveArgs(stage: { argList: CallStage["argList"] }, ctx: ExecutionContext, opts: { shell?: boolean; skip?: Set<string> } = {}) {
+  private resolveArgs(stage: { argList: CallStage["argList"] }, ctx: ExecutionContext, opts: { shell?: (name: string | undefined) => boolean; skip?: Set<string> } = {}) {
     const positional: unknown[] = [];
     const named: Record<string, unknown> = {};
     for (const a of stage.argList) {
       if (a.name && opts.skip?.has(a.name)) continue;
-      const value = this.resolveValue(a.value, ctx, opts);
+      const value = this.resolveValue(a.value, ctx, { shell: opts.shell?.(a.name) ?? false });
       if (a.name) named[a.name] = value;
       else positional.push(value);
     }
@@ -1366,8 +1397,8 @@ export class HaloRuntime {
     const tool = this.tools.get(stage.callee);
     if (!stage.method || (stage.implicit && !agent && this.pipelines.has(stage.callee))) return this.pipelineCall(stage, ctx);
     if (tool) {
-      // Values inserted into a Bash command are shell-quoted, so they can't run as commands.
-      const { positional, named } = this.resolveArgs(stage, ctx, { shell: tool.provider === "Bash" });
+      // Values inserted into a shell command are shell-quoted, so they can't run as commands.
+      const { positional, named } = this.resolveArgs(stage, ctx, { shell: shellArgs(tool.provider) });
       return this.toolCall(tool, stage.method, positional, named, ctx, false);
     }
     if (agent) return this.agentCall(agent, stage, ctx);
@@ -1512,7 +1543,7 @@ export class HaloRuntime {
     let templated = false;
     const toolArg = stage.argList.find((a) => a.name === "tool");
     const toolName = toolArg ? (toolArg.value.kind === "ref" ? toolArg.value.path.join(".") : String(this.resolveValue(toolArg.value, ctx))) : undefined;
-    const shell = toolName !== undefined && this.tools.get(toolName)?.provider === "Bash";
+    const shellArg = shellArgs(toolName === undefined ? undefined : this.tools.get(toolName)?.provider);
 
     for (const a of stage.argList) {
       if (a.name === "tool") {
@@ -1524,9 +1555,9 @@ export class HaloRuntime {
         templated ||= t.used;
         instructions.push(t.text);
       } else if (a.name) {
-        params[a.name] = this.resolveValue(a.value, ctx, { shell });
+        params[a.name] = this.resolveValue(a.value, ctx, { shell: shellArg(a.name) });
       } else {
-        const value = this.resolveValue(a.value, ctx, { shell });
+        const value = this.resolveValue(a.value, ctx, { shell: shellArg(a.name) });
         if (value !== undefined) inputs.push(value);
       }
     }
@@ -1562,7 +1593,7 @@ export class HaloRuntime {
       : [];
     const prompt = buildPrompt({ ...parts, context: [...feedback, ...memory.context] });
     if (!prompt.trim()) throw new HaloError(`${target} has an empty prompt (its arguments and the pipeline value are all empty)`);
-    const system = String(callOptions.system ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined;
+    const system = this.withSkills(agent, String(callOptions.system ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined, callOptions, ctx);
     const options = llmOptions(agent.params, callOptions);
 
     const hooks = this.guardHooks(ctx);
@@ -1602,6 +1633,32 @@ export class HaloRuntime {
         conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
       }
     }
+  }
+
+  /**
+   * `skills:` on the call (or else the agent): those skills' instructions, added to the system prompt.
+   * Skills are looked up in the folders of the Skills tools the agent equips (else ./skills), then
+   * in Halo's built-in skills.
+   */
+  private withSkills(agent: Agent, system: string | undefined, callOptions: Record<string, unknown>, ctx: ExecutionContext): string | undefined {
+    const names = skillNames(callOptions.skills ?? agent.params.skills);
+    if (!names.length || (names.length === 1 && names[0] === "none")) return system;
+    const dirs: string[] = [];
+    let builtin = true;
+    const kits = (agent.equips ?? []).map((n) => this.tools.get(n)).filter((t) => t?.provider === "Skills");
+    for (const tool of kits) {
+      const src = skillSources(this.toolConfig(tool!, ctx).config);
+      dirs.push(...src.dirs);
+      builtin &&= src.builtin;
+    }
+    const catalog = skillCatalog(kits.length ? dirs : ["skills"], builtin);
+    const skills = names.map((n) => {
+      const skill = findSkill(catalog, n);
+      if (!skill) throw new HaloError(`${agent.name}: no skill named "${n}" (there are: ${catalog.map((s) => s.name).join(", ") || "none"})`, { code: "UNKNOWN_SKILL" });
+      return skill;
+    });
+    const block = `Skills: follow the instructions of a skill whenever the task is the kind it covers.\n\n${skillPrompt(skills)}`;
+    return system ? `${system}\n\n${block}` : block;
   }
 
   /**
