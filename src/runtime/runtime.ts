@@ -61,7 +61,7 @@ import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } f
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
-import { validateSchema } from "./schema.js";
+import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
 import { asNumber, asText, formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
 
@@ -1248,11 +1248,9 @@ export class HaloRuntime {
     return to;
   }
 
-  /** Validate (and parse) a pipeline's output when its `-> Type` names a declared schema. */
+  /** Validate (and parse) a pipeline's output against its `-> Type`: a declared schema or a built-in type. */
   private checkSchema(pipeline: PipelineDeclaration, output: unknown): unknown {
-    const schema = this.schemas.get(pipeline.returnType);
-    if (!schema) return output;
-    return validateSchema(schema, output, (name) => this.schemas.get(name));
+    return validateReturn(pipeline.returnType, output, (name) => this.schemas.get(name));
   }
 
   // ── Values ──

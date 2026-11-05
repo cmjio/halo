@@ -1,7 +1,7 @@
 import { CompletionItemKind, type CompletionItem, type Position } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
 import { AGENT_PRESETS } from "../runtime/presets.js";
-import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS } from "../parser/builtins.js";
+import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SCHEMA_TYPES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS, TYPE_DESCRIPTIONS } from "../parser/builtins.js";
 
 const KEYWORDS: Array<[string, string]> = [
   ["agent", "Declare an agent: agent Name [model, temp: 0.2]"],
@@ -45,6 +45,14 @@ export function getCompletions(sourceText: string, position: Position): Completi
       ...remotes,
     ];
   }
+  if (atType(sourceText, position, line, before)) {
+    // Schemas are read from the text: the declaration being typed usually doesn't parse yet.
+    const schemas = [...new Set([...sourceText.matchAll(/^\s*schema\s+(\w+)/gm)].map((m) => m[1]!))];
+    return [
+      ...SCHEMA_TYPES.map((t) => ({ label: t, kind: CompletionItemKind.TypeParameter, detail: TYPE_DESCRIPTIONS[t] })),
+      ...schemas.map((s) => ({ label: s, kind: CompletionItemKind.Struct, detail: "schema" })),
+    ];
+  }
   if (/@\w*$/.test(before)) return DIRECTIVES.map((d) => ({ label: d, kind: CompletionItemKind.Keyword, detail: `@${d}` }));
   if (/:\s*\w*$/.test(before) && /^\s*(tool|store)\b/.test(line)) {
     return TOOL_PROVIDERS.map((p) => ({ label: p, kind: CompletionItemKind.Class, detail: "Tool provider" }));
@@ -63,4 +71,15 @@ export function getCompletions(sourceText: string, position: Position): Completi
   for (const p of ast.pipelines) items.push({ label: p.name, kind: CompletionItemKind.Function, detail: `pipeline (${p.params.map((x) => x.name).join(", ")})` });
   for (const s of ast.schemas) items.push({ label: s.name, kind: CompletionItemKind.Struct, detail: "schema" });
   return items;
+}
+
+/** Whether the cursor is where a type goes: `(x: |`, `-> |`, `Array<|`, or a field inside `schema Name { ... }`. */
+function atType(sourceText: string, position: Position, line: string, before: string): boolean {
+  if (/<\s*[\w, ]*$/.test(before) && /:\s*\w*<|->\s*\w*</.test(before)) return true;
+  if (/^\s*pipeline\b/.test(line)) return /(?:[(,]\s*\w+\s*:|->)\s*\w*$/.test(before);
+  if (!/(?:^|[{,])\s*\w+\s*:\s*\w*$/.test(before)) return false;
+  const lines = sourceText.split("\n");
+  const upTo = [...lines.slice(0, position.line), before].join("\n");
+  const open = [...upTo.matchAll(/\bschema\s+\w+\s*\{/g)].at(-1);
+  return !!open && !upTo.slice(open.index).includes("}");
 }

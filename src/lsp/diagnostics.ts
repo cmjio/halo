@@ -10,6 +10,17 @@ function rangeAt(lines: string[], line: number, character: number, length?: numb
   return { start: { line, character }, end: { line, character: character + len } };
 }
 
+/** Where `token` first appears as a whole word, from `line` on (a declaration can span lines), or undefined. */
+function findToken(lines: string[], line: number, character: number, token: string): Range | undefined {
+  const re = new RegExp(`(?<![\\w.])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`);
+  for (let l = line; l < Math.min(lines.length, line + 50); l++) {
+    const from = l === line ? character : 0;
+    const m = re.exec((lines[l] ?? "").slice(from));
+    if (m) return { start: { line: l, character: from + m.index }, end: { line: l, character: from + m.index + token.length } };
+  }
+  return undefined;
+}
+
 /** Syntax errors plus the validator's errors and warnings (undefined names, unequipped tools, ...). */
 export function getDiagnostics(sourceText: string): Diagnostic[] {
   const lines = sourceText.split("\n");
@@ -24,7 +35,7 @@ export function getDiagnostics(sourceText: string): Diagnostic[] {
   }
   return validate(ast).map((d) => ({
     severity: d.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
-    range: d.line ? rangeAt(lines, d.line - 1, d.column ?? 0) : rangeAt(lines, 0, 0, 0),
+    range: d.line ? ((d.token && findToken(lines, d.line - 1, d.column ?? 0, d.token)) || rangeAt(lines, d.line - 1, d.column ?? 0)) : rangeAt(lines, 0, 0, 0),
     message: d.message,
     source: "halo",
   }));
