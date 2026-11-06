@@ -55,4 +55,4 @@ The path can hold placeholders, for one file per user: `File(".halo/history-{{us
 
 ## Databases
 
-`PostgreSQL(Env.DATABASE_URL)` is a tool, not an automatic memory. Query it explicitly (see [Built-in Tools](./tools.md#postgresql-sql)). For a key-value store in a local SQLite file, use [`KV`](./local-tools.md#kv).
+`PostgreSQL(Env.DATABASE_URL)` is a tool, not an automatic memory. Query it explicitly (see [Built-in Tools](./tools.md#postgresql-sql)). For a key-value store in a local SQLite file, use [`KV`](./local-tools.md#kv). For tables you query with SQL, use [`SQLite`](./sqlite.md).

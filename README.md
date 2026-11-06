@@ -97,7 +97,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 
 ### Built in: tools, agents, and skills
 
-- **Tools** that need no account: `Workspace`, `KV`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a cloud sandbox from E2B or Daytona that lasts one run), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
+- **Tools** that need no account: `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a cloud sandbox from E2B or Daytona that lasts one run), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
 - **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Twelve ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
 - **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
 
@@ -216,6 +216,7 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 | `Chrome(allow: [...])` | A headless Chrome tab: `open`, `click`, `fill`, `press`, `text`, `screenshot`, ... limited to the hosts you allow |
 | `Workspace(dir, write: true)` | `read`, `write`, `edit`, `list`, `glob`, `search`, `delete` inside one folder (read-only by default) |
 | `KV(path)` | `get`, `set` (with `ttl:`), `delete`, `list`, `incr` in a local SQLite file |
+| `SQLite(path, write: true)` | `query`, `get`, `tables` (reads) and `execute` (writes) on a SQLite file in the project, with parameterised SQL only (read-only by default) |
 | `Code("python")` | `run(code:, input:)` in its own process, without your environment (not a sandbox) |
 | `Documents()` | `extract(path)`: text from Markdown, HTML, CSV, JSON, Word, and PDF |
 | `MCP(command)` / `MCP(url: ...)` | Every tool of an MCP server, over stdio or Streamable HTTP |

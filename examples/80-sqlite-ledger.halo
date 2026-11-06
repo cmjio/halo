@@ -1,0 +1,67 @@
+// ============================================================
+// SQLite: an expense ledger in a local database file
+// ============================================================
+// Pipelines read and write data/ledger.db with parameterised SQL: the
+// SQL is written out, and the values go in params: or in named args
+// (`amount: amount` fills :amount), never into the SQL text.
+// Reads (query, get, tables) and writes (execute) are separate methods,
+// so `halo plan` shows which steps change the database, and policies
+// decide what an agent may do: the analyst can only read, and the
+// bookkeeper's changes wait for a person to approve them.
+//
+// RUN:  halo run examples/80-sqlite-ledger.halo -p Setup
+//       halo run examples/80-sqlite-ledger.halo -p Import --args '{"rows":[{"description":"Train to Leeds","amount":42.5,"category":"travel","spent_on":"2026-11-02"},{"description":"Team lunch","amount":63,"category":"food","spent_on":"2026-11-03"}]}'
+//       halo run examples/80-sqlite-ledger.halo -p Summary --arg month=2026-11
+//       halo run examples/80-sqlite-ledger.halo -p Ask --arg question="What did we spend most on this month?"
+// SEE:  halo plan examples/80-sqlite-ledger.halo -p Fix
+// ============================================================
+
+policy ReadOnly : AllowEffects(read)
+policy AskBeforeWriting : ApproveEffects(write)
+
+// One file, two tools: Ledger may change it, Books opens it read-only.
+tool Ledger : SQLite("data/ledger.db", write: true)
+tool Books  : SQLite("data/ledger.db")
+
+agent Categorizer [anthropic/claude-haiku-4-5]
+  system "Answer with one lowercase word: food, travel, software, office or other."
+
+agent Analyst [anthropic/claude-sonnet-4-5, tools: auto]
+  system "Answer questions about the expenses table with SQL. Look at the tables first."
+  equips Books
+  requires ReadOnly
+
+agent Bookkeeper [anthropic/claude-sonnet-4-5]
+  system "You correct entries in the expenses table. Find the row first, then change only it."
+  equips Ledger
+  requires AskBeforeWriting
+
+pipeline Setup() -> Result:
+  ""
+    |> Ledger.execute(sql: "CREATE TABLE IF NOT EXISTS expenses (id INTEGER PRIMARY KEY, description TEXT NOT NULL, amount REAL NOT NULL, category TEXT NOT NULL DEFAULT 'other', spent_on TEXT NOT NULL DEFAULT (date('now')))")
+    |> Books.tables()
+
+// One expense: a model picks the category, the database stores it.
+pipeline Record(description: String, amount: Number) -> Result:
+  description
+    |> Categorizer.classify("Which category is this expense?") as category
+    |> Ledger.execute(sql: "INSERT INTO expenses (description, amount, category) VALUES (:description, :amount, :category) RETURNING id", description: description, amount: amount, category: context.data.category)
+
+// Many rows in one transaction: all of them are stored, or none.
+pipeline Import(rows: Array) -> Result:
+  rows
+    |> Ledger.execute(sql: "INSERT INTO expenses (description, amount, category, spent_on) VALUES (:description, :amount, :category, :spent_on)", batch: rows)
+
+// Numbers from the database, not from a model.
+pipeline Summary(month: String) -> Result:
+  month
+    |> Books.query(sql: "SELECT category, round(sum(amount), 2) AS total, count(*) AS entries FROM expenses WHERE strftime('%Y-%m', spent_on) = ? GROUP BY category ORDER BY total DESC", params: [month]) as by_category
+    |> Books.get(sql: "SELECT round(sum(amount), 2) AS total FROM expenses WHERE strftime('%Y-%m', spent_on) = :month", month: month) as overall
+
+// The analyst writes its own SELECTs; its policy hides execute, and Books can't write anyway.
+pipeline Ask(question: String) -> Result:
+  question |> Analyst.answer()
+
+// The bookkeeper can change rows, but each change waits for approval.
+pipeline Fix(request: String) -> Result:
+  request |> Bookkeeper.fix(tools: [Ledger])

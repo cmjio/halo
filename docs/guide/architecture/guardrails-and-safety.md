@@ -34,7 +34,7 @@ The full rule and category list is in [Policies](../../stdlib/policies.md). The 
 
 - **Secrets stay out of prompts.** `Env.X` works only in tool declarations, and `{{Env.X}}` is never filled in.
 - **Shell quoting.** Values inserted into `Bash` commands are shell-quoted.
-- **Read-only SQL.** `PostgreSQL` refuses writes unless the tool is declared with `readOnly: false`.
+- **Read-only SQL.** `PostgreSQL` refuses writes unless the tool is declared with `readOnly: false`. A [`SQLite`](../../stdlib/sqlite.md) tool opens its file read-only unless it's declared with `write: true`. Its reads run with SQLite's `query_only` setting on, and SQL with `{{placeholders}}` in it is refused, so values have to go in `params:`.
 - **Gates and approvals.** `|? (cond)` stops a run, and `|! yield` waits for a human (see [Human-in-the-Loop](./human-in-the-loop.md)).
 - **Audit trail.** `context.trace` is a SHA-256 hash chain of every stage. `verifyTrace(trace)` checks the chain, which catches an edited entry unless every later hash was recomputed too.
 

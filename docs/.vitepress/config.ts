@@ -98,6 +98,7 @@ export default defineConfig({
           { text: 'Built-in Tools', link: '/stdlib/tools' },
           { text: 'Chrome', link: '/stdlib/chrome' },
           { text: 'Local Tools', link: '/stdlib/local-tools' },
+          { text: 'SQLite', link: '/stdlib/sqlite' },
           { text: 'Utility Tools', link: '/stdlib/utility-tools' },
           { text: 'Remote Computers', link: '/stdlib/remote' },
           { text: 'Agent Presets', link: '/stdlib/agent-presets' },

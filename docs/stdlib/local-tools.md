@@ -1,11 +1,12 @@
 # Local Tools
 
-Four providers work on this machine, with no service to sign up for: a folder of files, a key-value store, a code runner, and a document reader. Declare them like any other tool, call them from a pipeline, or equip an agent with them.
+These providers work on this machine, with no service to sign up for: a folder of files, a key-value store, a SQLite database, a code runner, and a document reader. `SQLite` has [its own page](./sqlite.md). Declare them like any other tool, call them from a pipeline, or equip an agent with them.
 
 | Provider | What it does |
 |---|---|
 | `Workspace` | Read, search and (if allowed) change files in one folder |
 | `KV` | A persistent key-value store in a local SQLite file |
+| [`SQLite`](./sqlite.md) | Query and write a SQLite database file with parameterised SQL |
 | `Code` | Run a JavaScript, TypeScript or Python snippet in its own process |
 | `Documents` | Extract text from text, Markdown, HTML, CSV/TSV, JSON, Word and PDF files |
 
