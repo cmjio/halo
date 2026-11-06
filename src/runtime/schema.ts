@@ -1,10 +1,12 @@
 /**
- * Output validation for `pipeline P(...) -> Schema`.
+ * Output validation for `pipeline P(...) -> Type`: a declared schema, or a built-in
+ * type like `Number` or `Array<String>`. `Result`, `Any` and undeclared names aren't checked.
  *
  * Field types: String, Number, Integer, Boolean, Array / List (optionally
  * `Array<T>`), Object / JSON / Any, or another schema's name (nested).
  */
 
+import { SCHEMA_TYPES, includes } from "../parser/builtins.js";
 import type { SchemaDeclaration } from "../parser/types.js";
 import { SchemaValidationError } from "./errors.js";
 import { parseOutput } from "./values.js";
@@ -65,6 +67,7 @@ function check(value: unknown, type: string, path: string, lookup: Lookup): stri
     case "Map":
       return value !== null && typeof value === "object" && !Array.isArray(value) ? undefined : `${path} should be an object, got ${describe(value)}`;
     case "Any":
+    case "Result":
       return undefined;
   }
   const schema = lookup(base);
@@ -95,5 +98,40 @@ export function validateSchema(schema: SchemaDeclaration, output: unknown, looku
   if (typeof value === "string") throw new SchemaValidationError(schema.name, `output is not JSON: ${JSON.stringify(value.slice(0, 80))}`);
   const problem = checkObject(value, schema, "", lookup);
   if (problem) throw new SchemaValidationError(schema.name, problem);
+  return value;
+}
+
+/** A model answers in text: read it as the declared built-in type where it plainly is one ("42", "true", JSON). */
+function fromText(text: string, base: string): unknown {
+  const t = text.trim();
+  switch (base) {
+    case "Number":
+    case "Integer":
+      return /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(t) ? Number(t) : text;
+    case "Boolean":
+      return /^(?:true|false)$/i.test(t) ? t.toLowerCase() === "true" : text;
+    case "Array":
+    case "List":
+    case "Object":
+    case "JSON":
+    case "Map":
+      return parseOutput(text);
+  }
+  return text;
+}
+
+/**
+ * Check a pipeline's output against its declared return type and return it (parsed
+ * from text where the type calls for it). Throws SchemaValidationError on a mismatch.
+ */
+export function validateReturn(type: string, output: unknown, lookup: Lookup): unknown {
+  if (!type) return output;
+  const { base } = parseType(type);
+  const schema = lookup(base);
+  if (schema && base === type.trim()) return validateSchema(schema, output, lookup);
+  if (!schema && !includes(SCHEMA_TYPES, base)) return output; // undeclared names aren't checked (the validator warns)
+  const value = typeof output === "string" ? fromText(output, base) : output;
+  const problem = check(value, type, "output", lookup);
+  if (problem) throw new SchemaValidationError(type, problem);
   return value;
 }

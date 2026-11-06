@@ -274,7 +274,7 @@ function envRecord(call: ToolCall, value: unknown): Record<string, string> {
 }
 
 /** Connect protocol framing: a flags byte, a big-endian length, then the message. */
-export function connectFrame(message: unknown, flags = 0): Uint8Array {
+export function connectFrame(message: unknown, flags = 0): Uint8Array<ArrayBuffer> {
   const body = new TextEncoder().encode(JSON.stringify(message));
   const out = new Uint8Array(5 + body.length);
   out[0] = flags;
@@ -373,7 +373,7 @@ async function e2bMachine(call: ToolCall, services: ToolServices, signal: AbortS
     },
     async write(path, bytes, sig) {
       const form = new FormData();
-      form.append("file", new Blob([bytes]), posix.basename(path));
+      form.append("file", new Blob([bytes as Uint8Array<ArrayBuffer>]), posix.basename(path));
       await api(call, services.fetch, `writing ${path}`, fileUrl(path), { method: "POST", headers: auth, body: form, signal: sig });
     },
     async close() {
@@ -448,7 +448,7 @@ async function daytonaMachine(call: ToolCall, services: ToolServices, signal: Ab
       },
       async write(path, bytes, sig) {
         const form = new FormData();
-        form.append("file", new Blob([bytes]), posix.basename(path));
+        form.append("file", new Blob([bytes as Uint8Array<ArrayBuffer>]), posix.basename(path));
         await api(call, services.fetch, `writing ${path}`, `${toolbox}/files/upload-v2?${new URLSearchParams({ path })}`, { method: "POST", headers, body: form, signal: sig });
       },
       close: remove,

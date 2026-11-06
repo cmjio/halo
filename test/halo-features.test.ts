@@ -107,13 +107,13 @@ describe("validator: Halo checks", () => {
           |> A.go()
           |<> loop(T, "x == 1")
           |<> loop(A, "x ==", tries: 2)`;
-    expect(messages(src, "error")).toEqual([
+    expect(messages(src, "error").slice(1)).toEqual([
       `Pipeline "P": loop(T, ...) needs an agent to retry with, but "T" is not an agent`,
       expect.stringContaining(`Pipeline "P": loop condition "x ==" is not valid:`),
     ]);
+    expect(messages(src, "error")[0]).toBe(`Schema "S": field "b": "Strng" is not a type; did you mean "String"?`);
     expect(messages(src, "warning")).toEqual([
-      `Schema "S": field "b" has unknown type "Strng" (use String, Number, Integer, Boolean, Array, List, Object, Map, JSON, Any, or another schema)`,
-      `Schema "S": field "c" has unknown type "Widget" (use String, Number, Integer, Boolean, Array, List, Object, Map, JSON, Any, or another schema)`,
+      `Schema "S": field "c": "Widget" is not a declared schema, so it isn't checked (declare \`schema Widget { ... }\`, or use String, Number, Integer, Boolean, Array, List, Object, Map, JSON, Any, Result)`,
       `Pipeline "P": loop(...) has no option "tries" (only max: n)`,
     ]);
   });
@@ -152,6 +152,102 @@ describe("schemas: a pipeline's output must match its -> Schema", () => {
       const err = await run(typeof answer === "string" ? answer : JSON.stringify(answer)).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(SchemaValidationError);
       expect((err as Error).message).toBe(`Schema validation failed for "Profile": ${problem}`);
+    });
+  }
+});
+
+describe("types: names, fields and arguments are checked", () => {
+  const head = `
+    schema Address { city: String }
+    schema Profile { name: String, age: Integer, address: Address }
+    agent W [openai/gpt-4o]
+    pipeline Double(n: Number, label: String) -> Number:
+      n |> System.Value(n)`;
+
+  test("a near miss of a type is an error; other undeclared names are warnings", () => {
+    const src = `${head}
+    pipeline A(n: Numbr, p: Profil) -> Strng:
+      n |> System.Print()
+    pipeline B(issue: GitHub.Issue) -> Report:
+      issue |> System.Print()`;
+    expect(messages(src, "error")).toEqual([
+      `Pipeline "A": parameter "n": "Numbr" is not a type; did you mean "Number"?`,
+      `Pipeline "A": parameter "p": "Profil" is not a type; did you mean "Profile"?`,
+      `Pipeline "A": return type: "Strng" is not a type; did you mean "String"?`,
+    ]);
+    expect(messages(src, "warning").map((m) => m.split(" is not")[0])).toEqual([`Pipeline "B": parameter "issue": "GitHub.Issue"`, `Pipeline "B": return type: "Report"`]);
+  });
+
+  test("Result, Any and nested built-ins are known types", () => {
+    expect(messages(`${head}
+    pipeline C(xs: Array<Map<String, Profile>>, y: Any) -> Result:
+      xs |> System.Print()`)).toEqual([]);
+  });
+
+  test("a field a schema doesn't have is an error, however it's read", () => {
+    const src = `${head}
+    pipeline C(p: Profile) -> Result:
+      p.height
+        |> W.write("{{p.address.zip}} {{p.name}}", about: p.address.city)
+        |? (p.nickname != null)
+        |> System.Value(context.input.p.age)
+        |> System.Print(context.input.p.address.country)`;
+    expect(messages(src, "error")).toEqual([
+      `Pipeline "C": p.height: "height" is not a field of Profile (it has name, age, address)`,
+      `Pipeline "C": p.address.zip: "zip" is not a field of Address (it has city)`,
+      `Pipeline "C": p.nickname: "nickname" is not a field of Profile (it has name, age, address)`,
+      `Pipeline "C": p.address.country: "country" is not a field of Address (it has city)`,
+    ]);
+  });
+
+  test("a literal or parameter passed to a pipeline must match the parameter's type", () => {
+    const src = `${head}
+    pipeline C(name: String, p: Profile, o: Object, k: Integer) -> Result:
+      name
+        |> Double(n: name, label: "ok")
+        |> Double("three", 4)
+        |> Double(n: p.age, label: p.address)
+        |> Double(n: k, label: p.name)
+        |> Double(n: 1.5, label: true)
+        |> Pick(p: o, q: [1, 2], k: 2.5)
+    pipeline Pick(p: Profile, q: List, k: Integer) -> Result:
+      p |> System.Print()`;
+    expect(messages(src, "error")).toEqual([
+      `Pipeline "C": Double(...) passes a String to "n", which is a Number`,
+      `Pipeline "C": Double(...) passes a String to "n", which is a Number`,
+      `Pipeline "C": Double(...) passes an Integer to "label", which is a String`,
+      `Pipeline "C": Double(...) passes an Address to "label", which is a String`,
+      `Pipeline "C": Double(...) passes a Boolean to "label", which is a String`,
+      `Pipeline "C": Pick(...) passes a Number to "k", which is an Integer`,
+    ]);
+  });
+});
+
+describe("return types: built-in types are checked at runtime too", () => {
+  const run = (type: string, answer: unknown) =>
+    rt(`agent X [openai/gpt-4o]\npipeline P(q: String) -> ${type}:\n  q |> X.answer()`, { "X.answer": answer }).execute("P", { q: "?" });
+
+  test("a model's text is read as the declared type", async () => {
+    expect(await run("Number", " 42 ")).toBe(42);
+    expect(await run("Integer", "7")).toBe(7);
+    expect(await run("Boolean", "True")).toBe(true);
+    expect(await run("Array<String>", `["a", "b"]`)).toEqual(["a", "b"]);
+    expect(await run("String", "hi")).toBe("hi");
+    expect(await run("Result", { any: "thing" })).toEqual({ any: "thing" });
+    expect(await run("Report", "unchecked")).toBe("unchecked");
+  });
+
+  for (const [type, answer, problem] of [
+    ["Number", "about forty", `output should be a Number, got a string ("about forty")`],
+    ["Integer", "4.5", `output should be an Integer, got a number (4.5)`],
+    ["Boolean", "yes", `output should be a Boolean, got a string ("yes")`],
+    ["Array<Number>", "[1, \"2\"]", `output[1] should be a Number, got a string ("2")`],
+    ["String", { a: 1 }, `output should be a String, got an object`],
+  ] as const) {
+    test(`-> ${type} rejects ${JSON.stringify(answer)}`, async () => {
+      const err = await run(type, answer).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SchemaValidationError);
+      expect((err as Error).message).toBe(`Schema validation failed for "${type}": ${problem}`);
     });
   }
 });
@@ -604,6 +700,45 @@ pipeline P(x: String) -> Result:
     expect(getCompletions(src, { line: 4, character: 24 }).map((c) => c.label)).toContain("Print");
     const all = getCompletions(src, { line: 5, character: 0 }).map((c) => c.label);
     expect(all).toEqual(expect.arrayContaining(["pipeline", "agent", "loop", "A", "P"]));
+  });
+
+  describe("types", () => {
+    const typed = `schema Address { city: String }
+schema Profile {
+  name: Strng,
+  home: Address
+}
+pipeline Greet(p: Profile, n: Numbr) -> Profil:
+  p.home.zip |> Greet(p: "x")`;
+    const at = (src: string, line: number, character: number) => getCompletions(src, { line, character }).map((c) => c.label);
+
+    test("type and field problems are underlined where they're written", () => {
+      const lines = typed.split("\n");
+      const shown = getDiagnostics(typed).filter((d) => d.severity === 1).map((d) => [d.range.start.line, lines[d.range.start.line]!.slice(d.range.start.character, d.range.end.character)]);
+      expect(shown).toEqual([
+        [2, "Strng"],
+        [5, "Numbr"],
+        [5, "Profil"],
+        [6, "p.home.zip"],
+        [6, "p:"],
+      ]);
+    });
+
+    test("type names complete in signatures, schema fields and type arguments, not elsewhere", () => {
+      expect(at("pipeline P(x: ", 0, 14)).toEqual(expect.arrayContaining(["String", "Result", "Integer"]));
+      expect(at(`${typed}\npipeline Q(a: String, b: Pro`, 7, 27)).toEqual(expect.arrayContaining(["Profile", "Address", "String"]));
+      expect(at("pipeline P(x: String) -> ", 0, 25)).toContain("Result");
+      expect(at("schema S {\n  a: ", 1, 5)).toContain("Number");
+      expect(at("schema S { a: String, b: ", 0, 25)).toContain("Boolean");
+      expect(at("pipeline P(xs: Array<", 0, 21)).toContain("String");
+      expect(at("schema S { a: String }\nagent A [openai/gpt-4o, temp: ", 1, 30)).not.toContain("String");
+      expect(at("tool T : ", 0, 9)).not.toContain("String");
+    });
+
+    test("hover describes built-in types", () => {
+      const hover = getHover("pipeline P(x: Integer) -> Result:\n  x", { line: 0, character: 16 });
+      expect((hover!.contents as { value: string }).value).toBe("**Integer** (built-in type): a whole number");
+    });
   });
 });
 

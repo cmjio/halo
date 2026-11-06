@@ -8,7 +8,7 @@ Halo is a **declarative**, pipeline-oriented language for expressing AI workflow
 
 ### Types and state
 
-Halo is dynamically typed and statically validated (`halo validate`). Parameter and return types are written as `String`, `Number`, `Integer`, `Boolean`, `Array` / `List` (optionally `Array<T>`), `Object` / `JSON`, `Any`, or a declared `schema`. Only a pipeline's return type is checked at runtime, and only when it names a schema.
+Halo is dynamically typed and statically validated (`halo validate`). Parameter and return types are written as `String`, `Number`, `Integer`, `Boolean`, `Array` / `List` (optionally `Array<T>`), `Object` / `JSON` / `Map`, `Any`, `Result` (unchecked, like `Any`), or a declared `schema`. The validator checks type names, fields read from schema-typed parameters, and values passed to pipelines whose types it can see (literals and parameters). At runtime, a pipeline's output is checked against its return type.
 
 #### The Global State (`context`)
 

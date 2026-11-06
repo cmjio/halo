@@ -2,8 +2,23 @@
 
 export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "thread"] as const;
 
-/** Field types a `schema` can use (besides other schemas). */
-export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any"] as const;
+/** Types a schema field, parameter or return can name (besides declared schemas). `Result` is the usual unchecked return type, like `Any`. */
+export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any", "Result"] as const;
+
+/** What each built-in type accepts, for editors (hover, completions). */
+export const TYPE_DESCRIPTIONS: Record<(typeof SCHEMA_TYPES)[number], string> = {
+  String: "a string",
+  Number: "a finite number",
+  Integer: "a whole number",
+  Boolean: "true or false",
+  Array: "a list; Array<T> checks every item against T",
+  List: "a list (same as Array); List<T> checks every item against T",
+  Object: "an object",
+  Map: "an object (same as Object)",
+  JSON: "an object (same as Object)",
+  Any: "anything (not checked)",
+  Result: "anything (not checked); the usual return type of a pipeline whose output isn't checked",
+};
 
 /** System methods with built-in behavior. */
 export const SYSTEM_METHODS = ["Print", "Log", "Sleep", "Fail", "Pick", "Value"] as const;

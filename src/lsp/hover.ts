@@ -1,6 +1,7 @@
 import { MarkupKind, type Hover, type Position } from "vscode-languageserver";
 import { parse } from "../parser/index.js";
 import { findPreset } from "../runtime/presets.js";
+import { SCHEMA_TYPES, TYPE_DESCRIPTIONS, includes } from "../parser/builtins.js";
 
 const OPERATORS: Record<string, string> = {
   "|>": "**Pipe**: run a call on the current value.",
@@ -52,5 +53,6 @@ export function getHover(sourceText: string, position: Position): Hover | null {
   }
   const schema = ast.schemas.find((s) => s.name === word);
   if (schema) return md(`**schema ${schema.name}**\n\n${schema.fields.map((f) => `- ${f.name}: \`${f.type}\``).join("\n")}`);
+  if (includes(SCHEMA_TYPES, word)) return md(`**${word}** (built-in type): ${TYPE_DESCRIPTIONS[word]}`);
   return null;
 }

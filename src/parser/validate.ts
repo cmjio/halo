@@ -4,6 +4,13 @@
  * `parse()` only checks syntax. `validate()` checks that names resolve, that
  * agents are equipped with the tools they use, that `requires` policies exist,
  * and flags constructs the runtime cannot enforce.
+ *
+ * Types are checked where they are written down: every type name must be a
+ * built-in or a declared schema, a field read from a schema-typed parameter
+ * must be one of the schema's fields, and a value passed to a pipeline must
+ * match the parameter's type when the validator can tell what it is (a literal,
+ * or another parameter). Model answers can't be known ahead of time, so the
+ * runtime checks a pipeline's output against its return type.
  */
 
 import type { Agent, Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, Value } from "./types.js";
@@ -33,6 +40,8 @@ export interface Diagnostic {
   message: string;
   line?: number;
   column?: number;
+  /** The text the problem is about (a type or field name), on or after `line`, so editors can underline it. */
+  token?: string;
 }
 
 export interface ValidateOptions {
@@ -54,20 +63,22 @@ class Validator {
   private tools: Map<string, ParseResult["tools"][number]>;
   private policies: Map<string, ParseResult["policies"][number]>;
   private pipelines: Map<string, PipelineDeclaration>;
+  private schemas: Map<string, SchemaDeclaration>;
 
   constructor(private ast: ParseResult, private options: ValidateOptions) {
     this.agents = new Map(ast.agents.map((m) => [m.name, m]));
     this.tools = new Map([...ast.tools, ...ast.stores].map((t) => [t.name, t]));
     this.policies = new Map(ast.policies.map((g) => [g.name, g]));
     this.pipelines = new Map(ast.pipelines.map((s) => [s.name, s]));
+    this.schemas = new Map(ast.schemas.map((sc) => [sc.name, sc]));
   }
 
   private isDeclaredName(name: string): boolean {
     return this.agents.has(name) || this.tools.has(name) || this.policies.has(name) || this.pipelines.has(name);
   }
 
-  private add(severity: Diagnostic["severity"], message: string, loc?: Loc) {
-    this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}) });
+  private add(severity: Diagnostic["severity"], message: string, loc?: Loc, token?: string) {
+    this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}), ...(token ? { token } : {}) });
   }
 
   run(): Diagnostic[] {
@@ -206,12 +217,92 @@ class Validator {
     for (const f of sc.fields) {
       if (names.has(f.name)) this.add("error", `Schema "${sc.name}": duplicate field "${f.name}"`, sc.loc);
       names.add(f.name);
-      for (const t of f.type.split(/[<>,\s]+/).filter(Boolean)) {
-        if (!includes(SCHEMA_TYPES, t) && !this.ast.schemas.some((x) => x.name === t)) {
-          this.add("warning", `Schema "${sc.name}": field "${f.name}" has unknown type "${t}" (use ${SCHEMA_TYPES.join(", ")}, or another schema)`, sc.loc);
-        }
+      this.checkTypeName(f.type, `Schema "${sc.name}": field "${f.name}"`, sc.loc);
+    }
+  }
+
+  /**
+   * Every name in a written type (`Array<Profile>`) should be a built-in type or a declared schema.
+   * A near miss of one (`Numbr`, `Profil`) is an error. Any other name is a warning: it documents
+   * the value but isn't checked, as `Report` or `GitHub.PullRequest` often do.
+   */
+  private checkTypeName(type: string, what: string, loc?: Loc) {
+    const known = [...SCHEMA_TYPES, ...this.schemas.keys()];
+    for (const t of type.split(/[<>,\s]+/).filter(Boolean)) {
+      if (known.includes(t)) continue;
+      const near = known.find((k) => nearMiss(t, k));
+      if (near) this.add("error", `${what}: "${t}" is not a type; did you mean "${near}"?`, loc, t);
+      else this.add("warning", `${what}: "${t}" is not a declared schema, so it isn't checked (declare \`schema ${t} { ... }\`, or use ${SCHEMA_TYPES.join(", ")})`, loc, t);
+    }
+  }
+
+  // ── Types of values in a pipeline ──
+
+  /** The declared type of `path` read from a parameter (`p`, `p.address.city`), or undefined if it isn't a parameter. Reports fields the schema doesn't have. */
+  private paramPathType(path: string[], s: PipelineDeclaration, loc?: Loc, report = true): string | undefined {
+    const param = s.params.find((p) => p.name === path[0]);
+    if (!param) return undefined;
+    let type = param.type;
+    for (const [i, field] of path.slice(1).entries()) {
+      const schema = this.schemas.get(baseType(type));
+      if (!schema) return ""; // not a schema (Object, Any, ...): fields aren't known
+      const f = schema.fields.find((x) => x.name === field);
+      if (!f) {
+        if (!report) return "";
+        const read = path.slice(0, i + 2).join(".");
+        this.add("error", `Pipeline "${s.name}": ${read}: "${field}" is not a field of ${schema.name} (it has ${schema.fields.map((x) => x.name).join(", ") || "no fields"})`, loc, read);
+        return "";
+      }
+      type = f.type;
+    }
+    return type;
+  }
+
+  /** The type of a value as written, when the validator can tell: a literal, or a parameter (`p.age`, `context.input.p.age`). */
+  private valueType(v: Value, s: PipelineDeclaration): string {
+    switch (v.kind) {
+      case "string":
+        return "String";
+      case "number":
+        return Number.isInteger(v.value) ? "Integer" : "Number";
+      case "bool":
+        return "Boolean";
+      case "list":
+        return "List";
+      case "ref":
+        return this.paramPathType(v.path, s, undefined, false) ?? "";
+      case "context":
+        return v.path[0] === "input" ? (this.paramPathType(v.path.slice(1), s, undefined, false) ?? "") : "";
+      default:
+        return "";
+    }
+  }
+
+  /** A pipeline call's arguments against the callee's parameter types. */
+  private checkCallTypes(call: CallStage, callee: PipelineDeclaration, s: PipelineDeclaration) {
+    const positional = call.argList.filter((a) => !a.name);
+    for (const arg of call.argList) {
+      const param = arg.name ? callee.params.find((p) => p.name === arg.name) : callee.params[positional.indexOf(arg)];
+      if (!param) continue;
+      const given = this.valueType(arg.value, s);
+      const fraction = arg.value.kind === "number" && !Number.isInteger(arg.value.value) && baseType(param.type) === "Integer";
+      if (fraction || !this.assignable(given, param.type)) {
+        this.add("error", `Pipeline "${s.name}": ${callee.name}(...) passes ${article(baseType(given))} to "${param.name}", which is ${article(baseType(param.type))}`, call.loc, arg.name ? `${arg.name}:` : undefined);
       }
     }
+  }
+
+  /** Whether a value of type `from` can go where `to` is declared. Unknown or unchecked types always can. */
+  private assignable(from: string, to: string): boolean {
+    const a = kindOf(baseType(from), this.schemas);
+    const b = kindOf(baseType(to), this.schemas);
+    if (a === "any" || b === "any") return true;
+    if (a === b) return a !== "schema" || baseType(from) === baseType(to);
+    // A Number may hold a whole number; only a written 1.5 is known not to (see checkCallTypes).
+    if ((a === "integer" && b === "number") || (a === "number" && b === "integer")) return true;
+    if (a === "schema" && b === "object") return true;
+    if (a === "object" && b === "schema") return true;
+    return false;
   }
 
   // ── Pipelines ──
@@ -223,6 +314,9 @@ class Validator {
     if (keyParam && !s.params.some((p) => p.name === keyParam)) {
       this.add("error", `Pipeline "${s.name}": @thread(${keyParam}) keys the thread by an input, but "${keyParam}" is not a parameter`, s.loc);
     }
+
+    for (const p of s.params) if (p.type) this.checkTypeName(p.type, `Pipeline "${s.name}": parameter "${p.name}"`, s.loc);
+    if (s.returnType) this.checkTypeName(s.returnType, `Pipeline "${s.name}": return type`, s.loc);
 
     const params = new Set(s.params.map((p) => p.name));
     // Names available under context.data as the pipeline progresses.
@@ -236,6 +330,8 @@ class Validator {
       if (stage.kind === "expression") {
         if (stage.expr.kind === "ref" && !params.has(stage.expr.path[0]!)) {
           this.add("error", `Pipeline "${s.name}": undefined variable "${stage.expr.path[0]}"`, stage.loc);
+        } else if (stage.expr.kind === "ref") {
+          this.paramPathType(stage.expr.path, s, stage.loc);
         } else if (stage.expr.kind === "context") {
           this.checkContextRef(stage.expr.path, s, data, stage.loc);
         }
@@ -331,6 +427,7 @@ class Validator {
         const positional = call.argList.filter((a) => !a.name).length;
         const missing = callee.params.filter((p, i) => (call.argList.length ? i >= positional : i > 0) && !call.argList.some((a) => a.name === p.name));
         if (missing.length) this.add("warning", `${where}: ${call.callee}(...) is called without ${missing.map((p) => `"${p.name}"`).join(", ")}`, call.loc);
+        this.checkCallTypes(call, callee, s);
       }
       return;
     }
@@ -410,6 +507,7 @@ class Validator {
 
   private checkValue(v: Value, s: PipelineDeclaration, params: Set<string>, data: Set<string>, loc?: Loc) {
     if (v.kind === "context") this.checkContextRef(v.path, s, data, loc);
+    else if (v.kind === "ref") this.paramPathType(v.path, s, loc);
     else if (v.kind === "list") for (const item of v.items) this.checkValue(item, s, params, data, loc);
     else if (v.kind === "string") this.checkTemplate(v.value, s, params, data, loc);
   }
@@ -419,6 +517,8 @@ class Validator {
       const path = expr!.split(".");
       if (path[0] === "context") {
         this.checkContextRef(path.slice(1), s, data, loc);
+      } else if (params.has(path[0]!)) {
+        this.paramPathType(path, s, loc);
       } else if (path[0] !== "current" && !params.has(path[0]!) && !data.has(path[0]!) && path[0] !== "Env") {
         this.add("warning", `Pipeline "${s.name}": template {{${expr}}} does not match a parameter or an earlier result`, loc);
       }
@@ -444,6 +544,8 @@ class Validator {
           this.add("error", `Pipeline "${s.name}": ${c.value.path.join(".")} can only be used in tool declarations, not in a condition`, loc);
         } else if (c.value.kind === "ref" && !params.has(c.value.path[0]!) && !data.has(c.value.path[0]!)) {
           this.add("warning", `Pipeline "${s.name}": "${c.value.path.join(".")}" in a gate is not a parameter or result; it compares as a string`, loc);
+        } else if (c.value.kind === "ref") {
+          this.paramPathType(c.value.path, s, loc);
         }
         break;
     }
@@ -474,6 +576,8 @@ class Validator {
     }
     if (ns === "input" && !s.params.some((p) => p.name === key)) {
       this.add("warning", `Pipeline "${s.name}": context.input.${key} is not a parameter of this pipeline`, loc);
+    } else if (ns === "input") {
+      this.paramPathType(path.slice(1), s, loc);
     }
   }
 }
@@ -507,6 +611,56 @@ function callKeys(call: CallStage): string[] {
 }
 
 const UNSAFE_NAMES = new Set(["__proto__", "prototype", "constructor"]);
+
+/** `Array<String>` → `Array` */
+function baseType(type: string): string {
+  const lt = type.indexOf("<");
+  return (lt < 0 ? type : type.slice(0, lt)).trim();
+}
+
+type Kind = "string" | "number" | "integer" | "boolean" | "list" | "object" | "schema" | "any";
+
+/** What a type name accepts, folding aliases (List = Array, JSON = Map = Object). Unknown and unchecked types are "any". */
+function kindOf(base: string, schemas: Map<string, SchemaDeclaration>): Kind {
+  switch (base) {
+    case "String":
+      return "string";
+    case "Number":
+      return "number";
+    case "Integer":
+      return "integer";
+    case "Boolean":
+      return "boolean";
+    case "Array":
+    case "List":
+      return "list";
+    case "Object":
+    case "JSON":
+    case "Map":
+      return "object";
+  }
+  return schemas.has(base) ? "schema" : "any";
+}
+
+/** A likely typo: the same name in another case, or within an edit or two (one for short names). */
+function nearMiss(written: string, known: string): boolean {
+  if (written.toLowerCase() === known.toLowerCase()) return true;
+  const limit = Math.min(written.length, known.length) <= 4 ? 1 : 2;
+  if (Math.abs(written.length - known.length) > limit) return false;
+  let prev = Array.from({ length: known.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= written.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= known.length; j++) {
+      row[j] = Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + (written[i - 1] === known[j - 1] ? 0 : 1));
+    }
+    prev = row;
+  }
+  return prev[known.length]! <= limit;
+}
+
+function article(type: string): string {
+  return `${/^[AEIOU]/.test(type) ? "an" : "a"} ${type}`;
+}
 
 function validRegex(pattern: string): boolean {
   try {

@@ -79,5 +79,5 @@ async function download(req: Request, url: URL, env: Env): Promise<Response> {
   headers.set("cache-control", key === "latest.json" ? "public, max-age=60" : "public, max-age=31536000, immutable");
   if (!headers.has("content-type")) headers.set("content-type", key.endsWith(".json") ? "application/json" : "application/octet-stream");
   if (!key.endsWith(".json")) headers.set("content-disposition", `attachment; filename="${key.split("/").pop()}"`);
-  return new Response("body" in object ? object.body : null, { headers });
+  return new Response(req.method === "HEAD" ? null : (object as R2Object).body, { headers });
 }

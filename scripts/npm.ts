@@ -44,7 +44,7 @@ const common = {
 rmSync(out, { recursive: true, force: true });
 
 for (const key of keys) {
-  const p = platforms[key];
+  const p = platforms[key]!; // keys come from Object.keys(platforms)
   const src = join(from, p.asset);
   if (!existsSync(src)) throw new Error(`No ${p.asset} in ${from}. Build the release first (bun scripts/release.ts --no-upload).`);
   const dir = join(out, `halo-${key}`);
