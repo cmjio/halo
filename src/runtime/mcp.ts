@@ -24,7 +24,7 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_SUPPORTED_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const CLIENT_INFO = { name: "halo", version: "0.4.0" };
+const CLIENT_INFO = { name: "halo", version: "0.5.0" };
 
 /** Methods every MCP tool has, in addition to the server's own tools. */
 const BUILTIN_METHODS = new Set(["list_tools", "list_resources", "read_resource"]);
