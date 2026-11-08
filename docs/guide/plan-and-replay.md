@@ -1,6 +1,6 @@
 # Plan and Replay
 
-`halo plan` shows what a run could do before it runs. `halo replay` runs a recorded run again with the answers it got, without calling any model. For a `@checkpoint` run, `halo history` lists every step and `halo rewind` continues from any of them.
+`halo plan` shows what a run could do before it runs. `halo replay` runs a recorded run again with the answers it got, without calling any model. `halo compare` puts the two together: it checks that a changed pipeline can't do anything the original couldn't, then replays the original's recorded runs against it and has a judge say which outputs are better. For a `@checkpoint` run, `halo history` lists every step and `halo rewind` continues from any of them.
 
 ## `halo plan`
 
@@ -85,7 +85,7 @@ When every agent that calls a model has a `MaxSpend`, the run can't spend more t
 
 Every `halo run` and `halo debug` keeps a recording of what the run got from outside, in order:
 
-- each model answer, including the tool calls an agent asked for
+- each model answer, including the tool calls an agent asked for, with what the call cost and a fingerprint of the request (a hash of the model, prompt or conversation, and settings)
 - each tool result, whether the pipeline or an agent made the call
 - each answer to a tool-call approval
 - each answer to `|! yield` and each `~> listen` event, whether it came from the terminal, a handler, or `halo resume`
@@ -117,12 +117,13 @@ The run id is in `halo run`'s summary line, in the name of the recording's file,
 
 or `≠ Different from the recorded run …`, with what the recorded run ended with.
 
-Use it to check that a change to the pipeline doesn't change the result, to look at a failure again without paying for the models, or (with `--live-models`) to try new prompts against the same tool results.
+Use it to check that a change to the pipeline doesn't change the result, to look at a failure again without paying for the models, or (with `--live-models` or `--live-changed`) to try new prompts against the same tool results. `--live-changed` pays only for the stages a change touched: edit the last prompt of a five-stage pipeline, and the first four answers come from the recording. It prints how many answers it reused and how many it called live. A recording made before fingerprints were kept can't be checked, so its model calls all go live, and the replay says so.
 
 | Flag | Replays | Calls for real |
 |---|---|---|
 | (none) | Model answers and tool results | Nothing |
 | `--live-models` | Tool results | The models: new prompts against the same tool results |
+| `--live-changed` | Tool results, and the model answers whose requests didn't change | Only the models whose request changed (a new prompt, model or setting, or an earlier answer that changed), and calls the recording has none for |
 | `--live-tools` | Model answers | The tools: **writes, posts and shell commands run again** |
 
 When the pipeline asks for something the recording doesn't have (a new agent stage, a tool the recorded run never called, one more call than was recorded, or a different model answer leading to a different tool call), the run fails with `REPLAY_MISMATCH`: "the pipeline or its input changed". A tool call an agent chose is the exception: the mismatch goes back to the model as a tool error, like any other failed tool call.
@@ -133,6 +134,72 @@ Limits:
 - Recordings made before `|! yield` answers were recorded have none: a replay of one approves every yield, as `halo test` does.
 - `@shadow` calls aren't recorded.
 - Replay follows the recorded order per target. If parallel stages (`|*`, `each`) call the same target, they can get each other's answers.
+
+## `halo compare`
+
+```bash
+halo compare triage.halo --from main          # the file as it is now, against the file on main
+halo compare triage.halo --from HEAD~1 --runs 30 --criteria criteria.md --budget 2.00 --report compare.md
+halo compare triage.halo triage-v2.halo       # or two files
+```
+
+It answers two questions about a changed pipeline (`b`), using the runs the original (`a`) really had.
+
+With `--from <rev>`, `a` is the file as it was at a git revision (a branch, a tag, `HEAD~1`, a commit) and `b` is the file as it is in your working copy. That's the usual way to use it: change the pipeline in place, keep its name, and compare before you commit or in the pull request. Recordings are found by pipeline name, so a pipeline that keeps its name keeps its recorded runs. A copy under a new name (`TriageV2`) has none of them, and it reuses no recorded model answers where it calls agents under new names.
+
+**1. Does b reach anything a couldn't?** From the two files, before anything runs, b must be inside the *fence*:
+
+| Check | b passes when |
+|---|---|
+| signature | The pipeline's arguments and return type (and its schema) are the same |
+| tools | The same tool and store declarations, with the same arguments (so the same secrets) |
+| effects | Every tool call in b's plan, with its effect, is in a's plan |
+| unasked effects | Nothing new writes or calls out without asking |
+| approvals | No `\|! yield` or `~> listen` removed, and no call that needed approval now goes without |
+| policies | Policy declarations unchanged, every agent still requires what it did, and a new agent requires every policy all of a's agents required |
+| equips | No agent equips a tool or store it couldn't see before |
+| models | Every model (including `@shadow` models) is from a provider a already sends prompts to, or matches `--allow-model` |
+| cost | b's worst-case cost per run (its `MaxSpend` cap, or its plan's total) is no higher than a's, times `--max-cost-ratio` (1.0) |
+| spend limits | No `MaxSpend` raised or removed |
+| bounds | No new `\|* each` without a `limit:` |
+
+When b is outside the fence, `halo compare` prints what it found and stops with status 1. It doesn't replay b. Widening what a pipeline can do is a decision for a person to make on purpose, after reading the diff and the new `halo plan`.
+
+**2. Is b better on real runs?** It takes a's newest recorded runs that completed or halted (`--runs`, 20), and replays each against b with `--live-changed`: tool results, approvals, yields and events come from the recording, so nothing is written, posted or sent, and only the model calls b changed go to the model. Then, for each run:
+
+| Outcome | Meaning |
+|---|---|
+| `same` | b gave exactly a's output. No judge is asked |
+| `better` / `worse` / `tie` | Both completed with different outputs, and the judge picked |
+| `now halts` / `no longer halts` / `both halt` | A gate stopped one, or both |
+| `now pauses` | b waits for something a didn't |
+| `now fails` | b failed where a didn't |
+| `diverged` | b asked for something the recording has no answer for, such as a tool call its agent chose differently or a new tool stage. It isn't scored, because finding out would mean running the tool for real |
+
+The **judge** sees the run's input, the criteria, and both outputs, in random order (`--seed`, 1) and unlabelled, and picks one or calls a tie. It's a small Halo pipeline on `--judge`'s model, by default the priciest model a already uses, so judging sends the data nowhere new. `--criteria <file.md>` says what a better output is for this pipeline; without it the judge uses a general one. `--no-judge` skips judging and counts differing outputs as ties.
+
+It ends with a summary:
+
+```
+Won 15 · tied 3 · lost 2
+Also: 1 now halts, 1 diverged
+Cost per run  $0.0210 → $0.0120 (-43%), estimated from live calls and the recorded cost of reused ones
+Spent $0.3100 of $1.00 · report: compare.md (unredacted)
+```
+
+- **Cost per run** is a's recorded cost against b's estimate: what b's live calls cost plus what the reused answers cost when they were recorded. It counts only runs that finished both times.
+- **`--budget`** (default $1.00) stops it starting new runs once live calls and judging have cost that much. One run can still spend up to b's own worst case.
+- **`--report <file.md>`** writes every run side by side: input, both outputs, the judge's reason, and how many model answers were reused. It holds unredacted inputs and outputs, like the recordings it came from, so keep it out of version control.
+- **`--json`** prints the fence and every run's result.
+- Missing API keys stop it: before anything runs for the judge's model, and at the first changed stage that needs one.
+
+Limits:
+
+- It compares against recorded runs only, so it needs `halo run` (which records by default) to have run the original. `halo serve` doesn't record unless asked, and only the newest 50 recordings are kept.
+- Effects are what each tool provider says about itself. An MCP tool's methods show as `Tool.*` with the effect not described, so the fence can only check that b calls no `Tool.*` that a didn't.
+- The approvals check counts yields and listens, and checks approval rules per call. It doesn't check that a yield still comes before the same effects.
+- A `@thread` pipeline's runs depend on state the replay doesn't restore.
+- Lowering a `MaxSpend` changes the policy's declaration, so it counts as outside the fence.
 
 ## `halo history`
 

@@ -127,7 +127,16 @@ export interface MockRequest {
   tools?: string[];
   messages?: LLMMessage[];
   step?: number;
+  /** For an agent: the model asked for, and a hash of the whole request (model, prompt or conversation, settings). Two calls with the same fingerprint asked the same thing. */
+  model?: string;
+  fingerprint?: string;
 }
+
+/**
+ * A mock function can carry `live(req)`: when it returns true, that call goes to the model for real instead.
+ * `halo replay --live-changed` uses it to call only the models whose requests changed.
+ */
+export type LiveCheck = (req: MockRequest) => boolean;
 
 /** A mocked model turn that calls a tool: `useTool("Files.read", { path: "a.ts" })`. Return one, or a list, from a mock. */
 export class ToolUse {
@@ -143,6 +152,9 @@ export interface RecordedCall {
   value: unknown;
   /** For a model turn that called tools: the calls. */
   toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+  /** For a model answer: the request's fingerprint (see MockRequest), and what the call cost in USD. */
+  fingerprint?: string;
+  cost?: number;
 }
 
 /** A canned value, or a function computing one. */
@@ -488,6 +500,14 @@ function sha256(...parts: string[]): string {
   const h = new Bun.CryptoHasher("sha256");
   for (const p of parts) h.update(p);
   return h.digest("hex");
+}
+
+/** A hash of everything a model request asks: the model, the prompt (or the conversation so far and the tools offered), and its settings. */
+function requestFingerprint(model: string, prompt: string, system: string | undefined, options: LLMOptions, turn?: Turn): string {
+  // Tool call ids and the adapter's raw turns differ between a run and its replay, so they don't count.
+  const messages = turn?.messages.map((m) => (m.role === "assistant" ? { role: m.role, content: m.content, calls: m.toolCalls?.map((c) => [c.name, c.args]) } : m.role === "tool" ? { role: m.role, name: m.name, content: m.content } : m));
+  const asked = turn ? { messages, tools: turn.targets, toolChoice: turn.toolChoice } : { system, prompt };
+  return sha256(safeJson({ model, ...asked, temperature: options.temperature, maxTokens: options.maxTokens, topP: options.topP }));
 }
 
 function safeJson(v: unknown): string {
@@ -1414,11 +1434,16 @@ export class HaloRuntime {
   }
 
   private mockFor(...keys: string[]): ((req: MockRequest) => Promise<unknown>) | undefined {
+    const mock = this.rawMock(...keys);
+    if (mock === undefined) return undefined;
+    return async (req) => (typeof mock === "function" ? await (mock as (r: MockRequest) => unknown)(req) : mock);
+  }
+
+  /** The mock installed for the first of `keys` that has one, as given to mockAll. */
+  private rawMock(...keys: string[]): MockValue | undefined {
     if (!this.mocks) return undefined;
     const key = keys.find((k) => Object.hasOwn(this.mocks!, k));
-    if (key === undefined) return undefined;
-    const mock = this.mocks[key];
-    return async (req) => (typeof mock === "function" ? await (mock as (r: MockRequest) => unknown)(req) : mock);
+    return key === undefined ? undefined : this.mocks[key];
   }
 
   private retryPolicy(ctx: ExecutionContext, agent?: Agent): { retries: number; delayMs: number } {
@@ -1888,8 +1913,11 @@ export class HaloRuntime {
     for (const name of agent.equips ?? []) {
       const tool = this.tools.get(name);
       if (!tool || name === explicitTool) continue;
-      if (tool.provider === "VectorStore" && query && !this.mockFor(`${name}.search`, name)) {
-        const hits = (await this.toolCall(tool, "search", [query], { limit: 3, min_score: 0.1 }, ctx, true)) as Array<{ content: unknown }>;
+      // A mocked store is skipped (a canned answer isn't a list of hits), except under replay, which answers the search the run made.
+      const storeMock = this.rawMock(`${name}.search`, name);
+      if (tool.provider === "VectorStore" && query && (storeMock === undefined || (typeof storeMock === "function" && (storeMock as { replay?: boolean }).replay))) {
+        const found = await this.toolCall(tool, "search", [query], { limit: 3, min_score: 0.1 }, ctx, true);
+        const hits = Array.isArray(found) ? (found as Array<{ content: unknown }>) : [];
         if (hits.length) context.push({ source: name, text: hits.map((h) => `- ${formatValue(h.content)}`).join("\n") });
       } else if (tool.provider === "File") {
         histories.push(tool);
@@ -1921,7 +1949,20 @@ export class HaloRuntime {
     turn?: Turn,
   ): Promise<{ value: unknown; text?: string; tokens?: { prompt: number; completion: number }; toolCalls?: LLMToolCall[]; rawMessage?: unknown }> {
     const t0 = performance.now();
-    const mock = this.mockFor(...mockKeys);
+    const fingerprint = requestFingerprint(model, prompt, system, options, turn);
+    const raw = this.rawMock(...mockKeys);
+    let mock = this.mockFor(...mockKeys);
+    let req: MockRequest | undefined;
+    const mockRequest = (): MockRequest => {
+      if (req) return req;
+      const { positional, named } = stage ? this.resolveArgs(stage, ctx, { skip: LLM_OPTION_KEYS }) : { positional: [], named: {} };
+      req = { target, kind: "agent", prompt: turn ? turn.shown : prompt, system, args: positional, named, input: ctx.current, model, fingerprint };
+      if (turn) Object.assign(req, { tools: turn.targets, messages: turn.messages, step: turn.step });
+      return req;
+    };
+    // A mock can send this call to the model for real (replay --live-changed, for a request that changed).
+    const live = typeof raw === "function" ? (raw as { live?: LiveCheck }).live : undefined;
+    if (mock && live?.(mockRequest())) mock = undefined;
     const flight = this.flight(ctx);
     let reserve = 0;
     if (mock) flight.calls++;
@@ -1930,10 +1971,7 @@ export class HaloRuntime {
     try {
       outcome = await this.withPolicies(ctx, target, agent, async (signal) => {
         if (mock) {
-          const { positional, named } = stage ? this.resolveArgs(stage, ctx, { skip: LLM_OPTION_KEYS }) : { positional: [], named: {} };
-          const req: MockRequest = { target, kind: "agent", prompt: turn ? turn.shown : prompt, system, args: positional, named, input: ctx.current };
-          if (turn) Object.assign(req, { tools: turn.targets, messages: turn.messages, step: turn.step });
-          const value = await mock(req);
+          const value = await mock(mockRequest());
           // A mock that calls tools returns useTool(...) (or a list of them).
           const uses = (Array.isArray(value) ? value : [value]).filter((v): v is ToolUse => v instanceof ToolUse);
           if (turn && uses.length) {
@@ -1970,7 +2008,7 @@ export class HaloRuntime {
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
     const toolCalls = result.toolCalls;
-    if (kind !== "shadow") this.config.recorder?.({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}) });
+    if (kind !== "shadow") this.config.recorder?.({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}), fingerprint, cost: result.cost });
     if (kind !== "shadow") {
       // Telemetry keeps what the agent's policies let out: redacted, or withheld if blocked.
       const shown = this.guard.forLog(agent, value);
@@ -2009,6 +2047,11 @@ export class HaloRuntime {
     return this.config.apiKeys?.[adapter.id] ?? fromEnv ?? this.config.apiKey ?? this.env.HALO_API_KEY ?? undefined;
   }
 
+  /** Whether a model has an adapter and the key it needs. */
+  canCallModel(modelId: string): boolean {
+    return this.isModelAvailable(modelId);
+  }
+
   private isModelAvailable(modelId: string): boolean {
     const adapter = this.adapterRegistry.findAdapter(modelId);
     return !!adapter && (adapter.requiresApiKey === false || !!this.apiKeyFor(adapter));
@@ -2032,7 +2075,7 @@ export class HaloRuntime {
     const apiKey = this.apiKeyFor(adapter);
     if (adapter.requiresApiKey !== false && !apiKey) {
       const vars = [...(adapter.envKeys ?? []), "HALO_API_KEY"].join(" or ");
-      throw new HaloError(`No API key set for ${adapter.id} (model "${model}"). Set ${vars}, or pass apiKey in RuntimeConfig.`);
+      throw new HaloError(`No API key set for ${adapter.id} (model "${model}"). Set ${vars}, or pass apiKey in RuntimeConfig.`, { code: "NO_API_KEY" });
     }
 
     if (turn?.tools.length && adapter.supportsTools === false) {

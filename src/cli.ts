@@ -15,7 +15,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parse } from "./parser/index.js";
 import { validate, type Diagnostic } from "./parser/validate.js";
@@ -32,9 +32,11 @@ import { TOOL_PROVIDERS } from "./parser/builtins.js";
 import { AGENT_PRESETS } from "./runtime/presets.js";
 import { findSkill, skillCatalog, skillFiles } from "./runtime/skills.js";
 import { formatPlan, plan, type PlanOptions } from "./plan.js";
+import { checkFence } from "./fence.js";
+import { compareReport, compareRuns, defaultJudgeModel, haloJudge, recordingsFor, type Outcome } from "./compare.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
-import { pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
+import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { describePermissions, permissionsOf } from "./registry/manifest.js";
 import { DEFAULT_REGISTRY, install, installFromLock, loadInstalled, pack, publish, readLock, search, uninstall, type LoadedProvider } from "./registry/packages.js";
@@ -48,7 +50,8 @@ USAGE:
   halo test <file.halo> [options]       Run offline: --mock plus --auto-approve
   halo resume <file.halo> <runId>       Continue a paused run (--payload '<json or word>')
   halo replay <file.halo> <runId>       Rerun a recorded run with the answers it got: no model
-                                        or tool calls (--live-models or --live-tools to redo one side)
+                                        or tool calls (--live-models or --live-tools to redo one side;
+                                        --live-changed: only the models whose prompts changed)
   halo rewind <file.halo> <runId> --step N
                                         Go back to a step of a @checkpoint run and continue
                                         from there as a new run (--yes if stages after it
@@ -68,6 +71,13 @@ USAGE:
   halo plan <file.halo>                 Show what a run could do: model calls and worst-case
                                         cost, tool calls and their effects, approvals
   halo mcp [files|dirs ...]             Serve pipelines as MCP tools over stdio
+  halo compare <a.halo> <b.halo>        Is b better than a on a's recorded runs, and does it reach
+                                        anything a couldn't? Replays them against b (tools from the
+                                        recordings, models only where prompts changed) and has a
+                                        judge pick between the outputs (--runs, --criteria, --judge,
+                                        --budget, --report)
+  halo compare <file.halo> --from <rev> The same, with the file as it was at a git revision (main,
+                                        HEAD~1, a tag) as a and the file as it is now as b
 
 TOOL PACKAGES:
   halo search [query]                   Find tool packages in the registry
@@ -113,6 +123,19 @@ SERVE OPTIONS:
                          webhooks, notify.slack, publicUrl, files
   --no-studio            Don't serve Halo Studio
 
+COMPARE OPTIONS:
+  --pipeline, -p <name>  Pipeline to compare (default: the entry pipeline)
+  --from <rev>           Compare the file with itself at this git revision
+  --runs <n>             How many recent recorded runs to replay (default 20)
+  --criteria <file.md>   What a better output looks like, for the judge
+  --judge <model>        Judge model (default: the priciest model a already uses)
+  --no-judge             Don't judge: count differing outputs as ties
+  --budget <usd>         Stop starting runs once live calls and judging cost this much (default 1.00)
+  --allow-model <glob>   A model b may use from a provider a doesn't (repeatable, e.g. "openai/*")
+  --max-cost-ratio <x>   How much b's worst-case cost per run may exceed a's (default 1.0)
+  --report <file.md>     Write every run side by side (unredacted, like the recordings)
+  --seed <n>             Seed for the order the judge sees outputs in (default 1)
+
 VALIDATE OPTIONS:
   --strict               Treat warnings as errors
 
@@ -150,7 +173,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "no-builtin"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -445,6 +468,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   const telemetry = flags.bools.has("no-telemetry") ? undefined : new SqliteTelemetry(".halo/telemetry.db");
   const trace = tracer(debug);
   const replaying = replayRun ? readRecording(RECORDINGS, replayRun) : undefined;
+  const replayStats = newReplayStats();
+  if (replaying && flags.bools.has("live-changed") && flags.bools.has("live-models")) fail("Pass --live-models or --live-changed, not both");
   // Every real run keeps a recording, so it can be replayed (a resumed run adds to its own).
   const runId = resumeRun ?? crypto.randomUUID();
   // A rewound run's recording would miss what came before its step, so it couldn't be replayed.
@@ -470,7 +495,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   if (replaying) {
     const tools = [...ast.tools, ...ast.stores].map((t) => t.name);
     // Recordings from before yields were recorded approve them, as halo test does.
-    rt.mockAll({ yield: AUTO_EVENT, ...replayMocks(replaying, { liveModels: flags.bools.has("live-models"), liveTools: flags.bools.has("live-tools"), tools }) });
+    rt.mockAll({ yield: AUTO_EVENT, ...replayMocks(replaying, { liveModels: flags.bools.has("live-models"), liveChanged: flags.bools.has("live-changed"), liveTools: flags.bools.has("live-tools"), tools, stats: replayStats }) });
   }
 
   let result: RunResult;
@@ -539,6 +564,10 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   const meta = result.context.meta;
   if (replaying) {
     const same = replaying.end && replaying.end.status === result.status && JSON.stringify(replaying.end.output) === JSON.stringify(result.output);
+    if (flags.bools.has("live-changed")) {
+      console.error(dim(`${replayStats.reused} model answer(s) from the recording, ${replayStats.live} called live (their requests changed)`));
+      if (replayStats.unfingerprinted) console.error(yellow(`This recording predates request fingerprints, so ${replayStats.unfingerprinted} call(s) went live without being checked; record the run again to reuse them`));
+    }
     console.error(same ? green(`✓ Same output as the recorded run ${replayRun}`) : yellow(`≠ Different from the recorded run ${replayRun}${replaying.end ? ` (it ${replaying.end.status === "error" ? `failed: ${replaying.end.error}` : `ended ${replaying.end.status} with ${formatValue(replaying.end.output).slice(0, 200)}`})` : ""}`));
   }
   if (result.status === "halted" && meta.halted) {
@@ -623,6 +652,127 @@ async function cmdPlan(flags: Flags): Promise<number> {
   if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));
   else console.log(plans.map((p) => formatPlan(p, { bold, dim, red, yellow })).join("\n\n"));
   return diags.some((d) => d.severity === "error") ? 1 : 0;
+}
+
+const OUTCOME_MARK: Record<Outcome, string> = {
+  same: "=", better: "✓", worse: "✗", tie: "~", "now halts": "⏹", "no longer halts": "▶", "both halt": "⏹", "now pauses": "⏸", "now fails": "✗", diverged: "?", skipped: "·",
+};
+
+/** A .halo file as it was at a git revision (`git show <rev>:<file>`). */
+function loadRevision(rev: string, path: string): ParseResult {
+  // A revision that starts with "-" would be read as an option.
+  if (!rev.trim() || rev.startsWith("-")) fail(`--from needs a git revision, such as main or HEAD~1 (got "${rev}")`);
+  const p = Bun.spawnSync(["git", "show", `${rev}:./${basename(path)}`], { cwd: dirname(path), stderr: "pipe" });
+  if (p.exitCode !== 0) fail(`Can't read ${relative(process.cwd(), path)} at ${rev}: ${p.stderr.toString().trim() || `git exited with ${p.exitCode}`}`);
+  const ast = parse(p.stdout.toString());
+  if (ast.errors.length) fail(`Parse errors in ${relative(process.cwd(), path)} at ${rev}:\n${ast.errors.map((e) => "  " + e).join("\n")}`);
+  return ast;
+}
+
+async function cmdCompare(flags: Flags): Promise<number> {
+  const usage = "Usage: halo compare <original.halo> <variant.halo>, or halo compare <file.halo> --from <git revision> [--pipeline Name] [--runs 20] [--criteria file.md] [--budget 1.00]";
+  const [first, second] = flags.positional;
+  const from = last(flags, "from");
+  if (!first || (from === undefined) === (second === undefined)) fail(usage);
+  // With --from, the original is the file as it was at that revision, and the variant is the file as it is now.
+  const b = await load(from === undefined ? second : first);
+  const relB = relative(process.cwd(), b.path);
+  const a = from === undefined ? await load(first) : { path: b.path, ast: loadRevision(from, b.path) };
+  const relA = from === undefined ? relative(process.cwd(), a.path) : `${relB}@${from}`;
+  let invalid = false;
+  for (const [ast, rel] of [[a.ast, relA], [b.ast, relB]] as const) {
+    for (const d of validate(ast, await validateOptions()).filter((x) => x.severity === "error")) {
+      console.error(formatDiag(d, rel));
+      invalid = true;
+    }
+  }
+  if (invalid) return 1;
+  const pipeline = pickStream(a.ast, last(flags, "pipeline")).name;
+  const providers = await installed();
+  const quiet = new HaloRuntime({ logger: { log() {}, warn() {} } });
+  registerInstalled(quiet, providers);
+  const number = (key: string, fallback: number) => {
+    const v = last(flags, key);
+    if (v === undefined) return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) fail(`--${key} needs a number, got "${v}"`);
+    return n;
+  };
+
+  // 1. The fence, from the files alone.
+  const fence = checkFence(a.ast, b.ast, pipeline, {
+    providerInfo: (provider) => quiet.toolProviderInfo(provider),
+    allowModels: flags.values.get("allow-model") ?? [],
+    maxCostRatio: number("max-cost-ratio", 1),
+  });
+  const json = flags.bools.has("json");
+  const log = (s: string) => (json ? undefined : console.error(s));
+  log(`${bold("Fence")}  ${fence.inside ? green(`✓ ${relB} reaches nothing ${relA} couldn't`) : red(`✗ ${relB} reaches something ${relA} couldn't`)}`);
+  const width = Math.max(...fence.checks.map((c) => c.rule.length));
+  for (const c of fence.checks) log(`  ${c.ok ? green("✓") : red("✗")} ${c.rule.padEnd(width)}  ${c.ok ? dim(c.detail) : c.detail}`);
+  if (!fence.inside) {
+    if (json) console.log(JSON.stringify({ pipeline, fence }, null, 2));
+    log(red(`\n${relB} is outside the fence, so it isn't replayed. Widening what a pipeline can do is a person's decision, not a comparison's.`));
+    return 1;
+  }
+
+  // 2. The recorded runs.
+  const recordings = recordingsFor(RECORDINGS, pipeline, number("runs", 20));
+  if (!recordings.length) fail(`No recorded runs of ${pipeline} in ${RECORDINGS}. Run it with halo run (which records by default) first.`);
+
+  const runtime = () => {
+    const rt = new HaloRuntime({ apiKey: last(flags, "api-key"), logger: { log() {}, warn() {} }, threadPath: ":memory:" });
+    registerInstalled(rt, providers);
+    return rt;
+  };
+  const judgeModel = flags.bools.has("no-judge") ? undefined : (last(flags, "judge") ?? defaultJudgeModel(a.ast));
+  // The judge always calls its model: check its key before spending anything. (A changed stage that lacks one stops the comparison when it's reached.)
+  if (judgeModel && !runtime().canCallModel(judgeModel)) fail(`No API key for the judge's model ${judgeModel}: set the provider's key, pick another with --judge, or pass --no-judge.`);
+  const criteriaPath = last(flags, "criteria");
+  if (criteriaPath && !(await Bun.file(criteriaPath).exists())) fail(`Criteria file not found: ${criteriaPath}`);
+  const criteria = criteriaPath ? await Bun.file(criteriaPath).text() : undefined;
+  const budget = number("budget", 1);
+  const worst = fence.variant.cappedAt ?? fence.variant.maxCost;
+  log(`\n${bold(`Comparing ${relB} with ${relA}`)} on ${recordings.length} recorded run(s) of ${pipeline}${judgeModel ? ` · judge ${judgeModel}` : " · no judge"} · budget $${budget.toFixed(2)}`);
+  if (worst !== undefined) log(dim(`  worst case if every model call went live: $${(worst * recordings.length).toFixed(4)} for the runs, plus judging`));
+
+  const summary = await compareRuns({
+    original: a.ast,
+    variant: b.ast,
+    pipeline,
+    recordings,
+    runtime,
+    judge: judgeModel ? haloJudge(judgeModel, runtime) : undefined,
+    judgeModel,
+    criteria,
+    budget,
+    seed: number("seed", 1),
+    onRun: (r) => {
+      const color = r.outcome === "better" || r.outcome === "same" ? green : r.outcome === "worse" || r.outcome === "now fails" ? red : r.outcome === "skipped" ? dim : yellow;
+      const why = r.verdict?.reason ?? (r.outcome === "diverged" ? "asked for something the recording has no answer for" : (r.variant?.error ?? ""));
+      log(`  ${color(`${OUTCOME_MARK[r.outcome]} ${r.outcome.padEnd(15)}`)} ${dim(r.runId.slice(0, 8))}  ${why.slice(0, 120)}`);
+    },
+  });
+
+  const reportPath = last(flags, "report");
+  if (reportPath) await Bun.write(reportPath, compareReport(summary, { original: relA, variant: relB }, fence.checks));
+  if (json) {
+    console.log(JSON.stringify({ ...summary, fence }, null, 2));
+    return 0;
+  }
+  log(`\n${bold(`Won ${summary.won} · tied ${summary.tied} · lost ${summary.lost}`)}${summary.won + summary.tied + summary.lost ? "" : dim(" (nothing to score)")}`);
+  const other = Object.entries(summary.counts).filter(([k, n]) => n && !["same", "better", "worse", "tie"].includes(k));
+  if (other.length) log(`Also: ${other.map(([k, n]) => `${n} ${k}`).join(", ")}`);
+  if (summary.originalCostPerRun !== undefined && summary.variantCostPerRun !== undefined) {
+    const before = summary.originalCostPerRun;
+    const after = summary.variantCostPerRun;
+    const change = before ? ` (${after >= before ? "+" : ""}${Math.round(((after - before) / before) * 100)}%)` : "";
+    log(`Cost per run  $${before.toFixed(4)} → $${after.toFixed(4)}${change}, estimated from live calls and the recorded cost of reused ones`);
+  }
+  const unchecked = summary.runs.reduce((n, r) => n + (r.variant?.stats.unfingerprinted ?? 0), 0);
+  if (unchecked) log(yellow(`${unchecked} model call(s) went live because their recordings predate request fingerprints; record the runs again to reuse them`));
+  log(dim(`Spent $${summary.spent.toFixed(4)} of $${budget.toFixed(2)}${reportPath ? ` · report: ${reportPath} (unredacted)` : ""}`));
+  return 0;
 }
 
 /**
@@ -935,7 +1085,7 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdRun(flags, false);
       case "replay": {
         const runId = flags.positional[1];
-        if (!runId) fail("Usage: halo replay <file.halo> <runId> [--live-models | --live-tools]");
+        if (!runId) fail("Usage: halo replay <file.halo> <runId> [--live-models | --live-changed | --live-tools]");
         return await cmdRun(flags, false, undefined, runId);
       }
       case "resume": {
@@ -969,6 +1119,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdParse(flags);
       case "plan":
         return await cmdPlan(flags);
+      case "compare":
+        return await cmdCompare(flags);
       case "mcp":
         return await cmdMcp(flags);
       case "add":

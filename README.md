@@ -127,7 +127,8 @@ halo parse <file.halo>                # the AST as JSON
 halo init [name] [--template support-inbox]   # a new project, or a deployable blueprint
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
-halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-tools)
+halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-changed, --live-tools)
+halo compare <file.halo> --from main  # can the changed file do anything main's couldn't? is it better on recorded runs? (or two files)
 halo history <runId> [--step N]       # every step of a @checkpoint run, or its state after step N
 halo rewind <file.halo> <runId> --step N   # continue a @checkpoint run from a step, as a new run
 halo threads | thread <name> <key>    # list threads, show one (--reset --yes deletes its state)
