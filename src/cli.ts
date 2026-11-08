@@ -749,7 +749,8 @@ async function cmdCompare(flags: Flags): Promise<number> {
     seed: number("seed", 1),
     onRun: (r) => {
       const color = r.outcome === "better" || r.outcome === "same" ? green : r.outcome === "worse" || r.outcome === "now fails" ? red : r.outcome === "skipped" ? dim : yellow;
-      const why = r.verdict?.reason ?? (r.outcome === "diverged" ? "asked for something the recording has no answer for" : (r.variant?.error ?? ""));
+      const on = r.judgedOn ? `(on ${r.judgedOn.target}'s answer) ` : "";
+      const why = on + (r.verdict?.reason ?? (r.outcome === "diverged" ? (r.note ?? "asked for something the recording has no answer for") : (r.variant?.error ?? "")));
       log(`  ${color(`${OUTCOME_MARK[r.outcome]} ${r.outcome.padEnd(15)}`)} ${dim(r.runId.slice(0, 8))}  ${why.slice(0, 120)}`);
     },
   });
@@ -771,6 +772,10 @@ async function cmdCompare(flags: Flags): Promise<number> {
   }
   const unchecked = summary.runs.reduce((n, r) => n + (r.variant?.stats.unfingerprinted ?? 0), 0);
   if (unchecked) log(yellow(`${unchecked} model call(s) went live because their recordings predate request fingerprints; record the runs again to reuse them`));
+  const judgedOn = summary.runs.filter((r) => r.judgedOn).length;
+  if (judgedOn) log(dim(`${judgedOn} run(s) compared on the last model answer: their output comes from a tool asked something new, answered from the recording`));
+  const uncheckedTools = summary.runs.reduce((n, r) => n + (r.variant?.stats.uncheckedTools ?? 0), 0);
+  if (uncheckedTools) log(yellow(`${uncheckedTools} tool result(s) were recorded before tool fingerprints, so a changed tool call can't be spotted and its output may be stale; record the runs again`));
   log(dim(`Spent $${summary.spent.toFixed(4)} of $${budget.toFixed(2)}${reportPath ? ` · report: ${reportPath} (unredacted)` : ""}`));
   return 0;
 }

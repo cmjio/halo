@@ -127,7 +127,10 @@ export interface MockRequest {
   tools?: string[];
   messages?: LLMMessage[];
   step?: number;
-  /** For an agent: the model asked for, and a hash of the whole request (model, prompt or conversation, settings). Two calls with the same fingerprint asked the same thing. */
+  /**
+   * For an agent: the model asked for, and a hash of the whole request (model, prompt or conversation, settings).
+   * For a tool: a hash of the call (target and arguments). Two calls with the same fingerprint asked the same thing.
+   */
   model?: string;
   fingerprint?: string;
 }
@@ -152,7 +155,7 @@ export interface RecordedCall {
   value: unknown;
   /** For a model turn that called tools: the calls. */
   toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
-  /** For a model answer: the request's fingerprint (see MockRequest), and what the call cost in USD. */
+  /** The request's fingerprint (see MockRequest), for a model answer or a tool result; and what a model call cost in USD. */
   fingerprint?: string;
   cost?: number;
 }
@@ -510,6 +513,11 @@ function requestFingerprint(model: string, prompt: string, system: string | unde
   return sha256(safeJson({ model, ...asked, temperature: options.temperature, maxTokens: options.maxTokens, topP: options.topP }));
 }
 
+/** A tool call's fingerprint: what it was asked to do (its target and arguments). */
+function toolFingerprint(target: string, args: unknown[], named: Record<string, unknown>): string {
+  return sha256(safeJson({ target, args, named }));
+}
+
 function safeJson(v: unknown): string {
   try {
     return JSON.stringify(v) ?? "undefined";
@@ -740,6 +748,12 @@ export class HaloRuntime {
   /** Register a `System.<name>(...)` method. A non-undefined return value replaces the pipeline value. */
   registerSystem(name: string, handler: SystemHandler): this {
     this.systems.set(name, handler);
+    return this;
+  }
+
+  /** Get every answer a run gets from outside (model answers, tool results, approvals), as a recording keeps them: unredacted. */
+  recordTo(recorder: (entry: RecordedCall) => void): this {
+    this.config.recorder = recorder;
     return this;
   }
 
@@ -2143,18 +2157,19 @@ export class HaloRuntime {
     const { config, template0 } = this.toolConfig(tool, ctx);
 
     const t0 = performance.now();
+    const fingerprint = toolFingerprint(target, args, named);
     const mock = this.mockFor(target, tool.name);
     const provider = this.providers.get(tool.provider);
     if (!mock && !provider) throw new HaloError(`Unknown tool provider "${tool.provider}" for tool "${tool.name}" (register it with runtime.registerToolProvider)`);
 
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
-        ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current }), mocked: true }
+        ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current, fingerprint }), mocked: true }
         : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId, pauses: this.topMeta(ctx).pauses ?? 0 }, this.toolServices()), mocked: false },
     );
 
     const latencyMs = Math.round(performance.now() - t0);
-    this.config.recorder?.({ kind: "tool", target, value: result.value });
+    this.config.recorder?.({ kind: "tool", target, value: result.value, fingerprint });
     ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: chosenBy } : {}) });
     // A result an agent chose to fetch is logged as its policies let it out (as the agent itself sees it).
     const chooser = chosenBy ? this.agents.get(chosenBy) : undefined;

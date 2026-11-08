@@ -86,9 +86,16 @@ export interface ReplayStats {
   mismatches: number;
   /** Recorded model answers that have no fingerprint (recorded before fingerprints were kept), so --live-changed can't tell whether they changed. */
   unfingerprinted: number;
+  /**
+   * Tool calls answered with a recorded result although they were asked something else (their arguments changed),
+   * by target, in order. The result is stale: it's what the original call returned, so anything built on it is too.
+   */
+  staleTools: string[];
+  /** Recorded tool results with no fingerprint (recorded before tool fingerprints were kept), so a changed call can't be told apart. */
+  uncheckedTools: number;
 }
 
-export const newReplayStats = (): ReplayStats => ({ reused: 0, reusedCost: 0, live: 0, mismatches: 0, unfingerprinted: 0 });
+export const newReplayStats = (): ReplayStats => ({ reused: 0, reusedCost: 0, live: 0, mismatches: 0, unfingerprinted: 0, staleTools: [], uncheckedTools: 0 });
 
 /** What the recorded run spent on models (USD), or undefined for a recording made before costs were kept. */
 export function recordedCost(rec: Recording): number | undefined {
@@ -153,7 +160,17 @@ export function replayMocks(rec: Recording, options: ReplayOptions = {}): Record
       mocks[c.target] = answer;
     } else if (c.kind === "tool" && !options.liveTools) {
       // Marked as a replay, so an equipped store's automatic search is answered too (it was recorded).
-      mocks[c.target] = Object.assign((req: MockRequest) => next("tool", req.target).value, { replay: true });
+      // A call asked something other than what was recorded still gets the recorded result (running it could
+      // write or send something), and is counted as stale.
+      mocks[c.target] = Object.assign(
+        (req: MockRequest) => {
+          const got = next("tool", req.target);
+          if (got.fingerprint === undefined) stats.uncheckedTools++;
+          else if (req.fingerprint !== undefined && got.fingerprint !== req.fingerprint) stats.staleTools.push(req.target);
+          return got.value;
+        },
+        { replay: true },
+      );
     } else if (c.kind === "approval") {
       mocks.approval = (req: MockRequest) => next("approval", req.target).value;
     } else if (c.kind === "yield") {
