@@ -447,6 +447,17 @@ function cap(text: string, n: number): string {
   return text.length > n ? `${text.slice(0, n)}…` : text;
 }
 
+/**
+ * The page's summary after an action, checked again: a navigation that starts after settle's grace
+ * period (a slow machine) lands after checkLocation ran, so the URL the summary saw is checked too.
+ */
+async function checkedSummary(c: Ctx, withText: boolean): Promise<Record<string, unknown>> {
+  const out = await summary(c, withText);
+  const url = String(out.url);
+  if (c.s.blocked.length || (url !== "about:blank" && !urlAllowed(url, c.s.allow))) await checkLocation(c);
+  return out;
+}
+
 async function summary(c: Ctx, withText: boolean): Promise<Record<string, unknown>> {
   const page = await evaluate(c, `({ url: location.href, title: document.title, text: ${withText ? "(document.body ? document.body.innerText : '')" : "''"} })`);
   const out: Record<string, unknown> = { url: page.url, title: page.title };
@@ -545,7 +556,7 @@ async function run(c: Ctx): Promise<unknown> {
       }
       if (r.loaderId) await settle(c, 50);
       await checkLocation(c);
-      return summary(c, true);
+      return checkedSummary(c, true);
     }
 
     case "click": {
@@ -558,7 +569,7 @@ async function run(c: Ctx): Promise<unknown> {
       await send(c, "Input.dispatchMouseEvent", { type: "mouseReleased", ...mouse });
       await settle(c);
       await checkLocation(c);
-      const after = await summary(c, false);
+      const after = await checkedSummary(c, false);
       return { clicked: selector, navigated: after.url !== before, ...after };
     }
 
@@ -580,7 +591,7 @@ async function run(c: Ctx): Promise<unknown> {
       await evaluate(c, `document.activeElement && document.activeElement.dispatchEvent(new Event("change", { bubbles: true }))`);
       await settle(c, 50);
       await checkLocation(c);
-      return { filled: selector, value, ...(await summary(c, false)) };
+      return { filled: selector, value, ...(await checkedSummary(c, false)) };
     }
 
     case "press": {
@@ -600,7 +611,7 @@ async function run(c: Ctx): Promise<unknown> {
       await send(c, "Input.dispatchKeyEvent", { type: "keyUp", ...base });
       await settle(c);
       await checkLocation(c);
-      return { pressed: key, ...(await summary(c, false)) };
+      return { pressed: key, ...(await checkedSummary(c, false)) };
     }
 
     case "select": {
@@ -622,7 +633,7 @@ async function run(c: Ctx): Promise<unknown> {
       if (r.error) throw new HaloError(`${call.tool.name}.select: "${selector}" has ${r.error}${r.options ? ` (options: ${r.options.join(", ")})` : ""}`, { code: "TOOL_ARGUMENT" });
       await settle(c, 50);
       await checkLocation(c);
-      return { selected: r.value, label: r.label, ...(await summary(c, false)) };
+      return { selected: r.value, label: r.label, ...(await checkedSummary(c, false)) };
     }
 
     case "text":
@@ -675,7 +686,7 @@ async function run(c: Ctx): Promise<unknown> {
       await send(c, "Page.navigateToHistoryEntry", { entryId: prev.id });
       await settle(c);
       await checkLocation(c);
-      return { wentBack: true, ...(await summary(c, false)) };
+      return { wentBack: true, ...(await checkedSummary(c, false)) };
     }
 
     case "evaluate": {
