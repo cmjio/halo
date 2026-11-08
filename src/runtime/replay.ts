@@ -75,11 +75,46 @@ export function pruneRecordings(dir: string, keep = 50): void {
   for (const { f } of files.slice(keep)) rmSync(join(dir, f), { force: true });
 }
 
+/** What a replay did with the recording, filled in as it runs. */
+export interface ReplayStats {
+  /** Model calls answered from the recording, and what they cost when recorded (USD). */
+  reused: number;
+  reusedCost: number;
+  /** Model calls sent to the model for real (--live-changed: their request changed, or the recording had none). */
+  live: number;
+  /** Calls the recording had no answer for (REPLAY_MISMATCH), including tool calls an agent chose that went back to it as errors. */
+  mismatches: number;
+  /** Recorded model answers that have no fingerprint (recorded before fingerprints were kept), so --live-changed can't tell whether they changed. */
+  unfingerprinted: number;
+}
+
+export const newReplayStats = (): ReplayStats => ({ reused: 0, reusedCost: 0, live: 0, mismatches: 0, unfingerprinted: 0 });
+
+/** What the recorded run spent on models (USD), or undefined for a recording made before costs were kept. */
+export function recordedCost(rec: Recording): number | undefined {
+  const answers = rec.calls.filter((c) => c.kind === "agent");
+  if (answers.some((c) => c.cost === undefined)) return undefined;
+  return answers.reduce((sum, c) => sum + (c.cost ?? 0), 0);
+}
+
+export interface ReplayOptions {
+  /** Call every model for real (only tools, approvals and events are replayed). */
+  liveModels?: boolean;
+  /** Call only the models whose request differs from the recorded one (same target, in order), or that the recording has no answer for. */
+  liveChanged?: boolean;
+  /** Run tools for real. */
+  liveTools?: boolean;
+  /** Declared tool and store names: a call to one the recording never called is refused instead of run. */
+  tools?: string[];
+  stats?: ReplayStats;
+}
+
 /**
  * Mocks that answer each call with what the recording says it got, in order, per target.
  * A call the recording has no answer for means the pipeline (or its input) changed.
  */
-export function replayMocks(rec: Recording, options: { liveModels?: boolean; liveTools?: boolean; tools?: string[] } = {}): Record<string, unknown> {
+export function replayMocks(rec: Recording, options: ReplayOptions = {}): Record<string, unknown> {
+  const stats = options.stats ?? newReplayStats();
   const queues = new Map<string, RecordedCall[]>();
   for (const c of rec.calls) {
     const key = `${c.kind}:${c.target}`;
@@ -89,18 +124,36 @@ export function replayMocks(rec: Recording, options: { liveModels?: boolean; liv
   const next = (kind: RecordedCall["kind"], target: string) => {
     const c = queues.get(`${kind}:${target}`)?.shift();
     const what = { agent: "model answers", tool: "results", approval: "approvals", yield: "answers", listen: "events" }[kind];
+    if (!c) stats.mismatches++;
     if (!c) throw new HaloError(`The recording has no more ${what} for ${target}: the pipeline or its input changed since run ${rec.runId}`, { code: "REPLAY_MISMATCH" });
     return c;
   };
   const mocks: Record<string, unknown> = {};
   for (const c of rec.calls) {
     if (c.kind === "agent" && !options.liveModels) {
-      mocks[c.target] = (req: MockRequest) => {
+      const answer = (req: MockRequest) => {
         const got = next("agent", req.target);
+        stats.reused++;
+        stats.reusedCost += got.cost ?? 0;
         return got.toolCalls?.length ? got.toolCalls.map((t) => useTool(t.name, t.args)) : got.value;
       };
+      // --live-changed: a call whose request isn't the recorded one goes to the model, and uses up that recorded answer,
+      // so later calls to the same target still line up with theirs.
+      if (options.liveChanged) {
+        (answer as { live?: (req: MockRequest) => boolean }).live = (req) => {
+          const queue = queues.get(`agent:${req.target}`);
+          const head = queue?.[0];
+          if (head && head.fingerprint === undefined) stats.unfingerprinted++;
+          if (head && head.fingerprint !== undefined && head.fingerprint === req.fingerprint) return false;
+          queue?.shift();
+          stats.live++;
+          return true;
+        };
+      }
+      mocks[c.target] = answer;
     } else if (c.kind === "tool" && !options.liveTools) {
-      mocks[c.target] = (req: MockRequest) => next("tool", req.target).value;
+      // Marked as a replay, so an equipped store's automatic search is answered too (it was recorded).
+      mocks[c.target] = Object.assign((req: MockRequest) => next("tool", req.target).value, { replay: true });
     } else if (c.kind === "approval") {
       mocks.approval = (req: MockRequest) => next("approval", req.target).value;
     } else if (c.kind === "yield") {
@@ -113,13 +166,16 @@ export function replayMocks(rec: Recording, options: { liveModels?: boolean; liv
   if (!options.liveTools) {
     for (const name of options.tools ?? []) {
       mocks[name] ??= (req: MockRequest) => {
+        stats.mismatches++;
         throw new HaloError(`The recording has no results for ${req.target}: the pipeline changed since run ${rec.runId} (pass --live-tools to call tools for real)`, { code: "REPLAY_MISMATCH" });
       };
     }
   }
   // Anything else that would call a model (a shadow, or a new agent stage) isn't in the recording.
-  if (!options.liveModels) {
+  // Under --live-changed, a model call the recording has no answer for goes to the model.
+  if (!options.liveModels && !options.liveChanged) {
     mocks["*"] = (req: MockRequest) => {
+      stats.mismatches++;
       throw new HaloError(`The recording has no model answers for ${req.target}: the pipeline changed since run ${rec.runId}`, { code: "REPLAY_MISMATCH" });
     };
   }

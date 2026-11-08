@@ -24,6 +24,12 @@ Each stage's result becomes the next stage's input, `context.current`. A result 
 
 Strings can reference parameters and results with `{{name}}` or `{{context.data.x.y}}`.
 
+### Files and pipelines
+
+A file can hold any number of pipelines, and a pipeline can call another by name (`|> ApplyLabels(repo, issues)`). Keep one **entry pipeline** per file, the one nothing else calls, next to the pipelines it calls. With one entry, `halo run`, `halo plan` and `halo compare` know which pipeline you mean without `--pipeline`.
+
+Keep versions of a pipeline in git, not as copies in the file. A pipeline's name is how the rest of Halo finds it: its recordings, its thread state, its API route and webhook, and its MCP tool are all keyed by it, and `halo serve` serves every pipeline in the file. A `TriageV2` beside `Triage` is a second live endpoint with no history. Change `Triage` in place, and check the change with [`halo compare triage.halo --from main`](./plan-and-replay.md#halo-compare).
+
 ## Agents
 
 An `agent` binds a model to parameters, a system prompt, tools, and policies:
