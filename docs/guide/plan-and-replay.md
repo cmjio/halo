@@ -174,7 +174,12 @@ When b is outside the fence, `halo compare` prints what it found and stops with 
 | `now halts` / `no longer halts` / `both halt` | A gate stopped one, or both |
 | `now pauses` | b waits for something a didn't |
 | `now fails` | b failed where a didn't |
-| `diverged` | b asked for something the recording has no answer for, such as a tool call its agent chose differently or a new tool stage. It isn't scored, because finding out would mean running the tool for real |
+| `diverged` | b asked for something the recording has no answer for, such as a tool call its agent chose differently or a new tool stage, or a tool asked something new fed b's last model answer (see below). It isn't scored, because finding out would mean running the tool for real |
+
+A tool that b calls with different arguments still gets the result a's call got, because running it could write or send something. That result is **stale**, and so is anything built on it. Recordings keep a fingerprint of each tool call, so `halo compare` can tell:
+
+- When the stale results all come after b's last model answer, that answer is compared instead of the output. A pipeline that ends by saving its report (`|> Log.write(content: report)`) returns the save's recorded result whatever it wrote, so its outputs would always look the same. The run's line says `(on Editor.write_report's answer)`, and the report shows both answers.
+- When a stale result went into that answer, the run is `diverged`, and its line names the tool.
 
 The **judge** sees the run's input, the criteria, and both outputs, in random order (`--seed`, 1) and unlabelled, and picks one or calls a tie. It's a small Halo pipeline on `--judge`'s model, by default the priciest model a already uses, so judging sends the data nowhere new. `--criteria <file.md>` says what a better output is for this pipeline; without it the judge uses a general one. `--no-judge` skips judging and counts differing outputs as ties.
 
@@ -195,7 +200,7 @@ Spent $0.3100 of $1.00 · report: compare.md (unredacted)
 
 Limits:
 
-- It compares against recorded runs only, so it needs `halo run` (which records by default) to have run the original. `halo serve` doesn't record unless asked, and only the newest 50 recordings are kept.
+- It compares against recorded runs only, so it needs `halo run` (which records by default) to have run the original. Runs recorded before 0.5.0 have no model fingerprints, so every model call goes live; runs recorded before 0.5.1 have no tool fingerprints, so a stale tool result can't be spotted, and it says so. Record them again. `halo serve` doesn't record unless asked, and only the newest 50 recordings are kept.
 - Effects are what each tool provider says about itself. An MCP tool's methods show as `Tool.*` with the effect not described, so the fence can only check that b calls no `Tool.*` that a didn't.
 - The approvals check counts yields and listens, and checks approval rules per call. It doesn't check that a yield still comes before the same effects.
 - A `@thread` pipeline's runs depend on state the replay doesn't restore.

@@ -262,6 +262,75 @@ describe("compareRuns", () => {
   });
 });
 
+describe("compareRuns: a stale tool result", () => {
+  const prefers = (prefer: string): Judge => async ({ first, second }) => ({
+    better: String(first).includes(prefer) ? "1" : String(second).includes(prefer) ? "2" : "tie",
+    reason: `the one with "${prefer}"`,
+    cost: 0.001,
+  });
+
+  // Ends by saving what it wrote, like the triage example's TriageLog.log: the output is the save's result.
+  const saving = (dir: string) =>
+    original(dir)
+      .replace(`tool Notes : Workspace("${dir}")`, `tool Notes : Workspace("${dir}")\ntool Out : Workspace("${dir}", write: true)`)
+      .replace(`|> Writer.write("Write one line about {{topic}} from: {{summary}}")`, `|> Writer.write("Write one line about {{topic}} from: {{summary}}") as line\n    |> Out.write(path: "out.md", content: context.data.line)`);
+
+  async function setup(n: number) {
+    const dir = workspace();
+    const recDir = mkdtempSync(join(tmp, "rec-"));
+    const recs: Recording[] = [];
+    for (let i = 0; i < n; i++) recs.push(await record(saving(dir), recDir, `topic ${i}`, answers));
+    return { dir, recs };
+  }
+
+  test("recordings keep each tool call's fingerprint", async () => {
+    const { recs } = await setup(1);
+    const tools = recs[0]!.calls.filter((c) => c.kind === "tool");
+    expect(tools.map((c) => c.target)).toEqual(["Notes.read", "Out.write"]);
+    expect(tools.every((c) => typeof c.fingerprint === "string" && c.fingerprint.length === 64)).toBe(true);
+  });
+
+  test("an output built on a stale result is compared on the last model answer instead", async () => {
+    const { dir, recs } = await setup(3);
+    const variant = parse(saving(dir).replace("Write one line", "Write one vivid line"));
+    const live = fakeOpenAI(() => "A vivid line.");
+    const r = await compareRuns({ original: parse(saving(dir)), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: live.fetch }), judge: prefers("vivid") });
+    // Before the fix, the replayed Out.write result made every run "same".
+    expect(r.counts.better).toBe(3);
+    expect(r.runs[0]!.judgedOn).toEqual({ target: "Writer.write", original: "A line.", variant: "A vivid line." });
+    expect(r.runs[0]!.note).toContain("Out.write");
+    expect(r.runs[0]!.variant!.stats.staleTools).toEqual(["Out.write"]);
+    const report = compareReport(r, { original: "a.halo", variant: "b.halo" }, []);
+    expect(report).toContain("Variant's Writer.write answer");
+    expect(report).toContain("A vivid line.");
+    // The replay wrote nothing: out.md still holds the last recorded run's line.
+    expect(await Bun.file(join(dir, "out.md")).text()).toBe("A line.");
+  });
+
+  test("an unchanged pipeline has no stale results and stays same", async () => {
+    const { dir, recs } = await setup(2);
+    const r = await compareRuns({ original: parse(saving(dir)), variant: parse(saving(dir)), pipeline: "Brief", recordings: recs, runtime: () => runtime(), judge: prefers("x") });
+    expect(r.counts.same).toBe(2);
+    expect(r.runs.every((x) => !x.judgedOn && x.variant!.stats.staleTools.length === 0)).toBe(true);
+  });
+
+  test("a stale result that went into the last answer makes the run diverged, not scored", async () => {
+    const { dir, recs } = await setup(2);
+    // The read asks for another file, answered with the recorded notes.md: everything after it is built on that.
+    const variant = parse(saving(dir).replace(`Notes.read(path: "notes.md")`, `Notes.read(path: "other.md")`));
+    const r = await compareRuns({ original: parse(saving(dir)), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: fakeOpenAI(() => "x").fetch }), judge: prefers("x") });
+    expect(r.counts.diverged).toBe(2);
+    expect(r.runs[0]!.note).toContain("Notes.read got a changed input before Writer.write answered");
+  });
+
+  test("tool results recorded before tool fingerprints are counted", async () => {
+    const { dir, recs } = await setup(1);
+    const old = recs.map((rec) => ({ ...rec, calls: rec.calls.map((c) => (c.kind === "tool" ? { ...c, fingerprint: undefined } : c)) }));
+    const r = await compareRuns({ original: parse(saving(dir)), variant: parse(saving(dir)), pipeline: "Brief", recordings: old, runtime: () => runtime() });
+    expect(r.runs[0]!.variant!.stats.uncheckedTools).toBe(2);
+  });
+});
+
 describe("halo compare (CLI)", () => {
   function cliIn(cwd: string, ...args: string[]) {
     const p = Bun.spawnSync(["bun", join(root, "index.ts"), ...args], { cwd, env: { ...Bun.env, NO_COLOR: "1", OPENAI_API_KEY: "", HALO_API_KEY: "" } });
