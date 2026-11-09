@@ -93,7 +93,7 @@ halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mock
 | `\|! yield(msg: "...")` | Ask a human |
 | `~> listen(Slack.Reaction)` | Wait for an external event |
 
-Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step, for `halo history` and `halo rewind`), `@thread(user_id)` (keep state between runs, per user), `@shadow(Primary)` (runs this agent alongside `Primary` and records its output), `@correct(2)` (when a policy rejects an answer, tells the agent why and asks again).
+Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step, for `halo history` and `halo rewind`), `@thread(user_id)` (keep state between runs, per user), `@shadow(Primary)` (runs this agent alongside `Primary` and records its output), `@correct(2)` (when a policy rejects an answer, tells the agent why and asks again), `@expect("output.labels.length <= 3")` (hard checks on the output, for `halo test`, `halo compare` and `halo evolve`).
 
 ### Built in: tools, agents, and skills
 
@@ -130,7 +130,7 @@ halo plan <file.halo>                 # what a run could do: model calls, worst-
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-changed, --live-tools)
 halo compare <file.halo> --from main  # can the changed file do anything main's couldn't? is it better on recorded runs? (or two files)
 halo evolve <file.halo> --criteria c.md   # a model proposes rewrites; those inside the fence are judged on recorded runs, the best on held-out ones
-halo evolve apply <dir> [variant]     # write the winner over the file (evolve itself changes nothing)
+halo evolve apply <dir> [variant]     # write the winner over the file (evolve itself changes nothing); --pr opens a pull request instead
 halo history <runId> [--step N]       # every step of a @checkpoint run, or its state after step N
 halo rewind <file.halo> <runId> --step N   # continue a @checkpoint run from a step, as a new run
 halo threads | thread <name> <key>    # list threads, show one (--reset --yes deletes its state)
@@ -145,7 +145,7 @@ In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a 
 
 ### 🧬 Pipelines that improve themselves
 
-`halo evolve` points a model at your pipeline and its real traffic. It proposes rewrites (sharper prompts, cheaper models, an extra check), throws away any that would reach something new (a tool, an effect, a provider, a weaker policy, a missing approval, a higher spend cap), replays the rest against recorded runs without touching the world, has a judge compare each with the original, and checks the best on runs the proposer never saw. You get one diff and a report: *"v4.1 beat the original on 12 held-out runs: won 7 · tied 4 · lost 1, $0.021 → $0.012 per run."* It changes nothing until you run `halo evolve apply`. See [`halo evolve`](docs/guide/plan-and-replay.md#halo-evolve).
+`halo evolve` points a model at your pipeline and its real traffic. It proposes rewrites (sharper prompts, cheaper models, an extra check), throws away any that would reach something new (a tool, an effect, a provider, a weaker policy, a missing approval, a higher spend cap), replays the rest against recorded runs without touching the world, has a judge compare each with the original, and checks the best on runs the proposer never saw. You get one diff and a report: *"v4.1 beat the original on 12 held-out runs: won 7 · tied 4 · lost 1, $0.021 → $0.012 per run."* It changes nothing until you run `halo evolve apply`, or `--pr` opens a pull request with the winner. Studio has an Evolve tab for the same loop, and `halo serve` can record production runs (`"recordings": { "serve": true }`) for it to learn from. See [`halo evolve`](docs/guide/plan-and-replay.md#halo-evolve).
 
 ## 🌐 Serving pipelines
 

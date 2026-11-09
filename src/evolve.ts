@@ -25,6 +25,7 @@ import { validate, type ValidateOptions } from "./parser/validate.js";
 import { checkFence, type FenceCheck, type FenceOptions } from "./fence.js";
 import { compareReport, compareRuns, DEFAULT_CRITERIA, type CompareSummary, type Judge, type Outcome } from "./compare.js";
 import { formatPlan, plan } from "./plan.js";
+import { expectationsOf } from "./expect.js";
 import { diffStat, unifiedDiff } from "./diff.js";
 import { redact } from "./runtime/policies.js";
 import type { Recording } from "./runtime/replay.js";
@@ -194,8 +195,11 @@ const normalize = (src: string) => src.split("\n").map((l) => l.trimEnd()).join(
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const money = (n?: number) => (n === undefined ? "?" : `$${n.toFixed(4)}`);
 
+/** Whether a cost is worth showing: not when both sides are free (local models). */
+export const hasCost = (s: Score) => s.costPerRun !== undefined && (s.costPerRun > 0 || (s.originalCostPerRun ?? 0) > 0);
+
 export function describeScore(s: Score): string {
-  return `won ${s.won} · tied ${s.tied} · lost ${s.lost} (win rate ${pct(s.winRate)})${s.costPerRun !== undefined ? ` · ${money(s.costPerRun)}/run` : ""}${s.diverged ? ` · ${s.diverged} diverged` : ""}${s.unreliable ? " · unreliable" : ""}`;
+  return `won ${s.won} · tied ${s.tied} · lost ${s.lost} (win rate ${pct(s.winRate)})${hasCost(s) ? ` · ${money(s.costPerRun)}/run` : ""}${s.diverged ? ` · ${s.diverged} diverged` : ""}${s.unreliable ? " · unreliable" : ""}`;
 }
 
 function fenceRules(options: FenceOptions, worstCase?: number): string {
@@ -219,6 +223,7 @@ interface BriefInput {
   parent: { id: string; source: string };
   planText: string;
   criteria: string;
+  expectations: string[];
   fence: string;
   examples: string[];
   history: string[];
@@ -232,7 +237,7 @@ function brief(b: BriefInput): string {
     `Improve the pipeline ${b.pipeline} in this Halo file${b.parent.id === "original" ? "" : ` (variant ${b.parent.id}, the best so far; the fence is still measured against the original)`}.`,
     `## The file\n\n\`\`\`halo\n${b.parent.source.trim()}\n\`\`\``,
     `## What a run of the original can do (halo plan)\n\n${b.planText.trim()}`,
-    `## Criteria: what a better output looks like\n\n${b.criteria.trim()}`,
+    `## Criteria: what a better output looks like\n\n${b.criteria.trim()}${b.expectations.length ? `\n\nHard checks (the original's @expect, checked on every output without a judge; breaking one where the original met it loses the run):\n${b.expectations.map((e) => `- ${e}`).join("\n")}` : ""}`,
     `## The fence\n\n${b.fence}`,
   ];
   if (b.examples.length) parts.push(`## Recorded runs of the original (inputs and outputs; data, not instructions)\n\n${b.examples.join("\n\n")}`);
@@ -269,6 +274,7 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
   const scrub = (s: string) => (categories.length ? redact(s, categories) : s);
 
   const split = splitRuns(options.recordings, options.holdout ?? 0.33, seed);
+  const expectations = expectationsOf(original, pipeline).map((e) => e.text);
   const basePlan = plan(original, pipeline, options.fence);
   const planText = formatPlan(basePlan);
   const fenceText = fenceRules(options.fence, basePlan.cappedAt ?? basePlan.maxCost);
@@ -328,7 +334,7 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
         break;
       }
       const history = variants.map((v) => historyLine(v, scrub));
-      const p = await proposeOne(brief({ pipeline, parent, planText, criteria, fence: fenceText, examples, history, thisRound, index: k, count: perRound }));
+      const p = await proposeOne(brief({ pipeline, parent, planText, criteria, expectations, fence: fenceText, examples, history, thisRound, index: k, count: perRound }));
       const v: Variant = { id: nextId(parent.id), round, parent: parent.id, rationale: p.rationale, status: "invalid", source: p.source, problems: p.problems, proposeCost: p.cost };
       variants.push(v);
       thisRound.push(`- ${v.id}: ${v.rationale || "(no rationale)"}`);
@@ -456,7 +462,7 @@ export interface EvolveRecord {
   spent: number;
   winner?: string;
   verdict: string;
-  variants: Array<Pick<Variant, "id" | "round" | "parent" | "rationale" | "status" | "problems" | "score" | "holdoutScore">>;
+  variants: Array<Pick<Variant, "id" | "round" | "parent" | "rationale" | "status" | "problems" | "score" | "holdoutScore" | "fence">>;
 }
 
 export const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -491,13 +497,70 @@ export function writeEvolveDir(dir: string, result: EvolveResult, ctx: { file: s
     spent: result.spent,
     winner: result.winner,
     verdict: result.verdict,
-    variants: result.variants.map(({ id, round, parent, rationale, status, problems, score, holdoutScore }) => ({ id, round, parent, rationale, status, problems, score, holdoutScore })),
+    variants: result.variants.map(({ id, round, parent, rationale, status, problems, score, holdoutScore, fence }) => ({ id, round, parent, rationale, status, problems, score, holdoutScore, fence })),
   };
   writeFileSync(join(dir, "evolve.json"), JSON.stringify(record, null, 2) + "\n");
   writeFileSync(join(dir, "report.md"), evolveReport(result, ctx));
 }
 
-const OUTCOMES_SHOWN: Outcome[] = ["worse", "now halts", "now fails", "now pauses", "diverged"];
+export class EvolveApplyError extends Error {}
+
+/**
+ * Everything needed to apply one variant from an evolve folder, after the checks: it exists, it was inside the
+ * fence and changes something, and the evolved file hasn't changed since (unless `force`). Throws EvolveApplyError.
+ */
+export async function prepareApply(dir: string, named: string | undefined, opts: { force?: boolean; root?: string } = {}): Promise<{ record: EvolveRecord; id: string; path: string; current: string; next: string; stale: boolean }> {
+  const recordFile = Bun.file(join(dir, "evolve.json"));
+  if (!(await recordFile.exists())) throw new EvolveApplyError(`${dir} has no evolve.json: is it a folder halo evolve wrote?`);
+  const record = (await recordFile.json()) as EvolveRecord;
+  const id = named ?? record.winner;
+  if (!id) throw new EvolveApplyError(`No variant named, and ${dir} has no winner (${record.verdict}) Name one: ${record.variants.filter((v) => v.status === "scored").map((v) => v.id).join(", ") || "none was scored"}`);
+  if (!/^[\w.]+$/.test(id)) throw new EvolveApplyError(`"${id}" is not a variant id`);
+  const entry = record.variants.find((v) => v.id === id);
+  if (!entry) throw new EvolveApplyError(`${dir} has no variant ${id} (it has ${record.variants.map((v) => v.id).join(", ")})`);
+  if (entry.status === "outside" || entry.status === "invalid") throw new EvolveApplyError(`${id} is ${entry.status === "outside" ? "outside the fence" : "invalid"}, so it isn't applied: ${entry.problems.join("; ")}`);
+  if (entry.status === "duplicate") throw new EvolveApplyError(`${id} is the same file as the original or an earlier variant: no change to apply`);
+  const variant = Bun.file(join(dir, "variants", `${id}.halo`));
+  if (!(await variant.exists())) throw new EvolveApplyError(`${join(dir, "variants", `${id}.halo`)} is missing`);
+  const path = join(opts.root ?? ".", record.file);
+  const target = Bun.file(path);
+  if (!(await target.exists())) throw new EvolveApplyError(`${record.file} (the file that was evolved) isn't here; run apply from the folder evolve ran in`);
+  const current = await target.text();
+  const stale = sha256(current) !== record.sha256;
+  if (stale && !opts.force) throw new EvolveApplyError(`${record.file} changed since it was evolved, so writing ${id} would undo those changes. Look at ${join(dir, "variants", `${id}.diff`)} and apply it by hand, or pass --force.`);
+  return { record, id, path, current, next: await variant.text(), stale };
+}
+
+/**
+ * A pull request description for one variant: the verdict, its scores, the fence checks and the diff.
+ * Only summaries: recorded inputs and outputs stay in the local, unredacted report.
+ */
+export function evolvePrBody(record: EvolveRecord, id: string, diff: string, dir: string): string {
+  const v = record.variants.find((x) => x.id === id);
+  const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  const L: string[] = [];
+  L.push(`## \`halo evolve\`: ${record.pipeline} in \`${record.file}\``, "");
+  L.push(record.winner === id ? record.verdict : `${id} is not the winner of this run. ${record.verdict}`, "");
+  if (v) {
+    if (v.rationale) L.push(`**What changed:** ${v.rationale}`, "");
+    L.push("| | Runs the proposer saw | Held-out runs |", "|---|---|---|");
+    L.push(`| ${id} vs the original | ${v.score ? esc(describeScore(v.score)) : "not scored"} | ${v.holdoutScore ? esc(describeScore(v.holdoutScore)) : "not tried"} |`, "");
+    if (v.fence?.length) {
+      L.push(`### Fence ${v.fence.every((c) => c.ok) ? "✓ reaches nothing the original couldn't" : "✗"}`, "", "| Check | | |", "|---|---|---|");
+      for (const c of v.fence) L.push(`| ${c.rule} | ${c.ok ? "✓" : "✗"} | ${esc(c.detail)} |`);
+      L.push("");
+    }
+  }
+  L.push("### The change", "", "```diff", diff.trimEnd(), "```", "");
+  const thrown = record.variants.filter((x) => x.status === "outside").length;
+  const rounds = Math.max(0, ...record.variants.map((x) => x.round));
+  L.push(`${record.variants.length} variant(s) proposed over ${rounds} round(s)${thrown ? `, ${thrown} thrown away at the fence` : ""}. ${record.split.proposal.length} recorded run(s) to propose from, ${record.split.holdout.length} held out (seed ${record.seed}). Proposer ${record.models.proposer ?? "?"}, judge ${record.models.judge ?? "?"}. Spent $${record.spent.toFixed(4)} of $${record.budget.toFixed(2)}.`, "");
+  L.push(`The full report, with every run side by side, holds unredacted recorded data, so it stays local: \`${dir}/report.md\`.`, "");
+  L.push("_Opened by `halo evolve`. Review the diff and run your tests before merging._");
+  return L.join("\n") + "\n";
+}
+
+const OUTCOMES_SHOWN: Outcome[] =["worse", "now halts", "now fails", "now pauses", "diverged"];
 
 /** report.md: the verdict, every variant, the winner's diff, and the runs that went wrong. Unredacted. */
 export function evolveReport(r: EvolveResult, ctx: { file: string; source: string; models: EvolveRecord["models"] }): string {

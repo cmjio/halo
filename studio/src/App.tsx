@@ -12,6 +12,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './App.css';
+import { EvolveStart, EvolveView, type EvolveSummary } from './Evolve';
 
 // Halo Studio is served by `halo serve`, so the API is on the same origin.
 // If the server needs a token, open Studio once with ?token=<HALO_SERVE_TOKEN>.
@@ -195,6 +196,19 @@ function App() {
   }, [flow, selectedRun, nodes.length]);
 
   const [pipelines, setPipelines] = useState<PipelineInfo[]>([]);
+  const [tab, setTab] = useState<'runs' | 'evolve'>('runs');
+  const [evolves, setEvolves] = useState<EvolveSummary[]>([]);
+  const [selectedEvolve, setSelectedEvolve] = useState<string | null>(null);
+  const [evolveFormOpen, setEvolveFormOpen] = useState(false);
+
+  // Evolve runs, refreshed while the tab is open.
+  useEffect(() => {
+    if (tab !== 'evolve') return;
+    const load = () => api<EvolveSummary[]>('/api/evolve').then(setEvolves).catch((e) => setError(e.message));
+    load();
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
+  }, [tab]);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -323,6 +337,33 @@ function App() {
       {/* Sidebar: Run List */}
       <div className="sidebar">
         {error && <div className="banner error">{error}</div>}
+        <div className="tabs">
+          <button className={tab === 'runs' ? 'active' : ''} onClick={() => setTab('runs')}>Runs</button>
+          <button className={tab === 'evolve' ? 'active' : ''} onClick={() => setTab('evolve')}>Evolve</button>
+        </div>
+        {tab === 'evolve' ? (
+          <>
+            <h2 className="clickable" onClick={() => setEvolveFormOpen(!evolveFormOpen)}>New evolve run {evolveFormOpen ? '▾' : '▸'}</h2>
+            {evolveFormOpen && <EvolveStart api={api} pipelines={pipelines} onStarted={(id) => { setSelectedEvolve(id); setEvolveFormOpen(false); }} />}
+            <h2>Evolve runs</h2>
+            <div className="run-list">
+              {evolves.length === 0 && <p className="hint">None yet. A pipeline needs about ten finished recorded runs to evolve.</p>}
+              {evolves.map((e) => (
+                <div key={e.id} className={`run-item ${selectedEvolve === e.id ? 'active' : ''}`} onClick={() => setSelectedEvolve(e.id)}>
+                  <div className="run-title">
+                    <span className="run-pipeline">{e.pipeline}</span>
+                    <span className={`run-status ${e.status === 'done' ? (e.winner ? 'completed' : 'halted') : e.status}`}>{e.status === 'done' ? (e.winner ? `winner ${e.winner}` : 'no winner') : e.status}</span>
+                  </div>
+                  <div className="run-meta">
+                    {new Date(e.startedAt).toLocaleString()}{e.spent !== undefined ? ` · $${e.spent.toFixed(4)}` : ''}{e.variants ? ` · ${e.variants} variants` : ''}
+                  </div>
+                  {e.verdict && <div className="run-meta evolve-verdict">{e.verdict}</div>}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+        <>
         <h2>Pipelines</h2>
         <div className="pipeline-list">
           {pipelines.map((p) => (
@@ -349,8 +390,16 @@ function App() {
             </div>
           ))}
         </div>
+        </>
+        )}
       </div>
 
+      {tab === 'evolve' ? (
+        <div className="canvas evolve-canvas">
+          {selectedEvolve ? <EvolveView api={api} id={selectedEvolve} /> : <div className="empty-state">Start an evolve run, or pick one to read its variants</div>}
+        </div>
+      ) : (
+      <>
       {/* Main Canvas: React Flow DAG */}
       <div className="canvas">
         {detail?.paused && detail.runId === selectedRun && (
@@ -407,6 +456,8 @@ function App() {
             <PayloadView payload={selectedEvent.payload} />
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

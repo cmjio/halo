@@ -241,17 +241,18 @@ class Walker {
   }
 
   private directives(list: DirectiveContext[]): Directive[] {
-    return list.map((d) => ({
-      name: d.name().getText(),
-      value: d
-        .directiveArg()
-        .map((a) => {
-          const lit = a.literal();
-          if (lit) return render(this.literal(lit));
-          return a.getText();
-        })
-        .join(", "),
-    }));
+    return list.map((d) => {
+      const args = d.directiveArg().map((a) => {
+        const lit = a.literal();
+        if (!lit) return { text: a.getText(), raw: a.getText() };
+        const v = this.literal(lit);
+        return { text: render(v), raw: v.kind === "string" ? v.value : render(v), string: v.kind === "string" };
+      });
+      const directive: Directive = { name: d.name().getText(), value: args.map((a) => a.text).join(", ") };
+      // String arguments can hold commas, which `value` can't keep apart: then each is kept on its own too.
+      if (args.some((a) => "string" in a && a.string)) directive.args = args.map((a) => a.raw);
+      return directive;
+    });
   }
 
   pipeline(ctx: PipelineDeclContext): PipelineDeclaration {

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Milestones 1 (`halo compare`, `halo replay --live-changed`) and 2 (`halo evolve`, `halo evolve apply`, the `Evolver` preset, `recordings.keep`) are built. Studio and Cloud aren't. |
+| Status | Milestones 1 (`halo compare`, `--live-changed`), 2 (`halo evolve`, `apply`, `--pr`, the `Evolver` preset, `recordings.keep`) and 3 (Studio's Evolve tab) are built, with `@expect` hard checks and recording in `halo serve`. Halo Cloud isn't. |
 | Date | 8 November 2026 |
 | Builds on | `halo plan`, recordings and `halo replay`, `@shadow`, the `Judge` preset, `halo validate --strict`, policies and tool effects |
 | Related | [Halo Cloud](halo-cloud.md) (plan diff and replay before promotion) |
@@ -244,14 +244,14 @@ halo replay <file.halo> <runId> --live-changed
 ## Milestones
 
 1. **`halo compare`.** Built: the fence check (`src/fence.ts`), `--live-changed` (recordings now keep each model request's fingerprint and cost), pairwise judging by a Halo pipeline, the side-by-side `--report`, and a budget. Not yet: absolute scores, hard checks from a criteria file, and `recordings.keep` (it uses the newest 50). There's no held-out split, because nothing proposes from the runs: a person wrote the variant. Next showcase: an old and new prompt of the triage example, compared on real runs.
-2. **`halo evolve`.** Built: the `Evolver` preset, rounds that propose from the best variant so far, one repair attempt for files that don't parse or validate, the fence against the original for every variant, a seeded held-out split, the Pareto front of win rate and cost, a hard budget, `.halo/evolve/<id>/` (report, variants, `git apply`-able diffs, scores, evolve.json), `halo evolve apply` (refuses a stale file), and `recordings.keep`. Not yet: `--pr`, absolute scores and hard checks from the criteria file, and a recording setting for `halo serve`. Showcase: the worked example above, with real numbers, on the home page and in the video.
-3. **Studio.** An Evolve tab: start a run, watch rounds, read the side-by-side report, apply a variant.
+2. **`halo evolve`.** Built: the `Evolver` preset, rounds that propose from the best variant so far, one repair attempt for files that don't parse or validate, the fence against the original for every variant, a seeded held-out split, the Pareto front of win rate and cost, a hard budget, `.halo/evolve/<id>/` (report, variants, `git apply`-able diffs, scores, evolve.json), `halo evolve apply` (refuses a stale file), and `recordings.keep`. Since built too: `--pr`, hard checks as `@expect` on the pipeline (the open question below), and `recordings.serve` for `halo serve`. Not yet: absolute scores. Showcase: the worked example above, with real numbers, on the home page and in the video.
+3. **Studio.** Built: an Evolve tab that starts a run for a served pipeline, shows each variant as it's proposed and scored, its fence checks and diff, and applies one (`/api/evolve`).
 4. **Halo Cloud.** Continuous evolve on production recordings for opted-in pipelines. A winning variant becomes a preview deployment with the plan diff and replay results already attached, and still needs a person to promote it.
 
 ## Open questions
 
 - Should a variant be allowed to **remove** a capability (drop a tool the pipeline never uses)? That's inside the fence, but it changes the plan, so the report should call it out.
 - Should the fence allow raising the cost cap in exchange for a big enough quality gain, behind an explicit `--allow-cost-increase`?
-- Should criteria live in the `.halo` file (an `expect` block on the pipeline) so they're versioned beside the pipeline and `halo test` can use them too?
+- ~~Should criteria live in the `.halo` file?~~ Hard checks do: `@expect(...)` on the pipeline, used by `halo test`, `halo compare` and `halo evolve`. The judge's prose criteria are still a file.
 - Pairwise judging costs twice the judge calls. Is the absolute score enough below some number of runs?
 - How should evolve treat `@thread` pipelines, where a run's output depends on state from earlier runs that a replay doesn't restore?

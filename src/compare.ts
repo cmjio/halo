@@ -20,6 +20,7 @@ import { HaloRuntime, type RecordedCall, type RunResult } from "./runtime/runtim
 import { newReplayStats, readRecording, recordedCost, replayMocks, type Recording, type ReplayStats } from "./runtime/replay.js";
 import { APPROVED, formatValue } from "./runtime/values.js";
 import { HaloError } from "./runtime/errors.js";
+import { checkExpectations, expectationsOf, type Expectation } from "./expect.js";
 
 export type Outcome =
   /** The variant produced exactly the recorded output: no judge needed. */
@@ -101,6 +102,8 @@ export interface CompareOptions {
   budget?: number;
   /** Seed for the order outputs are shown to the judge. */
   seed?: number;
+  /** Hard checks on the output (default: the original's `@expect` conditions on the pipeline). */
+  expectations?: Expectation[];
   onRun?: (r: RunComparison, index: number) => void;
 }
 
@@ -171,6 +174,8 @@ export async function compareRuns(options: CompareOptions): Promise<CompareSumma
   const criteria = options.criteria?.trim() || DEFAULT_CRITERIA;
   const rand = random(options.seed ?? 1);
   const tools = [...variant.tools, ...variant.stores].map((t) => t.name);
+  // The original's expectations, never the variant's: a variant can't loosen what it's held to.
+  const expectations = options.expectations ?? expectationsOf(options.original, pipeline);
   const runs: RunComparison[] = [];
   let spent = 0;
 
@@ -247,7 +252,10 @@ export async function compareRuns(options: CompareOptions): Promise<CompareSumma
     else if (stats.staleTools.length && !judgedOn) outcome = "diverged";
     else if (same(pair[0], pair[1])) outcome = "same";
     else if (stats.mismatches) outcome = "diverged";
-    else if (!options.judge) outcome = "tie";
+    else if (expectations.length && !judgedOn && expectVerdict(expectations, original.output, result.output, rec.args)) {
+      verdict = expectVerdict(expectations, original.output, result.output, rec.args)!;
+      outcome = verdict.better === "variant" ? "better" : "worse";
+    } else if (!options.judge) outcome = "tie";
     else {
       const [first, second] = flip ? [pair[1], pair[0]] : pair;
       const j = await options.judge({ input: rec.args, criteria, first, second });
@@ -279,6 +287,20 @@ export async function compareRuns(options: CompareOptions): Promise<CompareSumma
     budget: options.budget,
     judgeModel: options.judgeModel,
   };
+}
+
+/**
+ * Settles a run without the judge when the outputs differ on the hard checks: the variant breaks an
+ * expectation the original met (worse), or meets every one the original broke and breaks none (better).
+ */
+function expectVerdict(expectations: Expectation[], a: unknown, b: unknown, args: Record<string, unknown>): Verdict | undefined {
+  const before = checkExpectations(expectations, a, args);
+  const after = checkExpectations(expectations, b, args);
+  const broke = after.filter((r, i) => !r.ok && before[i]!.ok).map((r) => r.text);
+  if (broke.length) return { better: "original", reason: `breaks @expect: ${broke.join("; ")}`, cost: 0 };
+  const fixed = after.filter((r, i) => r.ok && !before[i]!.ok).map((r) => r.text);
+  if (fixed.length && after.every((r) => r.ok)) return { better: "variant", reason: `meets @expect the original broke: ${fixed.join("; ")}`, cost: 0 };
+  return undefined;
 }
 
 const clip = (s: string, n = 4000) => (s.length > n ? `${s.slice(0, n)}\n… (${s.length - n} more characters)` : s);

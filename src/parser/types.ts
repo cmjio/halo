@@ -30,6 +30,8 @@ export interface Directive {
   name: string;
   /** Arguments rendered as text, comma-separated (e.g. "3, 2s"). */
   value: string;
+  /** Each argument on its own, strings without their quotes (e.g. `@expect`'s conditions, which can hold commas). */
+  args?: string[];
 }
 
 export interface PolicyRule {

@@ -268,6 +268,17 @@ Like recordings, these hold unredacted inputs and outputs. `.halo/` is in the de
 
 **Applying.** `halo evolve apply <dir> [variant]` writes a variant (by default the winner) over the file that was evolved. It refuses a variant that was outside the fence, invalid or a duplicate, and refuses when the file has changed since it was evolved, because writing the variant would undo those changes (`--force` overrides that). Review the change with `git diff` and run your tests before you commit.
 
+**Pull requests.** `--pr` (on `halo evolve`, for the winner, or on `halo evolve apply`) opens a pull request instead of writing the file. It makes a branch `halo-evolve/<run>-<variant>` from the current one, commits only the evolved file, pushes it to `origin`, and runs `gh pr create` against the branch you were on. Then it switches back, so your working copy is as it was. The description has the verdict, the scores, the fence checks and the diff, but no recorded inputs or outputs: the full report stays local. It needs the GitHub CLI signed in, and refuses when the evolved file has uncommitted changes.
+
+```bash
+halo evolve triage.halo --criteria criteria/triage.md --pr      # evolve, then open a PR with the winner
+halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4 --pr
+```
+
+**Hard checks.** `@expect("output.issues.length <= limit", ...)` on the pipeline adds checks no model is needed for. Every variant is held to the original's, and a run where a variant breaks one the original met is a loss without asking the judge. See [`@expect`](../reference/compiler-directives.md#expect).
+
+**In Studio.** Studio (served by `halo serve`) has an **Evolve** tab: start a run for any served pipeline with its variants, rounds, budget and criteria, watch each variant as it's proposed and scored, read every variant's fence checks and diff, and apply one. A served pipeline builds up its own recorded runs to evolve from when `halo.json` has `"recordings": { "serve": true }`.
+
 ```jsonc
 // halo.json
 {

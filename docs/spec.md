@@ -119,6 +119,7 @@ A call is `Agent.method(...)`, `Tool.method(...)`, `System.Method(...)`, `Thread
 | `@thread(input)`, `@thread(input, Name)` | Keep state between runs, one thread per value of `input`: read it as `context.thread`, change it with `Thread.set`, `Thread.append` and `Thread.clear`, saved when the run ends ([Thread State](/guide/thread-state)) | `@thread(user_id)` |
 | `@shadow(Primary)` | On an agent: run it alongside every call to `Primary` and record its output, which is never used. `@shadow(openai/gpt-4o)` runs the same prompt on that model instead | `@shadow(Baseline)` |
 | `@correct(n)` | On an agent or pipeline: when an output policy rejects an answer, tell the agent what was wrong and ask again, up to n times | `@correct(2)` |
+| `@expect("cond", ...)` | On a pipeline: conditions its output must meet, in gate syntax over `output` and the inputs. `halo run`/`halo test` report them (`test` fails on a broken one); `halo compare` and `halo evolve` hold every variant to the original's, with no judge | `@expect("output.labels.length <= 3")` |
 
 ## Bindings, Conditions & Strings
 
