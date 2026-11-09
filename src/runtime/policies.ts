@@ -437,7 +437,8 @@ export class PolicyEngine {
   }
 }
 
-function redact(text: string, categories: string[]): string {
+/** `text` with every category a `Redact(...)` rule names masked, as an agent's prompt would be. */
+export function redact(text: string, categories: string[]): string {
   // Redact between JSON escapes, so "\n123-45-6789" in a prompt is read as a new line, not "n123…".
   return text.split(JSON_ESCAPE).map((part, i) => (i % 2 ? part : redactText(part, categories))).join("");
 }

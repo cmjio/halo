@@ -98,7 +98,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 ### Built in: tools, agents, and skills
 
 - **Tools** that need no account: `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a cloud sandbox from E2B or Daytona that lasts one run), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
-- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Twelve ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
+- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
 - **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
 
 See [`examples/78-builtin-kit.halo`](examples/78-builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
@@ -129,6 +129,8 @@ halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-changed, --live-tools)
 halo compare <file.halo> --from main  # can the changed file do anything main's couldn't? is it better on recorded runs? (or two files)
+halo evolve <file.halo> --criteria c.md   # a model proposes rewrites; those inside the fence are judged on recorded runs, the best on held-out ones
+halo evolve apply <dir> [variant]     # write the winner over the file (evolve itself changes nothing)
 halo history <runId> [--step N]       # every step of a @checkpoint run, or its state after step N
 halo rewind <file.halo> <runId> --step N   # continue a @checkpoint run from a step, as a new run
 halo threads | thread <name> <key>    # list threads, show one (--reset --yes deletes its state)
@@ -139,7 +141,11 @@ halo search | add | remove | install | tools | pack | publish   # tool packages
 
 `validate` catches undefined agents, tools, and policies; tools an agent uses without `equips`; unknown `System.*` methods; `context.data.x` values nothing writes; bad schema types and loop targets; and policy rules the runtime can't enforce.
 
-In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a server), the run pauses and prints the `halo resume` command; paused runs are kept in `.halo/runs`. Every CLI run is recorded to `.halo/telemetry.db` for Halo Studio unless you pass `--no-telemetry`, and to `.halo/recordings` for `halo replay` (unredacted; the newest 50 are kept) unless you pass `--no-record`. See [Plan and Replay](docs/guide/plan-and-replay.md).
+In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a server), the run pauses and prints the `halo resume` command; paused runs are kept in `.halo/runs`. Every CLI run is recorded to `.halo/telemetry.db` for Halo Studio unless you pass `--no-telemetry`, and to `.halo/recordings` for `halo replay` (unredacted; the newest 50 are kept, or `recordings.keep` in `halo.json`) unless you pass `--no-record`. See [Plan and Replay](docs/guide/plan-and-replay.md).
+
+### 🧬 Pipelines that improve themselves
+
+`halo evolve` points a model at your pipeline and its real traffic. It proposes rewrites (sharper prompts, cheaper models, an extra check), throws away any that would reach something new (a tool, an effect, a provider, a weaker policy, a missing approval, a higher spend cap), replays the rest against recorded runs without touching the world, has a judge compare each with the original, and checks the best on runs the proposer never saw. You get one diff and a report: *"v4.1 beat the original on 12 held-out runs: won 7 · tied 4 · lost 1, $0.021 → $0.012 per run."* It changes nothing until you run `halo evolve apply`. See [`halo evolve`](docs/guide/plan-and-replay.md#halo-evolve).
 
 ## 🌐 Serving pipelines
 

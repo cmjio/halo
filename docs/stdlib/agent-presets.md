@@ -29,6 +29,7 @@ pipeline Route(email: String) -> Result:
 | `CodeReviewer` | Reviews a diff for bugs and security problems | `temp: 0` | `code-review` | `{ verdict, summary, findings }` |
 | `Translator` | Translates into `to:`, keeping formatting and placeholders | `temp: 0.2` | | text |
 | `Triager` | Triages bug reports: kind, severity, duplicate, what's missing | `temp: 0` | `bug-triage` | `{ kind, severity, reproducible, duplicate_of, area, labels, missing, summary, reply }` |
+| `Evolver` | Rewrites a Halo pipeline to do better on its criteria, inside its fence (used by [`halo evolve`](../guide/plan-and-replay.md#halo-evolve)) | `temp: 0.8, max_tokens: 8000` | | `Rationale:` line and a ` ```halo ` block |
 
 `halo agents` prints this list. Preset names are case-insensitive, and `halo validate` reports one that doesn't exist.
 

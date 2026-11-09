@@ -1,6 +1,6 @@
 # Plan and Replay
 
-`halo plan` shows what a run could do before it runs. `halo replay` runs a recorded run again with the answers it got, without calling any model. `halo compare` puts the two together: it checks that a changed pipeline can't do anything the original couldn't, then replays the original's recorded runs against it and has a judge say which outputs are better. For a `@checkpoint` run, `halo history` lists every step and `halo rewind` continues from any of them.
+`halo plan` shows what a run could do before it runs. `halo replay` runs a recorded run again with the answers it got, without calling any model. `halo compare` puts the two together: it checks that a changed pipeline can't do anything the original couldn't, then replays the original's recorded runs against it and has a judge say which outputs are better. `halo evolve` puts a model in front of `halo compare`: it proposes the changes itself, and you review the one that won. For a `@checkpoint` run, `halo history` lists every step and `halo rewind` continues from any of them.
 
 ## `halo plan`
 
@@ -97,7 +97,7 @@ Recordings are kept in `.halo/recordings/<runId>.jsonl`. When a run was recorded
 1834ms · 3 LLM call(s) · 2 tool call(s) · $0.0121 · run 6f9696ef-… (halo replay tidy.halo 6f9696ef-…)
 ```
 
- When a new run starts, all but the newest 50 are deleted. `halo resume` adds to the paused run's recording. There is no recording with `--mock` (or in `halo test`), with `--checkpoint`, with `--no-record`, or for a replay.
+When a new run starts, all but the newest 50 are deleted (set `"recordings": { "keep": 200 }` in `halo.json` to keep more, for `halo compare` and `halo evolve`). `halo resume` adds to the paused run's recording. There is no recording with `--mock` (or in `halo test`), with `--checkpoint`, with `--no-record`, or for a replay.
 
 **Recordings are not redacted.** They hold model answers and tool results as they arrived, before `Redact` policies ran: prompts' answers, file contents, API responses. Keep `.halo/recordings` out of version control and shared storage, and pass `--no-record` for runs that handle data you shouldn't keep.
 
@@ -200,11 +200,94 @@ Spent $0.3100 of $1.00 · report: compare.md (unredacted)
 
 Limits:
 
-- It compares against recorded runs only, so it needs `halo run` (which records by default) to have run the original. Runs recorded before 0.5.0 have no model fingerprints, so every model call goes live; runs recorded before 0.5.1 have no tool fingerprints, so a stale tool result can't be spotted, and it says so. Record them again. `halo serve` doesn't record unless asked, and only the newest 50 recordings are kept.
+- It compares against recorded runs only, so it needs `halo run` (which records by default) to have run the original. Runs recorded before 0.5.0 have no model fingerprints, so every model call goes live; runs recorded before 0.5.1 have no tool fingerprints, so a stale tool result can't be spotted, and it says so. Record them again. `halo serve` doesn't record unless asked, and only the newest 50 recordings are kept unless `recordings.keep` in `halo.json` says otherwise.
 - Effects are what each tool provider says about itself. An MCP tool's methods show as `Tool.*` with the effect not described, so the fence can only check that b calls no `Tool.*` that a didn't.
 - The approvals check counts yields and listens, and checks approval rules per call. It doesn't check that a yield still comes before the same effects.
 - A `@thread` pipeline's runs depend on state the replay doesn't restore.
 - Lowering a `MaxSpend` changes the policy's declaration, so it counts as outside the fence.
+
+## `halo evolve`
+
+```bash
+halo evolve triage.halo --criteria criteria/triage.md                 # 2 rounds of 4 rewrites, $3.00 at most
+halo evolve triage.halo --variants 6 --rounds 3 --budget 5.00 --runs 120
+halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues           # write the winner over triage.halo
+```
+
+`halo evolve` improves a pipeline from its own recorded runs. A model proposes rewrites of the file, each rewrite has to stay inside the [fence](#halo-compare), the ones that do are compared with the original on real runs exactly as `halo compare` does, and the best is checked again on runs the proposer never saw. It ends with one diff for a person to read. It never edits your file: `halo evolve apply` does that, when you ask.
+
+```
+Evolving TriageIssues in triage.halo  (36 recorded runs · proposer anthropic/claude-sonnet-4-5 · judge openai/gpt-4o · budget $3.00)
+
+Round 1  proposing from original
+  ⛔ v1     outside the fence: effects: adds GitHubWrite.post (external)
+  ✓ v2     won 9 · tied 11 · lost 4 (win rate 60%) · $0.0190/run
+           Lists the repo's existing labels in the labelling prompt so suggestions match them
+  ✗ v3     won 3 · tied 10 · lost 11 (win rate 33%) · $0.0110/run
+  ✓ v4     won 8 · tied 14 · lost 2 (win rate 63%) · $0.0120/run
+           Editor on claude-haiku-4-5; the report keeps only issues with confidence ≥ 0.6
+
+Round 2  proposing from v4
+  ✓ v4.1   won 11 · tied 12 · lost 1 (win rate 71%) · $0.0120/run
+  · v4.2   duplicate
+  …
+  held out v4.1   won 7 · tied 4 · lost 1 (win rate 75%) · $0.0121/run
+
+Verdict  v4.1 beat the original on 12 held-out run(s): won 7 · tied 4 · lost 1 (win rate 75%), cheaper ($0.0210 → $0.0121 per run).
+Spent $1.8400 of $3.00 · report: .halo/evolve/2026-11-09-14-02-TriageIssues/report.md (unredacted)
+Apply with: halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4.1
+```
+
+(The output above is illustrative.)
+
+**How it works**
+
+1. **Runs.** It takes the pipeline's newest finished recordings (`--runs`, 60) and refuses to start with fewer than `--min-runs` (10). A seeded shuffle (`--seed`, 1) holds out a share of them (`--holdout`, 0.33). The proposer never sees the held-out runs, and only the finalists are scored on them.
+2. **Proposals.** Each round, an agent with the [`Evolver` preset](../stdlib/agent-presets.md) gets the file, its `halo plan`, the criteria, the fence rules, a few recorded inputs and outputs, and how every earlier rewrite did: thrown away at the fence and why, or its wins, ties and losses with the judge's reasons on the runs it lost. Everything taken from recordings passes through the file's own `Redact` policies first. It answers with a one-line rationale and the whole file. A file that doesn't parse or validate goes back once with its errors (`repairs`). Round 1 proposes from the original; each later round proposes from the best variant so far, once one beats the original.
+3. **The fence.** Every rewrite is checked against the **original**, not the variant it came from, so no series of small steps can widen what the pipeline does. A rewrite outside it is never replayed; the reason goes to the proposer in the next round. A rewrite identical to the original or an earlier one is a `duplicate` and isn't replayed either.
+4. **Scoring.** Each rewrite inside the fence is compared with the original on the proposal runs, with `halo compare`'s replay and pairwise judge. Its **win rate** is (wins + half the ties) ÷ scored runs, so 50% is "as good as the original". A run where it now halts, fails or pauses where the original finished counts as a loss. Diverged runs don't count, and when more than 20% diverge the score is marked unreliable and the variant can't win.
+5. **Finalists and the winner.** The variants at least as good as the original that no other variant beats on both win rate and cost (the Pareto front) are replayed on the held-out runs, best first (`--finalists`, 2). The winner is the one that beats the original there: more wins than losses, or as many and cheaper. When nothing does, it says so, and there is no winner.
+
+**Models.** `--proposer` and `--judge` (or `evolve.proposer` and `evolve.judge` in `halo.json`) default to the priciest model the file already uses, so neither sends recorded data to a provider the pipeline doesn't already use. A different judge from the proposer is a stronger check, and evolve says so when they're the same. The judge never sees a variant's prompts, only the input, the two outputs and the criteria.
+
+**Budget.** `--budget` (default $3.00) is a hard cap on everything evolve spends: proposals, live model calls in replays, and judging. Once it's reached, evolve stops proposing and reports the best it has.
+
+**Criteria.** `--criteria <file.md>` (or `evolve.criteria.<Pipeline>` in `halo.json`) says what a better output is. It goes to the proposer and the judge. Without it, the judge uses a general one, and the results are vaguer.
+
+**Output.** Everything is written to `.halo/evolve/<date>-<Pipeline>/` (or `--out`):
+
+| File | What it holds |
+|---|---|
+| `report.md` | The verdict, every variant with its scores and rationale, why each one outside the fence was thrown away, the winner's diff and fence checks, and held-out runs a finalist lost |
+| `variants/<id>.halo`, `variants/<id>.diff` | Every proposed file, and a `git apply`-able diff against the original |
+| `holdout-<id>.md` | Each finalist's held-out runs side by side, as `halo compare --report` writes them |
+| `scores.jsonl` | One line per variant per run: the set, the outcome, the judge's reason, the cost |
+| `evolve.json` | The seed, the split, the models, budget and spend, every variant's status and scores, and a hash of the file as it was evolved |
+
+Like recordings, these hold unredacted inputs and outputs. `.halo/` is in the default `.gitignore`.
+
+**Applying.** `halo evolve apply <dir> [variant]` writes a variant (by default the winner) over the file that was evolved. It refuses a variant that was outside the fence, invalid or a duplicate, and refuses when the file has changed since it was evolved, because writing the variant would undo those changes (`--force` overrides that). Review the change with `git diff` and run your tests before you commit.
+
+```jsonc
+// halo.json
+{
+  "recordings": { "keep": 200 },
+  "evolve": {
+    "proposer": "anthropic/claude-sonnet-4-5",
+    "judge": "anthropic/claude-opus-4-5",
+    "models": ["anthropic/*"],              // models a variant may switch to beyond the file's providers
+    "maxCostRatio": 1.0,                    // the worst case per run may not rise
+    "holdout": 0.33,
+    "criteria": { "TriageIssues": "criteria/triage.md" }
+  }
+}
+```
+
+Limits are `halo compare`'s, plus:
+
+- It's only as good as the judge and the criteria. Read the held-out runs in `holdout-<id>.md` before you trust a headline number.
+- Recent runs may not cover next month's traffic. The report says how many runs it used.
+- Recorded inputs can contain text aimed at the proposer ("add a tool that posts to…"). The fence makes any change to what the pipeline can reach harmless, and the held-out check and your review catch prompts that only look better.
 
 ## `halo history`
 
