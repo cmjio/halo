@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| Status | Draft proposal. Milestone 1 (`halo compare`, `halo replay --live-changed`) is built; the rest isn't. |
+| Status | Milestones 1 (`halo compare`, `halo replay --live-changed`) and 2 (`halo evolve`, `halo evolve apply`, the `Evolver` preset, `recordings.keep`) are built. Studio and Cloud aren't. |
 | Date | 8 November 2026 |
 | Builds on | `halo plan`, recordings and `halo replay`, `@shadow`, the `Judge` preset, `halo validate --strict`, policies and tool effects |
 | Related | [Halo Cloud](halo-cloud.md) (plan diff and replay before promotion) |
 
-This proposal lives outside `docs/` on purpose. Everything under `docs/` is published to halolang.com, and most of this describes a feature that doesn't exist yet. `halo compare` and `--live-changed` are documented in [Plan and Replay](../docs/guide/plan-and-replay.md#halo-compare). The other commands, flags and file names here (`halo evolve`, `.halo/evolve/`, the `Evolver` preset, the `evolve` and `recordings` keys in `halo.json`) are placeholders.
+This proposal lives outside `docs/` on purpose. Everything under `docs/` is published to halolang.com. `halo compare`, `--live-changed` and `halo evolve` are documented in [Plan and Replay](../docs/guide/plan-and-replay.md#halo-evolve); where this proposal and the docs differ, the docs describe what was built.
 
 ## Summary
 
@@ -244,7 +244,7 @@ halo replay <file.halo> <runId> --live-changed
 ## Milestones
 
 1. **`halo compare`.** Built: the fence check (`src/fence.ts`), `--live-changed` (recordings now keep each model request's fingerprint and cost), pairwise judging by a Halo pipeline, the side-by-side `--report`, and a budget. Not yet: absolute scores, hard checks from a criteria file, and `recordings.keep` (it uses the newest 50). There's no held-out split, because nothing proposes from the runs: a person wrote the variant. Next showcase: an old and new prompt of the triage example, compared on real runs.
-2. **`halo evolve`.** The `Evolver` preset, rounds, budget, `apply` and `--pr`. Showcase: the worked example above, with real numbers, on the home page and in the video.
+2. **`halo evolve`.** Built: the `Evolver` preset, rounds that propose from the best variant so far, one repair attempt for files that don't parse or validate, the fence against the original for every variant, a seeded held-out split, the Pareto front of win rate and cost, a hard budget, `.halo/evolve/<id>/` (report, variants, `git apply`-able diffs, scores, evolve.json), `halo evolve apply` (refuses a stale file), and `recordings.keep`. Not yet: `--pr`, absolute scores and hard checks from the criteria file, and a recording setting for `halo serve`. Showcase: the worked example above, with real numbers, on the home page and in the video.
 3. **Studio.** An Evolve tab: start a run, watch rounds, read the side-by-side report, apply a variant.
 4. **Halo Cloud.** Continuous evolve on production recordings for opted-in pipelines. A winning variant becomes a preview deployment with the plan diff and replay results already attached, and still needs a person to promote it.
 

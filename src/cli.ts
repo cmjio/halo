@@ -34,6 +34,8 @@ import { findSkill, skillCatalog, skillFiles } from "./runtime/skills.js";
 import { formatPlan, plan, type PlanOptions } from "./plan.js";
 import { checkFence } from "./fence.js";
 import { compareReport, compareRuns, defaultJudgeModel, haloJudge, recordingsFor, type Outcome } from "./compare.js";
+import { evolve, haloProposer, sha256, writeEvolveDir, describeScore, type EvolveRecord, type Variant } from "./evolve.js";
+import { diffStat } from "./diff.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
@@ -78,6 +80,11 @@ USAGE:
                                         --budget, --report)
   halo compare <file.halo> --from <rev> The same, with the file as it was at a git revision (main,
                                         HEAD~1, a tag) as a and the file as it is now as b
+  halo evolve <file.halo>               Improve a pipeline from its own recorded runs: a model proposes
+                                        rewrites, each must stay inside the fence, the rest are replayed
+                                        and judged against the original, and the best is checked on
+                                        held-out runs. Writes .halo/evolve/<id>/ and changes nothing
+  halo evolve apply <dir> [variant]     Write a variant (default: the winner) over the evolved file
 
 TOOL PACKAGES:
   halo search [query]                   Find tool packages in the registry
@@ -136,6 +143,26 @@ COMPARE OPTIONS:
   --report <file.md>     Write every run side by side (unredacted, like the recordings)
   --seed <n>             Seed for the order the judge sees outputs in (default 1)
 
+EVOLVE OPTIONS:
+  --pipeline, -p <name>  Pipeline to evolve (default: the entry pipeline)
+  --criteria <file.md>   What a better output looks like (halo.json evolve.criteria.<pipeline>)
+  --variants <n>         Rewrites proposed per round (default 4)
+  --rounds <n>           Rounds; each proposes from the best variant so far (default 2)
+  --budget <usd>         Hard cap on proposing, replaying and judging together (default 3.00)
+  --runs <n>             How many recent recorded runs to use (default 60)
+  --min-runs <n>         Refuse to start with fewer (default 10)
+  --holdout <x>          Share of runs held out for the final check (default 0.33)
+  --finalists <n>        Best variants tried on the held-out runs (default 2)
+  --proposer <model>     Model that proposes rewrites (default: evolve.proposer, then the
+                         priciest model the file already uses)
+  --judge <model>        Judge model (default: evolve.judge, then the same rule)
+  --allow-model <glob>   A model a variant may switch to from a new provider (repeatable;
+                         also evolve.models)
+  --max-cost-ratio <x>   How much a variant's worst-case cost may exceed the original's (default 1.0)
+  --out <dir>            Where to write (default .halo/evolve/<date>-<pipeline>)
+  --seed <n>             Seed for the split and the judge's order (default 1)
+  --force                (apply) Overwrite even though the file changed since it was evolved
+
 VALIDATE OPTIONS:
   --strict               Treat warnings as errors
 
@@ -173,7 +200,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -540,7 +567,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
         fail(`Missing argument(s) for ${pipeline.name}(${pipeline.params.map((p) => `${p.name}: ${p.type}`).join(", ")}): ${missing.join(", ")}\n  Pass them with ${missing.map((m) => `--arg ${m}=...`).join(" ")}`);
       }
       recorder?.start(pipeline.name, args);
-      pruneRecordings(RECORDINGS);
+      pruneRecordings(RECORDINGS, (await haloConfig()).recordings?.keep ?? 50);
       result = await rt.run(pipeline.name, args, { runId });
     }
     recorder?.finish({ status: result.status, output: result.output });
@@ -777,6 +804,165 @@ async function cmdCompare(flags: Flags): Promise<number> {
   const uncheckedTools = summary.runs.reduce((n, r) => n + (r.variant?.stats.uncheckedTools ?? 0), 0);
   if (uncheckedTools) log(yellow(`${uncheckedTools} tool result(s) were recorded before tool fingerprints, so a changed tool call can't be spotted and its output may be stale; record the runs again`));
   log(dim(`Spent $${summary.spent.toFixed(4)} of $${budget.toFixed(2)}${reportPath ? ` · report: ${reportPath} (unredacted)` : ""}`));
+  return 0;
+}
+
+/** halo.json settings that the CLI's commands read (all optional). */
+interface HaloConfig {
+  recordings?: { keep?: number };
+  evolve?: { proposer?: string; judge?: string; models?: string[]; maxCostRatio?: number; holdout?: number; criteria?: Record<string, string> };
+}
+
+let haloConfigCache: Promise<HaloConfig> | undefined;
+function haloConfig(): Promise<HaloConfig> {
+  haloConfigCache ??= (async () => {
+    const f = Bun.file("halo.json");
+    if (!(await f.exists())) return {};
+    try {
+      return (await f.json()) as HaloConfig;
+    } catch (err) {
+      fail(`halo.json is not valid JSON: ${err instanceof Error ? err.message : err}`);
+    }
+  })();
+  return haloConfigCache;
+}
+
+const EVOLVE_DIR = ".halo/evolve";
+
+async function cmdEvolve(flags: Flags): Promise<number> {
+  const usage = "Usage: halo evolve <file.halo> [--pipeline Name] [--criteria file.md] [--variants 4] [--rounds 2] [--budget 3.00]";
+  const file = flags.positional[0];
+  if (!file) fail(usage);
+  const { path, ast } = await load(file);
+  const rel = relative(process.cwd(), path);
+  const source = await Bun.file(path).text();
+  for (const d of validate(ast, await validateOptions()).filter((x) => x.severity === "error")) {
+    console.error(formatDiag(d, rel));
+    fail(`${rel} doesn't validate; fix it before evolving it`);
+  }
+  const pipeline = pickStream(ast, last(flags, "pipeline")).name;
+  const config = (await haloConfig()).evolve ?? {};
+  const number = (key: string, fallback: number, integer = false) => {
+    const v = last(flags, key);
+    if (v === undefined) return fallback;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) fail(`--${key} needs a ${integer ? "whole " : ""}number, got "${v}"`);
+    return n;
+  };
+  const holdout = number("holdout", config.holdout ?? 0.33);
+  if (holdout >= 1) fail(`--holdout is a share of the runs, below 1 (got ${holdout})`);
+
+  const recordings = recordingsFor(RECORDINGS, pipeline, number("runs", 60, true));
+  const minRuns = number("min-runs", 10, true);
+  if (recordings.length < minRuns) {
+    fail(`${pipeline} has ${recordings.length} finished recorded run(s) in ${RECORDINGS}; evolve needs at least ${minRuns}, to have runs to propose from and runs to check on. Run it more (halo run records by default), or pass --min-runs.`);
+  }
+
+  const providers = await installed();
+  const quiet = new HaloRuntime({ logger: { log() {}, warn() {} } });
+  registerInstalled(quiet, providers);
+  const runtime = () => {
+    const rt = new HaloRuntime({ apiKey: last(flags, "api-key"), logger: { log() {}, warn() {} }, threadPath: ":memory:" });
+    registerInstalled(rt, providers);
+    return rt;
+  };
+  const proposer = last(flags, "proposer") ?? config.proposer ?? defaultJudgeModel(ast);
+  const judgeModel = last(flags, "judge") ?? config.judge ?? defaultJudgeModel(ast);
+  if (!proposer || !judgeModel) fail(`${rel} has no agents, so there is nothing to evolve`);
+  for (const [role, model] of [["proposer", proposer], ["judge", judgeModel]] as const) {
+    if (!runtime().canCallModel(model)) fail(`No API key for the ${role}'s model ${model}: set the provider's key, or pick another with --${role}.`);
+  }
+  const criteriaPath = last(flags, "criteria") ?? config.criteria?.[pipeline];
+  if (criteriaPath && !(await Bun.file(criteriaPath).exists())) fail(`Criteria file not found: ${criteriaPath}`);
+  const criteria = criteriaPath ? await Bun.file(criteriaPath).text() : undefined;
+  const budget = number("budget", 3);
+  const json = flags.bools.has("json");
+  const log = (s: string) => (json ? undefined : console.error(s));
+
+  const out = last(flags, "out") ?? join(EVOLVE_DIR, `${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}-${pipeline}`);
+  log(`${bold(`Evolving ${pipeline}`)} in ${rel}  ${dim(`(${recordings.length} recorded runs · proposer ${proposer} · judge ${judgeModel} · budget $${budget.toFixed(2)})`)}`);
+  if (proposer === judgeModel) log(dim(`  The proposer and the judge are the same model. The judge never sees a variant's prompts, but a different judge (--judge, or evolve.judge in halo.json) is a stronger check.`));
+  if (!criteriaPath) log(dim(`  No criteria file: judging on "does the task better". Write what a good output looks like and pass --criteria for sharper results.`));
+
+  const mark = (v: Variant) => (v.status === "scored" ? (v.score!.winRate > 0.5 ? green("✓") : v.score!.winRate === 0.5 ? yellow("~") : red("✗")) : v.status === "outside" ? red("⛔") : v.status === "invalid" ? red("✗") : dim("·"));
+  const result = await evolve({
+    source,
+    pipeline,
+    recordings,
+    runtime,
+    propose: haloProposer(proposer, runtime),
+    judge: haloJudge(judgeModel, runtime),
+    criteria,
+    variants: number("variants", 4, true),
+    rounds: number("rounds", 2, true),
+    holdout,
+    finalists: number("finalists", 2, true),
+    budget,
+    seed: number("seed", 1, true),
+    fence: {
+      providerInfo: (provider) => quiet.toolProviderInfo(provider),
+      allowModels: [...(config.models ?? []), ...(flags.values.get("allow-model") ?? [])],
+      maxCostRatio: number("max-cost-ratio", config.maxCostRatio ?? 1),
+    },
+    validate: await validateOptions(),
+    onEvent: (e) => {
+      if (e.type === "round") {
+        log(`\n${bold(`Round ${e.round}`)}  ${dim(`proposing from ${e.parent}`)}`);
+      } else if (e.type === "variant") {
+        const v = e.variant;
+        const what = v.status === "scored" || v.status === "unscored" ? (v.score ? describeScore(v.score) : "not scored") : v.status === "outside" ? `outside the fence: ${v.problems[0] ?? ""}` : v.status === "invalid" ? `invalid: ${v.problems[0] ?? ""}` : v.status;
+        log(`  ${mark(v)} ${v.id.padEnd(6)} ${what.slice(0, 110)}`);
+        if (v.rationale) log(dim(`           ${v.rationale.slice(0, 140)}`));
+      } else if (e.type === "holdout") {
+        log(`  ${bold("held out")} ${e.variant.id.padEnd(6)} ${describeScore(e.variant.holdoutScore!)}`);
+      } else if (e.type === "budget") {
+        log(yellow(`  budget reached ($${e.spent.toFixed(4)} of $${budget.toFixed(2)}); stopping`));
+      }
+    },
+  });
+
+  writeEvolveDir(out, result, { file: rel, source, version: pkg.version, models: { proposer, judge: judgeModel } });
+  if (json) {
+    console.log(JSON.stringify({ ...result, out, variants: result.variants.map(({ proposal: _, holdout: __, ...v }) => v) }, null, 2));
+    return 0;
+  }
+  log(`\n${bold("Verdict")}  ${result.winner ? green(result.verdict) : yellow(result.verdict)}`);
+  const w = result.variants.find((v) => v.id === result.winner);
+  if (w?.source) {
+    const st = diffStat(source, w.source);
+    if (w.rationale) log(`  ${w.rationale}`);
+    log(dim(`  +${st.added} −${st.removed} lines · fence ✓ reaches nothing ${rel} couldn't`));
+  }
+  log(dim(`Spent $${result.spent.toFixed(4)} of $${budget.toFixed(2)} · report: ${join(out, "report.md")} (unredacted)`));
+  if (result.winner) log(`Apply with: halo evolve apply ${out} ${result.winner}`);
+  return 0;
+}
+
+async function cmdEvolveApply(flags: Flags): Promise<number> {
+  const dir = flags.positional[1];
+  if (!dir) fail("Usage: halo evolve apply <.halo/evolve/dir> [variant] [--force]");
+  const recordFile = Bun.file(join(dir, "evolve.json"));
+  if (!(await recordFile.exists())) fail(`${dir} has no evolve.json: is it a folder halo evolve wrote?`);
+  const record = (await recordFile.json()) as EvolveRecord;
+  const id = flags.positional[2] ?? record.winner;
+  if (!id) fail(`No variant named, and ${dir} has no winner (${record.verdict}) Name one: ${record.variants.filter((v) => v.status === "scored").map((v) => v.id).join(", ") || "none was scored"}`);
+  const entry = record.variants.find((v) => v.id === id);
+  if (!entry) fail(`${dir} has no variant ${id} (it has ${record.variants.map((v) => v.id).join(", ")})`);
+  if (entry.status === "outside" || entry.status === "invalid") fail(`${id} is ${entry.status === "outside" ? "outside the fence" : "invalid"}, so it isn't applied: ${entry.problems.join("; ")}`);
+  if (entry.status === "duplicate") fail(`${id} is the same file as the original or an earlier variant: no change to apply`);
+  const variantPath = join(dir, "variants", `${id}.halo`);
+  const variant = Bun.file(variantPath);
+  if (!(await variant.exists())) fail(`${variantPath} is missing`);
+  const target = Bun.file(record.file);
+  if (!(await target.exists())) fail(`${record.file} (the file that was evolved) isn't here; run apply from the folder evolve ran in`);
+  const current = await target.text();
+  if (sha256(current) !== record.sha256 && !flags.bools.has("force")) fail(`${record.file} changed since it was evolved, so writing ${id} would undo those changes. Look at ${join(dir, "variants", `${id}.diff`)} and apply it by hand, or pass --force.`);
+  const next = await variant.text();
+  await Bun.write(record.file, next);
+  const st = diffStat(current, next);
+  console.log(`${green("✓")} wrote ${id} over ${record.file} ${dim(`(+${st.added} −${st.removed} lines)`)}`);
+  if (record.winner !== id) console.log(yellow(`  ${id} wasn't the winner: ${record.verdict}`));
+  console.log(dim(`  Review it with git diff, and run halo validate and your tests before you commit.`));
   return 0;
 }
 
@@ -1126,6 +1312,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdPlan(flags);
       case "compare":
         return await cmdCompare(flags);
+      case "evolve":
+        return flags.positional[0] === "apply" ? await cmdEvolveApply(flags) : await cmdEvolve(flags);
       case "mcp":
         return await cmdMcp(flags);
       case "add":
