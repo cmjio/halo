@@ -7,7 +7,9 @@ import { escapeHtml } from "./highlight.ts";
 
 export interface SiteData {
   version: string;
-  examples: Array<{ file: string; number: number; title: string; about: string; run?: string; source: string; features: Record<string, boolean> }>;
+  /** file is the path from examples/ (`learn/01-hello.halo`), name just the file name. */
+  examples: Array<{ file: string; name: string; section: string; number: number; title: string; about: string; run?: string; source: string; pipelines: string[]; features: Record<string, boolean> }>;
+  sections: Array<{ folder: string; title: string; emoji: string; blurb: string }>;
   packages: Array<{
     name: string;
     version: string;
@@ -72,7 +74,7 @@ export function runHtml(data: SiteData): string {
   }
   const agentCalls = calls.filter((c) => c.kind === "agent").length;
   const toolCalls = calls.filter((c) => c.kind === "tool").length;
-  return `<div class="run-head"><span>$ halo run examples/74-software-team.halo --pipeline FixUntilGreen</span><span>${run.model}</span></div>
+  return `<div class="run-head"><span>$ halo run examples/real-world/74-software-team.halo --pipeline FixUntilGreen</span><span>${run.model}</span></div>
     <ol>${steps.join("")}</ol>
     <div class="run-foot"><span>${(run.durationMs / 1000).toFixed(1)}s · ${agentCalls} model calls · ${toolCalls} tool calls · $${run.cost.toFixed(4)}</span><span class="ok">2 pass · 0 fail</span></div>`;
 }

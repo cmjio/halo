@@ -50,7 +50,7 @@ Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 
 ### ⭐ Try the flagship
 
-[`examples/50-github-triage.halo`](examples/50-github-triage.halo) triages a public repo's open issues for real:
+[`examples/real-world/50-github-triage.halo`](examples/real-world/50-github-triage.halo) triages a public repo's open issues for real:
 - fetches issues from GitHub's public API (no token needed)
 - trims each payload with `System.Pick`
 - classifies the issues and searches past reports in parallel
@@ -60,7 +60,7 @@ Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 Answer `label` instead of `approve` and it also adds each issue's suggested labels with `|* each` (set `GITHUB_TOKEN`). It needs only an Anthropic key; a run costs about $0.02.
 
 ```bash
-ANTHROPIC_API_KEY=... halo debug examples/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
+ANTHROPIC_API_KEY=... halo debug examples/real-world/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
 ```
 
 ### 📦 Start from a blueprint
@@ -101,7 +101,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 - **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
 - **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
 
-See [`examples/78-builtin-kit.halo`](examples/78-builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
+See [`examples/real-world/78-builtin-kit.halo`](examples/real-world/78-builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
 
 ### How a pipeline runs
 
@@ -254,7 +254,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 
 ## 📚 Examples
 
-`examples/` is a learning path: 01–19 introduce one concept each, 20–25 are role-based workflows, 30–38 are larger systems (moderation routing, a multi-agent swarm, local automation, schema validation), 40–46 are industry examples, 50 is the flagship, 60–66 are everyday domains, and 70–72 run for real on free public data:
+`examples/` is a learning path in six folders, each file numbered so they read in order: [`learn/`](examples/learn/) (01–19, one concept each), [`roles/`](examples/roles/) (20–25, role-based workflows), [`systems/`](examples/systems/) (30–38, moderation routing, a multi-agent swarm, local automation, schema validation), [`industries/`](examples/industries/) (40–46), [`everyday/`](examples/everyday/) (60–66), and [`real-world/`](examples/real-world/) (50 and 70–80, which run for real on free public data). [`examples/README.md`](examples/README.md) maps them all. Highlights:
 
 | # | Example | What it shows |
 |---|---|---|

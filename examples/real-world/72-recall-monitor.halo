@@ -7,7 +7,7 @@
 // for a person to approve, because a wrong alert about food or drug
 // safety does real harm.
 //
-// RUN:  halo run examples/72-recall-monitor.halo \
+// RUN:  halo run examples/real-world/72-recall-monitor.halo \
 //         --arg product=food --arg keyword=peanut --arg slack_channel=""
 //       (product is food, drug, or device)
 // ============================================================

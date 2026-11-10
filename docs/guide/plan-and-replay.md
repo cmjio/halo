@@ -240,7 +240,7 @@ Apply with: halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4.1
 
 (The output above is illustrative.)
 
-**A real run.** The flagship [`50-github-triage.halo`](https://github.com/cmjio/halo/blob/main/examples/50-github-triage.halo) was run on 14 real repositories (about $0.02 each), then evolved with 2 rounds of 3 rewrites and a short criteria file. It spent $1.20 of a $3.00 budget:
+**A real run.** The flagship [`50-github-triage.halo`](https://github.com/cmjio/halo/blob/main/examples/real-world/50-github-triage.halo) was run on 14 real repositories (about $0.02 each), then evolved with 2 rounds of 3 rewrites and a short criteria file. It spent $1.20 of a $3.00 budget:
 
 | Variant | What it tried | Result |
 |---|---|---|

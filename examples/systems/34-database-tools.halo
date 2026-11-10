@@ -1,3 +1,11 @@
+// ============================================================
+// STEP 34: Database Tools - SQL and a VectorStore Together
+// ============================================================
+// LEARN: How to chain a SQL lookup into a vector search
+// WHY:   Fetch a user's row from Postgres, look up the policies that
+//        apply to their type, and have an analyst summarize both.
+// ============================================================
+
 tool UsersDB : PostgreSQL("postgres://user:pass@localhost:5432/mydb")
 tool KnowledgeBase : VectorStore("index-123")
 

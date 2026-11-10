@@ -48,10 +48,10 @@ A person reviews one diff. The pipeline gets better from its own traffic, and it
 
 ## A worked example
 
-The flagship [`examples/50-github-triage.halo`](../examples/50-github-triage.halo) has been run 60 times across a few repositories. Each run left a recording in `.halo/recordings`.
+The flagship [`examples/real-world/50-github-triage.halo`](../examples/real-world/50-github-triage.halo) has been run 60 times across a few repositories. Each run left a recording in `.halo/recordings`.
 
 ```bash
-halo evolve examples/50-github-triage.halo --pipeline TriageIssues \
+halo evolve examples/real-world/50-github-triage.halo --pipeline TriageIssues \
   --criteria criteria/triage.md --variants 6 --rounds 2 --budget 3.00
 ```
 

@@ -26,11 +26,11 @@ describe("CLI", () => {
   });
 
   test("validate --strict fails on warnings", () => {
-    expect(cli("validate", "examples/14-env-vars.halo", "--strict").code).toBe(1);
+    expect(cli("validate", "examples/learn/14-env-vars.halo", "--strict").code).toBe(1);
   });
 
   test("run --mock prints the output once", () => {
-    const r = cli("run", "examples/01-hello.halo", "--arg", "name=World", "--mock");
+    const r = cli("run", "examples/learn/01-hello.halo", "--arg", "name=World", "--mock");
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe("[mock Greeter.prompt] Write a warm, one-sentence 'Hello World' greeting for this person. Input: World");
   });
@@ -92,7 +92,7 @@ pipeline S(x: String) -> Result:
   });
 
   test("run --json returns the full result", () => {
-    const r = cli("run", "examples/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
+    const r = cli("run", "examples/learn/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
     const result = JSON.parse(r.out);
     expect(result.status).toBe("halted");
     expect(result.context.meta.halted.condition).toBe('lang != "en"');
@@ -100,31 +100,31 @@ pipeline S(x: String) -> Result:
   });
 
   test("missing arguments are explained", () => {
-    const r = cli("run", "examples/03-tools.halo", "--mock");
+    const r = cli("run", "examples/learn/03-tools.halo", "--mock");
     expect(r.code).toBe(1);
     expect(r.err).toContain("Missing argument(s) for MultiLangHello(name: String, lang: String): name, lang");
   });
 
   test("multiple pipelines need --pipeline", () => {
-    const r = cli("run", "examples/10-named-args.halo", "--mock");
+    const r = cli("run", "examples/learn/10-named-args.halo", "--mock");
     expect(r.code).toBe(1);
     expect(r.err).toContain("pick one with --pipeline (GreetPerson, Summarize)");
   });
 
   test("a real run without keys fails with the variable to set", () => {
-    const r = cli("run", "examples/01-hello.halo", "--arg", "name=World");
+    const r = cli("run", "examples/learn/01-hello.halo", "--arg", "name=World");
     expect(r.code).toBe(1);
     expect(r.err).toContain("Set GEMINI_API_KEY or GOOGLE_API_KEY or HALO_API_KEY");
   });
 
   test("debug traces each stage", () => {
-    const r = cli("debug", "examples/05-fanout.halo", "--arg", "name=Ana", "--mock");
+    const r = cli("debug", "examples/learn/05-fanout.halo", "--arg", "name=Ana", "--mock");
     expect(r.code).toBe(0);
     expect(r.err).toContain("▶ [1] |* { Greeter.prompt, Greeter.prompt }");
   });
 
   test("parse prints the AST", () => {
-    const ast = JSON.parse(cli("parse", "examples/01-hello.halo").out);
+    const ast = JSON.parse(cli("parse", "examples/learn/01-hello.halo").out);
     expect(ast.agents[0].name).toBe("Greeter");
   });
 
@@ -192,9 +192,9 @@ pipeline Approve(doc: String) -> Result:
   test("runs are recorded for Halo Studio unless --no-telemetry", () => {
     const dir = mkdtempSync(join(tmpdir(), "halo-telemetry-"));
     try {
-      cliIn(dir, "run", "examples/01-hello.halo", "--arg", "name=World", "--mock", "--no-telemetry");
+      cliIn(dir, "run", "examples/learn/01-hello.halo", "--arg", "name=World", "--mock", "--no-telemetry");
       expect(existsSync(join(dir, ".halo/telemetry.db"))).toBe(false);
-      cliIn(dir, "run", "examples/01-hello.halo", "--arg", "name=World", "--mock");
+      cliIn(dir, "run", "examples/learn/01-hello.halo", "--arg", "name=World", "--mock");
       const db = new Database(join(dir, ".halo/telemetry.db"));
       const types = db.query("SELECT type FROM telemetry ORDER BY id").all().map((r: any) => r.type);
       db.close();

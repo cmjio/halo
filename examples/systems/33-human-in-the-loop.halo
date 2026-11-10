@@ -1,3 +1,12 @@
+// ============================================================
+// STEP 33: Human in the Loop - Approve in Slack, Then Send
+// ============================================================
+// LEARN: How a run pauses for a person and picks up where it left off
+// WHY:   A writer drafts, a person approves the draft in Slack, and
+//        only then does the email go out. ~> listen(...) waits for the
+//        button press; `halo resume` continues a paused run.
+// ============================================================
+
 tool Approvals : Slack("Env.SLACK_BOT_TOKEN")
 tool Notifier : Email("Env.RESEND_API_KEY", from: "approvals@example.com")
 

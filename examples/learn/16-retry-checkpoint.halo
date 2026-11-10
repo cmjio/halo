@@ -25,7 +25,7 @@ pipeline RobustCall(data: String) -> Result:
 //   Saves the run to .halo/checkpoints/<Pipeline>-<runId>.json after every
 //   stage, and adds each step to <Pipeline>-<runId>.steps.jsonl beside it.
 //
-//   halo run examples/16-retry-checkpoint.halo --checkpoint <file>   continue a stopped run
+//   halo run examples/learn/16-retry-checkpoint.halo --checkpoint <file>   continue a stopped run
 //   halo history <runId>                       list every step
 //   halo history <runId> --step 1              the run's state after step 1
-//   halo rewind examples/16-retry-checkpoint.halo <runId> --step 1   continue from step 1 as a new run
+//   halo rewind examples/learn/16-retry-checkpoint.halo <runId> --step 1   continue from step 1 as a new run

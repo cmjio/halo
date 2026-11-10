@@ -19,7 +19,7 @@ pipeline Totals(min: Number) -> Result:
     |> Books.query(sql: "SELECT category, sum(amount) AS total FROM expenses GROUP BY category HAVING total >= ? ORDER BY total DESC", params: [min])
 ```
 
-The full example is [`examples/80-sqlite-ledger.halo`](/examples/80-sqlite-ledger). It has a setup step, a bulk import, a monthly summary, an analyst agent that can only read, and a bookkeeper agent whose changes need approval.
+The full example is [`examples/real-world/80-sqlite-ledger.halo`](/examples/80-sqlite-ledger). It has a setup step, a bulk import, a monthly summary, an analyst agent that can only read, and a bookkeeper agent whose changes need approval.
 
 ## Methods
 

@@ -176,8 +176,8 @@ ENVIRONMENT:
   TOGETHER_API_KEY, REPLICATE_API_TOKEN, HALO_API_KEY (fallback), OLLAMA_HOST
 
 EXAMPLES:
-  halo run examples/01-hello.halo --arg name=World --mock
-  halo debug examples/06-gates.halo --arg name=Ana --arg lang=es --mock
+  halo run examples/learn/01-hello.halo --arg name=World --mock
+  halo debug examples/learn/06-gates.halo --arg name=Ana --arg lang=es --mock
   halo validate examples/
 `;
 
