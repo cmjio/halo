@@ -13,6 +13,10 @@ import { validate, type Diagnostic } from "../../src/parser/validate.ts";
 import { plan, type Plan } from "../../src/plan.ts";
 import type { ProviderInfo } from "../../src/runtime/tools.ts";
 import { CHALLENGES, type Challenge } from "./challenges.ts";
+import { setDiagnostics, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
+import { EditorSelection, EditorState, type Text } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { flashLine, haloEditor, SHORTCUTS } from "./editor.ts";
 import { escapeHtml, highlight } from "./highlight.ts";
 import type { SiteData } from "./render.ts";
 
@@ -82,18 +86,17 @@ const MARKUP = `
     <button type="button" class="pg-btn" data-pg-dice title="Open a random example">🎲 <span>Surprise me</span></button>
     <select data-pg-pipeline aria-label="Pipeline to plan"></select>
     <span class="pg-spacer"></span>
+    <button type="button" class="pg-btn" data-pg-keys aria-expanded="false" title="Keyboard shortcuts">⌨️ <span>Shortcuts</span></button>
     <button type="button" class="pg-btn" data-pg-reset hidden title="Undo all your edits to this file">↺ <span>Reset</span></button>
     <button type="button" class="pg-btn" data-pg-share title="Copy a link to what's in the editor (⌘S / Ctrl+S)">🔗 <span>Share</span></button>
     <span class="pg-status" data-pg-status role="status" aria-live="polite"></span>
   </div>
   <div class="pg-intro" data-pg-intro></div>
   <div class="pg-body">
-    <div class="editor">
-      <div class="editor-gutter" aria-hidden="true"><pre data-pg-lines></pre></div>
-      <div class="editor-main">
-        <div class="editor-marks" aria-hidden="true" data-pg-marks></div>
-        <pre class="editor-hl" aria-hidden="true"><code data-pg-hl></code></pre>
-        <textarea data-pg-src spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Halo source"></textarea>
+    <div class="editor" data-pg-editor>
+      <div class="pg-keys" data-pg-keys-panel hidden>
+        <div class="pg-keys-head"><strong>⌨️ Keyboard shortcuts</strong><button type="button" class="pg-link" data-pg-keys-close aria-label="Close">✕</button></div>
+        <dl data-pg-keys-list></dl>
       </div>
     </div>
     <div class="pg-out">
@@ -106,7 +109,7 @@ const MARKUP = `
       <div class="tab-body" data-pane="plan"><div data-pg-plan></div></div>
       <div class="tab-body" data-pane="problems" hidden><ul class="problems" data-pg-problems></ul></div>
       <div class="tab-body" data-pane="cheats" hidden>
-        <p class="pg-tip">Click a card to add it below the line your cursor is on. <kbd>Tab</kbd> indents, <kbd>⌘/</kbd> comments a line, <kbd>⌘Z</kbd> undoes anything.</p>
+        <p class="pg-tip">Click a card to add it below the line your cursor is on. <kbd>Tab</kbd> indents, <kbd>⌘/</kbd> comments a line, <kbd>⌘Z</kbd> undoes anything, and ⌨️ lists every shortcut.</p>
         <div class="cheats" data-pg-cheats></div>
       </div>
       <div class="tab-body" data-pane="ast" hidden><pre class="ast" data-pg-ast></pre></div>
@@ -129,11 +132,7 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
   );
   for (const p of data.packages) for (const pr of p.providers) providerInfo.set(pr.name, { methods: pr.methods.length ? (pr.methods as ProviderInfo["methods"]) : undefined });
 
-  const src = $<HTMLTextAreaElement>("[data-pg-src]");
-  const hl = $("[data-pg-hl]");
-  const hlPre = hl.parentElement!;
-  const lines = $("[data-pg-lines]");
-  const marks = $("[data-pg-marks]");
+  const editorHost = $("[data-pg-editor]");
   const pick = $<HTMLSelectElement>("[data-pg-pick]");
   const pipelinePick = $<HTMLSelectElement>("[data-pg-pipeline]");
   const status = $("[data-pg-status]");
@@ -191,8 +190,9 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
     original = next.kind === "example" ? next.example.source : next.kind === "challenge" ? next.challenge.starter : (opts.text ?? SCRATCH);
     const draft = opts.restoreDraft === false ? null : store.get(draftKey());
     const text = opts.text ?? (draft && draft !== original ? draft : original);
-    src.value = text;
-    src.scrollTop = 0;
+    // A fresh state per file: its own undo history and folds.
+    view.setState(EditorState.create({ doc: text, extensions }));
+    view.scrollDOM.scrollTop = 0;
     touched = false;
     lastErrors = null;
     lastSolved = false;
@@ -290,103 +290,57 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
 
   // ── The editor ──
 
-  const lineHeight = () => parseFloat(getComputedStyle(src).lineHeight) || 20.8;
-  const padTop = () => parseFloat(getComputedStyle(src).paddingTop) || 14;
-  const syncScroll = () => {
-    hlPre.scrollTop = src.scrollTop;
-    hlPre.scrollLeft = src.scrollLeft;
-    lines.style.transform = `translateY(${-src.scrollTop}px)`;
-    marks.style.transform = `translate(${-src.scrollLeft}px, ${-src.scrollTop}px)`;
-  };
-  src.addEventListener("scroll", syncScroll);
-
-  /** Replace a range as if typed, so ⌘Z undoes it; falls back to setRangeText where execCommand is gone. */
-  function edit(start: number, end: number, text: string, select?: [number, number]) {
-    src.focus();
-    src.setSelectionRange(start, end);
-    const ok = typeof document.execCommand === "function" && document.execCommand("insertText", false, text);
-    if (!ok) {
-      src.setRangeText(text, start, end, "end");
-      src.dispatchEvent(new Event("input"));
-    }
-    if (select) src.setSelectionRange(select[0], select[1]);
-  }
-  const replaceAll = (text: string) => edit(0, src.value.length, text, [0, 0]);
-
-  /** The start of the line holding `pos`, and the end of the line holding `end`. */
-  const lineSpan = (pos: number, end = pos) => {
-    const v = src.value;
-    const a = v.lastIndexOf("\n", pos - 1) + 1;
-    let b = v.indexOf("\n", end > pos && v[end - 1] === "\n" ? end - 1 : end);
-    if (b < 0) b = v.length;
-    return [a, b] as const;
-  };
-
-  src.addEventListener("keydown", (ev) => {
-    const mod = ev.metaKey || ev.ctrlKey;
-    const { selectionStart: s, selectionEnd: e } = src;
-    if (ev.key === "Tab" && !mod && !ev.altKey) {
-      ev.preventDefault();
-      const multi = src.value.slice(s, e).includes("\n");
-      if (!multi && !ev.shiftKey) return edit(s, e, "  ");
-      const [a, b] = lineSpan(s, e);
-      const block = src.value.slice(a, b);
-      const out = ev.shiftKey ? block.replace(/^ {1,2}/gm, "") : block.replace(/^/gm, "  ");
-      edit(a, b, out, [a, a + out.length]);
-    } else if (ev.key === "Enter" && !mod && !ev.shiftKey && !ev.altKey) {
-      // Keep the indent; a line ending in ":" (a pipeline header) opens a block.
-      const [a] = lineSpan(s);
-      const line = src.value.slice(a, s);
-      const indent = line.match(/^\s*/)![0] + (/:\s*$/.test(line.replace(/\/\/.*$/, "")) ? "  " : "");
-      ev.preventDefault();
-      edit(s, e, `\n${indent}`);
-    } else if (mod && ev.key === "/") {
-      ev.preventDefault();
-      const [a, b] = lineSpan(s, e);
-      const block = src.value.slice(a, b);
-      const all = block.split("\n").filter((l) => l.trim()).every((l) => /^\s*\/\//.test(l));
-      const out = all ? block.replace(/^(\s*)\/\/ ?/gm, "$1") : block.replace(/^(\s*)(?=\S)/gm, "$1// ");
-      edit(a, b, out, [a, a + out.length]);
-    } else if (mod && ev.key.toLowerCase() === "s") {
-      ev.preventDefault();
-      share();
-    } else if (mod && ev.key === "Enter") {
-      ev.preventDefault();
-      showTab("plan");
-    }
-  });
-
   let timer: ReturnType<typeof setTimeout> | undefined;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  src.addEventListener("input", () => {
-    touched = true;
-    hl.innerHTML = highlight(src.value) + "\n";
-    // Keep the last check's marks until the next one, so they don't blink while you type.
-    renderLines(lastProblems);
-    syncScroll();
-    clearTimeout(timer);
-    timer = setTimeout(update, 140);
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => store.set(draftKey(), src.value === original ? null : src.value), 400);
-  });
+  const extensions = haloEditor(
+    [
+      { key: "Mod-s", preventDefault: true, run: () => (share(), true) },
+      { key: "Mod-Enter", preventDefault: true, run: () => (showTab("plan"), true) },
+    ],
+    () => {
+      touched = true;
+      clearTimeout(timer);
+      timer = setTimeout(update, 140);
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => store.set(draftKey(), source() === original ? null : source()), 400);
+    },
+  );
+  const view = new EditorView({ state: EditorState.create({ doc: "", extensions }), parent: editorHost });
+  const source = () => view.state.doc.toString();
+
+  /** Replace a range as an edit, so ⌘Z undoes it. */
+  function edit(start: number, end: number, text: string, select?: [number, number]) {
+    view.dispatch({
+      changes: { from: start, to: end, insert: text },
+      selection: select ? EditorSelection.range(select[0], select[1]) : undefined,
+      scrollIntoView: true,
+      userEvent: "input",
+    });
+    view.focus();
+  }
+  const replaceAll = (text: string) => edit(0, view.state.doc.length, text, [0, 0]);
 
   const goToLine = (line: number, column = 1) => {
-    const before = src.value.split("\n").slice(0, line - 1).join("\n").length + (line > 1 ? 1 : 0);
-    const offset = before + Math.max(0, column - 1);
-    src.focus();
-    src.setSelectionRange(offset, offset);
-    src.scrollTop = Math.max(0, (line - 4) * lineHeight());
-    syncScroll();
-    flashLine(line);
+    const doc = view.state.doc;
+    const l = doc.line(Math.min(Math.max(1, line), doc.lines));
+    const pos = Math.min(l.to, l.from + Math.max(0, column - 1));
+    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+    view.focus();
+    flashLine(view, l.number);
   };
 
-  function flashLine(line: number) {
-    const el = document.createElement("div");
-    el.className = "mark flash";
-    el.style.top = `${padTop() + (line - 1) * lineHeight()}px`;
-    marks.appendChild(el);
-    setTimeout(() => el.remove(), 900);
-  }
+  // The shortcuts panel.
+  const keysBtn = $("[data-pg-keys]");
+  const keysPanel = $("[data-pg-keys-panel]");
+  $("[data-pg-keys-list]").innerHTML = SHORTCUTS.map(([k, what]) => `<div><dt>${k.split(" ").map((x) => (x === "/" ? " / " : `<kbd>${escapeHtml(x)}</kbd>`)).join("")}</dt><dd>${escapeHtml(what)}</dd></div>`).join("");
+  const toggleKeys = (show = keysPanel.hidden) => {
+    keysPanel.hidden = !show;
+    keysBtn.setAttribute("aria-expanded", String(show));
+    if (!show) view.focus();
+  };
+  keysBtn.addEventListener("click", () => toggleKeys());
+  $("[data-pg-keys-close]").addEventListener("click", () => toggleKeys(false));
+  keysPanel.addEventListener("keydown", (ev) => ev.key === "Escape" && toggleKeys(false));
 
   // ── Tabs, problems, and the cheat sheet ──
 
@@ -399,12 +353,6 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
   $("[data-pg-problems]").addEventListener("click", (ev) => {
     const li = (ev.target as HTMLElement).closest<HTMLElement>("[data-line]");
     if (li?.dataset.line) goToLine(Number(li.dataset.line), Number(li.dataset.col || 1));
-  });
-  lines.addEventListener("click", (ev) => {
-    const n = (ev.target as HTMLElement).closest<HTMLElement>("[data-n]");
-    if (!n) return;
-    showTab("problems");
-    goToLine(Number(n.dataset.n));
   });
 
   $("[data-pg-cheats]").innerHTML = SNIPPETS.map(
@@ -419,42 +367,27 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
 
   /** Add code on the line after the cursor's (or at the end, with a blank line before a declaration). */
   function insertBelow(code: string) {
-    const v = src.value;
-    const at = document.activeElement === src || src.selectionStart > 0 ? lineSpan(src.selectionStart)[1] : v.length;
+    const v = source();
+    const head = view.state.selection.main.head;
+    const at = view.hasFocus || head > 0 ? view.state.doc.lineAt(head).to : v.length;
     const atEnd = at >= v.length;
     const lead = !v.length ? "" : atEnd ? (v.endsWith("\n") ? "" : "\n") + (/^\S/.test(code) && !v.endsWith("\n\n") ? "\n" : "") : "\n";
     const text = lead + (atEnd ? code : code.replace(/\n$/, ""));
     edit(at, at, text, [at + lead.length, at + text.length]);
-    src.scrollTop = Math.max(0, (v.slice(0, at).split("\n").length - 4) * lineHeight());
-    syncScroll();
   }
 
   // ── Checking, as you type ──
 
-  let lastProblems: Diagnostic[] = [];
+  /** Problems as the editor's diagnostics: underlined where the validator can say what, with a gutter marker either way. */
   function renderLines(problems: Diagnostic[]) {
-    lastProblems = problems;
-    const n = src.value.split("\n").length;
-    const at = new Map<number, Diagnostic[]>();
-    for (const d of problems) if (d.line) at.set(d.line, [...(at.get(d.line) ?? []), d]);
-    let out = "";
-    for (let i = 1; i <= n; i++) {
-      const ds = at.get(i);
-      if (!ds) out += `${i}\n`;
-      else {
-        const bad = ds.some((d) => d.severity === "error");
-        out += `<span class="${bad ? "error" : "warning"}" data-n="${i}" title="${escapeHtml(ds.map((d) => d.message).join("\n"))}">${i}</span>\n`;
-      }
-    }
-    lines.innerHTML = out;
-    marks.innerHTML = [...at.entries()]
-      .map(([line, ds]) => `<div class="mark ${ds.some((d) => d.severity === "error") ? "error" : "warning"}" style="top:${padTop() + (line - 1) * lineHeight()}px"></div>`)
-      .join("");
+    const doc = view.state.doc;
+    const marks: CmDiagnostic[] = problems.filter((d) => d.line).map((d) => ({ ...rangeOf(doc, d), severity: d.severity, message: d.message }));
+    view.dispatch(setDiagnostics(view.state, marks));
   }
 
   function update() {
-    hl.innerHTML = highlight(src.value) + "\n";
-    const ast = parse(src.value);
+    const text = source();
+    const ast = parse(text);
     const problems: Diagnostic[] = ast.errors.length
       ? ast.errors.map((message) => {
           const m = message.match(/^\[(\d+):(\d+)\] (.*)$/s);
@@ -464,9 +397,8 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
     const errors = problems.filter((d) => d.severity === "error").length;
     const warnings = problems.length - errors;
     renderLines(problems);
-    syncScroll();
 
-    const edited = src.value !== original;
+    const edited = text !== original;
     resetBtn.hidden = !edited;
     status.className = `pg-status ${errors ? "bad" : warnings ? "warn" : "ok"}`;
     status.textContent = errors ? `✗ ${errors} error${errors > 1 ? "s" : ""}` : warnings ? `✓ valid · ${warnings} warning${warnings > 1 ? "s" : ""}` : "✓ valid";
@@ -497,7 +429,7 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
       }
 
     const planEl = $("[data-pg-plan]");
-    if (!src.value.trim()) planEl.innerHTML = `<p class="empty">An empty page, full of possibility. <button type="button" class="pg-link" data-snippet="agent">🤖 Add an agent</button> or roll the 🎲 for an example.</p>`;
+    if (!text.trim()) planEl.innerHTML = `<p class="empty">An empty page, full of possibility. <button type="button" class="pg-link" data-snippet="agent">🤖 Add an agent</button> or roll the 🎲 for an example.</p>`;
     else if (ast.errors.length) planEl.innerHTML = `<p class="empty">Almost: fix the ${errors > 1 ? `${errors} syntax errors` : "syntax error"} and the plan comes back. The red line number shows where.</p>`;
     else if (!current) planEl.innerHTML = `<p class="empty">No pipeline yet, so nothing to plan. <button type="button" class="pg-link" data-snippet="pipeline">🧵 Add a pipeline</button></p>`;
     else if (planError || !plans.get(current)) planEl.innerHTML = `<p class="empty">${escapeHtml(planError || "This pipeline can't be planned yet.")}</p>`;
@@ -511,7 +443,7 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
     }
     lastErrors = errors;
 
-    if (mode.kind === "challenge") checkChallenge(mode.challenge, { source: src.value, ast, problems, plans: [...plans.values()] });
+    if (mode.kind === "challenge") checkChallenge(mode.challenge, { source: text, ast, problems, plans: [...plans.values()] });
   }
 
   function checkChallenge(c: Challenge, input: Parameters<Challenge["check"]>[0]) {
@@ -542,7 +474,8 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
 
   async function share() {
     let url = `${location.origin}${urlFor()}`;
-    if (src.value !== original || mode.kind === "scratch") url = `${location.origin}${location.pathname}#code=${await encode(src.value)}`;
+    const text = source();
+    if (text !== original || mode.kind === "scratch") url = `${location.origin}${location.pathname}#code=${await encode(text)}`;
     let copied = false;
     try {
       await navigator.clipboard.writeText(url);
@@ -605,6 +538,22 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
     const e = (start.example && findExample(start.example)) || findExample("01-hello") || data.examples[0]!;
     open({ kind: "example", example: e });
   }
+}
+
+/** Where a problem sits: its token on or after its line when it names one, else from its column to the end of the line. */
+function rangeOf(doc: Text, d: Diagnostic): { from: number; to: number } {
+  const line = doc.line(Math.min(Math.max(1, d.line!), doc.lines));
+  if (d.token) {
+    const tail = doc.sliceString(line.from + Math.max(0, (d.column ?? 1) - 1));
+    const at = tail.search(new RegExp(`\\b${d.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`));
+    if (at >= 0 && line.from + (d.column ?? 1) - 1 + at < doc.length) {
+      const from = line.from + Math.max(0, (d.column ?? 1) - 1) + at;
+      return { from, to: from + d.token.length };
+    }
+  }
+  const from = Math.min(line.to, line.from + Math.max(0, (d.column ?? 1) - 1));
+  const to = from < line.to ? line.to : from;
+  return { from: from === to && from > line.from ? line.from : from, to };
 }
 
 /** Backticked words in a message as code. */

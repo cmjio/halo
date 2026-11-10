@@ -25,9 +25,10 @@ Link to an example with `?example=01-hello`, or a challenge with `?challenge=bud
 </div>
 
 <style>
+/* The whole window: the editor wants every column it can get. */
 .playground-page {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 32px 24px 64px;
+  max-width: none;
+  margin: 0;
+  padding: 24px 24px 48px;
 }
 </style>
