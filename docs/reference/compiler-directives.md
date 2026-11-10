@@ -93,3 +93,19 @@ pipeline Answer(q: String) -> Result:
 ```
 
 With a model id as the target (`@shadow(openai/gpt-4o)`), the agent's own prompts are also sent to that model. The run waits for shadow calls to finish before it returns. Shadow costs are added to `context.meta.cost`.
+
+## `@expect`
+
+Conditions a pipeline's output must meet, written beside the pipeline. Each argument is a condition in the same language as a gate, over `output` (what the run returned) and the pipeline's inputs (`input.repo`, or just `repo`). Strings can hold commas.
+
+```halo
+@expect("output.issues.length <= limit", "output.confidence >= 0", "output.summary != null")
+pipeline Triage(repo: String, limit: Number) -> Result:
+  ...
+```
+
+No model is involved, so they are hard checks:
+
+- `halo run` and `halo test` print `✓` or `✗` for each after a run that completes. `halo test` exits with status 1 when one is broken, except when every answer is a placeholder from `--mock` without `--mocks` (it says so instead).
+- `halo compare` and `halo evolve` hold every variant to the **original's** expectations, never the variant's own, so a variant can't loosen what it's checked against. A variant whose output breaks one the original's met loses that run without asking the judge; one that meets every expectation the original broke wins it. `halo evolve` also shows them to the proposer.
+- `halo validate` reports a condition that doesn't parse.

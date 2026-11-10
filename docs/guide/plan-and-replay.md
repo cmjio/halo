@@ -240,6 +240,19 @@ Apply with: halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4.1
 
 (The output above is illustrative.)
 
+**A real run.** The flagship [`50-github-triage.halo`](https://github.com/cmjio/halo/blob/main/examples/50-github-triage.halo) was run on 14 real repositories (about $0.02 each), then evolved with 2 rounds of 3 rewrites and a short criteria file. It spent $1.20 of a $3.00 budget:
+
+| Variant | What it tried | Result |
+|---|---|---|
+| v1 | Triager on `claude-haiku-3-5`, `@correct(2)` | Lost all 9 proposal runs: that model id doesn't exist, so every run failed |
+| v2 | A Judge agent checks the report before it's saved | Re-scored after a fix to compare (below): 7 won, 7 lost, +24% cost |
+| **v3** | **A 9-line Editor system prompt: severity calibration rules, short labels, every issue once** | **5–1–3 on the proposal runs; 3 won, 2 lost on 5 held-out runs, same cost: the winner** |
+| v3.1 | A gate that re-classifies low-confidence triage | Diverged: it changed what `TriageLog.search` was asked, which replay can't answer |
+| v3.2 | `@correct(2)` and a warmer Triager | 3–1–5: lost |
+| v3.3 | A second `TriageLog.search` for past severities | Diverged: a new tool call |
+
+Three things to take from it: the win is real but small, and 5 held-out runs is a small sample (record more runs before trusting a margin like this); the judge's reasons are mostly about conciseness and label style, which is what the criteria asked for; and rewrites that add tool calls can't be scored from recordings, so the proposer is now told to prefer changes to prompts, models, settings, gates and agents. The run also found a gap: v2 added an agent after the Editor, and compare used to judge on the last model answer, which the original didn't have. It now judges on the last answer from an agent both versions have.
+
 **How it works**
 
 1. **Runs.** It takes the pipeline's newest finished recordings (`--runs`, 60) and refuses to start with fewer than `--min-runs` (10). A seeded shuffle (`--seed`, 1) holds out a share of them (`--holdout`, 0.33). The proposer never sees the held-out runs, and only the finalists are scored on them.
@@ -267,6 +280,17 @@ Apply with: halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4.1
 Like recordings, these hold unredacted inputs and outputs. `.halo/` is in the default `.gitignore`.
 
 **Applying.** `halo evolve apply <dir> [variant]` writes a variant (by default the winner) over the file that was evolved. It refuses a variant that was outside the fence, invalid or a duplicate, and refuses when the file has changed since it was evolved, because writing the variant would undo those changes (`--force` overrides that). Review the change with `git diff` and run your tests before you commit.
+
+**Pull requests.** `--pr` (on `halo evolve`, for the winner, or on `halo evolve apply`) opens a pull request instead of writing the file. It makes a branch `halo-evolve/<run>-<variant>` from the current one, commits only the evolved file, pushes it to `origin`, and runs `gh pr create` against the branch you were on. Then it switches back, so your working copy is as it was. The description has the verdict, the scores, the fence checks and the diff, but no recorded inputs or outputs: the full report stays local. It needs the GitHub CLI signed in, and refuses when the evolved file has uncommitted changes.
+
+```bash
+halo evolve triage.halo --criteria criteria/triage.md --pr      # evolve, then open a PR with the winner
+halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4 --pr
+```
+
+**Hard checks.** `@expect("output.issues.length <= limit", ...)` on the pipeline adds checks no model is needed for. Every variant is held to the original's, and a run where a variant breaks one the original met is a loss without asking the judge. See [`@expect`](../reference/compiler-directives.md#expect).
+
+**In Studio.** Studio (served by `halo serve`) has an **Evolve** tab: start a run for any served pipeline with its variants, rounds, budget and criteria, watch each variant as it's proposed and scored, read every variant's fence checks and diff, and apply one. A served pipeline builds up its own recorded runs to evolve from when `halo.json` has `"recordings": { "serve": true }`.
 
 ```jsonc
 // halo.json

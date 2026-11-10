@@ -307,6 +307,23 @@ describe("compareRuns: a stale tool result", () => {
     expect(await Bun.file(join(dir, "out.md")).text()).toBe("A line.");
   });
 
+  test("a variant that adds a checking agent at the end is compared on the answer both versions wrote", async () => {
+    const { dir, recs } = await setup(3);
+    // Like the triage showcase's v2: a new agent checks the line before it's saved. Its answer has no counterpart in the
+    // original, so the comparison falls back to the Writer's, which both have.
+    const variant = parse(
+      saving(dir)
+        .replace("Write one line", "Write one vivid line")
+        .replace("pipeline Brief", "agent Checker [openai/gpt-4o, temp: 0]\n  requires Safe\n\npipeline Brief")
+        .replace(`    |> Out.write(`, `    |> Checker.verify("Is this one line?", context.data.line)\n    |> Out.write(`),
+    );
+    const live = fakeOpenAI((p) => (p.includes("Is this one line") ? "yes" : "A vivid line."));
+    const r = await compareRuns({ original: parse(saving(dir)), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: live.fetch }), judge: prefers("vivid") });
+    expect(r.counts.diverged).toBe(0);
+    expect(r.counts.better).toBe(3);
+    expect(r.runs[0]!.judgedOn?.target).toBe("Writer.write");
+  });
+
   test("an unchanged pipeline has no stale results and stays same", async () => {
     const { dir, recs } = await setup(2);
     const r = await compareRuns({ original: parse(saving(dir)), variant: parse(saving(dir)), pipeline: "Brief", recordings: recs, runtime: () => runtime(), judge: prefers("x") });

@@ -34,8 +34,9 @@ import { findSkill, skillCatalog, skillFiles } from "./runtime/skills.js";
 import { formatPlan, plan, type PlanOptions } from "./plan.js";
 import { checkFence } from "./fence.js";
 import { compareReport, compareRuns, defaultJudgeModel, haloJudge, recordingsFor, type Outcome } from "./compare.js";
-import { evolve, haloProposer, sha256, writeEvolveDir, describeScore, type EvolveRecord, type Variant } from "./evolve.js";
-import { diffStat } from "./diff.js";
+import { evolve, EvolveApplyError, evolvePrBody, haloProposer, prepareApply, writeEvolveDir, describeScore, type EvolveRecord, type Variant } from "./evolve.js";
+import { diffStat, unifiedDiff } from "./diff.js";
+import { checkExpectations, expectationsOf } from "./expect.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
@@ -85,6 +86,7 @@ USAGE:
                                         and judged against the original, and the best is checked on
                                         held-out runs. Writes .halo/evolve/<id>/ and changes nothing
   halo evolve apply <dir> [variant]     Write a variant (default: the winner) over the evolved file
+                                        (--pr: open a pull request with it instead)
 
 TOOL PACKAGES:
   halo search [query]                   Find tool packages in the registry
@@ -161,6 +163,9 @@ EVOLVE OPTIONS:
   --max-cost-ratio <x>   How much a variant's worst-case cost may exceed the original's (default 1.0)
   --out <dir>            Where to write (default .halo/evolve/<date>-<pipeline>)
   --seed <n>             Seed for the split and the judge's order (default 1)
+  --pr                   Open a pull request with the winner (or, on apply, the variant) instead of
+                         writing it: a new branch with one commit, pushed, then gh pr create;
+                         the working copy is left as it was
   --force                (apply) Overwrite even though the file changed since it was evolved
 
 VALIDATE OPTIONS:
@@ -200,7 +205,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -606,6 +611,18 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     console.error(yellow(`⏸ Paused at stage ${meta.paused.stage} ${stageAt(ast, meta.pipeline, meta.paused.stage)}, waiting for ${what}${meta.paused.message ? `: ${meta.paused.message}` : ""}`));
     console.error(`  Continue with: halo resume ${rel} ${result.runId} --payload approve`);
   }
+  // @expect: hard checks on the output. Placeholder answers from --mock (without --mocks) can't be held to them.
+  let expectFailed = false;
+  const expectations = result.status === "completed" ? expectationsOf(ast, meta.pipeline) : [];
+  if (expectations.length) {
+    const placeholders = flags.bools.has("mock") && !last(flags, "mocks");
+    const results = checkExpectations(expectations, result.output, result.context.input);
+    for (const r of results) console.error(`${r.ok ? green("✓") : placeholders ? dim("·") : red("✗")} @expect ${r.text}`);
+    if (results.some((r) => !r.ok)) {
+      if (placeholders) console.error(dim("  (mocked answers are placeholders, so @expect isn't enforced; pass --mocks with realistic answers)"));
+      else expectFailed = true;
+    }
+  }
   const llmCalls = meta.calls.filter((c) => c.kind !== "tool").length;
   const parts = [`${meta.durationMs}ms`, `${llmCalls} LLM call(s)`, `${meta.calls.length - llmCalls} tool call(s)`];
   if (meta.cost > 0) parts.push(`$${meta.cost.toFixed(4)}`);
@@ -613,7 +630,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   if (meta.checkpoint) parts.push(`checkpoint ${meta.checkpoint}`);
   if (recorder) parts.push(`run ${result.runId} (halo replay ${rel} ${result.runId})`);
   console.error(dim(parts.join(" · ")));
-  return 0;
+  return expectFailed ? 1 : 0;
 }
 
 function stageAt(ast: ParseResult, pipeline: string, index: number): string {
@@ -934,30 +951,77 @@ async function cmdEvolve(flags: Flags): Promise<number> {
     log(dim(`  +${st.added} −${st.removed} lines · fence ✓ reaches nothing ${rel} couldn't`));
   }
   log(dim(`Spent $${result.spent.toFixed(4)} of $${budget.toFixed(2)} · report: ${join(out, "report.md")} (unredacted)`));
-  if (result.winner) log(`Apply with: halo evolve apply ${out} ${result.winner}`);
+  if (!result.winner) return 0;
+  if (flags.bools.has("pr")) return await applyVariant(out, result.winner, { pr: true, force: false });
+  log(`Apply with: halo evolve apply ${out} ${result.winner}   (or --pr to open a pull request)`);
   return 0;
 }
 
 async function cmdEvolveApply(flags: Flags): Promise<number> {
   const dir = flags.positional[1];
-  if (!dir) fail("Usage: halo evolve apply <.halo/evolve/dir> [variant] [--force]");
-  const recordFile = Bun.file(join(dir, "evolve.json"));
-  if (!(await recordFile.exists())) fail(`${dir} has no evolve.json: is it a folder halo evolve wrote?`);
-  const record = (await recordFile.json()) as EvolveRecord;
-  const id = flags.positional[2] ?? record.winner;
-  if (!id) fail(`No variant named, and ${dir} has no winner (${record.verdict}) Name one: ${record.variants.filter((v) => v.status === "scored").map((v) => v.id).join(", ") || "none was scored"}`);
-  const entry = record.variants.find((v) => v.id === id);
-  if (!entry) fail(`${dir} has no variant ${id} (it has ${record.variants.map((v) => v.id).join(", ")})`);
-  if (entry.status === "outside" || entry.status === "invalid") fail(`${id} is ${entry.status === "outside" ? "outside the fence" : "invalid"}, so it isn't applied: ${entry.problems.join("; ")}`);
-  if (entry.status === "duplicate") fail(`${id} is the same file as the original or an earlier variant: no change to apply`);
-  const variantPath = join(dir, "variants", `${id}.halo`);
-  const variant = Bun.file(variantPath);
-  if (!(await variant.exists())) fail(`${variantPath} is missing`);
-  const target = Bun.file(record.file);
-  if (!(await target.exists())) fail(`${record.file} (the file that was evolved) isn't here; run apply from the folder evolve ran in`);
-  const current = await target.text();
-  if (sha256(current) !== record.sha256 && !flags.bools.has("force")) fail(`${record.file} changed since it was evolved, so writing ${id} would undo those changes. Look at ${join(dir, "variants", `${id}.diff`)} and apply it by hand, or pass --force.`);
-  const next = await variant.text();
+  if (!dir) fail("Usage: halo evolve apply <.halo/evolve/dir> [variant] [--force] [--pr]");
+  return await applyVariant(dir, flags.positional[2], { pr: flags.bools.has("pr"), force: flags.bools.has("force") });
+}
+
+function git(args: string[], cwd?: string): string {
+  const p = Bun.spawnSync(["git", ...args], { cwd, stderr: "pipe" });
+  if (p.exitCode !== 0) throw new CliError(`git ${args[0]} failed: ${p.stderr.toString().trim() || `exit ${p.exitCode}`}`);
+  return p.stdout.toString().trim();
+}
+
+/**
+ * Opens a pull request with one variant, without touching the working copy: on a new branch from the
+ * current one, commit only the evolved file, push, `gh pr create`, then switch back.
+ */
+async function openEvolvePr(dir: string, record: EvolveRecord, id: string, next: string): Promise<number> {
+  const file = record.file;
+  try {
+    git(["rev-parse", "--show-toplevel"]);
+  } catch {
+    fail("--pr needs a git repository");
+  }
+  if (Bun.spawnSync(["gh", "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode !== 0) fail("--pr needs the GitHub CLI (gh), signed in");
+  if (git(["status", "--porcelain", "--", file])) fail(`${file} has uncommitted changes; commit or stash them first, so the pull request holds only ${id}`);
+  const from = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (from === "HEAD") fail("--pr needs a branch checked out (HEAD is detached)");
+  const stamp = basename(dir).replace(/[^\w.-]+/g, "-");
+  const branch = `halo-evolve/${stamp}-${id}`.replace(/[^\w./-]+/g, "-");
+  const current = await Bun.file(file).text();
+  const diff = unifiedDiff(current, next, { a: `a/${file}`, b: `b/${file}` });
+  const v = record.variants.find((x) => x.id === id);
+  git(["switch", "-c", branch]);
+  let url = "";
+  try {
+    await Bun.write(file, next);
+    git(["add", "--", file]);
+    git(["commit", "-m", `Evolve ${record.pipeline}: ${v?.rationale || id}`.slice(0, 200), "-m", `${record.verdict}\n\nProposed and checked by halo evolve (${basename(dir)}, variant ${id}).`, "--", file]);
+    git(["push", "-u", "origin", branch]);
+    const title = `Evolve ${record.pipeline}: ${v?.rationale || id}`.slice(0, 120);
+    const gh = Bun.spawnSync(["gh", "pr", "create", "--head", branch, "--base", from, "--title", title, "--body-file", "-"], { stdin: new TextEncoder().encode(evolvePrBody(record, id, diff, dir)), stderr: "pipe" });
+    if (gh.exitCode !== 0) throw new CliError(`gh pr create failed: ${gh.stderr.toString().trim()} (the branch ${branch} is pushed; open the pull request by hand)`);
+    url = gh.stdout.toString().trim();
+  } finally {
+    // Whatever happened, leave the working copy as it was: the evolved file as committed, on the branch we came from.
+    Bun.spawnSync(["git", "checkout", "--", file], { stderr: "ignore" });
+    Bun.spawnSync(["git", "switch", from], { stderr: "ignore" });
+  }
+  console.log(`${green("✓")} opened a pull request with ${id}: ${url}`);
+  console.log(dim(`  branch ${branch}; your working copy is unchanged`));
+  return 0;
+}
+
+async function applyVariant(dir: string, named: string | undefined, opts: { pr: boolean; force: boolean }): Promise<number> {
+  let prepared: Awaited<ReturnType<typeof prepareApply>>;
+  try {
+    prepared = await prepareApply(dir, named, { force: opts.force && !opts.pr });
+  } catch (err) {
+    if (err instanceof EvolveApplyError) fail(err.message);
+    throw err;
+  }
+  const { record, id, current, next } = prepared;
+  if (opts.pr) {
+    return await openEvolvePr(dir, record, id, next);
+  }
   await Bun.write(record.file, next);
   const st = diffStat(current, next);
   console.log(`${green("✓")} wrote ${id} over ${record.file} ${dim(`(+${st.added} −${st.removed} lines)`)}`);

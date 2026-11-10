@@ -15,18 +15,21 @@
  * prompts and answers, and the API starts runs that spend money.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parse } from "../parser/index.js";
 import { validate } from "../parser/validate.js";
-import type { PipelineDeclaration } from "../parser/types.js";
+import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
 import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
 import { cronMatches, nextRun, parseCron, type CronSchedule } from "./cron.js";
 import { createMcpServer } from "./mcp-server.js";
+import { evolveApi, type EvolveConfig } from "./evolve-api.js";
+import { pruneRecordings, Recorder } from "../runtime/replay.js";
 import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
 import { loadInstalled } from "../registry/packages.js";
 import pkg from "../../package.json" with { type: "json" };
@@ -59,6 +62,14 @@ export interface ServeConfig {
   stateDir?: string;
   /** Serve the pipelines as MCP tools at /mcp (behind the API token). Default true. */
   mcp?: boolean;
+  /**
+   * `serve: true` records every run to <stateDir>/recordings, as `halo run` does, so `halo replay`,
+   * `halo compare` and `halo evolve` can use production traffic. Recordings aren't redacted.
+   * `keep` is how many to keep (default 50).
+   */
+  recordings?: { serve?: boolean; keep?: number };
+  /** Defaults for `halo evolve` and Studio's Evolve tab. */
+  evolve?: EvolveConfig;
 }
 
 export interface ServeOptions extends ServeConfig {
@@ -84,6 +95,9 @@ interface Entry {
   file: string;
   runtime: HaloRuntime;
   decl: PipelineDeclaration;
+  ast: ParseResult;
+  /** Absolute path of the file. */
+  path: string;
 }
 
 export interface HaloServer {
@@ -185,6 +199,10 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   });
   const entries = new Map<string, Entry>();
   const runtimes: HaloRuntime[] = [];
+  // Recording: runs share a runtime, so each run's calls find their recorder through the async context.
+  const recordingsDir = options.recordings?.serve ? join(stateDir, "recordings") : undefined;
+  const recording = new AsyncLocalStorage<Recorder>();
+  const recorder = recordingsDir ? { recorder: (c: Parameters<Recorder["record"]>[0]) => recording.getStore()?.record(c) } : {};
   const onEvent = (e: RuntimeEvent) => {
     telemetry.handler(e);
     options.runtime?.onEvent?.(e);
@@ -199,14 +217,14 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const errors = validate(ast, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
     if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${d.line ?? "?"}: ${d.message}`).join("\n  ")}`);
     if (!ast.pipelines.length) continue;
-    const runtime = new HaloRuntime({ logger, ...options.runtime, env, runStore, onEvent }).load(ast);
+    const runtime = new HaloRuntime({ logger, ...options.runtime, ...recorder, env, runStore, onEvent }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
     for (const decl of ast.pipelines) {
       const prev = entries.get(decl.name);
       if (prev) throw new ServeError(`Pipeline "${decl.name}" is declared in both ${prev.file} and ${rel}`);
-      entries.set(decl.name, { name: decl.name, file: rel, runtime, decl });
+      entries.set(decl.name, { name: decl.name, file: rel, runtime, decl, ast, path: resolve(file) });
     }
   }
 
@@ -285,9 +303,29 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (missing.length) throw new ServeError(`${pipeline} needs ${missing.join(", ")}`);
     const runId = crypto.randomUUID();
     logger.log(`[halo] ${pipeline} started by ${source} (run ${runId.slice(0, 8)})`);
-    track(runId, pipeline, e.runtime.run(pipeline, args, { runId }));
+    track(runId, pipeline, recorded(runId, pipeline, args, () => e.runtime.run(pipeline, args, { runId })));
     return runId;
   };
+
+  /** Writes how a recorded run ended (each time it ends: a run that pauses ends, then ends again after resuming). */
+  function ended(rec: Recorder, work: Promise<RunResult>): Promise<RunResult> {
+    return work.then(
+      (r) => (rec.finish({ status: r.status, output: r.output }), r),
+      (err: unknown) => {
+        rec.finish({ status: "error", error: err instanceof Error ? err.message : String(err) });
+        throw err;
+      },
+    );
+  }
+
+  /** Runs `work` with a recorder for `runId` (when serve records). */
+  function recorded(runId: string, pipeline: string, args: Record<string, unknown>, work: () => Promise<RunResult>): Promise<RunResult> {
+    if (!recordingsDir) return work();
+    pruneRecordings(recordingsDir, options.recordings?.keep ?? 50);
+    const rec = new Recorder(recordingsDir, runId);
+    rec.start(pipeline, args);
+    return ended(rec, recording.run(rec, work));
+  }
 
   const settled = (runId: string) => inflight.get(runId) ?? Promise.resolve(recent.get(runId));
 
@@ -300,9 +338,14 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const snap = await runStore.load(runId);
     if (snap?.waitingFor === undefined) return { error: "That run is not paused", status: 409 };
     try {
-      const claimed = await entry(snap.pipeline).runtime.resumePaused(runId, event ?? snap.waitingFor, payload, { pauseId });
+      // The resumed run keeps appending to its recording (the answer to the pause is recorded too).
+      const rec = recordingsDir ? new Recorder(recordingsDir, runId) : undefined;
+      const waitingFor = event ?? snap.waitingFor;
+      const claim = () => entry(snap.pipeline).runtime.resumePaused(runId, waitingFor, payload, { pauseId });
+      // The run continues inside the recorder's context; a failed claim (already answered, wrong event) records nothing.
+      const claimed = rec ? await recording.run(rec, claim) : await claim();
       logger.log(`[halo] ${claimed.pipeline} resumed (run ${runId.slice(0, 8)})`);
-      return { work: track(runId, claimed.pipeline, claimed.result) };
+      return { work: track(runId, claimed.pipeline, rec ? ended(rec, claimed.result) : claimed.result) };
     } catch (err) {
       if (err instanceof SignalError) return { error: err.message, status: 409 };
       throw err;
@@ -513,6 +556,23 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
   }
 
   // ── MCP ──
+  // Evolve runs (Studio's Evolve tab): their own runtimes, configured like the served ones but recording nothing.
+  const evolveRoutes = evolveApi({
+    stateDir,
+    root: resolve(options.root ?? process.cwd()),
+    pipelines: () => [...entries.values()].map((e) => ({ name: e.name, file: e.file, decl: e.decl, ast: e.ast, path: e.path })),
+    runtime: () => {
+      const rt = new HaloRuntime({ logger: { log() {}, warn() {} }, ...options.runtime, onEvent: undefined, recorder: undefined, env, threadPath: ":memory:" });
+      for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
+      return rt;
+    },
+    fence: { providerInfo: (provider) => runtimes[0]?.toolProviderInfo(provider) ?? new HaloRuntime({ logger: { log() {}, warn() {} } }).toolProviderInfo(provider) },
+    validate: { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) },
+    config: options.evolve,
+    version: pkg.version,
+    logger,
+  });
+
   const mcp = createMcpServer(
     {
       list: () => [...entries.values()].map((e) => ({ name: e.name, description: describePipeline(e), params: e.decl.params })),
@@ -606,6 +666,11 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
 
         if (path === "/api/health") return json({ ok: true, pipelines: entries.size });
+
+        if (path === "/api/evolve" || path.startsWith("/api/evolve/")) {
+          const handled = await evolveRoutes(req, path, readJson);
+          if (handled) return handled;
+        }
 
         if (path === "/api/pipelines" && req.method === "GET") {
           return json(

@@ -35,6 +35,7 @@ import {
 import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
 import { sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
+import { parseCondition } from "./index.js";
 
 export interface Diagnostic {
   severity: "error" | "warning";
@@ -205,7 +206,7 @@ class Validator {
     }
   }
 
-  private checkDirective(d: { name: string; value: string }, loc: Loc | undefined, on: "agent" | "pipeline") {
+  private checkDirective(d: { name: string; value: string; args?: string[] }, loc: Loc | undefined, on: "agent" | "pipeline") {
     if (!includes(DIRECTIVES, d.name)) {
       this.add("warning", `Unknown directive @${d.name} is ignored`, loc);
       return;
@@ -224,6 +225,14 @@ class Validator {
     if (d.name === "shadow" && on === "pipeline") this.add("warning", `@shadow only applies to agents`, loc);
     if (d.name === "checkpoint" && on === "agent") this.add("warning", `@checkpoint only applies to pipelines`, loc);
     if (d.name === "thread" && on === "agent") this.add("warning", `@thread only applies to pipelines`, loc);
+    if (d.name === "expect") {
+      if (on === "agent") this.add("warning", `@expect only applies to pipelines`, loc);
+      if (!d.args?.length) this.add("error", `@expect needs at least one condition, e.g. @expect("output.labels.length <= 3")`, loc);
+      for (const text of d.args ?? []) {
+        const parsed = parseCondition(text);
+        if (parsed.errors.length) this.add("error", `@expect condition "${text}" is not valid: ${parsed.errors.join("; ")}`, loc);
+      }
+    }
     if (d.name === "thread" && (args.length < 1 || args.length > 2)) this.add("error", `@thread needs the input that keys the thread, and optionally a thread name, e.g. @thread(user_id) or @thread(user_id, Support)`, loc);
   }
 

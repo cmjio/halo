@@ -53,6 +53,8 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `slack.signingSecret` | Your Slack app's signing secret. Adds Approve / Reject buttons to the announcements, answered at `POST /slack/actions`. If it names a variable that is empty or not set, the server refuses to start |
 | `mcp` | `false` turns off the MCP endpoint at `/mcp`. Default on |
 | `stateDir` | Where telemetry, paused runs, watch readings, and the link-signing secret are kept. Default `.halo` |
+| `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted |
+| `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
 | `registry` | The tool package registry for `halo add` and `halo search` (not used by `halo serve` itself; see [Tool Packages](../tool-packages.md)) |
 
 ### Schedules
@@ -149,6 +151,10 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 | `GET /api/runs` | Recent runs: pipeline, status, duration, cost |
 | `GET /api/runs/<id>` | A run's events, and `paused` (`waitingFor`, `message`, `approveUrl`) while it waits |
 | `POST /api/runs/<id>/signal` | Resume a paused run. Body `{"answer": "approve"}`, or `{"payload": {...}, "event": "Slack.Reaction"}` |
+| `GET /api/evolve` | Evolve runs, running and finished, newest first |
+| `POST /api/evolve` | Start one in the background. Body `{"pipeline": "Name", "variants": 4, "rounds": 2, "budget": 3, "criteria": "..."}`; returns `202 {"id"}`. Needs `minRuns` (default 10) finished recordings |
+| `GET /api/evolve/<id>` | Its progress while it runs, then its `evolve.json` (`record`), every variant's diff, and the report |
+| `POST /api/evolve/<id>/apply` | Write a variant (`{"variant": "v2"}`, default the winner) over its file. Refused when the file changed since. The server keeps serving the version it loaded until restarted |
 | `GET /api/health` | `{"ok": true, "pipelines": n}` |
 | `GET /healthz` | `{"ok": true}`, without the token, for health checks |
 

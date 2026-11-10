@@ -5,7 +5,9 @@ import { join, resolve } from "node:path";
 import { parse } from "../src/parser/index";
 import { HaloRuntime, type RuntimeConfig } from "../src/runtime/runtime";
 import { readRecording, Recorder, type Recording } from "../src/runtime/replay";
-import type { Judge } from "../src/compare";
+import { compareRuns, recordingsFor, type Judge } from "../src/compare";
+import { startServer } from "../src/serve/server";
+import { checkExpectations, expectationsOf } from "../src/expect";
 import { evolve, haloProposer, parseProposal, redactionsOf, scoreOf, splitRuns, writeEvolveDir, type EvolveRecord, type Proposer } from "../src/evolve";
 import { diffStat, unifiedDiff } from "../src/diff";
 import { AGENT_PRESETS } from "../src/runtime/presets";
@@ -261,6 +263,118 @@ describe("evolve", () => {
   });
 });
 
+describe("@expect", () => {
+  const withExpect = (dir: string, ...conds: string[]) => original(dir).replace("pipeline Brief", `@expect(${conds.map((c) => JSON.stringify(c)).join(", ")})\npipeline Brief`);
+
+  test("keeps each condition, commas and all, and validate checks them", () => {
+    const ast = parse(withExpect("/tmp/x", "output != null", "topic != \"a, b\""));
+    expect(expectationsOf(ast, "Brief").map((e) => e.text)).toEqual(["output != null", 'topic != "a, b"']);
+    const errors = (src: string) => validate(parse(src)).filter((d) => d.severity === "error").map((d) => d.message);
+    expect(errors(withExpect("/tmp/x", "output.length <= 80"))).toEqual([]);
+    expect(errors(withExpect("/tmp/x", "output >=")).join()).toContain(`@expect condition "output >=" is not valid`);
+    expect(errors(original("/tmp/x").replace("pipeline Brief", "@expect\npipeline Brief")).join()).toContain("@expect needs at least one condition");
+  });
+
+  test("checks the output and the inputs", () => {
+    const exps = expectationsOf(parse(withExpect("/tmp/x", "output.labels.length <= 2", "output.summary != null", "input.topic == topic")), "Brief");
+    expect(checkExpectations(exps, { labels: ["a"], summary: "s" }, { topic: "t" }).map((r) => r.ok)).toEqual([true, true, true]);
+    expect(checkExpectations(exps, { labels: ["a", "b", "c"] }, { topic: "t" }).map((r) => r.ok)).toEqual([false, false, true]);
+  });
+
+  test("compare holds a variant to the original's expectations, without the judge", async () => {
+    const dir = workspace();
+    const src = withExpect(dir, "output.length <= 12");
+    const recs = await recordings(src, 3);
+    let judged = 0;
+    const judge: Judge = async () => (judged++, { better: "2", reason: "longer is better", cost: 0 });
+    // The variant drops the @expect and writes longer lines: it still loses on the original's check.
+    const variant = parse(original(dir).replace("Write one line", "Write one vivid line"));
+    const r = await compareRuns({ original: parse(src), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: fakeOpenAI(() => "A very long and vivid line indeed.").fetch }), judge });
+    expect(r.lost).toBe(3);
+    expect(judged).toBe(0);
+    expect(r.runs[0]!.verdict!.reason).toContain("breaks @expect: output.length <= 12");
+  });
+
+  test("halo test fails on a broken expectation, but not on placeholder mocks", async () => {
+    const cwd = mkdtempSync(join(tmp, "expect-"));
+    writeFileSync(join(cwd, "b.halo"), withExpect(workspace(), "output.length <= 12"));
+    const run = (...args: string[]) => Bun.spawnSync(["bun", join(root, "index.ts"), "test", "b.halo", "--arg", "topic=x", ...args], { cwd, env: { ...Bun.env, NO_COLOR: "1" } });
+    const placeholder = run();
+    expect(placeholder.exitCode).toBe(0);
+    expect(placeholder.stderr.toString()).toContain("isn't enforced");
+    writeFileSync(join(cwd, "short.json"), JSON.stringify({ "Writer.write": "Short." }));
+    const ok = run("--mocks", "short.json");
+    expect(ok.stderr.toString()).toContain("✓ @expect output.length <= 12");
+    expect(ok.exitCode).toBe(0);
+    writeFileSync(join(cwd, "long.json"), JSON.stringify({ "Writer.write": "A much longer line than allowed." }));
+    const bad = run("--mocks", "long.json");
+    expect(bad.stderr.toString()).toContain("✗ @expect output.length <= 12");
+    expect(bad.exitCode).toBe(1);
+  });
+});
+
+describe("halo serve: recordings and /api/evolve", () => {
+  test("records served runs, evolves from them in the background, and applies the winner", async () => {
+    const dir = workspace();
+    const proj = mkdtempSync(join(tmp, "serve-"));
+    const src = original(dir);
+    const file = join(proj, "brief.halo");
+    writeFileSync(file, src);
+    const vivid = src.replace("Write one line", "Write one vivid line");
+    // One fake OpenAI for the served pipeline, the proposer and the judge.
+    const fetch = fakeOpenAI((p) => {
+      if (p.includes("You improve Halo programs")) return answer("vivid lines read better", vivid);
+      if (p.includes("You compare two outputs")) return JSON.stringify({ better: /output_1: [^\n]*vivid/.test(p) ? "1" : "2", reason: "the vivid one" });
+      return answers(p);
+    }).fetch;
+    const s = await startServer({ files: [file], port: 0, root: proj, stateDir: join(proj, ".halo"), scheduler: false, studio: false, logger: { ...quiet, error() {} }, env: { OPENAI_API_KEY: "k" }, runtime: { fetch }, recordings: { serve: true } });
+    const api = (path: string, init?: RequestInit) => globalThis.fetch(`${s.url}${path}`, { ...init, headers: { "Content-Type": "application/json" } }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+    try {
+      for (let i = 0; i < 6; i++) {
+        const r = await api("/api/pipelines/Brief/runs", { method: "POST", body: JSON.stringify({ args: { topic: `t${i}` }, wait: true }) });
+        expect(r.body.status).toBe("completed");
+      }
+      // Each served run left a recording with its model answers, as halo run does.
+      const recDir = join(proj, ".halo/recordings");
+      const recs = recordingsFor(recDir, "Brief", 50);
+      expect(recs).toHaveLength(6);
+      expect(recs[0]!.calls.filter((c) => c.kind === "agent" && c.fingerprint)).toHaveLength(2);
+      expect(recs[0]!.calls.filter((c) => c.kind === "tool")).toHaveLength(1);
+
+      expect((await api("/api/evolve", { method: "POST", body: JSON.stringify({ pipeline: "Brief" }) })).body.error).toContain("evolve needs at least 10");
+      expect((await api("/api/evolve", { method: "POST", body: JSON.stringify({ pipeline: "Brief", variants: 99 }) })).status).toBe(400);
+      const started = await api("/api/evolve", { method: "POST", body: JSON.stringify({ pipeline: "Brief", variants: 1, rounds: 1, minRuns: 5 }) });
+      expect(started.status).toBe(202);
+      const id = started.body.id as string;
+      let detail: any;
+      for (let i = 0; i < 200; i++) {
+        detail = (await api(`/api/evolve/${id}`)).body;
+        if (detail.status !== "running") break;
+        await Bun.sleep(25);
+      }
+      expect(detail.status).toBe("done");
+      expect(detail.record.winner).toBe("v1");
+      expect(detail.diffs.v1).toContain("+    |> Writer.write(\"Write one vivid line");
+      expect(detail.log.join("\n")).toContain("Round 1");
+      const listed = (await api("/api/evolve")).body as Array<{ id: string; winner?: string }>;
+      expect(listed.find((x) => x.id === id)?.winner).toBe("v1");
+
+      // Path tricks don't reach outside the evolve folder.
+      expect((await api("/api/evolve/..")).status).toBe(404);
+      expect((await api(`/api/evolve/${id}/apply`, { method: "POST", body: JSON.stringify({ variant: "../x" }) })).body.error).toContain("not a variant id");
+
+      const applied = await api(`/api/evolve/${id}/apply`, { method: "POST", body: "{}" });
+      expect(applied.body.applied).toBe("v1");
+      expect(applied.body.note).toContain("restart halo serve");
+      expect(readFileSync(file, "utf8")).toBe(vivid);
+      // A second apply sees the file changed since, and refuses.
+      expect((await api(`/api/evolve/${id}/apply`, { method: "POST", body: "{}" })).status).toBe(409);
+    } finally {
+      await s.stop();
+    }
+  }, 30_000);
+});
+
 describe("halo evolve (CLI)", () => {
   async function cli(cwd: string, env: Record<string, string>, ...args: string[]) {
     const p = Bun.spawn(["bun", join(root, "index.ts"), ...args], { cwd, env: { ...Bun.env, NO_COLOR: "1", OPENAI_API_KEY: "", HALO_API_KEY: "", ...env }, stdout: "pipe", stderr: "pipe" });
@@ -321,6 +435,48 @@ describe("halo evolve (CLI)", () => {
       expect(readFileSync(join(cwd, "out/scores.jsonl"), "utf8").trim().split("\n").length).toBeGreaterThan(3);
       // Nothing changed until apply.
       expect(readFileSync(join(cwd, "brief.halo"), "utf8")).toBe(src);
+
+      // --pr: a branch with one commit, pushed, and gh asked to open it; the working copy stays as it was.
+      const remote = mkdtempSync(join(tmp, "remote-"));
+      Bun.spawnSync(["git", "init", "-q", "--bare"], { cwd: remote });
+      const gitEnv = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" };
+      const g = (...args: string[]) => {
+        const p = Bun.spawnSync(["git", ...args], { cwd, env: { ...Bun.env, ...gitEnv } });
+        if (p.exitCode !== 0) throw new Error(p.stderr.toString());
+        return p.stdout.toString().trim();
+      };
+      g("init", "-q", "-b", "main");
+      writeFileSync(join(cwd, ".gitignore"), ".halo/\nout/\nbin/\n");
+      g("add", "brief.halo", ".gitignore");
+      g("commit", "-q", "-m", "first");
+      g("remote", "add", "origin", remote);
+      const bin = join(cwd, "bin");
+      Bun.spawnSync(["mkdir", "-p", bin]);
+      writeFileSync(join(bin, "gh"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh; exit 0; fi\necho "$@" > "${cwd}/gh-args"\ncat > "${cwd}/gh-body"\necho https://github.com/acme/brief/pull/7\n`, { mode: 0o755 });
+      const prEnv = { ...env, ...gitEnv, PATH: `${bin}:${Bun.env.PATH}` };
+      const pr = await cli(cwd, prEnv, "evolve", "apply", "out", "--pr");
+      expect(pr.err).toBe("");
+      expect(pr.code).toBe(0);
+      expect(pr.out).toContain("opened a pull request with v1: https://github.com/acme/brief/pull/7");
+      expect(g("rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+      expect(readFileSync(join(cwd, "brief.halo"), "utf8")).toBe(src);
+      const branch = g("--git-dir", remote, "branch", "--format=%(refname:short)").split("\n").find((b) => b.startsWith("halo-evolve/"))!;
+      expect(branch).toBe("halo-evolve/out-v1");
+      expect(g("--git-dir", remote, "show", `${branch}:brief.halo`)).toBe(vivid.trimEnd());
+      expect(readFileSync(join(cwd, "gh-args"), "utf8")).toContain("pr create --head halo-evolve/out-v1 --base main");
+      const body = readFileSync(join(cwd, "gh-body"), "utf8");
+      expect(body).toContain("reaches nothing the original couldn't");
+      expect(body).toContain("+    |> Writer.write(\"Write one vivid line");
+      // Summaries only: no recorded inputs or outputs.
+      expect(body).not.toContain("A line.");
+      expect(body).not.toContain("t0");
+      // A file with uncommitted changes is refused.
+      writeFileSync(join(cwd, "brief.halo"), src + "// wip\n");
+      g("add", "brief.halo");
+      g("commit", "-q", "-m", "wip");
+      writeFileSync(join(cwd, "brief.halo"), src);
+      expect((await cli(cwd, prEnv, "evolve", "apply", "out", "--pr")).err).toContain("uncommitted changes");
+      g("commit", "-q", "-am", "back");
 
       // apply refuses a variant that was thrown away, and a file that changed since; then writes the winner.
       expect((await cli(cwd, env, "evolve", "apply", "out", "v2")).err).toContain("no change");
