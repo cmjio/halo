@@ -4,22 +4,22 @@
 
 Start with **`learn/`**, which teaches one idea per file and is numbered so you can read it in order. **`patterns/`** shows features in context. Every other folder is a domain, so jump to whichever looks like your problem.
 
-| Folder | | What's in it |
-|---|---|---|
-| [`learn/`](learn/) | 🌱 | Start here. One idea per file, in order: agents, pipes, policies, tools, gates, stores, directives. |
-| [`patterns/`](patterns/) | 🧩 | Features in context: people in the loop, schemas, memory, model routing, thread state, built-in tools, remote sandboxes. |
-| [`engineering/`](engineering/) | 🛠️ | Code review, CI, incidents, migrations, and agents that write code until the tests pass. |
-| [`product/`](product/) | 🧭 | A day's work for a founder, a PM, a designer, and a researcher. |
-| [`security/`](security/) | 🔐 | Alert triage, phishing, access requests, leaked secrets, and dependency watch. |
-| [`data-research/`](data-research/) | 🔬 | Text to SQL, anomaly explainers, research assistants, and an analyst swarm. |
-| [`support/`](support/) | 💬 | Refunds, rebooking, billing disputes, ticket routing, and moderation. |
-| [`sales-marketing/`](sales-marketing/) | 📈 | Outbound email, CRM hygiene, lead scoring, ads budgets, and content briefs. |
-| [`finance/`](finance/) | 💰 | Invoices, reconciliation, KYC, claims, fraud review, and a SQLite ledger. |
-| [`legal-hr/`](legal-hr/) | ⚖️ | Contract review, screening, onboarding, privacy requests, and regulatory change. |
-| [`healthcare/`](healthcare/) | 🏥 | Intake, scribing, prior authorization, coding, and an FDA recall monitor. |
-| [`operations/`](operations/) | 🚚 | Freight, warehouses, field service, maintenance, energy, and travel. |
-| [`personal/`](personal/) | 🏡 | Email, calendars, tutoring, shopping, sport, and dinner. |
-| [`projects/`](projects/) | | Fixtures the code-writing examples build against (the spreadsheet engine for `engineering/software-team.halo`). |
+| Folder | What's in it |
+|---|---|
+| [`learn/`](learn/) | Start here. One idea per file, in order: agents, pipes, policies, tools, gates, stores, directives. |
+| [`patterns/`](patterns/) | Features in context: people in the loop, schemas, memory, model routing, thread state, built-in tools, remote sandboxes. |
+| [`engineering/`](engineering/) | Code review, CI, incidents, migrations, and agents that write code until the tests pass. |
+| [`product/`](product/) | A day's work for a founder, a PM, a designer, and a researcher. |
+| [`security/`](security/) | Alert triage, phishing, access requests, leaked secrets, and dependency watch. |
+| [`data-research/`](data-research/) | Text to SQL, anomaly explainers, research assistants, and an analyst swarm. |
+| [`support/`](support/) | Refunds, rebooking, billing disputes, ticket routing, and moderation. |
+| [`sales-marketing/`](sales-marketing/) | Outbound email, CRM hygiene, lead scoring, ads budgets, and content briefs. |
+| [`finance/`](finance/) | Invoices, reconciliation, KYC, claims, fraud review, and a SQLite ledger. |
+| [`legal-hr/`](legal-hr/) | Contract review, screening, onboarding, privacy requests, and regulatory change. |
+| [`healthcare/`](healthcare/) | Intake, scribing, prior authorization, coding, and an FDA recall monitor. |
+| [`operations/`](operations/) | Freight, warehouses, field service, maintenance, energy, and travel. |
+| [`personal/`](personal/) | Email, calendars, tutoring, shopping, sport, and dinner. |
+| [`projects/`](projects/) | Fixtures the code-writing examples build against (the spreadsheet engine for `engineering/software-team.halo`). |
 
 File names are unique across folders, so `software-team.halo` names one example, and its page on the site is `/examples/software-team`.
 

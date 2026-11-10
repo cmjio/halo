@@ -365,7 +365,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (!snap?.waitingFor) return;
     const what = snap.waitingFor === "yield" ? "a human" : snap.waitingFor;
     const link = snap.meta.paused?.id ? linkFor(runId, snap.meta.paused.id) : "(no link: resume it with the API)";
-    const text = `⏸ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}`;
+    const text = `‖ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}`;
     logger.log(`[halo] ${text.replace("\n", " · ")}`);
     if (!slackUrl) return;
     // With a signing secret, Slack can tell us about clicks: answer right in the message.

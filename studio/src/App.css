@@ -535,3 +535,7 @@ pre.diff .add { background: rgba(16, 185, 129, 0.14); color: #a7f3d0; }
 pre.diff .del { background: rgba(239, 68, 68, 0.14); color: #fecaca; }
 pre.diff .hunk { color: var(--accent); }
 .evolve-view code { font-family: var(--font-mono); font-size: 12px; background: var(--bg-node); padding: 1px 5px; border-radius: 4px; }
+
+/* Tabler icons inline with text */
+.ti { vertical-align: -0.15em; flex-shrink: 0; }
+.node-icon, .inspector-header button { display: inline-flex; align-items: center; }

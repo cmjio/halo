@@ -245,7 +245,7 @@ describe("halo serve", () => {
       const runId = s.start("Draft", { topic: "slack" }, "test");
       await s.settled(runId);
       await Bun.sleep(20);
-      expect(sent).toEqual([{ text: `⏸ Draft is waiting for a human: Publish this draft?\nRespond: https://halo.example.com/approve/${runId}?sig=${(await s.approvalUrl(runId))!.split("sig=")[1]}` }]);
+      expect(sent).toEqual([{ text: `‖ Draft is waiting for a human: Publish this draft?\nRespond: https://halo.example.com/approve/${runId}?sig=${(await s.approvalUrl(runId))!.split("sig=")[1]}` }]);
     } finally {
       await s.stop();
     }

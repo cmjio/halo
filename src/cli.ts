@@ -394,7 +394,7 @@ async function ask(question: string): Promise<string> {
 }
 
 async function promptInterrupt(req: InterruptRequest): Promise<unknown> {
-  const lines = [bold(`\n⏸  ${req.pipeline} needs a human${req.channel ? ` (${req.channel})` : ""}`), req.message ?? formatValue(req.current)];
+  const lines = [bold(`\n‖  ${req.pipeline} needs a human${req.channel ? ` (${req.channel})` : ""}`), req.message ?? formatValue(req.current)];
   for (const a of req.attachments) lines.push(dim(`  • ${formatValue(a)}`));
   console.error(lines.join("\n"));
   // Letting an agent act needs a typed yes: Enter alone declines it.
@@ -409,7 +409,7 @@ async function promptInterrupt(req: InterruptRequest): Promise<unknown> {
 const toEvent = answerToEvent;
 
 async function promptListen(req: ListenRequest): Promise<unknown> {
-  console.error(bold(`\n👂 ${req.pipeline} is waiting for ${req.target}`));
+  console.error(bold(`\n‖ ${req.pipeline} is waiting for ${req.target}`));
   const answer = await ask(`Event (JSON or a word like approve/reject) [approve]: `);
   return answer ? toEvent(answer) : AUTO_EVENT;
 }
@@ -463,13 +463,13 @@ function tracer(debug: boolean): (e: RuntimeEvent) => void {
   // so hold each violation until the next event says which it was.
   let pending: Extract<RuntimeEvent, { type: "violation" }> | undefined;
   return (e) => {
-    if (pending && e.type !== "correction") console.error(red(`  ⛔ ${pending.policy}/${pending.rule}: ${pending.message}`));
+    if (pending && e.type !== "correction") console.error(red(`  ⊘ ${pending.policy}/${pending.rule}: ${pending.message}`));
     if (e.type !== "violation") pending = undefined;
     if (e.type === "violation") pending = e;
     if (e.type === "correction") console.error(yellow(`  ✎ ${e.target}: ${e.error}; asked to fix it (attempt ${e.attempt + 1})`));
     if (e.type === "retry") console.error(yellow(`  ↻ retry ${e.target} (attempt ${e.attempt}): ${e.error}`));
     if (!debug) return;
-    if (e.type === "stage" && e.status === "start") console.error(dim(`▶ [${e.index}] ${e.label}`));
+    if (e.type === "stage" && e.status === "start") console.error(dim(`▸ [${e.index}] ${e.label}`));
     if (e.type === "stage" && e.status === "end") console.error(dim(`  ✓ ${e.durationMs}ms → ${formatValue(e.value).replace(/\s+/g, " ").slice(0, 120)}`));
     if (e.type === "llm") {
       console.error(dim(`  ↳ ${e.agent} via ${e.model}${e.mocked ? " (mock)" : ""}, ${e.latencyMs}ms, $${e.cost.toFixed(5)}`));
@@ -477,10 +477,10 @@ function tracer(debug: boolean): (e: RuntimeEvent) => void {
       console.error(dim(`    prompt: ${e.prompt.replace(/\n/g, "\n            ")}`));
     }
     if (e.type === "tool") console.error(dim(`  ↳ tool ${e.tool}.${e.method}${e.mocked ? " (mock)" : ""}, ${e.latencyMs}ms`));
-    if (e.type === "halt") console.error(yellow(`  ⏹ gate closed: ${e.condition}`));
+    if (e.type === "halt") console.error(yellow(`  ■ gate closed: ${e.condition}`));
     if (e.type === "branch") console.error(dim(`  ⑂ ${e.arm < 0 ? "no arm matched; value passes through" : e.condition === undefined ? "else" : `(${e.condition})`}`));
     if (e.type === "loop") console.error(yellow(`  ↺ loop ${e.iteration}: ${e.condition} → back to stage ${e.to}`));
-    if (e.type === "checkpoint") console.error(dim(`  💾 ${e.path}`));
+    if (e.type === "checkpoint") console.error(dim(`  ↓ ${e.path}`));
   };
 }
 
@@ -604,11 +604,11 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   }
   if (result.status === "halted" && meta.halted) {
     const stage = stageAt(ast, meta.pipeline, meta.halted.stage);
-    console.error(yellow(`⏹ Halted at stage ${meta.halted.stage} ${stage}`));
+    console.error(yellow(`■ Halted at stage ${meta.halted.stage} ${stage}`));
   }
   if (result.status === "paused" && meta.paused) {
     const what = meta.paused.waitingFor === "yield" ? "a human response" : meta.paused.waitingFor;
-    console.error(yellow(`⏸ Paused at stage ${meta.paused.stage} ${stageAt(ast, meta.pipeline, meta.paused.stage)}, waiting for ${what}${meta.paused.message ? `: ${meta.paused.message}` : ""}`));
+    console.error(yellow(`‖ Paused at stage ${meta.paused.stage} ${stageAt(ast, meta.pipeline, meta.paused.stage)}, waiting for ${what}${meta.paused.message ? `: ${meta.paused.message}` : ""}`));
     console.error(`  Continue with: halo resume ${rel} ${result.runId} --payload approve`);
   }
   // @expect: hard checks on the output. Placeholder answers from --mock (without --mocks) can't be held to them.
@@ -699,7 +699,7 @@ async function cmdPlan(flags: Flags): Promise<number> {
 }
 
 const OUTCOME_MARK: Record<Outcome, string> = {
-  same: "=", better: "✓", worse: "✗", tie: "~", "now halts": "⏹", "no longer halts": "▶", "both halt": "⏹", "now pauses": "⏸", "now fails": "✗", diverged: "?", skipped: "·",
+  same: "=", better: "✓", worse: "✗", tie: "~", "now halts": "■", "no longer halts": "▸", "both halt": "■", "now pauses": "‖", "now fails": "✗", diverged: "?", skipped: "·",
 };
 
 /** A .halo file as it was at a git revision (`git show <rev>:<file>`). */
@@ -901,7 +901,7 @@ async function cmdEvolve(flags: Flags): Promise<number> {
   if (proposer === judgeModel) log(dim(`  The proposer and the judge are the same model. The judge never sees a variant's prompts, but a different judge (--judge, or evolve.judge in halo.json) is a stronger check.`));
   if (!criteriaPath) log(dim(`  No criteria file: judging on "does the task better". Write what a good output looks like and pass --criteria for sharper results.`));
 
-  const mark = (v: Variant) => (v.status === "scored" ? (v.score!.winRate > 0.5 ? green("✓") : v.score!.winRate === 0.5 ? yellow("~") : red("✗")) : v.status === "outside" ? red("⛔") : v.status === "invalid" ? red("✗") : dim("·"));
+  const mark = (v: Variant) => (v.status === "scored" ? (v.score!.winRate > 0.5 ? green("✓") : v.score!.winRate === 0.5 ? yellow("~") : red("✗")) : v.status === "outside" ? red("⊘") : v.status === "invalid" ? red("✗") : dim("·"));
   const result = await evolve({
     source,
     pipeline,
@@ -1127,7 +1127,7 @@ async function cmdHistory(flags: Flags): Promise<number> {
   for (const s of steps) {
     const changed = [...Object.keys(s.set), ...(s.unset ?? []).map((k) => `-${k}`)];
     const cost = s.cost > 0 ? ` $${s.cost.toFixed(4)}` : "";
-    console.log(`${bold(String(s.step).padStart(4))}  ${dim(s.at.slice(11, 23))}  ${`stage ${s.stage}`.padEnd(9)} ${s.label}${s.halted ? yellow(" ⏹ halted") : ""}${dim(cost)}${changed.length ? dim(`  → ${changed.join(", ")}`) : ""}`);
+    console.log(`${bold(String(s.step).padStart(4))}  ${dim(s.at.slice(11, 23))}  ${`stage ${s.stage}`.padEnd(9)} ${s.label}${s.halted ? yellow(" ■ halted") : ""}${dim(cost)}${changed.length ? dim(`  → ${changed.join(", ")}`) : ""}`);
   }
   return 0;
 }
@@ -1420,7 +1420,7 @@ export async function main(argv: string[]): Promise<number> {
     }
   } catch (err) {
     if (err instanceof CliError) console.error(red(`Error: ${err.message}`));
-    else console.error(red(`\n❌ ${err instanceof Error ? err.message : String(err)}`));
+    else console.error(red(`\n✗ ${err instanceof Error ? err.message : String(err)}`));
     return 1;
   }
 }

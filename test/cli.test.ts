@@ -120,7 +120,7 @@ pipeline S(x: String) -> Result:
   test("debug traces each stage", () => {
     const r = cli("debug", "examples/learn/05-fanout.halo", "--arg", "name=Ana", "--mock");
     expect(r.code).toBe(0);
-    expect(r.err).toContain("▶ [1] |* { Greeter.prompt, Greeter.prompt }");
+    expect(r.err).toContain("▸ [1] |* { Greeter.prompt, Greeter.prompt }");
   });
 
   test("parse prints the AST", () => {
@@ -160,7 +160,7 @@ pipeline Approve(doc: String) -> Result:
       );
       const paused = cliIn(dir, "run", "flow.halo", "--mock", "--arg", "doc=memo");
       expect(paused.code).toBe(0);
-      expect(paused.err).toContain("⏸ Paused at stage 2 |! yield, waiting for a human response: Publish this draft?");
+      expect(paused.err).toContain("‖ Paused at stage 2 |! yield, waiting for a human response: Publish this draft?");
       const runId = paused.err.match(/halo resume flow\.halo ([\w-]+)/)![1]!;
       expect(readdirSync(join(dir, ".halo/runs")).sort()).toEqual([`${runId}.json`, `${runId}.log.jsonl`]);
 
@@ -182,7 +182,7 @@ pipeline Approve(doc: String) -> Result:
       // The mock always answers with more than 2 words: corrected once, then it fails
       expect(r.err).toContain("✎ W.write: Content exceeds max words");
       expect(r.err).toContain("asked to fix it (attempt 2)");
-      expect(r.err.match(/⛔ Tiny\/MaxWords/g)).toHaveLength(1);
+      expect(r.err.match(/⊘ Tiny\/MaxWords/g)).toHaveLength(1);
       expect(r.code).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });

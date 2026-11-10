@@ -9,6 +9,7 @@
 import type { Diagnostic } from "../../src/parser/validate.ts";
 import type { ParseResult, PipelineStage } from "../../src/parser/types.ts";
 import type { Plan } from "../../src/plan.ts";
+import type { IconName } from "./icons.ts";
 
 export interface CheckInput {
   source: string;
@@ -20,7 +21,7 @@ export interface CheckInput {
 
 export interface Challenge {
   id: string;
-  emoji: string;
+  icon: IconName;
   title: string;
   /** What to do, in a sentence. */
   goal: string;
@@ -38,7 +39,7 @@ const has = (i: CheckInput, kind: PipelineStage["kind"]) => stages(i).some((s) =
 export const CHALLENGES: Challenge[] = [
   {
     id: "typo",
-    emoji: "🐛",
+    icon: "bug",
     title: "Squash the bug",
     goal: "This pipeline calls an agent that doesn't exist. Make the problems tab go green.",
     hint: "Look at the problems tab, then compare the agent's name with the one the pipeline calls.",
@@ -60,7 +61,7 @@ pipeline Hello(name: String) -> Result:
   },
   {
     id: "budget",
-    emoji: "💸",
+    icon: "cash-banknote",
     title: "Put a price on it",
     goal: "Cap what this run can spend at 10 cents or less, so the plan's worst-case cost has a ceiling.",
     hint: "Declare `policy Budget : MaxSpend(0.10)`, then add `requires Budget` to the agent.",
@@ -85,7 +86,7 @@ pipeline Poem(topic: String) -> Result:
   },
   {
     id: "approve",
-    emoji: "✋",
+    icon: "hand-stop",
     title: "Ask before you post",
     goal: "This bot posts to Slack on its own. Make it wait for a person's yes first.",
     hint: "Add `|! yield(msg: \"Post this?\", [context.current]) as ok` before the post, and a gate `|? (context.data.ok.approved == true)` after it.",
@@ -113,7 +114,7 @@ pipeline Announce(news: String) -> Result:
   },
   {
     id: "parallel",
-    emoji: "⚡",
+    icon: "bolt",
     title: "Two things at once",
     goal: "Ask for a haiku and a limerick at the same time, instead of one after the other.",
     hint: "A fan-out runs calls in parallel: `|* { Poet.prompt(\"a haiku\"), Poet.prompt(\"a limerick\") }`.",
@@ -135,7 +136,7 @@ pipeline Poems(topic: String) -> Result:
   },
   {
     id: "gate",
-    emoji: "🚦",
+    icon: "traffic-lights",
     title: "Only when it matters",
     goal: "Translate the greeting only when the language isn't English.",
     hint: "A gate skips the rest of the pipeline when its condition is false: `|? (lang != \"en\")`.",
@@ -160,7 +161,7 @@ pipeline Hello(name: String, lang: String) -> Result:
   },
   {
     id: "loop",
-    emoji: "🔁",
+    icon: "repeat",
     title: "Try, try again",
     goal: "If the joke is longer than 200 characters, send it back to the comedian, up to 3 times.",
     hint: "Bind the joke with `as joke`, then add `|<> loop(Comedian, \"context.data.joke.length > 200\", max: 3)`.",
@@ -183,7 +184,7 @@ pipeline Joke(topic: String) -> Result:
   },
   {
     id: "team",
-    emoji: "🎨",
+    icon: "palette",
     title: "Blank canvas",
     goal: "Write a pipeline from scratch where two different agents each do a step.",
     hint: "Declare two agents, then call both: `|> Writer.prompt(...)` then `|> Editor.prompt(...)`. The examples menu is full of ideas.",

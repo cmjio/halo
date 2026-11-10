@@ -5,11 +5,11 @@
 // from your help articles in knowledge/, and the draft waits for a
 // person (approval link or Slack buttons) before it is sent.
 //
-//   inbound email ─▶ POST /hooks/email ─▶ HandleEmail
+//   inbound email ─▸ POST /hooks/email ─▸ HandleEmail
 //     ├─ skip repeats (the provider retried) and spam
 //     ├─ triage + search help articles + search past replies (parallel)
 //     ├─ draft a reply grounded in the articles
-//     ├─ ⏸ a person approves, rejects, or edits the reply
+//     ├─ ‖ a person approves, rejects, or edits the reply
 //     └─ send it with Resend, and remember it for next time
 //
 // Offline:  halo test pipelines/support.halo -p IndexKnowledge --mocks samples/mocks.json

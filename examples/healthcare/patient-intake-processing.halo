@@ -67,7 +67,7 @@ pipeline ProcessIntake(form: PatientForm) -> IntakeResult:
     // Step 3: Gate — immediate escalation for critical triage
     |? (context.data.triage.level == "critical")
     |> ClinicSlack.post(
-         message: "🚨 CRITICAL INTAKE — immediate provider needed",
+         message: "CRITICAL INTAKE — immediate provider needed",
          patient_id: context.data.form.patient_id,
          triage: context.data.triage
        )
