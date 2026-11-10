@@ -12,7 +12,7 @@ import { parse } from "../../src/parser/index.ts";
 import { validate, type Diagnostic } from "../../src/parser/validate.ts";
 import { plan, type Plan } from "../../src/plan.ts";
 import type { ProviderInfo } from "../../src/runtime/tools.ts";
-import { CHALLENGES, type Challenge } from "./challenges.ts";
+import { CHALLENGES, TRACKS, type Challenge } from "./challenges.ts";
 import { setDiagnostics, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import { EditorSelection, EditorState, type Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -166,8 +166,12 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
       const list = data.examples.filter((e) => e.section === s.folder);
       return list.length ? `<optgroup label="${escapeHtml(s.title)}">${list.map((e) => `<option value="ex:${escapeHtml(e.file)}">${escapeHtml(label(e))}</option>`).join("")}</optgroup>` : "";
     });
-    const challenges = CHALLENGES.map((c, i) => `<option value="ch:${c.id}">${i + 1}. ${escapeHtml(c.title)}${solved.has(c.id) ? " ✓" : ""}</option>`).join("");
-    pick.innerHTML = `<optgroup label="Challenges">${challenges}</optgroup><optgroup label="Start fresh"><option value="scratch">Blank canvas</option></optgroup>${groups.join("")}`;
+    // One group per track, numbered straight through so "Challenge 9" means the same everywhere.
+    const challenges = TRACKS.map((t) => {
+      const opts = CHALLENGES.map((c, i) => (c.track === t ? `<option value="ch:${c.id}">${i + 1}. ${escapeHtml(c.title)}${solved.has(c.id) ? " ✓" : ""}</option>` : "")).join("");
+      return `<optgroup label="Challenges · ${t}">${opts}</optgroup>`;
+    }).join("");
+    pick.innerHTML = `${challenges}<optgroup label="Start fresh"><option value="scratch">Blank canvas</option></optgroup>${groups.join("")}`;
   };
   renderPicker();
 
@@ -248,9 +252,14 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
     } else if (mode.kind === "challenge") {
       const c = mode.challenge;
       const i = CHALLENGES.indexOf(c);
-      const dots = CHALLENGES.map((x, j) => `<button type="button" class="dot${solved.has(x.id) ? " done" : ""}${x === c ? " here" : ""}" data-ch="${x.id}" title="${escapeHtml(`${j + 1}. ${x.title}${solved.has(x.id) ? " (solved)" : ""}`)}" aria-label="Challenge ${j + 1}: ${escapeHtml(x.title)}"></button>`).join("");
+      const dot = (x: Challenge) => {
+        const j = CHALLENGES.indexOf(x);
+        return `<button type="button" class="dot${solved.has(x.id) ? " done" : ""}${x === c ? " here" : ""}" data-ch="${x.id}" title="${escapeHtml(`${j + 1}. ${x.title} (${x.track})${solved.has(x.id) ? ", solved" : ""}`)}" aria-label="Challenge ${j + 1}: ${escapeHtml(x.title)}"></button>`;
+      };
+      // The dots in a little cluster per track, so the progress row reads as chapters.
+      const dots = TRACKS.map((t) => `<span class="pg-dots-track" title="${t}">${CHALLENGES.filter((x) => x.track === t).map(dot).join("")}</span>`).join("");
       intro.className = "pg-intro challenge";
-      intro.innerHTML = `<div class="pg-intro-text"><span class="pg-crumb">${icon("target")} Challenge ${i + 1} of ${CHALLENGES.length}</span><strong>${icon(c.icon)} ${escapeHtml(c.title)}</strong><span class="pg-goal">${escapeHtml(c.goal)}</span>
+      intro.innerHTML = `<div class="pg-intro-text"><span class="pg-crumb">${icon("target")} Challenge ${i + 1} of ${CHALLENGES.length} · ${c.track}</span><strong>${icon(c.icon)} ${escapeHtml(c.title)}</strong><span class="pg-goal">${escapeHtml(c.goal)}</span>
           <span class="pg-hint" data-pg-hint hidden>${icon("bulb")} ${inlineCode(c.hint)}</span></div>
         <div class="pg-intro-side">
           <span class="pg-check" data-pg-check></span>

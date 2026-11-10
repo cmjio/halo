@@ -15,6 +15,7 @@ const NAMES = [
   "seedling", "puzzle", "tool", "compass", "lock", "microscope", "message-circle", "trending-up", "coin", "scale", "stethoscope", "truck", "home",
   // Challenges (site/src/challenges.ts)
   "bug", "cash-banknote", "hand-stop", "bolt", "traffic-lights", "repeat", "palette",
+  "tag", "speakerphone", "list-check", "stack-2", "thumb-up", "eye-off", "shield-lock", "key", "braces", "refresh", "forms", "checklist", "search", "rocket",
   // Cheat sheet cards and plan steps
   "robot", "route", "arrow-right", "arrows-split", "shield", "link", "schema", "printer", "brain",
   // Everything else in the playground
