@@ -3,11 +3,11 @@
 A Halo blueprint: a complete, deployable app, not a snippet. Customer email arrives at a webhook. Halo triages it, drafts a reply from your help articles, and waits for a person to approve, edit, or reject the draft before it sends it.
 
 ```
-inbound email ─▶ POST /hooks/email ─▶ HandleEmail
+inbound email ─▸ POST /hooks/email ─▸ HandleEmail
   ├─ skip repeats (the provider retried) and spam
   ├─ triage + search help articles + search past replies   (in parallel)
   ├─ draft a reply that uses only those articles
-  ├─ ⏸ a person approves, edits or rejects it   (approval link, Slack, or Studio)
+  ├─ ‖ a person approves, edits or rejects it   (approval link, Slack, or Studio)
   └─ send it with Resend, and remember the answer for next time
 ```
 

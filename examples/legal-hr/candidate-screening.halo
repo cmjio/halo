@@ -89,7 +89,7 @@ pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision
 
     // Step 6: Notify hiring manager for borderline candidates
     |> HRSlack.post(
-         message: "📋 New candidate screened",
+         message: "New candidate screened",
          candidate: context.data.application.name,
          role: context.data.application.role_title,
          match_score: context.data.match_skills.score,

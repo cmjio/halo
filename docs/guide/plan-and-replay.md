@@ -220,7 +220,7 @@ halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues           # write t
 Evolving TriageIssues in triage.halo  (36 recorded runs · proposer anthropic/claude-sonnet-4-5 · judge openai/gpt-4o · budget $3.00)
 
 Round 1  proposing from original
-  ⛔ v1     outside the fence: effects: adds GitHubWrite.post (external)
+  ⊘ v1     outside the fence: effects: adds GitHubWrite.post (external)
   ✓ v2     won 9 · tied 11 · lost 4 (win rate 60%) · $0.0190/run
            Lists the repo's existing labels in the labelling prompt so suggestions match them
   ✗ v3     won 3 · tied 10 · lost 11 (win rate 33%) · $0.0110/run
@@ -327,7 +327,7 @@ halo history 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
    3  14:50:18.265  stage 2   System.Print
 ```
 
-Each line shows the step number, its time, the stage, the keys it changed, the run's cost so far, and `⏹ halted` where a gate closed. A step's number is the length of the run's trace at that point, so it matches the trace entry, and it keeps counting through loops and when the run is resumed. `--step N` prints the run's state after step N: `context.current` and the whole of `context.data`. `--json` prints the raw steps, or with `--step` the folded state. You can also pass the path to a `.steps.jsonl` file instead of a run ID.
+Each line shows the step number, its time, the stage, the keys it changed, the run's cost so far, and `■ halted` where a gate closed. A step's number is the length of the run's trace at that point, so it matches the trace entry, and it keeps counting through loops and when the run is resumed. `--step N` prints the run's state after step N: `context.current` and the whole of `context.data`. `--json` prints the raw steps, or with `--step` the folded state. You can also pass the path to a `.steps.jsonl` file instead of a run ID.
 
 A history is a record of what the run did. Editing the checkpoint file by hand doesn't change earlier steps: the edit shows up as a change at the next step the run saves. Like recordings, histories aren't redacted, so keep `.halo/checkpoints` out of version control.
 

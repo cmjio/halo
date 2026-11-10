@@ -21,6 +21,7 @@ import { BUILTIN_PROVIDER_INFO } from "../src/runtime/provider-info.ts";
 import { describePermissions } from "../src/registry/manifest.ts";
 import pkg from "../package.json" with { type: "json" };
 import { SECTIONS, exampleFiles } from "../examples/catalog.ts";
+import { icon } from "./src/icons.ts";
 
 const root = resolve(import.meta.dir, "..");
 const site = import.meta.dir;
@@ -259,7 +260,7 @@ const num = (e: (typeof examples)[number]) => (e.number !== undefined ? `<code>$
 const sectionMd = SECTIONS.map((s) => {
   const list = examples.filter((e) => e.section === s.folder);
   const rows = list.map((e) => `| ${num(e)}[${md(e.title || e.name).replace(/\|/g, "\\|")}](/examples/${slug(e.file)}) | ${tags(e.features)} |`);
-  return `## ${s.emoji} ${s.title}\n\n${md(s.blurb)} <span class="ex-folder"><code>examples/${s.folder}/</code></span>\n\n| Example | |\n|---|---|\n${rows.join("\n")}\n`;
+  return `## ${icon(s.icon)} ${s.title}\n\n${md(s.blurb)} <span class="ex-folder"><code>examples/${s.folder}/</code></span>\n\n| Example | |\n|---|---|\n${rows.join("\n")}\n`;
 }).join("\n");
 await Bun.write(
   join(examplesDir, "index.md"),
@@ -267,7 +268,7 @@ await Bun.write(
 );
 // The sidebar: one group per section, collapsed except Learn.
 const sidebar = SECTIONS.map((s) => ({
-  text: `${s.emoji} ${s.title}`,
+  text: `${icon(s.icon)} ${s.title}`,
   collapsed: s.folder !== "learn",
   items: examples
     .filter((e) => e.section === s.folder)

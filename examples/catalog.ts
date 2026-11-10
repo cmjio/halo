@@ -10,30 +10,32 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { IconName } from "../site/src/icons.ts";
 
 export interface Section {
   /** Folder under examples/. */
   folder: string;
   title: string;
-  emoji: string;
+  /** A Tabler icon (site/src/icons.ts). */
+  icon: IconName;
   /** One line on what the section is for. */
   blurb: string;
 }
 
 export const SECTIONS: Section[] = [
-  { folder: "learn", title: "Learn", emoji: "🌱", blurb: "Start here. One idea per file, in order: agents, pipes, policies, tools, gates, stores, directives." },
-  { folder: "patterns", title: "Patterns", emoji: "🧩", blurb: "Features in context: people in the loop, schemas, memory, model routing, thread state, built-in tools, remote sandboxes." },
-  { folder: "engineering", title: "Engineering", emoji: "🛠️", blurb: "Code review, CI, incidents, migrations, and agents that write code until the tests pass." },
-  { folder: "product", title: "Product & design", emoji: "🧭", blurb: "A day's work for a founder, a PM, a designer, and a researcher." },
-  { folder: "security", title: "Security & IT", emoji: "🔐", blurb: "Alert triage, phishing, access requests, leaked secrets, and dependency watch." },
-  { folder: "data-research", title: "Data & research", emoji: "🔬", blurb: "Text to SQL, anomaly explainers, research assistants, and an analyst swarm." },
-  { folder: "support", title: "Customer support", emoji: "💬", blurb: "Refunds, rebooking, billing disputes, ticket routing, and moderation." },
-  { folder: "sales-marketing", title: "Sales & marketing", emoji: "📈", blurb: "Outbound email, CRM hygiene, lead scoring, ads budgets, and content briefs." },
-  { folder: "finance", title: "Finance & insurance", emoji: "💰", blurb: "Invoices, reconciliation, KYC, claims, fraud review, and a SQLite ledger." },
-  { folder: "legal-hr", title: "Legal, HR & compliance", emoji: "⚖️", blurb: "Contract review, screening, onboarding, privacy requests, and regulatory change." },
-  { folder: "healthcare", title: "Healthcare", emoji: "🏥", blurb: "Intake, scribing, prior authorization, coding, and an FDA recall monitor." },
-  { folder: "operations", title: "Operations", emoji: "🚚", blurb: "Freight, warehouses, field service, maintenance, energy, and travel." },
-  { folder: "personal", title: "Personal & everyday", emoji: "🏡", blurb: "Email, calendars, tutoring, shopping, sport, and dinner." },
+  { folder: "learn", title: "Learn", icon: "seedling", blurb: "Start here. One idea per file, in order: agents, pipes, policies, tools, gates, stores, directives." },
+  { folder: "patterns", title: "Patterns", icon: "puzzle", blurb: "Features in context: people in the loop, schemas, memory, model routing, thread state, built-in tools, remote sandboxes." },
+  { folder: "engineering", title: "Engineering", icon: "tool", blurb: "Code review, CI, incidents, migrations, and agents that write code until the tests pass." },
+  { folder: "product", title: "Product & design", icon: "compass", blurb: "A day's work for a founder, a PM, a designer, and a researcher." },
+  { folder: "security", title: "Security & IT", icon: "lock", blurb: "Alert triage, phishing, access requests, leaked secrets, and dependency watch." },
+  { folder: "data-research", title: "Data & research", icon: "microscope", blurb: "Text to SQL, anomaly explainers, research assistants, and an analyst swarm." },
+  { folder: "support", title: "Customer support", icon: "message-circle", blurb: "Refunds, rebooking, billing disputes, ticket routing, and moderation." },
+  { folder: "sales-marketing", title: "Sales & marketing", icon: "trending-up", blurb: "Outbound email, CRM hygiene, lead scoring, ads budgets, and content briefs." },
+  { folder: "finance", title: "Finance & insurance", icon: "coin", blurb: "Invoices, reconciliation, KYC, claims, fraud review, and a SQLite ledger." },
+  { folder: "legal-hr", title: "Legal, HR & compliance", icon: "scale", blurb: "Contract review, screening, onboarding, privacy requests, and regulatory change." },
+  { folder: "healthcare", title: "Healthcare", icon: "stethoscope", blurb: "Intake, scribing, prior authorization, coding, and an FDA recall monitor." },
+  { folder: "operations", title: "Operations", icon: "truck", blurb: "Freight, warehouses, field service, maintenance, energy, and travel." },
+  { folder: "personal", title: "Personal & everyday", icon: "home", blurb: "Email, calendars, tutoring, shopping, sport, and dinner." },
 ];
 
 const root = import.meta.dir;
