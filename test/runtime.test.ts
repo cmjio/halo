@@ -1,12 +1,13 @@
 import { test, expect, describe } from "bun:test";
 import { parse } from "../src/parser/index";
+import { examplePath } from "../examples/catalog";
 import { HaloRuntime } from "../src/runtime/runtime";
 
 describe("Halo Runtime", () => {
   // ── Helper ────//
 
   async function readExample(name: string): Promise<string> {
-    return await Bun.file(`${import.meta.dir}/../examples/${name}`).text();
+    return await Bun.file(examplePath(name)).text();
   }
 
   // ── Basic Tests ────//

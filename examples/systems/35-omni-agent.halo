@@ -1,3 +1,12 @@
+// ============================================================
+// STEP 35: Omni Agent - From a Figma Frame to a Deployed Component
+// ============================================================
+// LEARN: How one pipeline crosses five tools: Figma, a shell, GitHub,
+//        Linear, and Slack
+// WHY:   Design to code to PR to ticket to deploy, with a person's
+//        approval in Slack before anything ships.
+// ============================================================
+
 tool UI_System : Figma("Env.FIGMA_TOKEN")
 tool Local_Shell : Bash()
 tool Source_Control : GitHub("Env.GITHUB_TOKEN")

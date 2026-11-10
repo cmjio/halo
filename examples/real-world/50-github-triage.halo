@@ -3,7 +3,7 @@
 // PURPOSE: Triage a public repo's open issues for real. Needs
 //          only a model key: GitHub's public API needs no token,
 //          and triage history lives in a local vector store.
-// RUN:     ANTHROPIC_API_KEY=... halo run examples/50-github-triage.halo \
+// RUN:     ANTHROPIC_API_KEY=... halo run examples/real-world/50-github-triage.halo \
 //            --arg repo=oven-sh/bun --arg limit=8
 //          Answer "label" at the prompt to also apply the suggested
 //          labels (needs GITHUB_TOKEN with write access to the repo).

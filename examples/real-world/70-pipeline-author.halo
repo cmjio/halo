@@ -7,7 +7,7 @@
 // before it's saved.
 //
 // RUN (from the Halo repo, or anywhere `halo` is installed):
-//   halo run examples/70-pipeline-author.halo \
+//   halo run examples/real-world/70-pipeline-author.halo \
 //     --arg request="Every morning, summarize the top 5 Hacker News stories" \
 //     --arg save_as=pipelines/hn-digest.halo
 // ============================================================

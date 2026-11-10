@@ -9,11 +9,11 @@
 // decide what an agent may do: the analyst can only read, and the
 // bookkeeper's changes wait for a person to approve them.
 //
-// RUN:  halo run examples/80-sqlite-ledger.halo -p Setup
-//       halo run examples/80-sqlite-ledger.halo -p Import --args '{"rows":[{"description":"Train to Leeds","amount":42.5,"category":"travel","spent_on":"2026-11-02"},{"description":"Team lunch","amount":63,"category":"food","spent_on":"2026-11-03"}]}'
-//       halo run examples/80-sqlite-ledger.halo -p Summary --arg month=2026-11
-//       halo run examples/80-sqlite-ledger.halo -p Ask --arg question="What did we spend most on this month?"
-// SEE:  halo plan examples/80-sqlite-ledger.halo -p Fix
+// RUN:  halo run examples/real-world/80-sqlite-ledger.halo -p Setup
+//       halo run examples/real-world/80-sqlite-ledger.halo -p Import --args '{"rows":[{"description":"Train to Leeds","amount":42.5,"category":"travel","spent_on":"2026-11-02"},{"description":"Team lunch","amount":63,"category":"food","spent_on":"2026-11-03"}]}'
+//       halo run examples/real-world/80-sqlite-ledger.halo -p Summary --arg month=2026-11
+//       halo run examples/real-world/80-sqlite-ledger.halo -p Ask --arg question="What did we spend most on this month?"
+// SEE:  halo plan examples/real-world/80-sqlite-ledger.halo -p Fix
 // ============================================================
 
 policy ReadOnly : AllowEffects(read)

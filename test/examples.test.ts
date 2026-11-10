@@ -3,31 +3,41 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, validate } from "../src/parser/index";
+import { SECTIONS, examplePath, exampleFiles } from "../examples/catalog";
 import { HaloRuntime, LoopLimitError, PolicyViolation, SchemaValidationError, useTool, type MockRequest, type MockValue, type RunResult, type RuntimeConfig } from "../src/runtime/runtime";
 
 const dir = `${import.meta.dir}/../examples`;
-// The casebook's 100 agent designs live in their own folder and are held to the same bar.
-const files = [
-  ...readdirSync(dir).filter((f) => f.endsWith(".halo")).sort(),
-  ...readdirSync(`${dir}/casebook`).filter((f) => f.endsWith(".halo")).sort().map((f) => `casebook/${f}`),
-];
+// Every section, the casebook's 100 agent designs included, is held to the same bar.
+const files = exampleFiles();
 const tmp = mkdtempSync(join(tmpdir(), "halo-examples-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const quiet = { log() {}, warn() {} };
 
 async function load(file: string, config: RuntimeConfig = {}, mocks: Record<string, MockValue> = {}) {
-  const ast = parse(await Bun.file(`${dir}/${file}`).text());
+  const ast = parse(await Bun.file(examplePath(file)).text());
   const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", threadPath: ":memory:", checkpointDir: tmp, logger: quiet, onInterrupt: () => "approve", ...config });
   rt.load(ast).mockAll(mocks);
   return { ast, rt };
 }
 
+describe("examples folder", () => {
+  test("every example lives in a section folder, and every section has examples", () => {
+    expect(readdirSync(dir).filter((f) => f.endsWith(".halo"))).toEqual([]);
+    for (const s of SECTIONS) expect(files.some((f) => f.startsWith(`${s.folder}/`))).toBe(true);
+  });
+
+  test("example numbers are unique, so a file name names one example", () => {
+    const names = files.map((f) => f.split("/").pop());
+    expect(new Set(names).size).toBe(names.length);
+  });
+});
+
 // Every example must be valid Halo and run end to end with generic mocks.
 describe("all examples", () => {
   for (const file of files) {
     test(`${file} parses and validates without errors`, async () => {
-      const ast = parse(await Bun.file(`${dir}/${file}`).text());
+      const ast = parse(await Bun.file(examplePath(file)).text());
       expect(ast.errors).toEqual([]);
       expect(validate(ast).filter((d) => d.severity === "error")).toEqual([]);
     });
@@ -839,7 +849,7 @@ test("73 code writer: failing test output goes back to the coder until the real 
   await Bun.write(join(work, "package.json"), '{"name":"t","type":"module"}');
   await Bun.write(join(work, "add.test.ts"), `import { test, expect } from "bun:test";\nimport { add } from "./add";\ntest("adds", () => expect(add(2, 3)).toBe(5));\n`);
   const prompts: string[] = [];
-  const ast = parse(await Bun.file(`${dir}/73-code-writer.halo`).text());
+  const ast = parse(await Bun.file(examplePath("73-code-writer.halo")).text());
   const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
     "Coder.implement": (r: MockRequest) => {
       prompts.push(r.prompt!);
@@ -865,7 +875,7 @@ test("74 software team: modules are checked for their exports, and the fixer use
     `import { test, expect } from "bun:test";\nimport { add, double } from "./index";\ntest("math", () => { expect(add(2, 3)).toBe(5); expect(double(4)).toBe(8); });\n`,
   );
   const prompts: Record<string, string[]> = { coder: [], fixer: [] };
-  const ast = parse(await Bun.file(`${dir}/74-software-team.halo`).text());
+  const ast = parse(await Bun.file(examplePath("74-software-team.halo")).text());
   const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
     "Architect.plan": JSON.stringify({ types: "export type N = number;", modules: [{ file: "math.ts", exports: ["add", "double"], purpose: "math", interface: "add(a, b), double(x)" }] }),
     "Coder.implement": (r: MockRequest) => {
@@ -905,7 +915,7 @@ test("74 software team: modules are checked for their exports, and the fixer use
 }, 60_000);
 
 test("75 research assistant: it picks its tools, its policies fence them, and writing the report waits for approval", async () => {
-  const ast = parse(await Bun.file(`${dir}/75-research-assistant.halo`).text());
+  const ast = parse(await Bun.file(examplePath("75-research-assistant.halo")).text());
   const seen: MockRequest[] = [];
   const written: unknown[] = [];
   const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({
@@ -934,7 +944,7 @@ test("75 research assistant: it picks its tools, its policies fence them, and wr
 });
 
 test("76 watch and react: a change gets one decision from a fixed list, and paging waits for a person", async () => {
-  const ast = parse(await Bun.file(`${dir}/76-watch-and-react.halo`).text());
+  const ast = parse(await Bun.file(examplePath("76-watch-and-react.halo")).text());
   const posted: string[] = [];
   const answers = ['{"action": "panic", "reason": "?"}', '{"action": "page", "reason": "API is down"}'];
   const rt = new HaloRuntime({ env: {}, vectorPath: ":memory:", logger: quiet }).load(ast).mockAll({

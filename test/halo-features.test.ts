@@ -87,7 +87,7 @@ describe("parser: Halo declarations", () => {
   });
 
   test("the system-prompt example's agents carry their prompts", async () => {
-    const ast = parse(await Bun.file(`${import.meta.dir}/../examples/19-system-prompts.halo`).text());
+    const ast = parse(await Bun.file(`${import.meta.dir}/../examples/learn/19-system-prompts.halo`).text());
     expect(ast.errors).toEqual([]);
     const system = Object.fromEntries(ast.agents.map((a) => [a.name, a.system]));
     expect(system.Generic).toBeUndefined();

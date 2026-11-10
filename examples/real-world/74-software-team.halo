@@ -15,7 +15,7 @@
 // this writes files there and runs model-written code, so use a sandbox).
 //
 // RUN:  cp -r examples/projects/spreadsheet /tmp/sheet
-//       halo run examples/74-software-team.halo --arg workdir=/tmp/sheet
+//       halo run examples/real-world/74-software-team.halo --arg workdir=/tmp/sheet
 // ============================================================
 
 policy Team : Block(DestructiveOps) & Block(APIKey) & MaxSpend(3.00)

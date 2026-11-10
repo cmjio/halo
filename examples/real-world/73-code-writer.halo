@@ -9,7 +9,7 @@
 // sandbox (a scratch folder or a container), not at anything you care
 // about. Block(DestructiveOps) rejects code with things like `rm -rf`.
 //
-// RUN:  halo run examples/73-code-writer.halo --arg workdir=/tmp/calc \
+// RUN:  halo run examples/real-world/73-code-writer.halo --arg workdir=/tmp/calc \
 //         --arg test_file=calc.test.ts --arg target_file=calc.ts \
 //         --arg task="Evaluate arithmetic expressions"
 // ============================================================

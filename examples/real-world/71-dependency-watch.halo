@@ -7,7 +7,7 @@
 // severity, marking what's new since the last report. Posts to Slack
 // only when there's something new and a channel is given.
 //
-// RUN:  halo run examples/71-dependency-watch.halo --arg project=. --arg slack_channel=""
+// RUN:  halo run examples/real-world/71-dependency-watch.halo --arg project=. --arg slack_channel=""
 // DAILY (halo.json):
 //   { "pipeline": "DependencyWatch", "cron": "0 8 * * 1-5",
 //     "args": { "project": "/path/to/app", "slack_channel": "#security" } }

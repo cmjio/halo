@@ -3,8 +3,8 @@
 //
 //   halo agents                 the presets
 //   halo skills                 the skills (yours in ./skills, then the built-in ones)
-//   halo test examples/78-builtin-kit.halo -p ReviewChanges --arg base=HEAD~1
-//   halo run  examples/78-builtin-kit.halo -p WeeklyNumbers --args '{"orders":[{"id":1,"status":"paid","total":120},{"id":2,"status":"open","total":40}]}'
+//   halo test examples/real-world/78-builtin-kit.halo -p ReviewChanges --arg base=HEAD~1
+//   halo run  examples/real-world/78-builtin-kit.halo -p WeeklyNumbers --args '{"orders":[{"id":1,"status":"paid","total":120},{"id":2,"status":"open","total":40}]}'
 
 policy ReadOnly : AllowEffects(read)
 

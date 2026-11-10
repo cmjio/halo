@@ -8,7 +8,7 @@
 // again returns the saved review (free) instead of comparing the match
 // with itself.
 //
-// RUN: ANTHROPIC_API_KEY=... halo run examples/65-esports-review.halo \
+// RUN: ANTHROPIC_API_KEY=... halo run examples/everyday/65-esports-review.halo \
 //        --arg match_id=9072857576 --arg account_id=96183976
 // ============================================================
 

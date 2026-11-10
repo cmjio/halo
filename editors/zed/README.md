@@ -9,7 +9,7 @@ ported from `grammars/Halo.g4`). It has no language server.
 1. In Zed, open the command palette and run **zed: install dev extension**.
 2. Pick this folder, `editors/zed` (the one with `extension.toml`). Picking the
    repository root fails with "No extension manifest found for extension halo".
-3. Open any file in `examples/`; it should be highlighted as Halo.
+3. Open any file under `examples/`; it should be highlighted as Halo.
 
 Zed compiles the grammar itself (it downloads a WASI SDK the first time). If
 installing fails, run **zed: open log** for the reason. Dev extensions also need
@@ -27,7 +27,7 @@ clone").
 ```sh
 editors/zed/build.sh           # tree-sitter generate (and a local halo.wasm)
 cd editors/tree-sitter-halo
-tree-sitter parse --quiet --stat ../../examples/*.halo   # every example should parse
+tree-sitter parse --quiet --stat ../../examples/*/*.halo   # every example should parse
 ```
 
 Then commit and push (Zed builds the grammar from a commit on GitHub, including the generated

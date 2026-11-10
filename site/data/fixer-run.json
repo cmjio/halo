@@ -1,5 +1,5 @@
 {
- "note": "A real run of examples/74-software-team.halo FixUntilGreen (anthropic/claude-sonnet-4-5) on a small project with two bugs, recorded by halo run. Local paths replaced with ~/project.",
+ "note": "A real run of examples/real-world/74-software-team.halo FixUntilGreen (anthropic/claude-sonnet-4-5) on a small project with two bugs, recorded by halo run. Local paths replaced with ~/project.",
  "model": "anthropic/claude-sonnet-4-5",
  "durationMs": 19757,
  "cost": 0.0852,

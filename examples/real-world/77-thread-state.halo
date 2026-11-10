@@ -8,8 +8,8 @@
 // Saving applies them to the thread as it is then, so two messages from
 // one user handled at once both land in the history.
 //
-// RUN:  halo run examples/77-thread-state.halo --arg user_id=ana --arg msg="I'm planning a trip to Lisbon"
-//       halo run examples/77-thread-state.halo --arg user_id=ana --arg msg="What should I pack?"
+// RUN:  halo run examples/real-world/77-thread-state.halo --arg user_id=ana --arg msg="I'm planning a trip to Lisbon"
+//       halo run examples/real-world/77-thread-state.halo --arg user_id=ana --arg msg="What should I pack?"
 // SEE:  halo threads
 //       halo thread Chat ana
 //       halo thread Chat ana --reset --yes

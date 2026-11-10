@@ -15,8 +15,8 @@
 // pauses and `halo resume` continues the same conversation.
 // `halo plan` shows all of this before anything runs.
 //
-// RUN:  halo plan examples/75-research-assistant.halo
-//       halo run examples/75-research-assistant.halo \
+// RUN:  halo plan examples/real-world/75-research-assistant.halo
+//       halo run examples/real-world/75-research-assistant.halo \
 //         --arg question="What changed in the MCP spec in 2025?"
 // ============================================================
 

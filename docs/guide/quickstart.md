@@ -96,10 +96,10 @@ halo debug main.halo --arg topic="tide pools"     # print each stage, prompt, an
 
 Pass arguments with `--arg key=value` (repeatable; values that parse as JSON are parsed) or `--args '{"topic": "tide pools"}'`. If a file has several pipelines, choose one with `--pipeline Name`. Run `halo --help` for every flag.
 
-The repository's `examples/` directory has 40+ programs. `examples/50-github-triage.halo` triages a real GitHub repo and needs only `ANTHROPIC_API_KEY`:
+The repository's `examples/` directory has 40+ programs. `examples/real-world/50-github-triage.halo` triages a real GitHub repo and needs only `ANTHROPIC_API_KEY`:
 
 ```bash
-halo run examples/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
+halo run examples/real-world/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
 ```
 
 ## Next steps

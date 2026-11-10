@@ -9,7 +9,7 @@
 //
 // halo.json:
 //   {
-//     "files": ["examples/76-watch-and-react.halo"],
+//     "files": ["examples/real-world/76-watch-and-react.halo"],
 //     "watches": [
 //       { "pipeline": "OnStatusChange", "url": "https://www.githubstatus.com/api/v2/summary.json", "every": "2m" }
 //     ],
@@ -18,7 +18,7 @@
 //   }
 //
 // RUN:  halo serve           (approve or reject the page from Slack's buttons)
-// TRY:  halo test examples/76-watch-and-react.halo --args '{"source":"x","changes":[]}'
+// TRY:  halo test examples/real-world/76-watch-and-react.halo --args '{"source":"x","changes":[]}'
 // ============================================================
 
 policy Decision : Enforce(JSON) & MatchRegex("\"action\"\\s*:\\s*\"(ignore|note|alert|page)\"") & MaxSpend(0.05)

@@ -1,8 +1,8 @@
 // Remote computers: cloud sandboxes for running code, sandbox agents, and a server over SSH.
 //
-//   E2B_API_KEY=...  halo run examples/79-remote-computers.halo -p TryIt --arg code='print(sum(range(10)))'
-//   E2B_API_KEY=...  halo run examples/79-remote-computers.halo -p Build --arg task='a CLI that counts words, with tests'
-//   halo run examples/79-remote-computers.halo -p Disk --arg host_dir=/var/log
+//   E2B_API_KEY=...  halo run examples/real-world/79-remote-computers.halo -p TryIt --arg code='print(sum(range(10)))'
+//   E2B_API_KEY=...  halo run examples/real-world/79-remote-computers.halo -p Build --arg task='a CLI that counts words, with tests'
+//   halo run examples/real-world/79-remote-computers.halo -p Disk --arg host_dir=/var/log
 
 policy LookOnly : AllowEffects(read)
 
