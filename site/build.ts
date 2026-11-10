@@ -60,7 +60,8 @@ const allExamples = exampleFiles().map((file) => {
     file,
     name,
     section: file.split("/")[0]!,
-    number: Number(name.split("-")[0]),
+    // Only learn/'s files are numbered: it's the one folder meant to be read in order.
+    number: /^\d+-/.test(name) ? Number(name.split("-")[0]) : undefined,
     ...header(source),
     source,
     pipelines: ast.pipelines.map((p) => p.name),
@@ -73,9 +74,9 @@ const allExamples = exampleFiles().map((file) => {
     },
   };
 });
-// 100 agent designs, each a system prompt, its tools, and its policy tiers written as Halo.
-const casebook = allExamples.filter((e) => e.section === "casebook");
-const examples = allExamples.filter((e) => e.section !== "casebook");
+const examples = allExamples;
+/** Old example URLs (before the examples were grouped by domain) and the name each one has now. */
+const renamed: Record<string, string> = JSON.parse(readFileSync(join(site, "data/renamed-examples.json"), "utf8"));
 
 const registry = JSON.parse(readFileSync(join(root, "registry/index.json"), "utf8"));
 const packages = await Promise.all(Object.entries(registry.packages as Record<string, any>).map(async ([name, p]) => {
@@ -196,9 +197,10 @@ const data = {
   // The playground can open any of them, and groups them by section.
   examples: allExamples,
   sections: SECTIONS,
+  renamed,
   packages,
   providers,
-  plans: { research: planned("real-world/75-research-assistant.halo", "Research") },
+  plans: { research: planned("data-research/research-assistant.halo", "Research") },
   fixerRun,
   snippets: SNIPPETS,
   runs,
@@ -235,44 +237,41 @@ await Bun.write(
   `::: code-group\n\n${fence("halo", "triage.halo", SNIPPETS["triage.halo"]!)}\n${fence("txt", "$ halo plan", shell(runs.plan))}\n${fence("halo", "typo.halo", SNIPPETS["typo.halo"]!)}\n${fence("txt", "$ halo validate", shell(runs.validate))}\n${fence("halo", "hello.halo", SNIPPETS["hello.halo"]!)}\n${fence("txt", "$ halo test", shell(runs.hello))}\n:::\n`,
 );
 await Bun.write(join(generated, "help.md"), fence("txt", "", `$ halo --help\n${runs.help.out.trim()}`));
-await Bun.write(join(generated, "plan-research.md"), fence("txt", "", `$ halo plan examples/real-world/75-research-assistant.halo\n${data.plans.research}`));
+await Bun.write(join(generated, "plan-research.md"), fence("txt", "", `$ halo plan examples/data-research/research-assistant.halo\n${data.plans.research}`));
 
 // A page per example, and the list of them.
-// The casebook keeps its folder in the URL; the other examples are unique by name, so
-// /examples/74-software-team stays put whichever section folder the file is in.
-const slug = (file: string) => (file.startsWith("casebook/") ? file : file.split("/").pop()!).replace(/\.halo$/, "");
+// File names are unique across folders, so /examples/software-team stays put whichever folder the file is in.
+const slug = (file: string) => file.split("/").pop()!.replace(/\.halo$/, "");
 const tags = (f: Record<string, boolean>) =>
   Object.entries({ tools: "tools:", policies: "policies", loops: "|<> loops", parallel: "|* parallel", humans: "|! people" })
     .filter(([k]) => f[k])
     // Labels go in table cells too, where a bare | would end the cell.
     .map(([, label]) => `<span class="tag">${md(label).replace(/\|/g, "&#124;")}</span>`)
     .join(" ");
-for (const e of [...examples, ...casebook]) {
+for (const e of examples) {
   const title = e.title || e.file;
   await Bun.write(
     join(examplesDir, `${slug(e.file)}.md`),
     `---\ntitle: ${JSON.stringify(`${e.file} · ${title}`)}\n---\n\n# ${md(title)}\n\n<p class="ex-meta"><code>examples/${e.file}</code> ${tags(e.features)}</p>\n\n${e.about ? `${md(e.about)}\n\n` : ""}<p class="ex-actions"><a href="/playground?example=${encodeURIComponent(slug(e.file))}">Open in the playground and play with it →</a></p>\n\n${e.run ? fence("bash", "", e.run) + "\n" : ""}${fence("halo", e.file, e.source)}`,
   );
 }
-const row = (e: (typeof allExamples)[number], width: number) =>
-  `| \`${String(e.number).padStart(width, "0")}\` | [${md(e.title || e.name).replace(/\|/g, "\\|")}](/examples/${slug(e.file)}) | ${tags(e.features)} |`;
-const sectionMd = SECTIONS.filter((s) => s.folder !== "casebook")
-  .map((s) => {
-    const list = examples.filter((e) => e.section === s.folder);
-    return `## ${s.emoji} ${s.title}\n\n${md(s.blurb)} <span class="ex-folder"><code>examples/${s.folder}/</code></span>\n\n| | Example | |\n|---|---|---|\n${list.map((e) => row(e, 2)).join("\n")}\n`;
-  })
-  .join("\n");
+const num = (e: (typeof examples)[number]) => (e.number !== undefined ? `<code>${String(e.number).padStart(2, "0")}</code> ` : "");
+const sectionMd = SECTIONS.map((s) => {
+  const list = examples.filter((e) => e.section === s.folder);
+  const rows = list.map((e) => `| ${num(e)}[${md(e.title || e.name).replace(/\|/g, "\\|")}](/examples/${slug(e.file)}) | ${tags(e.features)} |`);
+  return `## ${s.emoji} ${s.title}\n\n${md(s.blurb)} <span class="ex-folder"><code>examples/${s.folder}/</code></span>\n\n| Example | |\n|---|---|\n${rows.join("\n")}\n`;
+}).join("\n");
 await Bun.write(
   join(examplesDir, "index.md"),
-  `---\ntitle: Examples\n---\n\n# Examples\n\n${examples.length} working examples, from hello world to a team of agents that builds a spreadsheet engine from a spec, in six sections you can read in order. The test suite runs every one. Each page has the full source; open any of them in the [playground](/playground) and change it.\n\n${sectionMd}\n## 📚 Casebook\n\n${casebook.length} agent designs from real work: support, finance, health, security, operations and more. Each one is a system prompt, the tools the agent gets, and what it may do freely, must confirm, or must never do, with the rules that have to hold enforced by policies and gates rather than by the prompt. The servers they call are fictional, so \`halo plan\` shows each one offline.\n\n| | Case | |\n|---|---|---|\n${casebook.map((e) => row(e, 3)).join("\n")}\n`,
+  `---\ntitle: Examples\n---\n\n# Examples\n\n${examples.length} working examples. Start with [Learn](#learn), which teaches one idea per file in order; every other section is a domain, from engineering and support to healthcare and dinner plans. Many are agent designs from real work: a system prompt, the tools the agent gets, and what it may do freely, must confirm, or must never do, with the rules that have to hold enforced by policies and gates rather than by the prompt. Where the servers they call are fictional, \`halo plan\` shows what a run would do, offline.\n\nThe test suite validates and runs every one. Each page has the full source; open any of them in the [playground](/playground) and change it.\n\n${sectionMd}`,
 );
-// The sidebar: one group per section, the long casebook collapsed.
+// The sidebar: one group per section, collapsed except Learn.
 const sidebar = SECTIONS.map((s) => ({
   text: `${s.emoji} ${s.title}`,
-  collapsed: s.folder === "casebook" ? true : undefined,
-  items: allExamples
+  collapsed: s.folder !== "learn",
+  items: examples
     .filter((e) => e.section === s.folder)
-    .map((e) => ({ text: `${String(e.number).padStart(s.folder === "casebook" ? 3 : 2, "0")} ${e.title || e.name}`, link: `/examples/${slug(e.file)}` })),
+    .map((e) => ({ text: `${e.number !== undefined ? `${String(e.number).padStart(2, "0")} ` : ""}${e.title || e.name}`, link: `/examples/${slug(e.file)}` })),
 }));
 await Bun.write(join(generated, "examples-sidebar.json"), JSON.stringify(sidebar));
 

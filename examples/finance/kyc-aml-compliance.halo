@@ -1,0 +1,102 @@
+// ============================================================
+// Fintech — KYC/AML Compliance Pipeline
+// PURPOSE: Onboard new customers with automated identity
+//          verification, sanctions screening, and risk scoring.
+//          Replaces 6-week manual review with 3-minute automation.
+// ============================================================
+
+// --- Policies ---
+policy KYCPrivacy     : Redact(SSN) & Redact(DateOfBirth) & Redact(PassportNumber)
+policy BSACompliance  : Require(RegulatoryHold) & Block(SanctionedEntity)
+policy CostGuard      : MaxSpend(2.00)
+
+// --- Tools ---
+tool IdentityAPI   : REST("api.plaid.com/identity/verify", apiKey: Env.PLAID_KEY)
+tool SanctionsAPI  : REST("api.ofac.treasury.gov/search", apiKey: Env.OFAC_KEY)
+tool CreditAPI     : REST("api.experian.com/credit/v1", apiKey: Env.EXPERIAN_KEY)
+tool ComplianceLog : POST("api.example.com/compliance-audit")
+tool CompSlack     : POST("hooks.slack.com/services/compliance-team")
+
+// --- Store ---
+tool RiskProfiles  : VectorStore(Env.PINECONE_KEY, namespace: "customer-risk-profiles")
+tool RegPatterns   : VectorStore(Env.PINECONE_KEY, namespace: "regulatory-patterns")
+
+// --- Struct ---
+schema KYCResult {
+  customer_id    : String
+  identity_match : Boolean
+  sanctions_clear : Boolean
+  risk_tier      : String
+  credit_score   : Number
+  approved       : Boolean
+}
+
+// --- Agents ---
+agent IdentityAgent [openai/gpt-4o-mini, temp: 0.0]
+  equips IdentityAPI, SanctionsAPI, CreditAPI
+  requires KYCPrivacy, CostGuard
+
+agent ComplianceAgent [anthropic/claude-sonnet-4, temp: 0.0]
+  equips RiskProfiles, RegPatterns
+  requires KYCPrivacy, BSACompliance, CostGuard
+
+// --- The Pipeline ---
+@timeout(5m)
+@retry(3, 10s)
+pipeline OnboardCustomer(application: CustomerApplication) -> KYCResult:
+  application
+    // Step 1: Parallel identity verification — hit all APIs at once
+    |* {
+         IdentityAgent.verify_identity(
+           tool: IdentityAPI,
+           name: context.data.application.full_name,
+           ssn_last4: context.data.application.ssn_last4,
+           dob: context.data.application.date_of_birth
+         ),
+         IdentityAgent.screen_sanctions(
+           tool: SanctionsAPI,
+           name: context.data.application.full_name,
+           country: context.data.application.country
+         ),
+         IdentityAgent.pull_credit(
+           tool: CreditAPI,
+           ssn: context.data.application.ssn,
+           consent_token: context.data.application.consent_id
+         )
+       }
+
+    // Step 2: Gate — immediate block if sanctions match
+    |? (context.data.screen_sanctions.match_found == true)
+    |> ComplianceLog.post(
+         event: "SANCTIONS_MATCH",
+         customer: context.data.application.full_name,
+         details: context.data.screen_sanctions
+       )
+
+    // Step 3: Risk assessment — synthesize all signals
+    |> ComplianceAgent.assess_risk(
+         identity: context.data.verify_identity,
+         sanctions: context.data.screen_sanctions,
+         credit: context.data.pull_credit,
+         application: context.data.application
+       )
+
+    // Step 4: Gate — auto-approve low-risk Tier 1 customers
+    |? (context.data.assess_risk.risk_tier != "low")
+
+    // Step 5: Human review for medium/high risk
+    |! yield(
+         CompSlack,
+         context.data.assess_risk,
+         [context.data.verify_identity, context.data.screen_sanctions, context.data.pull_credit],
+         2h
+       )
+    ~> listen(CompSlack.Reaction)
+
+    // Step 6: Log final decision for regulatory audit
+    |> ComplianceLog.post(
+         event: "KYC_COMPLETE",
+         customer_id: context.data.application.customer_id,
+         risk_tier: context.data.assess_risk.risk_tier,
+         approved: true
+       )

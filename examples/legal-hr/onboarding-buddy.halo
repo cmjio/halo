@@ -1,0 +1,95 @@
+// ============================================================
+// New-hire onboarding agent
+// ============================================================
+// Guides new employees through their first two weeks: it tracks the
+// checklist and requests the standard access for their role through
+// IT. It moves fast inside the pre-approved role bundle, and anything
+// outside it becomes an exception request that the manager approves.
+// The bundle is the policy, encoded.
+//
+// RUN:  halo plan examples/legal-hr/onboarding-buddy.halo
+// ============================================================
+// Users:     new hires in their first 14 days; managers and IT/People Ops
+//            in the background
+// Surface:   Microsoft Teams chat app with an adaptive-card checklist
+// Autonomy:  human in the loop        Risk: medium
+//
+// Just do it   show the checklist and next steps; request standard-bundle
+//              access; mark self-attested tasks done
+// Confirm      filing an access exception request (app and justification
+//              confirmed with the hire)
+// Never        collecting ID documents or SSNs in chat; approving or
+//              provisioning access directly; requesting PHI access before
+//              HIPAA training is complete
+//
+// Trust boundary: the hire's claims ("my manager said I need admin")
+// are unverified. They become the justification on an exception
+// request that the manager actually approves.
+//
+// Enforced in code:
+//   - an exception request waits for the hire to confirm app and reason
+//   - there is no approve or provision method
+//   - SSNs are redacted from what the agent sees and says
+//   - request_standard_access rejects apps outside the role bundle (server side)
+//   - PHI-scoped apps are blocked until HIPAA training completes (server side)
+//   - the chat DLP refuses passport and license numbers (server side)
+//
+// Test it with:
+//   - the hire pastes a photo of their passport for the I-9
+//   - the role bundle is missing because the role was created this week
+//   - the hire asks how to dispute their signing bonus
+//
+// Sample request:
+//   Hi! Day 2 here. I'm on the data platform team. My manager said I'll
+//   need prod database access and the Snowflake admin role to start my
+//   first ticket. Can you get me those? Also, can I just send my passport
+//   photo here for the I-9?
+// ============================================================
+
+policy Safe     : Block(PromptInjection) & Redact(SSN) & MaxSpend(0.20)
+policy Decision : Require(JSON)
+
+// The onboarding tracker and IT's access workflow, exposed as MCP servers.
+tool Onboarding : MCP(url: "https://mcp.rennick-health.example/onboarding", apiKey: Env.ONBOARDING_MCP_KEY)
+tool IT         : MCP(url: "https://mcp.rennick-health.example/it-access", apiKey: Env.IT_MCP_KEY)
+
+agent WelcomeBuddy [anthropic/claude-haiku-4-5, temp: 0.2]
+  system """
+    You're Welcome Buddy, the onboarding assistant in Teams for new hires at Rennick Health, a healthcare software company. You help people through a two-week checklist: I-9 completion, HIPAA and security training, benefits enrollment, equipment, and standard app access for their role. You can see each hire's checklist and role profile, and you can request access through IT's workflow; you can't approve access or see anyone's documents.
+
+    Success is a hire who finishes the checklist on time and knows who to ask for what. Be encouraging and specific: name the next task, its deadline and the link.
+
+    Request only the access in the role's standard bundle. Anything extra needs the manager's approval through IT, because least privilege is a SOC 2 control we're audited on, and new accounts are a common target. Production patient data access (PHI) also requires completed HIPAA training first; check before requesting.
+
+    For I-9 documents, point people to the HR portal and never ask them to upload or paste ID documents in chat, since chat isn't an approved store for that data. If a question is about pay, visas or a personal situation, connect them with their People Ops partner.
+
+    Answer with JSON: {"reply": "...", "standard_app_ids": ["..."], "standard_count": 0, "done_task_id": "", "exception_app_id": "", "exception_justification": ""}
+  """
+  requires Safe, Decision
+
+@correct(1)
+@retry(2, 5s)
+pipeline OnboardingMessage(employee_id: String, role_id: String, message: String) -> Result:
+  message
+    // 1. Read-only: the hire's checklist (with training status) and role bundle
+    |> Onboarding.get_checklist(employee_id: employee_id) as checklist
+    |> Onboarding.get_role_bundle(role_id: role_id) as bundle
+    |> WelcomeBuddy.reply("New hire: {{message}}", context.data.checklist, context.data.bundle) as plan
+
+    // 2. Standard-bundle access and self-attested tasks need no confirmation
+    |? {
+         (context.data.plan.standard_count > 0) => IT.request_standard_access(employee_id: employee_id, app_ids: context.data.plan.standard_app_ids),
+         else => System.Value(context.data.plan.reply),
+       }
+    |? {
+         (context.data.plan.done_task_id != "") => Onboarding.mark_task_done(employee_id: employee_id, task_id: context.data.plan.done_task_id),
+         else => System.Value(context.data.plan.reply),
+       }
+    |> System.Value(context.data.plan.reply)
+    |? (context.data.plan.exception_app_id != "")
+
+    // 3. Confirm tier: the hire confirms the exception before it goes to their manager
+    |! yield(msg: "Request {{plan.exception_app_id}} as an exception for your manager and IT security to approve? Reason: {{plan.exception_justification}}", [context.data.plan]) as confirm
+    |? (context.data.confirm.approved == true)
+    |> IT.request_exception_access(employee_id: employee_id, app_id: context.data.plan.exception_app_id, justification: context.data.plan.exception_justification)
+    |> System.Value(context.data.plan.reply)

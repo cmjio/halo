@@ -1,0 +1,117 @@
+// ============================================================
+// Insurance — Claims Processing & Fraud Detection
+// PURPOSE: Automate the claims lifecycle — from initial filing
+//          through fraud scoring, adjuster review, payout calc,
+//          and disbursement. Replaces BPM tools (Camunda, Pega)
+//          that cost $500K+/year to license and maintain.
+// ============================================================
+
+// --- Policies ---
+policy ClaimsPrivacy   : Redact(SSN) & Redact(CreditCard) & Redact(HealthData)
+policy FraudPolicy     : Block(DestructiveOps)
+policy PayoutLimit     : Validate("amount", "<=", "context.data.verify_coverage.max_payout")
+policy CostGuard       : MaxSpend(1.50)
+
+// --- Tools ---
+tool PolicyAPI     : REST("api.guidewire.com/v1/policies", apiKey: Env.GUIDEWIRE_KEY)
+tool ClaimsDB      : REST("api.guidewire.com/v1/claims", apiKey: Env.GUIDEWIRE_KEY)
+tool PaymentGW     : POST("api.stripe.com/v1/payouts", apiKey: Env.STRIPE_KEY)
+tool AdjusterSlack : POST("hooks.slack.com/services/claims-team")
+
+// --- Store ---
+tool FraudPatterns : VectorStore(Env.PINECONE_KEY, namespace: "fraud-indicators")
+tool ClaimHistory  : VectorStore(Env.PINECONE_KEY, namespace: "historical-claims")
+
+// --- Struct ---
+schema ClaimDecision {
+  claim_id        : String
+  fraud_score     : Number
+  coverage_valid  : Boolean
+  payout_amount   : Number
+  decision        : String
+  adjuster_notes  : String
+}
+
+// --- Agents ---
+agent ClaimsBot [openai/gpt-4o-mini, temp: 0.0]
+  equips PolicyAPI, PaymentGW
+  requires ClaimsPrivacy, CostGuard
+
+agent FraudAnalyst [anthropic/claude-sonnet-4, temp: 0.0]
+  equips FraudPatterns, ClaimHistory
+  requires ClaimsPrivacy, FraudPolicy, CostGuard
+
+@correct(3)
+agent AdjusterAssistant [openai/gpt-4o, temp: 0.2]
+  equips ClaimHistory
+  requires ClaimsPrivacy, CostGuard, PayoutLimit
+
+// --- The Pipeline ---
+@timeout(5m)
+@retry(2, 10s)
+pipeline ProcessClaim(claim: ClaimFiling) -> ClaimDecision:
+  claim
+    // Step 1: Parallel verification — policy lookup + fraud scoring
+    |* {
+         ClaimsBot.verify_coverage(
+           tool: PolicyAPI,
+           policy_number: context.data.claim.policy_number,
+           incident_date: context.data.claim.incident_date,
+           claim_type: context.data.claim.type
+         ),
+         FraudAnalyst.score_fraud(
+           claimant: context.data.claim.claimant_name,
+           amount_requested: context.data.claim.amount,
+           incident_description: context.data.claim.description,
+           submission_metadata: context.data.claim.metadata
+         )
+       }
+
+    // Step 2: Gate — immediate flag if fraud score is high
+    |? (context.data.score_fraud.fraud_score > 80)
+    |> AdjusterSlack.post(
+         message: "🚨 HIGH FRAUD RISK — manual review required immediately",
+         claim_id: context.data.claim.claim_id,
+         fraud_score: context.data.score_fraud.fraud_score,
+         channel: "fraud-investigations"
+       )
+    |! yield(AdjusterSlack, context.data.score_fraud, [context.data.verify_coverage], 4h)
+    ~> listen(AdjusterSlack.Reaction)
+
+    // Step 3: Gate — reject if policy doesn't cover this claim type
+    |? (context.data.verify_coverage.covered == false)
+
+    // Step 4: Calculate payout based on coverage limits + damage assessment
+    |> AdjusterAssistant.calculate_payout(
+         coverage: context.data.verify_coverage,
+         claim: context.data.claim,
+         fraud_assessment: context.data.score_fraud,
+         comparable_claims: ClaimHistory
+       )
+
+    // Step 5: Gate — auto-approve small, low-risk claims
+    |? (context.data.calculate_payout.amount > 5000)
+    |! yield(
+         AdjusterSlack,
+         context.data.calculate_payout,
+         [context.data.verify_coverage, context.data.score_fraud],
+         24h
+       )
+    ~> listen(AdjusterSlack.Reaction)
+
+    // Step 6: Disburse payment
+    |> ClaimsBot.disburse(
+         tool: PaymentGW,
+         claim_id: context.data.claim.claim_id,
+         amount: context.data.calculate_payout.amount,
+         method: context.data.claim.payment_method
+       )
+
+    // Step 7: Log to claims system
+    |> ClaimsDB.post(
+         event: "CLAIM_RESOLVED",
+         claim_id: context.data.claim.claim_id,
+         payout: context.data.calculate_payout.amount,
+         fraud_score: context.data.score_fraud.fraud_score,
+         decision: "approved"
+       )

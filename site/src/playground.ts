@@ -144,13 +144,21 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
 
   const sections = data.sections ?? [];
   const sectionOf = (e: Example) => sections.find((s) => s.folder === e.section);
-  const slug = (e: Example) => (e.section === "casebook" ? e.file : e.name).replace(/\.halo$/, "");
-  /** An example by its path (`learn/01-hello.halo`), name (`01-hello.halo`), or slug (`01-hello`): old links keep working. */
-  const findExample = (key: string) => {
+  const slug = (e: Example) => e.name.replace(/\.halo$/, "");
+  /**
+   * An example by its path (`learn/01-hello.halo`), name (`software-team.halo`), or slug
+   * (`software-team`). Old links (`74-software-team`, `casebook/021-ecommerce-refund`) go
+   * through the renames, path or not.
+   */
+  const findExample = (key: string): Example | undefined => {
     const k = key.replace(/\.halo$/, "");
-    return data.examples.find((e) => e.file.replace(/\.halo$/, "") === k || e.name.replace(/\.halo$/, "") === k);
+    const found = data.examples.find((e) => e.file.replace(/\.halo$/, "") === k || slug(e) === k);
+    if (found) return found;
+    const renamed = data.renamed ?? {};
+    const to = renamed[k] ?? renamed[k.split("/").pop()!];
+    return to ? data.examples.find((e) => slug(e) === to) : undefined;
   };
-  const label = (e: Example) => `${String(e.number).padStart(e.section === "casebook" ? 3 : 2, "0")} · ${e.title || e.name}`;
+  const label = (e: Example) => `${e.number !== undefined ? `${String(e.number).padStart(2, "0")} · ` : ""}${e.title || e.name}`;
 
   const solved = new Set((store.get("solved") ?? "").split(",").filter(Boolean));
   const renderPicker = () => {

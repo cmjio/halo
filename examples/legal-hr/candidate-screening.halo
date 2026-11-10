@@ -1,0 +1,115 @@
+// ============================================================
+// Recruitment — Screening & Interview Pipeline
+// PURPOSE: Automate resume screening, skills matching, culture
+//          assessment, interview scheduling, and hiring manager
+//          notification. Replaces Lever/Greenhouse automation
+//          rules with a single declarative pipeline.
+// ============================================================
+
+// --- Policies ---
+policy BiasProtection : Block(DiscriminatoryLanguage) & Block(AgeDiscrimination)
+policy CandidatePII   : Redact(SSN) & Redact(CreditCard) & Redact(Location)
+policy CostGuard      : MaxSpend(1.00)
+
+// --- Tools ---
+tool ATSAPI        : REST("api.lever.co/v1/opportunities", apiKey: Env.LEVER_KEY)
+tool CalendarAPI   : REST("www.googleapis.com/calendar/v3", apiKey: Env.GOOGLE_CAL_KEY)
+tool HRSlack       : POST("hooks.slack.com/services/hiring-team")
+
+// --- Store ---
+tool RoleRequirements : VectorStore(Env.PINECONE_KEY, namespace: "job-descriptions")
+tool PastHires        : VectorStore(Env.PINECONE_KEY, namespace: "successful-hires")
+
+// --- Struct ---
+schema CandidateDecision {
+  candidate_name   : String
+  match_score      : Number
+  skills_gap       : Array
+  culture_fit      : String
+  recommendation   : String
+  interview_slot   : String
+}
+
+// --- Agents ---
+agent Screener [openai/gpt-4o-mini, temp: 0.0]
+  requires BiasProtection, CandidatePII, CostGuard
+
+agent CultureAssessor [anthropic/claude-sonnet-4, temp: 0.2]
+  equips PastHires
+  requires BiasProtection, CandidatePII, CostGuard
+
+agent HiringCoordinator [openai/gpt-4o-mini, temp: 0.3]
+  equips RoleRequirements, CalendarAPI
+  requires CostGuard
+
+// --- The Pipeline ---
+@timeout(3m)
+@retry(2, 5s)
+pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision:
+  application
+    // Step 1: Parallel assessment — skills match + culture fit
+    |* {
+         Screener.match_skills(
+           resume: context.data.application.resume_text,
+           role_id: context.data.application.role_id,
+           required_skills: context.data.application.job_skills,
+           years_required: context.data.application.min_experience
+         ),
+         CultureAssessor.assess_fit(
+           cover_letter: context.data.application.cover_letter,
+           values_statement: context.data.application.values,
+           team_culture: context.data.application.team_id,
+           past_successful_hires: PastHires
+         )
+       }
+
+    // Step 2: Gate — reject if skills match is too low
+    |? (context.data.match_skills.score < 40)
+
+    // Step 3: Synthesize recommendation
+    |> HiringCoordinator.recommend(
+         skills: context.data.match_skills,
+         culture: context.data.assess_fit,
+         role: context.data.application.role_id,
+         salary_band: context.data.application.salary_expectation
+       )
+
+    // Step 4: Gate — auto-reject if recommendation is "no"
+    |? (context.data.recommend.decision == "reject")
+
+    // Step 5: Gate — auto-advance top candidates
+    |? (context.data.match_skills.score > 85)
+    |> HiringCoordinator.schedule_interview(
+         tool: CalendarAPI,
+         candidate_email: context.data.application.email,
+         interviewer_id: context.data.recommend.interviewer,
+         duration: "45m",
+         type: "technical"
+       )
+
+    // Step 6: Notify hiring manager for borderline candidates
+    |> HRSlack.post(
+         message: "📋 New candidate screened",
+         candidate: context.data.application.name,
+         role: context.data.application.role_title,
+         match_score: context.data.match_skills.score,
+         culture_fit: context.data.assess_fit.rating,
+         recommendation: context.data.recommend.decision
+       )
+
+    // Step 7: Human decision for borderline candidates
+    |! yield(
+         HRSlack,
+         context.data.recommend,
+         [context.data.match_skills, context.data.assess_fit],
+         48h
+       )
+    ~> listen(HRSlack.Reaction)
+
+    // Step 8: If approved, push to ATS
+    |> ATSAPI.post(
+         event: "CANDIDATE_ADVANCED",
+         candidate_id: context.data.application.candidate_id,
+         stage: "interview",
+         recommendation: context.data.recommend
+       )

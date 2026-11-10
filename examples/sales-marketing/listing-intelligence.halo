@@ -1,0 +1,93 @@
+// ============================================================
+// Real Estate — Listing Intelligence & Lead Scoring
+// PURPOSE: Ingest new MLS listings, enrich with market data,
+//          score leads, auto-draft marketing copy, and route
+//          to the right agent based on expertise
+// ============================================================
+
+// --- Policies ---
+policy FairHousing   : Block(DiscriminatoryLanguage) & Block(SteeringLanguage)
+policy PII           : Redact(SSN) & Redact(CreditCard)
+policy CostGuard     : MaxSpend(1.50)
+
+// --- Tools ---
+tool MLSAPI        : REST("api.spark.com/v1/listings", apiKey: Env.MLS_KEY)
+tool ZillowAPI     : REST("api.bridgedataoutput.com/api/v2/zestimates", apiKey: Env.ZILLOW_KEY)
+tool CRM           : POST("api.followupboss.com/v1/events", apiKey: Env.FUB_KEY)
+tool AgentSlack    : POST("hooks.slack.com/services/listings-team")
+
+// --- Store ---
+tool MarketTrends   : VectorStore(Env.PINECONE_KEY, namespace: "market-comps")
+tool AgentExpertise  : VectorStore(Env.PINECONE_KEY, namespace: "agent-specialties")
+
+// --- Struct ---
+schema ListingIntel {
+  listing_id     : String
+  estimated_value : Number
+  lead_score     : Number
+  marketing_copy : String
+  assigned_agent : String
+}
+
+// --- Agents ---
+agent MarketAnalyst [openai/gpt-4o-mini, temp: 0.1]
+  equips MarketTrends, MLSAPI, ZillowAPI
+  requires CostGuard
+
+agent Copywriter [anthropic/claude-sonnet-4, temp: 0.7]
+  requires FairHousing, CostGuard
+
+agent LeadScorer [openai/gpt-4o-mini, temp: 0.0]
+  equips AgentExpertise
+  requires CostGuard
+
+// --- The Pipeline ---
+@timeout(3m)
+@retry(2, 10s)
+pipeline ProcessListing(listing: MLSListing) -> ListingIntel:
+  listing
+    // Step 1: Parallel enrichment — market data + comps
+    |* {
+         MarketAnalyst.pull_comps(
+           tool: MLSAPI,
+           address: context.data.listing.address,
+           radius: "0.5mi",
+           sold_within: "90d"
+         ),
+         MarketAnalyst.get_zestimate(
+           tool: ZillowAPI,
+           address: context.data.listing.address
+         )
+       }
+
+    // Step 2: Market analysis — pricing recommendation
+    |> MarketAnalyst.analyze_pricing(
+         listing: context.data.listing,
+         comps: context.data.pull_comps,
+         zestimate: context.data.get_zestimate,
+         local_trends: MarketTrends
+       )
+
+    // Step 3: Generate Fair Housing-compliant marketing copy
+    |> Copywriter.draft_listing(
+         property: context.data.listing,
+         pricing: context.data.analyze_pricing,
+         tone: "luxury",
+         max_words: 150
+       )
+
+    // Step 4: Score and route the lead
+    |> LeadScorer.score_and_route(
+         listing: context.data.listing,
+         pricing: context.data.analyze_pricing,
+         agent_pool: AgentExpertise
+       )
+
+    // Step 5: Push to CRM and notify assigned agent
+    |> CRM.post(
+         event: "new_listing_matched",
+         listing_id: context.data.listing.mls_id,
+         agent: context.data.score_and_route.assigned_agent,
+         lead_score: context.data.score_and_route.score,
+         copy: context.data.draft_listing
+       )

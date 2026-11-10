@@ -1,0 +1,111 @@
+// ============================================================
+// GitHub Issue Triage
+// PURPOSE: Triage a public repo's open issues for real. Needs
+//          only a model key: GitHub's public API needs no token,
+//          and triage history lives in a local vector store.
+// RUN:     ANTHROPIC_API_KEY=... halo run examples/engineering/github-triage.halo \
+//            --arg repo=oven-sh/bun --arg limit=8
+//          Answer "label" at the prompt to also apply the suggested
+//          labels (needs GITHUB_TOKEN with write access to the repo).
+// ============================================================
+
+// --- Policies ---
+// Issue text is written by strangers: block injection attempts
+// and keep secrets and emails out of every prompt and report.
+policy UntrustedText : Block(PromptInjection) & Redact(APIKey) & Redact(Email)
+policy Budget        : MaxSpend(0.50)
+policy ReportShape   : MaxWords(900)
+
+// --- Tools ---
+tool GitHub      : REST("api.github.com")
+// Only used when you answer "label"; the token is read at that point.
+tool GitHubWrite : POST("api.github.com", apiKey: Env.GITHUB_TOKEN, sendInput: false)
+
+// --- Store ---
+// Past reports, so later runs can spot repeat issues.
+store TriageLog : VectorStore(namespace: "github-triage")
+
+// --- Agents ---
+// Swap the models for any provider you have a key for
+// (openai/gpt-4o-mini, gemini-2.5-flash, ollama/llama3.2, ...).
+agent Triager [anthropic/claude-haiku-4-5, temp: 0.0]
+  requires UntrustedText, Budget
+
+agent Editor [anthropic/claude-sonnet-4-5, temp: 0.2]
+  requires UntrustedText, Budget, ReportShape
+
+// --- The Pipeline ---
+@timeout(3m)
+@retry(2, 2s)
+pipeline TriageIssues(repo: String, limit: Number) -> Report:
+  repo
+    // 1. Fetch open issues (pull requests excluded) from GitHub's search API
+    |> GitHub.search(
+         path: "/search/issues",
+         q: "repo:{{repo}} is:issue is:open",
+         sort: "updated",
+         per_page: limit
+       ) as issues
+
+    // 2. Stop early if there is nothing to triage
+    |? (context.data.issues.total_count > 0)
+
+    // 3. Keep only the fields triage needs (the raw payload is ~8KB per issue)
+    |> System.Pick(
+         context.data.issues.items,
+         fields: ["number", "title", "html_url", "body", "labels.name", "comments", "created_at"],
+         maxChars: 1500
+       ) as items
+
+    // 4. In parallel: classify the issues, and recall past triage reports
+    |* {
+         Triager.classify("""
+           Triage these GitHub issues from {{repo}}.
+           Reply with JSON only, no prose:
+           {
+             "confidence": <0-1, how sure you are overall>,
+             "issues": [{
+               "number": <int>, "title": "<title>", "url": "<html_url>",
+               "category": "bug" | "feature" | "question" | "docs" | "other",
+               "severity": "critical" | "high" | "medium" | "low",
+               "labels": ["<suggested label>"],
+               "summary": "<one sentence>"
+             }]
+           }
+         """, context.data.items) as triage,
+         TriageLog.search(query: context.data.items, limit: 3) as history
+       }
+
+    // 5. Only report triage the model is confident in
+    |? (context.data.triage.confidence >= 0.6)
+
+    // 6. Write the report, flagging issues seen in earlier reports
+    |> Editor.write_report("""
+         Write a concise Markdown triage report for {{repo}}.
+         Lead with critical and high severity bugs. Give each issue
+         one line: #number, title, category, severity, suggested
+         labels, and its url. If an issue also appears in the past
+         reports, mark it "(seen before)". End with three
+         recommended next actions for the maintainers.
+       """, context.data.triage, context.data.history) as report
+
+    // 7. A human decides: approve (save), label (save and apply labels), or reject
+    |! yield(channel: Terminal, msg: "approve = save the report, label = save and apply labels on GitHub, reject = discard", [context.data.report])
+    |? (context.data.yield.approved == true || context.data.yield.action == "label")
+
+    // 8. Remember it, so the next run can spot repeats
+    |> TriageLog.log(content: context.data.report, tags: [repo])
+    |> System.Print(context.data.report)
+
+    // 9. Apply the suggested labels, one GitHub call per issue
+    |? {
+         (context.data.yield.action == "label") => ApplyLabels(repo, context.data.triage.issues),
+       }
+
+// Adds each issue's suggested labels (two requests at a time).
+pipeline ApplyLabels(repo: String, issues: List) -> Labeled:
+  issues
+    |* each(issue in issues, concurrency: 2) => GitHubWrite.add_labels(
+         path: "/repos/{{repo}}/issues/{{issue.number}}/labels",
+         labels: issue.labels
+       ) as labeled

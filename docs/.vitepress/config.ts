@@ -65,7 +65,7 @@ export default defineConfig({
     footer: { message: 'curl -fsSL https://halolang.com/install.sh | sh' },
 
     sidebar: {
-      // One group per section of examples/ (examples/catalog.ts), the casebook collapsed.
+      // One group per section of examples/ (examples/catalog.ts), all but Learn collapsed.
       '/examples/': [{ text: 'All examples', link: '/examples/' }, ...examplesSidebar],
       '/': [
       {

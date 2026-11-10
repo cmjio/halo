@@ -119,7 +119,7 @@ describe("unifiedDiff", () => {
   test("is a patch git apply accepts, with or without a final newline", () => {
     const cwd = mkdtempSync(join(tmp, "patch-"));
     Bun.spawnSync(["git", "init", "-q"], { cwd });
-    const a = readFileSync(join(root, "examples/real-world/50-github-triage.halo"), "utf8");
+    const a = readFileSync(join(root, "examples/engineering/github-triage.halo"), "utf8");
     const edits: Array<(l: string[]) => void> = [(l) => l.push("// end"), (l) => l.splice(l.length - 1, 0, "// end"), (l) => l.splice(0, 1), (l) => l.splice(10, 2, "// one", "// two", "// three")];
     for (const edit of edits) {
       const lines = a.split("\n");

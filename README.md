@@ -50,7 +50,7 @@ Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 
 ### ⭐ Try the flagship
 
-[`examples/real-world/50-github-triage.halo`](examples/real-world/50-github-triage.halo) triages a public repo's open issues for real:
+[`examples/engineering/github-triage.halo`](examples/engineering/github-triage.halo) triages a public repo's open issues for real:
 - fetches issues from GitHub's public API (no token needed)
 - trims each payload with `System.Pick`
 - classifies the issues and searches past reports in parallel
@@ -60,7 +60,7 @@ Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 Answer `label` instead of `approve` and it also adds each issue's suggested labels with `|* each` (set `GITHUB_TOKEN`). It needs only an Anthropic key; a run costs about $0.02.
 
 ```bash
-ANTHROPIC_API_KEY=... halo debug examples/real-world/50-github-triage.halo --arg repo=oven-sh/bun --arg limit=8
+ANTHROPIC_API_KEY=... halo debug examples/engineering/github-triage.halo --arg repo=oven-sh/bun --arg limit=8
 ```
 
 ### 📦 Start from a blueprint
@@ -101,7 +101,7 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 - **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
 - **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
 
-See [`examples/real-world/78-builtin-kit.halo`](examples/real-world/78-builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
+See [`examples/patterns/builtin-kit.halo`](examples/patterns/builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
 
 ### How a pipeline runs
 
@@ -254,24 +254,23 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 
 ## 📚 Examples
 
-`examples/` is a learning path in six folders, each file numbered so they read in order: [`learn/`](examples/learn/) (01–19, one concept each), [`roles/`](examples/roles/) (20–25, role-based workflows), [`systems/`](examples/systems/) (30–38, moderation routing, a multi-agent swarm, local automation, schema validation), [`industries/`](examples/industries/) (40–46), [`everyday/`](examples/everyday/) (60–66), and [`real-world/`](examples/real-world/) (50 and 70–80, which run for real on free public data). [`examples/README.md`](examples/README.md) maps them all. Highlights:
+`examples/` holds 160 examples. [`learn/`](examples/learn/) is the place to start: 19 files, one concept each, numbered so they read in order. [`patterns/`](examples/patterns/) shows features in context, and every other folder is a domain: [`engineering/`](examples/engineering/), [`product/`](examples/product/), [`security/`](examples/security/), [`data-research/`](examples/data-research/), [`support/`](examples/support/), [`sales-marketing/`](examples/sales-marketing/), [`finance/`](examples/finance/), [`legal-hr/`](examples/legal-hr/), [`healthcare/`](examples/healthcare/), [`operations/`](examples/operations/), and [`personal/`](examples/personal/). Most are agent designs from real work: a system prompt, its tools, and what the agent may do freely, must confirm, or must never do, with the rules that have to hold enforced by policies, gates and approvals rather than by the prompt. [`examples/README.md`](examples/README.md) maps them all. Highlights:
 
-| # | Example | What it shows |
-|---|---|---|
-| 60 | HR applicant screening | Contact details redacted before scoring, `\|* each`, a recruiter approves the shortlist |
-| 61 | School essay feedback | Draft feedback per essay, `@correct` fixes drafts that break policy, the teacher approves before release |
-| 62 | Shopping restock | The budget enforced in code with `Validate`, approval before ordering |
-| 63 | Weekly team report | GitHub issues trimmed with `System.Pick`, reviewed, then posted to Slack |
-| 64 | Sports scouting | Two analysts in parallel, output checked against a `schema` |
-| 65 | Esports match review | OpenDota's free API (runs for real); reuses a saved review; compares a player only with their own past matches |
-| 66 | Meal planner | Allergens checked by `grep`, `\|<> loop` replans until the plan is clean |
-| 70 | **Pipeline author** | Describe a workflow in English; an agent writes the `.halo` file, the real validator checks it, and `\|<> loop` sends errors back until it passes |
-| 71 | Dependency security watch | Installed versions checked against OSV.dev (free), sorted by severity, alerts only on new advisories |
-| 72 | FDA recall monitor | openFDA (free) recalls explained in plain language; publishing waits for approval |
-| 73 | **Code writer** | An agent writes code, the real tests run, and failing output goes back until they pass (run it in a sandbox) |
-| 74 | **Software team** | An architect plans modules, coders build them in parallel, an integrator wires them up, and a fixer patches until the acceptance tests pass. Built the spreadsheet engine in `examples/projects/spreadsheet` (1,400 lines, 29/29 tests, 16/16 hidden) in 4 minutes for $0.68 |
-
-[`examples/casebook/`](examples/casebook/) holds 100 more: agent designs from real work (support, finance, health, security, operations, and more), each a system prompt, its tools, and what the agent may do freely, must confirm, or must never do. The rules that have to hold are enforced by policies, gates and approvals rather than by the prompt. Their servers are fictional, so read them with `halo plan`.
+| Example | What it shows |
+|---|---|
+| [`legal-hr/applicant-screening`](examples/legal-hr/applicant-screening.halo) | Contact details redacted before scoring, `\|* each`, a recruiter approves the shortlist |
+| [`personal/essay-feedback`](examples/personal/essay-feedback.halo) | Draft feedback per essay, `@correct` fixes drafts that break policy, the teacher approves before release |
+| [`personal/shopping-restock`](examples/personal/shopping-restock.halo) | The budget enforced in code with `Validate`, approval before ordering |
+| [`engineering/team-report`](examples/engineering/team-report.halo) | GitHub issues trimmed with `System.Pick`, reviewed, then posted to Slack |
+| [`personal/sports-scouting`](examples/personal/sports-scouting.halo) | Two analysts in parallel, output checked against a `schema` |
+| [`personal/esports-review`](examples/personal/esports-review.halo) | OpenDota's free API (runs for real); reuses a saved review; compares a player only with their own past matches |
+| [`personal/meal-planner`](examples/personal/meal-planner.halo) | Allergens checked by `grep`, `\|<> loop` replans until the plan is clean |
+| [`support/ecommerce-refund`](examples/support/ecommerce-refund.halo) | Small refunds in chat: a `Validate` caps the amount at $100, and a person approves the exact figure first |
+| [`engineering/pipeline-author`](examples/engineering/pipeline-author.halo) | **Describe a workflow in English**; an agent writes the `.halo` file, the real validator checks it, and `\|<> loop` sends errors back until it passes |
+| [`security/dependency-watch`](examples/security/dependency-watch.halo) | Installed versions checked against OSV.dev (free), sorted by severity, alerts only on new advisories |
+| [`healthcare/recall-monitor`](examples/healthcare/recall-monitor.halo) | openFDA (free) recalls explained in plain language; publishing waits for approval |
+| [`engineering/code-writer`](examples/engineering/code-writer.halo) | **An agent writes code**, the real tests run, and failing output goes back until they pass (run it in a sandbox) |
+| [`engineering/software-team`](examples/engineering/software-team.halo) | **A software team**: an architect plans modules, coders build them in parallel, an integrator wires them up, and a fixer patches until the acceptance tests pass. Built the spreadsheet engine in `examples/projects/spreadsheet` (1,400 lines, 29/29 tests, 16/16 hidden) in 4 minutes for $0.68 |
 
 Every example validates, and `test/examples.test.ts` runs them.
 

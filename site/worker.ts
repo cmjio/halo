@@ -3,7 +3,11 @@
  *   - /dl/<version>/<file> and /dl/latest.json: release binaries, from R2
  *   - a 301 from www (and the old workers.dev address) to halolang.com, keeping the path
  *   - a 301 from /docs/<page> (where the docs used to be) to /<page>
+ *   - a 301 from an example's old URL (/examples/74-software-team, /examples/casebook/021-…)
+ *     to its page now (/examples/software-team)
  */
+
+import renamed from "./data/renamed-examples.json";
 
 interface R2Object {
   body: ReadableStream;
@@ -32,11 +36,20 @@ export default {
       const page = url.pathname.slice("/docs".length).replace(/\.html$/, "").replace(/\/index$/, "/") || "/";
       return Response.redirect(new URL(page + url.search + url.hash, url).toString(), 301);
     }
+    const moved = movedExample(url.pathname);
+    if (moved) return Response.redirect(new URL(moved + url.search + url.hash, url).toString(), 301);
     if (url.pathname.startsWith("/dl/")) return download(req, url, env);
     if (url.pathname.endsWith(".mp4")) return byteRange(req, env);
     return env.ASSETS.fetch(req);
   },
 };
+
+/** The page an example moved to, when the path is one of its old URLs. */
+export function movedExample(pathname: string): string | undefined {
+  const m = /^\/examples\/((?:casebook\/)?[\w-]+?)(?:\.html)?\/?$/.exec(pathname);
+  const to = m ? (renamed as Record<string, string>)[m[1]!] : undefined;
+  return to ? `/examples/${to}` : undefined;
+}
 
 /**
  * Static assets ignore Range and always send the whole file, but Safari won't play a

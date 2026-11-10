@@ -1,0 +1,34 @@
+// ============================================================
+// Human in the Loop - Approve in Slack, Then Send
+// ============================================================
+// LEARN: How a run pauses for a person and picks up where it left off
+// WHY:   A writer drafts, a person approves the draft in Slack, and
+//        only then does the email go out. ~> listen(...) waits for the
+//        button press; `halo resume` continues a paused run.
+// ============================================================
+
+tool Approvals : Slack("Env.SLACK_BOT_TOKEN")
+tool Notifier : Email("Env.RESEND_API_KEY", from: "approvals@example.com")
+
+agent Writer [openai/gpt-4, temp: 0.7]
+
+pipeline DraftEmail(topic: String) -> Result:
+  topic
+    |> Writer.prompt("Draft a professional email about this topic: {{context.input.topic}}")
+    
+    // Without a handler the run pauses here; resume it with signal(runId, ...) or `halo resume`
+    |> Approvals.execute(
+         channel: "#approvals",
+         text: "Please review this draft: {{context.current}}",
+         buttons: ["Approve", "Reject"]
+       )
+       
+    // The pipeline suspends safely, waiting ONLY for a Slack Interaction signal
+    ~> listen(Slack.Interaction)
+    
+    // Pipeline resumes here with the user's feedback, then we send the final email
+    |> Notifier.execute(
+         to: "client@example.com",
+         subject: "Update",
+         body: "Final approved message: {{context.current}}"
+       )

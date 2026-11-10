@@ -81,4 +81,4 @@ pipeline Report(topic: String) -> Result:
 
 ## Comparing models
 
-`@shadow` runs a candidate agent or model next to a primary agent without affecting its output. See [Directives](../../reference/compiler-directives.md#shadow). `examples/systems/31-power-analyst-swarm.halo` and `examples/learn/12-multiple-agents.halo` are longer examples.
+`@shadow` runs a candidate agent or model next to a primary agent without affecting its output. See [Directives](../../reference/compiler-directives.md#shadow). `examples/data-research/analyst-swarm.halo` and `examples/learn/12-multiple-agents.halo` are longer examples.

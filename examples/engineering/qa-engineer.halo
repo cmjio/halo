@@ -1,0 +1,84 @@
+// ============================================================
+// QA Engineer
+// PURPOSE: Automated test generation, execution, and flaky
+//          test detection with CI/CD pipeline integration
+// ============================================================
+
+policy TestSafety : Block(ProductionWrite)
+policy QABudget   : MaxSpend(8.00)
+
+// --- Tools ---
+tool GitHub         : POST("api.github.com/repos", apiKey: Env.GH_TOKEN)
+tool TestRunner     : POST("api.playwright.dev/run", apiKey: Env.PW_KEY)
+tool SlackQA        : POST("hooks.slack.com/services/qa-team")
+tool JiraAPI        : POST("api.atlassian.com/jira", apiKey: Env.JIRA_KEY)
+
+// --- Store ---
+tool TestHistory    : VectorStore(Env.PINECONE_KEY, namespace: "test-results")
+tool FlakyPatterns  : VectorStore(Env.PINECONE_KEY, namespace: "flaky-test-dna")
+
+// --- Agents ---
+// The test architect generates test cases from requirements
+@shadow(Architect_V2)
+agent TestArchitect [anthropic/claude-sonnet-4, temp: 0.3]
+  system """
+    You are a test automation architect. Generate comprehensive
+    test cases from PR diffs — cover happy paths, edge cases,
+    and regression scenarios. Output Playwright-compatible specs
+    with clear assertions and cleanup hooks.
+  """
+  equips GitHub, TestHistory
+  requires TestSafety, QABudget
+
+// The flaky test detector identifies unstable tests
+agent FlakyDetector [openai/gpt-4o-mini, temp: 0.0]
+  system """
+    You are a flaky test analyst. Identify unstable tests by
+    comparing current failures against historical pass/fail
+    patterns. Flag tests with intermittent failures, timing
+    dependencies, or shared-state pollution.
+  """
+  equips FlakyPatterns, TestHistory
+  requires QABudget
+
+// --- The Pipeline ---
+pipeline AutoTest(pr: GitHub.PullRequest) -> Report:
+  pr
+    // Step 1: Generate test cases from PR diff
+    |> TestArchitect.generate_tests(
+        diff: context.data.pr.diff,
+        framework: "playwright"
+      )
+
+    // Step 2: Run tests in CI
+    |> TestRunner.execute(
+        tests: context.data.TestArchitect.generate_tests,
+        env: "staging"
+      )
+
+    // Step 3: Analyze results
+    |> TestArchitect.analyze_results(
+        results: context.data.TestRunner.execute
+      )
+
+    // Step 4: Gate — only flag flaky tests if failures found
+    |? (context.data.TestArchitect.analyze_results.failure_count > 0)
+
+    // Step 5: Detect flaky patterns
+    |> FlakyDetector.detect(
+        test_results: context.data.TestArchitect.analyze_results,
+        history: TestHistory
+      )
+
+    // Step 6: Log results
+    |> TestHistory.log(
+        content: context.data.FlakyDetector.detect,
+        tags: ["flaky", context.data.pr.repo]
+      )
+
+    // Step 7: Post summary to Slack
+    |> SlackQA.post(
+        message: context.data.FlakyDetector.detect.summary,
+        channel: "qa-alerts"
+      )
+    |> System.Print()

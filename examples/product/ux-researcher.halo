@@ -1,0 +1,124 @@
+// ============================================================
+// UX Researcher
+// PURPOSE: Collect user interview transcripts, run thematic
+//          analysis, cross-reference with behavioral data,
+//          and generate an evidence-backed research report
+// ============================================================
+
+policy Privacy        : Redact(PersonalInfo) & Anonymize(Speaker)
+policy ResearchBudget : MaxSpend(3.00)
+
+// --- Tools ---
+tool DovetailAPI     : POST("api.dovetail.app/graphql", apiKey: Env.DOVTAIL_KEY)
+tool AmplitudeAPI    : POST("api.amplitude.com/1/export", apiKey: Env.AMPLITUDE_KEY)
+tool SlackResearch   : POST("hooks.slack.com/services/ux-research")
+tool NotionResearch  : POST("api.notion.com/v1/pages", apiKey: Env.NOTION_KEY)
+
+// --- Store ---
+tool PriorResearch   : VectorStore(Env.PINECONE_KEY, namespace: "interview-themes")
+tool UserSegments    : VectorStore(Env.PINECONE_KEY, namespace: "user-personas")
+
+// --- Agents ---
+// The thematic analyst identifies patterns across interviews
+@shadow(Analyst_Check)
+agent ThematicAnalyst [anthropic/claude-sonnet-4, temp: 0.2]
+  system """
+    You are a qualitative research analyst. Extract themes
+    from interview transcripts using affinity clustering.
+    Tag each theme with frequency, sentiment, and supporting
+    quotes. Preserve participant anonymity at all times.
+  """
+  equips PriorResearch, UserSegments
+  requires Privacy, ResearchBudget
+
+// The data trier validates themes against behavioral metrics
+agent DataTrier [openai/gpt-4o-mini, temp: 0.0]
+  system """
+    You are a data validation specialist. Cross-reference
+    qualitative themes against quantitative metrics to
+    confirm or refute each finding. Report correlation
+    strength and statistical confidence for every claim.
+  """
+  requires ResearchBudget
+
+// The synthesizer produces the final report
+agent ReportSynthesizer [openai/gpt-4o-mini, temp: 0.4]
+  system """
+    You are a research report writer. Produce evidence-backed
+    findings with clear recommendations. Structure reports as:
+    executive summary, methodology, key findings, supporting
+    data, and prioritized action items.
+  """
+  equips NotionResearch
+
+// --- The Pipeline ---
+@timeout(15m)
+@retry(2, 10s)
+pipeline ResearchReport(study_id: String) -> Report:
+  study_id
+    // Step 1: Load all interview transcripts from Dovetail
+    |> ThematicAnalyst.load_transcripts(
+         study_id,
+         PriorResearch
+       ) as study
+
+    // Step 2: Fan-out — parallel analysis: thematic + behavioral + persona
+    |* {
+         ThematicAnalyst.extract_themes(
+           context.data.study.transcripts,
+           ["pain_point", "satisfaction", "feature_request", "workflow"]
+         ) as themes,
+         DataTrier.validate_metrics(
+           AmplitudeAPI,
+           context.data.study.user_segment,
+           context.data.study.timeframe
+         ) as metrics,
+         ThematicAnalyst.segment_users(
+           context.data.study.speakers,
+           UserSegments
+         ) as segments
+       }
+
+    // Step 3: Gate — need at least 2 themes to report on
+    |? (context.data.themes.primary_themes > 2)
+
+    // Step 4: Cross-reference themes with behavioral data
+    |> DataTrier.correlate(
+         context.data.themes.ranked,
+         context.data.metrics.validation
+       ) as correlations
+
+    // Step 5: Synthesize the full research report
+    |> ReportSynthesizer.build_report(
+         context.data.themes,
+         context.data.correlations,
+         context.data.segments,
+         "evidence-backed"
+       ) as report
+
+    // Step 6: Send draft to research team for review
+    |> SlackResearch.post(
+         context.data.report.executive_summary,
+         [context.data.report.full_doc, context.data.report.top_quotes],
+         "ux-research-team"
+       )
+
+    // Step 7: Human-in-the-loop — researcher approves before publishing
+    |! yield(
+         SlackResearch,
+         "Research report ready for review. Approve for stakeholder distribution?",
+         [context.data.report.key_findings, context.data.report.recommendations],
+         48h
+       )
+
+    // Step 8: Wait for researcher action
+    ~> listen(SlackResearch.Reaction) as researcher
+
+    // Step 9: Gate on approval
+    |? (context.data.researcher.action == "approve")
+
+    // Step 10: Publish to Notion and notify stakeholders
+    |> NotionResearch.publish(
+         context.data.report.content,
+         "stakeholder-digest"
+       )

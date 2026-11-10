@@ -1,0 +1,47 @@
+// Remote computers: cloud sandboxes for running code, sandbox agents, and a server over SSH.
+//
+//   E2B_API_KEY=...  halo run examples/patterns/remote-computers.halo -p TryIt --arg code='print(sum(range(10)))'
+//   E2B_API_KEY=...  halo run examples/patterns/remote-computers.halo -p Build --arg task='a CLI that counts words, with tests'
+//   halo run examples/patterns/remote-computers.halo -p Disk --arg host_dir=/var/log
+
+policy LookOnly : AllowEffects(read)
+
+// A fresh sandbox for each run, deleted when the run ends.
+tool Lab : Remote("e2b")
+
+// A server you already have, over your own SSH keys and ~/.ssh/config.
+tool Box : Remote("deploy@build.example.com", connect_timeout: 10)
+
+// A sandbox agent: its own fresh sandbox for each run, with nothing else to declare.
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "e2b"]
+
+// This one works in Lab, so the pipeline can put files in before and take them out after.
+agent Fixer [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: Lab]
+
+agent Inspector [anthropic/claude-haiku-4-5, tools: auto]
+  system "Answer from what you find on the server. Don't guess."
+  equips Box
+  requires LookOnly
+
+// Run a snippet in the sandbox: no model, just the tool.
+pipeline TryIt(code: String) -> Result:
+  code
+    |> Lab.write(path: "main.py", content: code) as saved
+    |> Lab.run(command: "python3 main.py", timeout_ms: 30000)
+
+// Let a coder build and test something in its own sandbox.
+pipeline Build(task: String) -> Result:
+  task |> Dev.work("Run it, and the tests, before you say it's done.")
+
+// Hand a script to the fixer in Lab, then read back what it changed.
+pipeline Fix(script: String, error: String) -> Result:
+  script
+    |> Lab.write(path: "main.py", content: script) as given
+    |> Fixer.work("main.py fails with this error. Fix it and run it until it works.", error) as report
+    |> Lab.read(path: "main.py")
+
+// {{host_dir}} is shell-quoted, so it can't run as a command.
+pipeline Disk(host_dir: String) -> Result:
+  host_dir
+    |> Box.run(command: "du -sh {{host_dir}}/* | sort -h | tail -5") as usage
+    |> Inspector.explain("Which of these is growing, and is it worth worrying about?", context.data.usage.stdout, tools: [Box])
