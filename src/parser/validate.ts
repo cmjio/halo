@@ -351,6 +351,10 @@ class Validator {
       for (const key of producedKeys(stage)) {
         if (UNSAFE_NAMES.has(key)) this.add("error", `Pipeline "${s.name}": "${key}" can't be used as a name (as ${key})`, stage.loc);
       }
+      // `as msg` on a parameter would hide it in {{msg}} but not in a bare `msg` argument, so it is refused.
+      for (const key of boundNames(stage)) {
+        if (params.has(key)) this.add("error", `Pipeline "${s.name}": \`as ${key}\` reuses the parameter name "${key}"; pick a new name`, stage.loc);
+      }
       if (stage.kind === "expression") {
         if (stage.expr.kind === "ref" && !params.has(stage.expr.path[0]!)) {
           this.add("error", `Pipeline "${s.name}": undefined variable "${stage.expr.path[0]}"`, stage.loc);
@@ -639,6 +643,13 @@ export function producedKeys(stage: PipelineStage): string[] {
     default:
       return [];
   }
+}
+
+/** Names a stage binds with `as`, including on fanout items. */
+function boundNames(stage: PipelineStage): string[] {
+  if (stage.kind === "expression") return [];
+  const inner = stage.kind === "fanout" ? stage.stages.flatMap((s) => (s.bind ? [s.bind] : [])) : [];
+  return [...inner, ...(stage.bind ? [stage.bind] : [])];
 }
 
 /** A call's result is stored at `context.data.<Callee>.<method>` and `context.data.<method>`. */

@@ -206,4 +206,31 @@ describe("parser: syntax added for the runtime", () => {
     const deep = "(".repeat(5000) + "x == 1" + ")".repeat(5000);
     expect(parse(`pipeline P(x: String) -> Result:\n  x |? (${deep})`).errors).toEqual(["The program is nested too deeply to parse (too many brackets inside one another)"]);
   });
+
+  test("`as` can't reuse a parameter name, on a stage or a fanout item", () => {
+    const errs = messages(
+      `agent M [openai/gpt-4o]
+       pipeline S(msg: String, topic: String) -> Result:
+         msg |> M.reply("{{msg}}") as msg |* { M.a() as topic, M.b() } as ok`,
+      "error",
+    );
+    expect(errs).toEqual([
+      'Pipeline "S": `as msg` reuses the parameter name "msg"; pick a new name',
+      'Pipeline "S": `as topic` reuses the parameter name "topic"; pick a new name',
+    ]);
+  });
+
+  test("a misspelled `as` name is caught in templates, context.data and gates", () => {
+    const warns = messages(
+      `agent M [openai/gpt-4o]
+       pipeline S(msg: String) -> Result:
+         msg |> M.reply("{{msg}}") as answer |> M.check("{{answr}}") |? (answr != null) |> System.Value(context.data.answr)`,
+      "warning",
+    );
+    expect(warns).toEqual([
+      'Pipeline "S": template {{answr}} does not match a parameter or an earlier result',
+      'Pipeline "S": "answr" in a gate is not a parameter or result; it compares as a string',
+      'Pipeline "S": context.data.answr is never set before it is read (bind a result with `as answr`)',
+    ]);
+  });
 });
