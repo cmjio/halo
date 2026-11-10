@@ -232,10 +232,12 @@ const md = (text: string) => text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": 
 const fence = (lang: string, label: string, body: string) => `\`\`\`${lang}${label ? ` [${label}]` : ""}\n${body.replace(/\n+$/, "")}\n\`\`\`\n`;
 const shell = (r: { cmd: string; out: string }) => `$ ${r.cmd}\n${r.out}`;
 
-// The home page's tabs: a file, and what the CLI says about it.
+// The home page: a file beside what the CLI says about it, then the checks that run before anything else does.
+await Bun.write(join(generated, "hero-file.md"), fence("halo", "", SNIPPETS["triage.halo"]!));
+await Bun.write(join(generated, "hero-plan.md"), fence("txt", "", shell(runs.plan)));
 await Bun.write(
-  join(generated, "hero.md"),
-  `::: code-group\n\n${fence("halo", "triage.halo", SNIPPETS["triage.halo"]!)}\n${fence("txt", "$ halo plan", shell(runs.plan))}\n${fence("halo", "typo.halo", SNIPPETS["typo.halo"]!)}\n${fence("txt", "$ halo validate", shell(runs.validate))}\n${fence("halo", "hello.halo", SNIPPETS["hello.halo"]!)}\n${fence("txt", "$ halo test", shell(runs.hello))}\n:::\n`,
+  join(generated, "checks.md"),
+  `::: code-group\n\n${fence("halo", "typo.halo", SNIPPETS["typo.halo"]!)}\n${fence("txt", "$ halo validate", shell(runs.validate))}\n${fence("halo", "hello.halo", SNIPPETS["hello.halo"]!)}\n${fence("txt", "$ halo test", shell(runs.hello))}\n:::\n`,
 );
 await Bun.write(join(generated, "help.md"), fence("txt", "", `$ halo --help\n${runs.help.out.trim()}`));
 await Bun.write(join(generated, "plan-research.md"), fence("txt", "", `$ halo plan examples/data-research/research-assistant.halo\n${data.plans.research}`));

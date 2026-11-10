@@ -5,6 +5,7 @@ import ProvidersTable from "./ProvidersTable.vue";
 import PackageList from "./PackageList.vue";
 import RecordedRun from "./RecordedRun.vue";
 import "./custom.css";
+import "./home.css";
 
 export default {
   extends: DefaultTheme,
