@@ -4,12 +4,13 @@
  */
 
 import { escapeHtml } from "./highlight.ts";
+import type { IconName } from "./icons.ts";
 
 export interface SiteData {
   version: string;
   /** file is the path from examples/ (`learn/01-hello.halo`), name just the file name; only learn/'s are numbered. */
   examples: Array<{ file: string; name: string; section: string; number?: number; title: string; about: string; run?: string; source: string; pipelines: string[]; features: Record<string, boolean> }>;
-  sections: Array<{ folder: string; title: string; emoji: string; blurb: string }>;
+  sections: Array<{ folder: string; title: string; icon: IconName; blurb: string }>;
   /** Old example slugs and the name each example has now. */
   renamed?: Record<string, string>;
   packages: Array<{

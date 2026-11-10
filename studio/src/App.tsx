@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { IconArrowForward, IconBrain, IconClock, IconTool, IconX } from '@tabler/icons-react';
 import {
   ReactFlow,
   Controls,
@@ -90,8 +91,8 @@ function PipelineItem({ p, onStarted }: { p: PipelineInfo; onStarted: (runId: st
       </div>
       {(p.schedules.length > 0 || p.webhooks.length > 0) && (
         <div className="pipeline-triggers">
-          {p.schedules.map((s) => <span key={s.cron}>⏱ {s.cron}</span>)}
-          {p.webhooks.map((w) => <span key={w}>↪ {w}</span>)}
+          {p.schedules.map((s) => <span key={s.cron}><IconClock size={13} stroke={2} className="ti" /> {s.cron}</span>)}
+          {p.webhooks.map((w) => <span key={w}><IconArrowForward size={13} stroke={2} className="ti" /> {w}</span>)}
         </div>
       )}
       {open && (
@@ -157,7 +158,7 @@ const StageNode = ({ data }: any) => {
     <div className={`stage-node ${data.type} ${data.status}`}>
       <Handle type="target" position={Position.Top} />
       <div className="node-header">
-        <span className="node-icon">{data.type === 'tool_call' ? '🔧' : '🧠'}</span>
+        <span className="node-icon">{data.type === 'tool_call' ? <IconTool size={16} stroke={2} /> : <IconBrain size={16} stroke={2} />}</span>
         <span className="node-title">{data.label}</span>
       </div>
       {data.duration != null && <div className="node-metrics">{data.duration}ms</div>}
@@ -441,7 +442,7 @@ function App() {
         <div className="inspector">
           <div className="inspector-header">
             <h3>{selectedEvent.stage}</h3>
-            <button onClick={() => setSelectedEvent(null)}>✕</button>
+            <button onClick={() => setSelectedEvent(null)} aria-label="Close"><IconX size={16} stroke={2} /></button>
           </div>
           <div className="inspector-meta">
             <span>Type: {selectedEvent.type}</span>

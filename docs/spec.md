@@ -207,10 +207,10 @@ pipeline ResolveSalesDrop(event: String) -> Diagnosis:
 
 | Editor | Status | Path |
 |---|---|---|
-| VS Code | ✅ Highlighting + language server (errors, hover, completion) | `editors/vscode/` |
-| Zed | ✅ Tree-sitter highlighting | `editors/zed/` |
-| Sublime Text | ✅ Highlighting | `editors/sublime/` |
-| JetBrains | ⚠️ Planned | — |
+| VS Code | Highlighting + language server (errors, hover, completion) | `editors/vscode/` |
+| Zed | Tree-sitter highlighting | `editors/zed/` |
+| Sublime Text | Highlighting | `editors/sublime/` |
+| JetBrains | Planned | — |
 
 ## Dictionary
 

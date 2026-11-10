@@ -18,7 +18,7 @@ pipeline Explain(topic: String) -> Result:
     |> System.Print()
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 curl -fsSL https://halolang.com/install.sh | sh     # macOS, Linux
@@ -48,7 +48,7 @@ docker run -p 8080:8080 -v "$PWD:/app" -e HALO_SERVE_TOKEN -e ANTHROPIC_API_KEY 
 
 Inside this repo, `bun run index.ts ...` works the same as `halo ...`.
 
-### ⭐ Try the flagship
+### Try the flagship
 
 [`examples/engineering/github-triage.halo`](examples/engineering/github-triage.halo) triages a public repo's open issues for real:
 - fetches issues from GitHub's public API (no token needed)
@@ -63,7 +63,7 @@ Answer `label` instead of `approve` and it also adds each issue's suggested labe
 ANTHROPIC_API_KEY=... halo debug examples/engineering/github-triage.halo --arg repo=oven-sh/bun --arg limit=8
 ```
 
-### 📦 Start from a blueprint
+### Start from a blueprint
 
 A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it.
 
@@ -72,7 +72,7 @@ halo init my-inbox --template support-inbox && cd my-inbox
 halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
 ```
 
-## 🧠 The language
+## The language
 
 | Declaration | Example |
 |---|---|
@@ -115,7 +115,7 @@ See [`examples/patterns/builtin-kit.halo`](examples/patterns/builtin-kit.halo), 
 - `context.meta` records cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain over every stage.
 - In a `@thread(user_id)` pipeline, `context.thread` is state kept between runs for that user. `Thread.set`, `Thread.append` and `Thread.clear` change it, and the changes are saved when the run ends. See [Thread State](docs/guide/thread-state.md).
 
-## 🔧 CLI
+## CLI
 
 ```bash
 halo run <file.halo> [--pipeline Name] [--arg k=v ...] [--args '<json>'] [--json]
@@ -143,11 +143,11 @@ halo search | add | remove | install | tools | pack | publish   # tool packages
 
 In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a server), the run pauses and prints the `halo resume` command; paused runs are kept in `.halo/runs`. Every CLI run is recorded to `.halo/telemetry.db` for Halo Studio unless you pass `--no-telemetry`, and to `.halo/recordings` for `halo replay` (unredacted; the newest 50 are kept, or `recordings.keep` in `halo.json`) unless you pass `--no-record`. See [Plan and Replay](docs/guide/plan-and-replay.md).
 
-### 🧬 Pipelines that improve themselves
+### Pipelines that improve themselves
 
 `halo evolve` points a model at your pipeline and its real traffic. It proposes rewrites (sharper prompts, cheaper models, an extra check), throws away any that would reach something new (a tool, an effect, a provider, a weaker policy, a missing approval, a higher spend cap), replays the rest against recorded runs without touching the world, has a judge compare each with the original, and checks the best on runs the proposer never saw. You get one diff and a report. On the flagship triage example, run on 14 real repositories, it spent $1.20 and found a 9-line severity-calibration prompt for the Editor that beat the original on held-out runs, 3 to 2, at the same cost. It also threw away a rewrite that named a model that doesn't exist, and one that added a tool call it couldn't replay ([the run](docs/guide/plan-and-replay.md#halo-evolve)). It changes nothing until you run `halo evolve apply`, or `--pr` opens a pull request with the winner. Studio has an Evolve tab for the same loop, and `halo serve` can record production runs (`"recordings": { "serve": true }`) for it to learn from. See [`halo evolve`](docs/guide/plan-and-replay.md#halo-evolve).
 
-## 🌐 Serving pipelines
+## Serving pipelines
 
 `halo serve` turns a folder of pipelines into a service, in one Bun process:
 
@@ -168,7 +168,7 @@ In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a 
 
 It listens on localhost unless you set `HALO_SERVE_TOKEN`. See [Serving pipelines](docs/guide/production/serving.md).
 
-## 🧩 Library
+## Library
 
 ```ts
 import { compile, HaloRuntime, FileRunStore } from "halo";
@@ -190,7 +190,7 @@ for await (const event of rt.stream("Explain", { topic: "tides" })) { /* live ev
 
 Register an `onInterrupt` / `onListen` handler to answer humans and events in-process instead of pausing. Extension points: `registerAdapter()` (any OpenAI-compatible API via `OpenAICompatibleAdapter`), `registerToolProvider()`, `registerSystem()`, and `mockAll()` for tests. Errors are `HaloError`s with a `code` (`PolicyViolation`, `SchemaValidationError`, `TimeoutError`, `LoopLimitError`, ...).
 
-## ✅ Model providers
+## Model providers
 
 | Provider | Model prefix | API key |
 |---|---|---|
@@ -204,7 +204,7 @@ Register an `onInterrupt` / `onListen` handler to answer humans and events in-pr
 
 `HALO_API_KEY` (or `--api-key`) is used for any provider without its own key.
 
-## 🛠 Tools
+## Tools
 
 | Provider | What it does |
 |---|---|
@@ -232,7 +232,7 @@ Tokens can be `Env.NAME` or the string `"Env.NAME"`. An agent calls an equipped 
 
 **Tool packages** add providers from a registry: `halo add stripe` (also `jira`, `notion`, `sentry`, `cloudflare`, `github-mcp`, `world-time`). A package is a REST API described as data, an MCP server, or code; anything that runs code needs `--trust`, and `halo.lock` pins each one's checksum. See [Tool Packages](docs/guide/tool-packages.md).
 
-## 🛡 Policies
+## Policies
 
 Checked on every prompt (input) and answer (output) of agents that `requires` them:
 
@@ -246,13 +246,13 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 
 `Tone`, `Anonymize`, other `Require(...)` checks, and other categories need a model to judge them and are **not enforced yet**; `validate` warns wherever they're used.
 
-## 🧰 Tooling
+## Tooling
 
 - **Editors**: VS Code (`editors/vscode`, with a language server for errors, hover, and completion), Zed (`editors/zed`, tree-sitter), Sublime Text (`editors/sublime`).
 - **Halo Studio** (`studio/`): browse runs, start them, and approve paused ones. It's served by `halo serve` at `/` (`bun run studio` does the same).
 - **Docs site**: `bun run docs:dev`.
 
-## 📚 Examples
+## Examples
 
 `examples/` holds 160 examples. [`learn/`](examples/learn/) is the place to start: 19 files, one concept each, numbered so they read in order. [`patterns/`](examples/patterns/) shows features in context, and every other folder is a domain: [`engineering/`](examples/engineering/), [`product/`](examples/product/), [`security/`](examples/security/), [`data-research/`](examples/data-research/), [`support/`](examples/support/), [`sales-marketing/`](examples/sales-marketing/), [`finance/`](examples/finance/), [`legal-hr/`](examples/legal-hr/), [`healthcare/`](examples/healthcare/), [`operations/`](examples/operations/), and [`personal/`](examples/personal/). Most are agent designs from real work: a system prompt, its tools, and what the agent may do freely, must confirm, or must never do, with the rules that have to hold enforced by policies, gates and approvals rather than by the prompt. [`examples/README.md`](examples/README.md) maps them all. Highlights:
 
@@ -274,7 +274,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 
 Every example validates, and `test/examples.test.ts` runs them.
 
-## 🏗 Layout
+## Layout
 
 ```
 grammars/Halo.g4        the grammar (source of truth); `bun run generate` rebuilds the parser (needs Java)
@@ -289,6 +289,6 @@ bun test              # parser, validator, runtime, adapters over HTTP, tools, C
 bunx tsc --noEmit
 ```
 
-## 📄 License
+## License
 
 MIT
