@@ -1,0 +1,32 @@
+// ============================================================
+// Persistent Store Engine
+// ============================================================
+// LEARN: How to give agents cross-run amnesia protection
+// WHY:   Agents naturally forget everything between runs.
+//        Store blocks automatically inject and save context.
+// ============================================================
+
+// 1. Define a Store provider (e.g., File, SQLite, PostgreSQL)
+//    Here we use the built-in File provider to save a simple JSON/text log.
+store ChatHistory: File(".chat_history.log")
+
+// 2. Attach the store to the Agent using `equips`
+agent Helper [openai/gpt-4o, temp: 0.7]
+  equips ChatHistory
+
+// 3. Define a normal pipeline
+pipeline HandleMessage(msg: String) -> Result:
+  msg
+    |> Helper.prompt("You are a helpful assistant. Reply to the user's message.")
+    |> System.Print()
+
+// ============================================================
+// HOW IT WORKS UNDER THE HOOD:
+// 1. When `HandleMessage` runs, the engine sees `Helper` equips `ChatHistory`.
+// 2. Before sending the prompt to the LLM, the engine automatically 
+//    loads `.chat_history.log` and injects it into the prompt context.
+// 3. The LLM responds with full awareness of the entire past conversation.
+// 4. After the LLM responds, the engine automatically appends the new 
+//    `User -> Assistant` interaction to `.chat_history.log`.
+// 5. Zero extra code is required in your pipeline to manage state!
+// ============================================================

@@ -67,7 +67,7 @@ Give an agent `tools: [...]` and it calls them until it has an answer, using eac
 - `ApproveTools` asks a person first (terminal, approval link, or Slack buttons); the run waits on disk until someone answers.
 - Tool results go through the agent's `Redact` and `Block` rules before the model reads them.
 
-A real run of the fixer in [example 74](/examples/74-software-team), on a small project with two bugs, as `halo run` recorded it:
+A real run of the fixer in [example 74](/examples/software-team), on a small project with two bugs, as `halo run` recorded it:
 
 <RecordedRun />
 

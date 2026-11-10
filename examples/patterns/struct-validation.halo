@@ -1,0 +1,41 @@
+// ============================================================
+// Struct Schema Validation
+// ============================================================
+// LEARN: How to enforce strict data contracts on pipelines
+// WHY:   Ensure unpredictable agents return structured, 
+//        type-safe JSON that your backend can safely consume.
+// ============================================================
+
+// 1. Define a Struct to act as the strict schema
+schema UserProfile {
+  name: String
+  age: Number
+  isActive: Boolean
+  tags: Array
+}
+
+// 2. Define a Policy to force the model to output JSON
+policy JSONGuard:
+  Require(JSON)
+
+agent Extractor [openai/gpt-4o, temp: 0.1]
+  requires JSONGuard
+
+// 3. Declare the Pipeline to return the schema type
+pipeline ParseProfile(bio: String) -> UserProfile:
+  bio
+    |> Extractor.prompt("Extract the user profile into JSON matching this schema: { name: String, age: Number, isActive: Boolean, tags: Array }. If age is unknown, guess. Return ONLY JSON.")
+    |> System.Print()
+
+// ============================================================
+// HOW IT WORKS UNDER THE HOOD:
+// 1. The pipeline executes and `Extractor` returns a string.
+// 2. `JSONGuard` verifies that the string is parsable JSON.
+// 3. Before `ParseProfile` returns, the engine intercepts the result.
+// 4. The engine automatically parses the JSON and strictly type-checks 
+//    every field against the `UserProfile` schema definition.
+// 5. If `age` is returned as a string "30" instead of a number 30, 
+//    the pipeline throws a SchemaValidationError!
+// 6. The final result returned by Halo is a native JavaScript object,
+//    ready to be saved directly to your database.
+// ============================================================

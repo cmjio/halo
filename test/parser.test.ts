@@ -131,48 +131,48 @@ describe("Halo Parser", () => {
 
   // ── Advanced Examples (20-32) ────
 
-  test("parses 20-role-founder.halo without errors", async () => {
-    const result = parse(await readExample("20-role-founder.halo"));
+  test("parses founder.halo without errors", async () => {
+    const result = parse(await readExample("founder.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 21-role-software-engineer.halo without errors", async () => {
-    const result = parse(await readExample("21-role-software-engineer.halo"));
+  test("parses software-engineer.halo without errors", async () => {
+    const result = parse(await readExample("software-engineer.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 22-role-ux-designer.halo without errors", async () => {
-    const result = parse(await readExample("22-role-ux-designer.halo"));
+  test("parses ux-designer.halo without errors", async () => {
+    const result = parse(await readExample("ux-designer.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 23-role-ux-researcher.halo without errors", async () => {
-    const result = parse(await readExample("23-role-ux-researcher.halo"));
+  test("parses ux-researcher.halo without errors", async () => {
+    const result = parse(await readExample("ux-researcher.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 24-role-qa-engineer.halo without errors", async () => {
-    const result = parse(await readExample("24-role-qa-engineer.halo"));
+  test("parses qa-engineer.halo without errors", async () => {
+    const result = parse(await readExample("qa-engineer.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 25-role-product-manager.halo without errors", async () => {
-    const result = parse(await readExample("25-role-product-manager.halo"));
+  test("parses product-manager.halo without errors", async () => {
+    const result = parse(await readExample("product-manager.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 30-control-moderation.halo without errors", async () => {
-    const result = parse(await readExample("30-control-moderation.halo"));
+  test("parses content-moderation.halo without errors", async () => {
+    const result = parse(await readExample("content-moderation.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 31-power-analyst-swarm.halo without errors", async () => {
-    const result = parse(await readExample("31-power-analyst-swarm.halo"));
+  test("parses analyst-swarm.halo without errors", async () => {
+    const result = parse(await readExample("analyst-swarm.halo"));
     expect(result.errors).toEqual([]);
   });
 
-  test("parses 32-adapter-router-demo.halo without errors", async () => {
-    const result = parse(await readExample("32-adapter-router-demo.halo"));
+  test("parses model-router.halo without errors", async () => {
+    const result = parse(await readExample("model-router.halo"));
     expect(result.errors).toEqual([]);
   });
 

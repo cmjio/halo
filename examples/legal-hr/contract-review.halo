@@ -1,0 +1,96 @@
+// ============================================================
+// Legal — Contract Review & Risk Assessment
+// PURPOSE: Ingest contracts, extract clauses, compare against
+//          standard terms, flag deviations, and produce redline
+// ============================================================
+
+// --- Policies ---
+policy Confidential   : Redact(ClientName) & Redact(DealValue) & Redact(SSN)
+policy LegalDisclaimer : Require(NotLegalAdvice)
+policy CostGuard      : MaxSpend(3.00)
+
+// --- Tools ---
+tool DocParser     : REST("api.textract.aws.com/v1", apiKey: Env.AWS_KEY)
+tool CLM           : REST("api.ironclad.com/v1/contracts", apiKey: Env.IRONCLAD_KEY)
+tool LegalSlack    : POST("hooks.slack.com/services/legal-review")
+
+// --- Store ---
+tool ClauseLibrary  : VectorStore(Env.PINECONE_KEY, namespace: "standard-clauses")
+tool PrecedentDB    : VectorStore(Env.PINECONE_KEY, namespace: "past-negotiations")
+
+// --- Struct ---
+schema ContractReview {
+  risk_score       : Number
+  flagged_clauses  : Array
+  redline_summary  : String
+  recommendation   : String
+}
+
+// --- Agents ---
+agent Extractor [openai/gpt-4o-mini, temp: 0.0]
+  equips DocParser
+  requires CostGuard
+
+agent LegalAnalyst [anthropic/claude-sonnet-4, temp: 0.1]
+  equips ClauseLibrary, PrecedentDB
+  requires Confidential, LegalDisclaimer, CostGuard
+
+// --- The Pipeline ---
+@timeout(10m)
+@retry(2, 15s)
+pipeline ReviewContract(document: ContractUpload) -> ContractReview:
+  document
+    // Step 1: Parse the document into structured sections
+    |> Extractor.parse_sections(
+         tool: DocParser,
+         format: context.data.document.file_type,
+         raw: context.data.document.content
+       )
+
+    // Step 2: Fan-out — analyze each risk dimension in parallel
+    |* {
+         LegalAnalyst.check_indemnity(
+           clauses: context.data.parse_sections,
+           standard: "MSA-v4"
+         ),
+         LegalAnalyst.check_liability(
+           clauses: context.data.parse_sections,
+           cap_threshold: 2000000
+         ),
+         LegalAnalyst.check_termination(
+           clauses: context.data.parse_sections,
+           minimum_notice: "90d"
+         ),
+         LegalAnalyst.check_ip_assignment(
+           clauses: context.data.parse_sections,
+           company_policy: "retain-all"
+         )
+       }
+
+    // Step 3: Synthesize risk assessment from all analyses
+    |> LegalAnalyst.synthesize_risk(
+         indemnity: context.data.check_indemnity,
+         liability: context.data.check_liability,
+         termination: context.data.check_termination,
+         ip: context.data.check_ip_assignment,
+         precedents: PrecedentDB
+       )
+
+    // Step 4: Gate — auto-approve low-risk contracts
+    |? (context.data.synthesize_risk.risk_score > 30)
+
+    // Step 5: Generate redline markup for human review
+    |> LegalAnalyst.generate_redline(
+         original: context.data.parse_sections,
+         flagged: context.data.synthesize_risk.flagged_clauses,
+         standard_terms: ClauseLibrary
+       )
+
+    // Step 6: Human-in-the-loop — attorney must sign off
+    |! yield(
+         LegalSlack,
+         context.data.generate_redline,
+         [context.data.synthesize_risk],
+         24h
+       )
+    ~> listen(LegalSlack.Reaction)

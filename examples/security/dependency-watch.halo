@@ -1,0 +1,79 @@
+// ============================================================
+// Developer: Dependency security watch
+// ============================================================
+// Reads a project's dependencies (the versions actually installed in
+// node_modules), checks each one against OSV.dev, the free open
+// vulnerability database (no key), and writes a report sorted by
+// severity, marking what's new since the last report. Posts to Slack
+// only when there's something new and a channel is given.
+//
+// RUN:  halo run examples/security/dependency-watch.halo --arg project=. --arg slack_channel=""
+// DAILY (halo.json):
+//   { "pipeline": "DependencyWatch", "cron": "0 8 * * 1-5",
+//     "args": { "project": "/path/to/app", "slack_channel": "#security" } }
+// ============================================================
+
+policy Budget : MaxSpend(0.10) & Require(JSON)
+
+tool Shell : Bash()
+tool OSV   : POST("api.osv.dev/v1/query", sendInput: false)
+tool Chat  : Slack(Env.SLACK_BOT_TOKEN)
+store Reports : VectorStore(namespace: "dependency-reports")
+
+agent Analyst [anthropic/claude-haiku-4-5, temp: 0.0]
+  system """
+    You write dependency security reports. findings[i] belongs to deps[i].
+    List only packages that have advisories, most severe first. For each:
+    package@version, advisory id (and CVE if any), severity, a one-line
+    summary, and the lowest fixed version above the installed one. Mark an
+    advisory NEW if it isn't in the previous report. Never invent advisories.
+    Reply with JSON: {"vulnerable": <packages with advisories>, "new": <NEW advisories>, "report": "<Markdown>"}
+  """
+  requires Budget
+
+@retry(2, 5s)
+pipeline DependencyWatch(project: String, slack_channel: String) -> Result:
+  project
+    // 1. Direct dependencies at their installed versions, shaped as OSV queries
+    |> Shell.run(command: """
+         bun -e '
+           const dir = process.argv.at(-1);
+           const pkg = JSON.parse(await Bun.file(dir + "/package.json").text());
+           const all = { ...pkg.dependencies, ...pkg.devDependencies };
+           const out = [];
+           for (const name of Object.keys(all)) {
+             let version;
+             try { version = JSON.parse(await Bun.file(dir + "/node_modules/" + name + "/package.json").text()).version; }
+             catch { version = String(all[name]).replace(/^[^0-9]*/, ""); }
+             out.push({ package: { name, ecosystem: "npm" }, version });
+           }
+           console.log(JSON.stringify(out));
+         ' {{project}}
+       """) as deps
+    |? (context.data.deps.json.length > 0)
+
+    // 2. Ask OSV about each one (four at a time), keeping only the useful fields
+    |* each(dep in deps.json, concurrency: 4) => OSV.query(package: dep.package, version: dep.version) as results
+    |> System.Pick(
+         context.data.results,
+         fields: ["vulns.id", "vulns.aliases", "vulns.summary", "vulns.database_specific.severity", "vulns.affected.ranges.events.fixed"],
+         maxChars: 300
+       ) as findings
+
+    // 3. The last report for this project, to mark what's new
+    |> Reports.search(query: "report", tags: [project], order: "recent", limit: 1) as previous
+
+    // 4. The report
+    |> Analyst.report(
+         "Security report for {{project}}.",
+         deps: context.data.deps.json,
+         findings: context.data.findings,
+         previous_report: context.data.previous.content
+       ) as report
+
+    // 5. Remember it; alert only when something is new
+    |> Reports.log(content: context.data.report.report, tags: [project])
+    |? {
+         (context.data.report.new > 0 && slack_channel != "") => Chat.post(channel: slack_channel, text: "{{report.report}}"),
+       }
+    |> System.Value(context.data.report.report)

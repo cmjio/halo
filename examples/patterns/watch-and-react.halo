@@ -1,0 +1,62 @@
+// ============================================================
+// Watch something, and react with a decision, not a guess
+// ============================================================
+// `halo serve` checks a source on a schedule and starts this pipeline only
+// when it changes (no model call while nothing changes). The pipeline gets
+// what changed; an agent picks one action from a fixed list, as JSON the
+// policy enforces; a branch routes the decision; and the risky action waits
+// for a person.
+//
+// halo.json:
+//   {
+//     "files": ["examples/patterns/watch-and-react.halo"],
+//     "watches": [
+//       { "pipeline": "OnStatusChange", "url": "https://www.githubstatus.com/api/v2/summary.json", "every": "2m" }
+//     ],
+//     "notify": { "slack": "Env.SLACK_WEBHOOK_URL" },
+//     "slack": { "signingSecret": "Env.SLACK_SIGNING_SECRET" }
+//   }
+//
+// RUN:  halo serve           (approve or reject the page from Slack's buttons)
+// TRY:  halo test examples/patterns/watch-and-react.halo --args '{"source":"x","changes":[]}'
+// ============================================================
+
+policy Decision : Enforce(JSON) & MatchRegex("\"action\"\\s*:\\s*\"(ignore|note|alert|page)\"") & MaxSpend(0.05)
+
+schema Verdict {
+  action: String,
+  reason: String
+}
+
+tool Chat : Slack(Env.SLACK_BOT_TOKEN, channel: "#ops")
+store Log : VectorStore(namespace: "status-changes")
+
+@correct(1)
+agent Triage [anthropic/claude-haiku-4-5, temp: 0.0]
+  system """
+    You decide what to do about a change in a service's status page.
+    Reply with only JSON: {"action": "...", "reason": "<one sentence>"}
+    where action is exactly one of:
+      ignore: cosmetic or no real change
+      note:   worth remembering, nobody needs to act
+      alert:  a degradation people should know about
+      page:   a major outage that needs someone now
+  """
+  requires Decision
+
+pipeline OnStatusChange(source: String, changes: JSON) -> Verdict:
+  changes
+    |> Triage.decide("What changed at {{source}}, and what should we do?", changes) as verdict
+    |> Log.log(content: context.data.verdict, tags: ["{{verdict.action}}"])
+    |? {
+         (context.data.verdict.action == "alert") => Chat.post(text: "Status change: {{verdict.reason}}"),
+         else => System.Value(context.data.verdict)
+       }
+    |> System.Value(context.data.verdict)
+
+    // Paging someone is the one action that waits for a person.
+    |? (context.data.verdict.action == "page")
+    |! yield(msg: "Page the on-call engineer? {{verdict.reason}}") as review
+    |? (context.data.review.approved == true)
+    |> Chat.post(text: "<!here> Paging on-call: {{verdict.reason}}")
+    |> System.Value(context.data.verdict)

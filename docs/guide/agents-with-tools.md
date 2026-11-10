@@ -24,7 +24,7 @@ pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
     |> System.Value(context.data.report)
 ```
 
-The fixer runs the tests, reads files, edits them, and runs the tests again, choosing each step itself. The policy keeps it inside the project's files, away from the tests, and limits the shell to `bun test`. Both `DenyArgs` rules here use the three-argument form, which checks one named argument (`path`, `command`); `DenyArgs(tool, regex)` checks every argument value, each on its own. The pipeline then runs the tests itself and sends the fixer back if they still fail. This is `FixUntilGreen` in the repository's `examples/real-world/74-software-team.halo`.
+The fixer runs the tests, reads files, edits them, and runs the tests again, choosing each step itself. The policy keeps it inside the project's files, away from the tests, and limits the shell to `bun test`. Both `DenyArgs` rules here use the three-argument form, which checks one named argument (`path`, `command`); `DenyArgs(tool, regex)` checks every argument value, each on its own. The pipeline then runs the tests itself and sends the fixer back if they still fail. This is `FixUntilGreen` in the repository's `examples/engineering/software-team.halo`.
 
 ## Choosing the tools
 

@@ -13,7 +13,7 @@ pipeline Chat(user_id: String, msg: String) -> Result:
     |> System.Value(context.data.reply)
 ```
 
-Every run with `user_id: "ana"` shares one thread, and `user_id: "bo"` has another. The full example is [77: Thread state](/examples/77-thread-state).
+Every run with `user_id: "ana"` shares one thread, and `user_id: "bo"` has another. The full example is [77: Thread state](/examples/thread-state).
 
 ## Reading and changing it
 
