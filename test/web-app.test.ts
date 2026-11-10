@@ -20,7 +20,7 @@ const app = createApp({
   mocks: { ...mocks, "Writer.draft": (req: MockRequest) => (prompts.push(req), mocks["Writer.draft"]) },
   runtime: {
     env: { HANDBOOK_DIR: join(dir, "handbook"), ORDERS_API_URL: "http://orders.internal/orders", ORDERS_API_TOKEN: TOKEN },
-    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => orderService(new Request(input, init))) as typeof fetch,
+    fetch: (async (input: string | URL | Request, init?: RequestInit) => orderService(input instanceof Request ? input : new Request(String(input), init))) as typeof fetch,
   },
 });
 afterAll(() => app.close());
@@ -66,10 +66,10 @@ async function readEvents(res: Response, until: (e: PublicEvent) => boolean): Pr
 describe("web-app blueprint", () => {
   test("draft → pause → approve with an edit → done, remembered in the user's thread", async () => {
     const ana = browser();
-    const { userId } = await (await ana("/api/me")).json();
+    const { userId } = (await (await ana("/api/me")).json()) as { userId: string };
     const start = await ana("/api/drafts", { message: "Where is my lamp?", user_id: "someone-else" });
     expect(start.status).toBe(202);
-    const { runId } = await start.json();
+    const { runId } = (await start.json()) as { runId: string };
 
     const first = await readEvents((await ana(`/api/runs/${runId}/events`))!, (e) => e.type === "paused");
     expect(first.filter((e) => e.type === "stage").map((e) => (e as { label: string }).label)).toContain("Writer.draft");
@@ -105,7 +105,7 @@ describe("web-app blueprint", () => {
   test("another user can't watch or answer someone's run", async () => {
     const ana = browser();
     const bo = browser();
-    const { runId } = await (await ana("/api/drafts", { message: "Refund please" })).json();
+    const { runId } = (await (await ana("/api/drafts", { message: "Refund please" })).json()) as { runId: string };
     await readEvents((await ana(`/api/runs/${runId}/events`))!, (e) => e.type === "paused");
     expect((await bo(`/api/runs/${runId}/events`)).status).toBe(404);
     expect((await bo(`/api/runs/${runId}/answer`, { approved: true })).status).toBe(404);
@@ -113,7 +113,7 @@ describe("web-app blueprint", () => {
 
   test("reject halts the run; a second answer is refused", async () => {
     const ana = browser();
-    const { runId } = await (await ana("/api/drafts", { message: "Hello" })).json();
+    const { runId } = (await (await ana("/api/drafts", { message: "Hello" })).json()) as { runId: string };
     await readEvents((await ana(`/api/runs/${runId}/events`))!, (e) => e.type === "paused");
     expect((await ana(`/api/runs/${runId}/answer`, { approved: false })).status).toBe(202);
     expect((await ana(`/api/runs/${runId}/answer`, { approved: true })).status).toBe(409);
