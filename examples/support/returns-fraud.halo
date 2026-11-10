@@ -59,7 +59,7 @@ pipeline ProcessReturn(request: ReturnRequest) -> ReturnDecision:
     // Step 2: Gate — if fraud score is high, escalate immediately
     |? (context.data.score_risk.fraud_score > 70)
     |> CXSlack.post(
-         message: "🚩 FRAUD ALERT — manual review required",
+         message: "FRAUD ALERT — manual review required",
          order: context.data.verify_order,
          fraud: context.data.score_risk,
          channel: "loss-prevention"

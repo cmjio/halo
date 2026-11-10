@@ -18,5 +18,5 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div ref="host" class="pg-host"><p class="pg-loading">Warming up the playground… ✨</p></div>
+  <div ref="host" class="pg-host"><p class="pg-loading">Warming up the playground…</p></div>
 </template>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { IconCheck, IconX } from '@tabler/icons-react';
 
 /** The Evolve tab: start `halo evolve` runs, watch them, read the variants and their diffs, apply one. */
 
@@ -244,7 +245,7 @@ export function EvolveView({ api, id }: { api: Api; id: string }) {
                 <table className="fence">
                   <tbody>
                     {v.fence.map((c) => (
-                      <tr key={c.rule}><td className={c.ok ? 'ok' : 'bad'}>{c.ok ? '✓' : '✗'}</td><td className="mono">{c.rule}</td><td className="muted">{c.detail}</td></tr>
+                      <tr key={c.rule}><td className={c.ok ? 'ok' : 'bad'}>{c.ok ? <IconCheck size={14} stroke={2.5} aria-label="passes" /> : <IconX size={14} stroke={2.5} aria-label="fails" />}</td><td className="mono">{c.rule}</td><td className="muted">{c.detail}</td></tr>
                     ))}
                   </tbody>
                 </table>

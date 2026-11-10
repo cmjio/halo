@@ -105,7 +105,7 @@ A `command` runs with the server's full environment and permissions. It comes fr
 A run that reaches `|! yield` or `~> listen` pauses and is saved under `.halo/runs`, so it survives restarts. The server logs (and, with `notify.slack`, posts) a signed link:
 
 ```
-⏸ TriageIssues is waiting for a human: approve = save the report, label = …, reject = discard
+‖ TriageIssues is waiting for a human: approve = save the report, label = …, reject = discard
 Respond: https://halo.example.com/approve/6f9696ef-…?sig=94cea2…
 ```
 

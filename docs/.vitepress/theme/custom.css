@@ -859,3 +859,12 @@
     min-height: 360px;
   }
 }
+
+/* Tabler icons (site/src/icons.ts) sit on the text's baseline and take its color. */
+.ti {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+}
