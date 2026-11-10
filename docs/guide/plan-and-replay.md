@@ -240,6 +240,19 @@ Apply with: halo evolve apply .halo/evolve/2026-11-09-14-02-TriageIssues v4.1
 
 (The output above is illustrative.)
 
+**A real run.** The flagship [`50-github-triage.halo`](https://github.com/cmjio/halo/blob/main/examples/50-github-triage.halo) was run on 14 real repositories (about $0.02 each), then evolved with 2 rounds of 3 rewrites and a short criteria file. It spent $1.20 of a $3.00 budget:
+
+| Variant | What it tried | Result |
+|---|---|---|
+| v1 | Triager on `claude-haiku-3-5`, `@correct(2)` | Lost all 9 proposal runs: that model id doesn't exist, so every run failed |
+| v2 | A Judge agent checks the report before it's saved | Re-scored after a fix to compare (below): 7 won, 7 lost, +24% cost |
+| **v3** | **A 9-line Editor system prompt: severity calibration rules, short labels, every issue once** | **5–1–3 on the proposal runs; 3 won, 2 lost on 5 held-out runs, same cost: the winner** |
+| v3.1 | A gate that re-classifies low-confidence triage | Diverged: it changed what `TriageLog.search` was asked, which replay can't answer |
+| v3.2 | `@correct(2)` and a warmer Triager | 3–1–5: lost |
+| v3.3 | A second `TriageLog.search` for past severities | Diverged: a new tool call |
+
+Three things to take from it: the win is real but small, and 5 held-out runs is a small sample (record more runs before trusting a margin like this); the judge's reasons are mostly about conciseness and label style, which is what the criteria asked for; and rewrites that add tool calls can't be scored from recordings, so the proposer is now told to prefer changes to prompts, models, settings, gates and agents. The run also found a gap: v2 added an agent after the Editor, and compare used to judge on the last model answer, which the original didn't have. It now judges on the last answer from an agent both versions have.
+
 **How it works**
 
 1. **Runs.** It takes the pipeline's newest finished recordings (`--runs`, 60) and refuses to start with fewer than `--min-runs` (10). A seeded shuffle (`--seed`, 1) holds out a share of them (`--holdout`, 0.33). The proposer never sees the held-out runs, and only the finalists are scored on them.

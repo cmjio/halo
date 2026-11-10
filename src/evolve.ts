@@ -215,6 +215,8 @@ function fenceRules(options: FenceOptions, worstCase?: number): string {
     `- every model is from a provider the original uses${options.allowModels?.length ? `, or matches ${options.allowModels.join(", ")}` : ""};`,
     `- the worst-case cost per run doesn't rise${options.maxCostRatio && options.maxCostRatio !== 1 ? ` above ×${options.maxCostRatio}` : ""}${worstCase !== undefined ? ` (the original's is $${worstCase.toFixed(4)})` : ""}, and no MaxSpend is raised;`,
     "- no `|* each` without `limit:` is added.",
+    "",
+    "Scoring replays recorded runs: tool results come from the recording, and only model calls whose prompts changed go live. So a rewrite that adds a tool call, or changes what a tool is asked before the last agent that both versions have answers, can't be scored on those runs (they diverge) and can't win. Prefer changes to prompts, system prompts, models, settings, gates and agents.",
   ].join("\n");
 }
 

@@ -228,7 +228,10 @@ export async function compareRuns(options: CompareOptions): Promise<CompareSumma
     let note: string | undefined;
     if (result && stats.staleTools.length) {
       const isAnswer = (c: RecordedCall) => c.kind === "agent" && !c.toolCalls?.length;
-      const last = got.findLastIndex(isAnswer);
+      // The last answer from an agent the original also has: a variant that adds a checking agent at the end
+      // is still compared on the answer both versions wrote.
+      const shared = new Set(rec.calls.filter(isAnswer).map((c) => c.target));
+      const last = got.findLastIndex((c) => isAnswer(c) && shared.has(c.target));
       const before = got.slice(0, Math.max(last, 0)).filter((c) => c.stale).map((c) => c.target);
       const after = got.slice(last + 1).filter((c) => c.stale).map((c) => c.target);
       const mine = last >= 0 ? got[last] : undefined;
