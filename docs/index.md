@@ -20,7 +20,7 @@ import data from './.vitepress/generated/lite.json'
 <div class="h-actions">
   <a class="h-btn primary" href="/guide/quickstart">Get started</a>
   <a class="h-btn" href="/playground">Try the playground</a>
-  <a class="h-btn" href="https://github.com/cmjio/halo">GitHub ↗</a>
+  <a class="h-btn" href="https://github.com/cmjio/halo">GitHub →</a>
 </div>
 
 <div class="h-install">
@@ -185,7 +185,7 @@ curl -fsSL https://halolang.com/install.sh | sh
 <h2 class="h-h2">MIT licensed. No lock-in at any layer.</h2>
 <p class="h-sub">The language, the runtime, the CLI, Studio, and the editor tooling are in one public repository.</p>
 <div class="h-actions">
-  <a class="h-btn" href="https://github.com/cmjio/halo">Read the source ↗</a>
+  <a class="h-btn" href="https://github.com/cmjio/halo">Read the source →</a>
   <a class="h-btn ghost" href="/spec">Language spec →</a>
 </div>
 <dl class="h-stats">
