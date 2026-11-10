@@ -647,9 +647,8 @@ export function producedKeys(stage: PipelineStage): string[] {
 
 /** Names a stage binds with `as`, including on fanout items. */
 function boundNames(stage: PipelineStage): string[] {
-  if (stage.kind === "expression") return [];
   const inner = stage.kind === "fanout" ? stage.stages.flatMap((s) => (s.bind ? [s.bind] : [])) : [];
-  return [...inner, ...(stage.bind ? [stage.bind] : [])];
+  return [...inner, ...("bind" in stage && stage.bind ? [stage.bind] : [])];
 }
 
 /** A call's result is stored at `context.data.<Callee>.<method>` and `context.data.<method>`. */
