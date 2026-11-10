@@ -89,7 +89,7 @@ function outputText(output: unknown): string {
   return typeof output === "string" ? output : JSON.stringify(output, null, 2);
 }
 
-export function createMcpServer(source: McpPipelineSource, info: { name: string; version: string } = { name: "halo", version: "0.6.1" }): McpServer {
+export function createMcpServer(source: McpPipelineSource, info: { name: string; version: string } = { name: "halo", version: "0.7.0" }): McpServer {
   /** In-flight tools/call requests, so notifications/cancelled can stop them. */
   const inflight = new Map<Id, AbortController>();
 
