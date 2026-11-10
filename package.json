@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Halo: a declarative language for AI workflows",
   "type": "module",
   "main": "./index.ts",
