@@ -18,7 +18,7 @@ const NAMES = [
   // Cheat sheet cards and plan steps
   "robot", "route", "arrow-right", "arrows-split", "shield", "link", "schema", "printer", "brain",
   // Everything else in the playground
-  "dice-5", "target", "sparkles", "circle-check", "circle-dashed", "bulb", "eye", "confetti", "trophy", "wand", "mood-smile", "rotate",
+  "dice-5", "target", "sparkles", "circle-check", "circle-dashed", "bulb", "eye", "confetti", "trophy", "wand", "mood-smile", "rotate", "keyboard", "x",
 ].sort();
 
 const root = resolve(import.meta.dir, "..");

@@ -497,108 +497,74 @@
 
 .pg-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 1fr);
   /* A content-sized row would grow past the fixed height, and .pg clips it, so the panes never scroll to the end. */
   grid-template-rows: minmax(0, 1fr);
-  height: min(680px, calc(100vh - 260px));
-  min-height: 460px;
+  height: calc(100vh - 210px);
+  min-height: 520px;
 }
 
-/* The editor: line numbers, problem marks, highlighted code, and a transparent textarea on top */
+/* The editor (CodeMirror) and the shortcuts panel that opens over it */
 .editor {
   position: relative;
-  display: flex;
+  min-width: 0;
   background: var(--halo-code-bg);
   overflow: hidden;
 }
-.editor-gutter {
-  flex: 0 0 44px;
-  overflow: hidden;
-  border-right: 1px solid var(--vp-c-divider);
-}
-.editor-gutter pre {
-  margin: 0;
-  padding: 14px 8px 14px 0;
-  font: 12px var(--vp-font-family-mono);
-  line-height: var(--pg-lh);
-  text-align: right;
-  color: var(--vp-c-text-3);
-  opacity: 0.7;
-  will-change: transform;
-}
-.editor-gutter span {
-  cursor: pointer;
-  font-weight: 700;
-  opacity: 1;
-}
-.editor-gutter span.error { color: var(--halo-external); }
-.editor-gutter span.warning { color: var(--halo-write); }
-.editor-gutter span::before {
-  content: "●";
-  font-size: 8px;
-  margin-right: 4px;
-  vertical-align: 2px;
-}
-.editor-main {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-.editor-marks {
+.editor .cm-editor {
   position: absolute;
   inset: 0;
-  pointer-events: none;
-  will-change: transform;
 }
-.editor-marks .mark {
+@keyframes pg-flash-line {
+  from { background-color: var(--vp-c-brand-soft); }
+}
+.pg-keys {
   position: absolute;
-  left: 0;
-  width: 100000px;
-  height: var(--pg-lh);
-}
-.editor-marks .mark.error { background: color-mix(in srgb, var(--halo-external) 12%, transparent); }
-.editor-marks .mark.warning { background: color-mix(in srgb, var(--halo-write) 10%, transparent); }
-.editor-marks .mark.flash {
-  background: var(--vp-c-brand-soft);
-  animation: pg-flash 0.9s ease-out forwards;
-}
-@keyframes pg-flash {
-  to { opacity: 0; }
-}
-.editor-hl,
-.editor textarea {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  padding: 14px 16px;
-  font: 13px var(--vp-font-family-mono);
-  line-height: var(--pg-lh);
-  white-space: pre;
+  top: 10px;
+  right: 14px;
+  z-index: 20;
+  width: min(380px, calc(100% - 28px));
+  max-height: calc(100% - 20px);
   overflow: auto;
-  tab-size: 2;
-  border: 0;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  background: var(--vp-c-bg);
+  box-shadow: var(--vp-shadow-3);
+  font-size: 13px;
 }
-.editor-hl {
-  color: var(--vp-c-text-1);
-  pointer-events: none;
-  background: none;
+.pg-keys-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
 }
-.editor-hl code {
-  font: inherit;
-  background: none;
-  padding: 0;
+.pg-keys dl {
+  margin: 0;
 }
-.editor textarea {
-  color: transparent;
-  background: transparent;
-  caret-color: var(--vp-c-brand-1);
-  resize: none;
-  outline: none;
+.pg-keys dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-top: 1px solid var(--vp-c-divider);
 }
-.editor textarea::selection {
-  background: var(--vp-c-brand-soft);
-  color: transparent;
+.pg-keys dt {
+  white-space: nowrap;
+  color: var(--vp-c-text-2);
+}
+.pg-keys dd {
+  margin: 0;
+  text-align: right;
+}
+.pg-keys kbd {
+  font: 11.5px var(--vp-font-family-mono);
+  padding: 1px 5px;
+  margin: 0 1px;
+  border: 1px solid var(--vp-c-divider);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--vp-c-bg-soft);
 }
 
 .pg-out {
