@@ -474,6 +474,12 @@
 }
 .pg-dots {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px 12px;
+}
+.pg-dots-track {
+  display: flex;
   gap: 5px;
 }
 .pg-dots .dot {
