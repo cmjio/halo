@@ -1,0 +1,5 @@
+{
+  "Triager.classify": { "category": "order", "mood": "frustrated", "order_id": "A1001", "summary": "Order A1001 hasn't arrived and the customer is annoyed." },
+  "Writer.draft": "Hi Priya,\n\nI'm sorry your linen table lamp hasn't arrived yet. It shipped on 28 October with standard delivery, which should take 3 to 5 business days, so it is late.\n\nBecause it has been in transit for more than 7 business days, we have opened a trace with ParcelCo. We will write back within 2 business days with what they find. You can follow the parcel here: https://track.example.com/PC88213\n\nThe Lamp & Loom team",
+  "Checker.review": { "ok": true, "problems": [] }
+}

@@ -1,0 +1,33 @@
+:root {
+  --bg: #f7f7f5; --card: #fff; --text: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+  --accent: #3b5bdb; --accent-text: #fff; --warn: #c92a2a; --hi: #edf2ff;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161615; --card: #1f1f1d; --text: #ececea; --muted: #9a9a94; --line: #33332f; --accent: #748ffc; --accent-text: #10131f; --warn: #ff8787; --hi: #1c2140; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 680px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { margin: 0 0 4px; font-size: 26px; }
+h2 { margin: 0 0 12px; font-size: 17px; }
+.muted { color: var(--muted); margin: 8px 0 0; font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-top: 18px; }
+.card.highlight { background: var(--hi); border-color: var(--accent); }
+label { display: block; font-weight: 600; margin-bottom: 8px; }
+textarea { width: 100%; font: inherit; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); resize: vertical; }
+button { margin-top: 12px; font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); cursor: pointer; }
+button.secondary { background: transparent; color: var(--text); border-color: var(--line); }
+button:disabled { opacity: 0.5; cursor: default; }
+.row { display: flex; gap: 8px; }
+.error { color: var(--warn); margin: 8px 0 0; }
+.steps { margin: 0; padding-left: 20px; }
+.steps li { font-family: ui-monospace, monospace; font-size: 13px; }
+.steps li.start::after { content: " …"; color: var(--muted); }
+.steps li.end::after { content: " ✓"; color: var(--accent); }
+.tag { display: inline-block; padding: 0 8px; border-radius: 99px; border: 1px solid var(--line); font-size: 12px; }
+pre { white-space: pre-wrap; font: inherit; margin: 0; }
+code { font-size: 13px; }
+.ok { color: var(--accent); margin: 8px 0; font-size: 13px; }
+.warn { border: 1px solid var(--warn); border-radius: 8px; padding: 8px 12px; margin: 8px 0; color: var(--warn); font-size: 13px; }
+.warn ul { margin: 4px 0 0; padding-left: 18px; }

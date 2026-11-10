@@ -1,0 +1,4 @@
+{
+  "A1001": { "id": "A1001", "customer": "Priya Shah", "item": "Linen table lamp", "shipping": "standard", "status": "in_transit", "shipped_on": "2026-10-28", "carrier": "ParcelCo", "tracking_url": "https://track.example.com/PC88213" },
+  "A1002": { "id": "A1002", "customer": "Tom Reyes", "item": "Wool throw", "shipping": "express", "status": "delivered", "shipped_on": "2026-11-02", "delivered_on": "2026-11-04", "carrier": "ParcelCo", "tracking_url": "https://track.example.com/PC90117" }
+}
