@@ -41,9 +41,20 @@ Publishing to halolang.com needs a Cloudflare API token, stored as a repository 
 
 The account id is set as the repository variable `CLOUDFLARE_ACCOUNT_ID`.
 
-**npm.** Create the `halolang` organization on npmjs.com, then an automation (or granular,
-publish-only) access token for it, and `gh secret set NPM_TOKEN`. Without the secret the npm
-job warns and skips, and the rest of the release still ships.
+**npm.** The packages live in the `halolang` organization on npmjs.com and publish with
+[trusted publishing](https://docs.npmjs.com/trusted-publishers): the workflow proves who it
+is with GitHub's OIDC token, so there is no npm token to store or rotate. (npm no longer
+lets tokens that bypass 2FA publish, so a token in CI doesn't work.) Each package, the
+launcher `@halolang/halo` and every `@halolang/halo-<platform>`, needs this once on
+npmjs.com: package → Settings → Trusted Publisher → GitHub Actions, with organization
+`cmjio`, repository `halo` and workflow `release.yml`. Then, under Publishing access, choose
+to require 2FA and disallow tokens, since trusted publishing keeps working.
+
+A package must exist before it can have a trusted publisher, so a new platform publishes its
+first version by hand: `bun scripts/npm.ts --only <platform>`, then `npm publish --access
+public` in `dist/npm/halo-<platform>` (signed in with `npm login`). If the npm job fails
+after the rest of the release shipped, fix the setup and rerun only that job (`gh run rerun
+<id> --failed`); versions already on npm are skipped.
 
 **Container image.** Nothing to set up: the workflow pushes with its own `GITHUB_TOKEN`.
 After the first release, open the `halo` package under the account's GitHub Packages, and

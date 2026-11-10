@@ -159,24 +159,27 @@ jobs:
             org.opencontainers.image.licenses=MIT
 
   # @halolang/halo and its @halolang/halo-<platform> binary packages (scripts/npm.ts), with
-  # provenance. Needs the NPM_TOKEN secret; without it this job warns and skips npm.
+  # provenance. Publishes with npm trusted publishing (OIDC, the id-token permission), so it
+  # needs no token: each package names this repository and release.yml as its trusted
+  # publisher on npmjs.com (see .github/RELEASING.md).
   npm:
     needs: [build, macos, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+      # No registry-url: that writes an .npmrc with a placeholder token, and npm should
+      # authenticate with the workflow's OIDC token instead.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11
       - uses: actions/download-artifact@v4
         with:
           name: release
@@ -189,12 +192,7 @@ jobs:
           node -e 'const f="dist/npm-check/halo/package.json",p=require("./"+f);p.optionalDependencies={"@halolang/halo-linux-x64":p.version};require("fs").writeFileSync(f,JSON.stringify(p,null,2))'
           bash npm/smoke-test.sh dist/npm-check
       - name: Publish to npm
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::Set the NPM_TOKEN secret to publish @halolang/halo to npm (see .github/RELEASING.md). Skipped npm."
-            exit 0
-          fi
-          bun scripts/npm.ts --publish
+        run: bun scripts/npm.ts --publish
 
   publish:
     needs: [build, macos, windows]
