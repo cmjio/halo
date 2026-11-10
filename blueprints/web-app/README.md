@@ -20,11 +20,11 @@ for real either way.
 ```
  browser (React)          your backend (Bun)                         Halo runtime (same process)
  ───────────────          ───────────────────────────────────────    ────────────────────────────
- POST /api/drafts   ───▶  session → user_id, limits, choose runId ─▶  runtime.run("DraftReply", …)
- GET  …/events (SSE) ◀──  filter runtime events per user         ◀──  onEvent(stage, violation, …)
- POST …/answer      ───▶  check owner                            ─▶  runtime.signal(runId, "yield", …)
-                          /internal/orders  ◀──── REST tool ──────── Orders.get(id: …)
-                          handbook/*.md      ◀── Documents tool ───── Handbook.extract(…)
+ POST /api/drafts   ───▸  session → user_id, limits, choose runId ─▸  runtime.run("DraftReply", …)
+ GET  …/events (SSE) ◂──  filter runtime events per user         ◂──  onEvent(stage, violation, …)
+ POST …/answer      ───▸  check owner                            ─▸  runtime.signal(runId, "yield", …)
+                          /internal/orders  ◂──── REST tool ──────── Orders.get(id: …)
+                          handbook/*.md      ◂── Documents tool ───── Handbook.extract(…)
 ```
 
 The frontend never talks to a model, or to Halo. That isn't a style choice:

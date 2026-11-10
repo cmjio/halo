@@ -7,12 +7,12 @@
 // the user to approve it in the browser. Approved replies are
 // remembered per user (@thread), so later drafts sound like them.
 //
-//   browser ─▶ POST /api/drafts ─▶ app.ts ─▶ DraftReply
+//   browser ─▸ POST /api/drafts ─▸ app.ts ─▸ DraftReply
 //     ├─ triage the message, and find the order number in it
 //     ├─ in parallel: the order (your API), the policy and voice guide (files)
 //     ├─ draft a reply from those facts only
 //     ├─ a second agent checks the draft against the policy
-//     ├─ ⏸ the user approves, rejects, or edits it in the page
+//     ├─ ‖ the user approves, rejects, or edits it in the page
 //     └─ remember the reply in the user's thread
 //
 // Where the facts come from:
