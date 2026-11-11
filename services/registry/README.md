@@ -13,17 +13,17 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 |---|---|
 | Worker `halo-registry` (`src/index.ts`) | Routes `v1/*` (JSON, `ApiError` on failure, CORS on GETs) and the HTML pages. |
 | D1 `halo-registry` (`DB`) | Users, tokens (sha256 only), scopes and members, packages, versions (manifest, README, computed exports and permissions), dist-tags, daily downloads, pending device logins, domain checks, and an FTS5 table for search. Schema: `migrations/`. |
-| R2 `halo-packages` (`PACKAGES`) | Package files at `files/@scope/name/<version>.halotool`, written once. Served with `Cache-Control: immutable` and the sha256 as ETag. |
+| R2 `halo-packages` (`PACKAGES`) | Package files at `files/@scope/name/<version>/<sha256>.halotool`, written once. Served at `v1/files/@scope/name/<version>.halotool` (found through the sha256 in D1) with `Cache-Control: immutable` and the sha256 as ETag. |
 | Cache API | Package docs, `v1/index.json` and the pages, cached 60s at the edge and purged on publish, yank, deprecate, dist-tag and verification changes. |
 | Rate Limiting (`RATE_LIMITER`) | Publish (per user), login start (per IP) and token creation (per user). Skipped when unbound. |
 
 | File | |
 |---|---|
 | `src/index.ts` | The router and error handling. |
-| `src/auth.ts` | GitHub device flow (proxied), `halo_` tokens, whoami, token CRUD, permission checks. |
+| `src/auth.ts` | GitHub device flow (proxied), `halo_` tokens, whoami, token CRUD, permission checks. A user is their GitHub id; see [Logins](#logins). |
 | `src/scopes.ts` | Org scopes, members (owners only; the last owner can't leave), DNS TXT domain verification over DoH. |
 | `src/packages.ts` | Docs, index, search, file downloads, publishing, yank, deprecate, dist-tags, cache purges. |
-| `src/analyze.ts` | The pluggable `analyze(files, manifest)` hook that computes exports and permissions. Today: providers plus a marked regex scan; the linker's `analyzePackage` replaces it. |
+| `../../src/registry/check.ts` | Not in this folder: `checkPackageFiles`, shared with the CLI. Runs the linker's `analyzePackage` on the package's `.halo` files and returns the exports, the permissions and the problems that refuse a publish (syntax errors, hard-coded models in a package that isn't hosted, undeclared model slots, names declared twice in exported files, `use` outside the package or its dependencies, no README, hosted pipelines without interfaces). `halo publish` runs the same function, so the client refuses what the server refuses. |
 | `src/markdown.ts` | A small Markdown renderer that escapes all raw HTML and drops unsafe links. |
 | `src/pages.ts` | The HTML pages. No external assets; dark-mode aware. |
 | `src/env.ts` | The bindings, typed structurally, so the code also type-checks and runs under `bun test`. |
@@ -36,7 +36,7 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `GET v1/search?q=&limit=&offset=` | `SearchResponse` (FTS5, bm25 with name > keywords > description > README; exact name first) |
 | `GET v1/packages/@s/n.json` (or without `.json`) | `PackageDoc` |
 | `GET v1/files/@s/n/<v>.halotool` | the package file; counts a download |
-| `PUT v1/packages/@s/n` | publish (`Content-Type: application/vnd.halo.package+json`) → 201 `PublishResponse` |
+| `PUT v1/packages/@s/n` | publish (`Content-Type: application/vnd.halo.package+json`, at most `MAX_PACKAGE_WIRE_BYTES`, 8MB; the files inside at most `MAX_PACKAGE_BYTES`, 5MB) → 201 `PublishResponse`, whose `url` is the version's page |
 | `POST`/`DELETE v1/packages/@s/n/versions/<v>/yank` | yank `{ reason }` / unyank |
 | `POST v1/packages/@s/n/deprecate` | `{ range, message }`; empty message clears |
 | `PUT`/`DELETE v1/packages/@s/n/dist-tags/<tag>` | `{ version }`; `latest` can't be removed or point at a yanked version |
@@ -47,6 +47,24 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `PUT`/`DELETE v1/scopes/@s/members/<login>` | `{ role: "owner" \| "publisher" }` |
 | `POST v1/scopes/@s/verify` | `{ domain }` → `{ record, value, verified }` |
 | `GET /`, `/?q=`, `/@s/n`, `/@s/n/v/<version>` | HTML pages |
+
+## Publishing and races
+
+A publish checks the package, then writes the file to R2 under a key that holds its sha256,
+then inserts the version in one D1 batch. The unique `(package, version)` lets only one of two
+racing publishes in; the loser gets 409 and deletes its own R2 object. Because the key holds
+the sha256, the loser can never overwrite the winner's file, and a download only finds a file
+through the sha256 D1 recorded, so a file is never served before (or without) its version row.
+An object left behind by a Worker that died between the two writes is unreachable and harmless.
+
+## Logins
+
+A user is their GitHub user id; `login` is a label that follows GitHub's. When someone signs in
+with a login another row still holds (that account renamed on GitHub and hasn't signed in
+since), the old row gives it up and becomes `<login>~<github id>` until its owner signs in again
+and takes their new login. Scopes, memberships, tokens and packages belong to the id, so they
+stay with the account that made them: the new holder of `bob` does not get `@bob` if the old
+`bob` created it, and gets no personal scope until they create one.
 
 ## Local development
 
@@ -73,6 +91,13 @@ They call the Worker's `fetch(request, env, ctx)` directly with in-memory fakes:
 `bun:sqlite` with the real migration, R2 and the Cache API as Maps, and a local server playing
 GitHub (device flow, `/user`) and DNS over HTTPS. `bun run typecheck` covers the Worker through
 `tsconfig.tooling.json`; `services/registry/tsconfig.json` is there for editors.
+
+`test/e2e-registry.test.ts` (in the default `bun test`, or alone with `bun run test:e2e`) runs
+the real Worker under `wrangler dev --local` on a fresh D1 and R2 state folder, with a fake
+GitHub and DoH served by the test, and drives the real `halo` CLI against it: login, scopes,
+publish (dependencies first), search, info, add, install, validate, plan, run with mocks, yank,
+outdated and update, deprecate, dist-tags, read-only tokens, a racing double publish, and the
+HTML pages. It skips, saying why, when wrangler can't start.
 
 Check the bundle without deploying:
 

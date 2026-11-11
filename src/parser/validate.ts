@@ -36,6 +36,7 @@ import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
 import { sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
+import { splitToolPath } from "../linker/names.js";
 
 export interface Diagnostic {
   severity: "error" | "warning";
@@ -176,7 +177,7 @@ class Validator {
     }
     const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
     for (const pattern of patterns) {
-      const tool = pattern.split(".")[0]!;
+      const tool = splitToolPath(pattern).tool;
       if (tool !== "*" && !this.tools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
     }
   }

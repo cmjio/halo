@@ -1,6 +1,6 @@
 /** Scopes: creating org scopes, members, and DNS-verified domains. */
 
-import { RESERVED_SCOPES, type ScopeDoc, type ScopeRole } from "../../../src/registry/contract.ts";
+import { RESERVED_SCOPES, type ScopeDoc, type ScopeRole, type VerifyResponse } from "../../../src/registry/contract.ts";
 import { getScope, isScopeName, requireRole, requireWrite, type Caller } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { fail, json, now, randomToken, readJson } from "./http.ts";
@@ -98,7 +98,7 @@ export async function verifyScope(req: Request, scope: string, caller: Caller, e
   if (!pending) {
     const value = `halo-verify=${randomToken(18)}`;
     await env.DB.prepare(`INSERT INTO scope_verifications (scope_id, domain, value, created_at) VALUES (?, ?, ?, ?)`).bind(row.id, domain, value, now()).run();
-    return json({ record, value, verified: false });
+    return json({ record, value, verified: false } satisfies VerifyResponse);
   }
   const verified = await txtContains(env, record, pending.value);
   if (verified) {
@@ -107,7 +107,7 @@ export async function verifyScope(req: Request, scope: string, caller: Caller, e
     const { results } = await env.DB.prepare(`SELECT name FROM packages WHERE scope_id = ?`).bind(row.id).all<{ name: string }>();
     await Promise.all(results.map((p) => purgePackage(env, p.name)));
   }
-  return json({ record, value: pending.value, verified });
+  return json({ record, value: pending.value, verified } satisfies VerifyResponse);
 }
 
 async function txtContains(env: Env, name: string, value: string): Promise<boolean> {

@@ -256,6 +256,35 @@ describe("evolve", () => {
     expect(broke.variants.length).toBeLessThan(3);
   });
 
+  test("links a file with `use` lines: variants resolve imported names (path given)", async () => {
+    const dir = workspace();
+    const project = mkdtempSync(join(tmp, "uses-"));
+    writeFileSync(join(project, "shared.halo"), `agent Writer [openai/gpt-4o, temp: 0.4]\n`);
+    const entry = join(project, "brief.halo");
+    const src = `use "./shared.halo" { Writer }\ntool Notes : Workspace("${dir}")\n\npipeline Brief(topic: String) -> Result:\n  topic\n    |> Notes.read(path: "notes.md") as notes\n    |> Writer.write("Write one line about {{topic}} from: {{notes}}")\n`;
+    writeFileSync(entry, src);
+    const { linkFile } = await import("../src/linker/node");
+    const recDir = mkdtempSync(join(tmp, "rec-"));
+    const recs: Recording[] = [];
+    for (let i = 0; i < 4; i++) {
+      const runId = crypto.randomUUID();
+      const recorder = new Recorder(recDir, runId);
+      recorder.start("Brief", { topic: `t${i}` });
+      const r = await runtime({ fetch: fakeOpenAI(answers).fetch, recorder: recorder.record }).load(linkFile(entry).program).run("Brief", { topic: `t${i}` }, { runId });
+      recorder.finish({ status: r.status, output: r.output });
+      recs.push(readRecording(recDir, runId));
+    }
+    const vivid = src.replace("Write one line", "Write one vivid line");
+    const opts = { source: src, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: fakeOpenAI(answers).fetch }), judge: prefers("vivid"), variants: 1, rounds: 1, holdout: 0, budget: 5, fence: { providerInfo, maxCostRatio: 2 } };
+    const linked = await evolve({ ...opts, path: entry, propose: scripted([answer("vivid", vivid)]) });
+    expect(linked.variants[0]!.problems).toEqual([]);
+    expect(linked.variants[0]!.status).toBe("scored");
+    expect(linked.variants[0]!.score!.won).toBe(linked.split.proposal.length);
+    // Without the path, the file is parsed alone: Writer is unknown, so every variant is invalid.
+    const alone = await evolve({ ...opts, propose: scripted([answer("vivid", vivid), answer("vivid", vivid)]) });
+    expect(alone.variants[0]!.status).toBe("invalid");
+  });
+
   test("a variant that now halts loses those runs", () => {
     const counts = { same: 1, better: 1, worse: 0, tie: 0, "now halts": 2, "no longer halts": 0, "both halt": 0, "now pauses": 0, "now fails": 0, diverged: 0, skipped: 0 };
     const s = scoreOf({ pipeline: "P", runs: Array(4).fill({}), counts, won: 1, tied: 1, lost: 0, spent: 0 });

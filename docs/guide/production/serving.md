@@ -57,7 +57,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `stateDir` | Where telemetry, paused runs, schedule and watch state, and the link-signing secret are kept. Default `.halo` |
 | `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted |
 | `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
-| `registry` | The tool package registry for `halo add` and `halo search` (not used by `halo serve` itself; see [Tool Packages](../tool-packages.md)) |
+| `registry` | The package registry for `halo add`, `halo search` and `halo publish` (not used by `halo serve` itself; see [Packages](../tool-packages.md)). `registries` maps a scope to its own registry |
 
 ### Schedules
 

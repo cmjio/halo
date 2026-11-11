@@ -77,7 +77,7 @@ When every agent that calls a model has a `MaxSpend`, the run can't spend more t
 - An MCP tool's methods come from its server, which `halo plan` doesn't start. They show as `Tool.*`, with the effect not described.
 - A provider registered in TypeScript without `info` (see [Custom Tools](./integrations/custom-tools.md)) has no effects to show.
 - `DenyArgs` rules aren't shown: a method they restrict is still listed.
-- An effect is what the provider says about itself. For MCP servers and [tool packages](./tool-packages.md), that is the server's or publisher's claim.
+- An effect is what the provider says about itself. For MCP servers and [packages](./tool-packages.md), that is the server's or publisher's claim.
 
 `halo plan` exits with status 1 when the file has validation errors, after printing them and the plan.
 

@@ -9,7 +9,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { MAX_PACKAGE_BYTES, PACKAGE_FORMAT_V2, PACKAGE_MEDIA_TYPE, type PackageDoc, type PackageSummary, type SearchResponse } from "../src/registry/contract";
+import { MAX_PACKAGE_BYTES, MAX_PACKAGE_WIRE_BYTES, PACKAGE_FORMAT_V2, PACKAGE_MEDIA_TYPE, type PackageDoc, type PackageSummary, type SearchResponse } from "../src/registry/contract";
 import worker from "../services/registry/src/index";
 import type { D1Database, D1PreparedStatement, D1Result, EdgeCache, Env, R2Bucket, R2ObjectBody } from "../services/registry/src/env";
 import { renderMarkdown } from "../services/registry/src/markdown";
@@ -302,6 +302,36 @@ describe("sign-in (GitHub device flow)", () => {
     expect((await h.call("POST", "v1/auth/device/token", { json: { device_code: "never-issued" } })).status).toBe(410);
   });
 
+  test("a GitHub login is the user's id's label: a renamed account's old login doesn't block whoever has it now", async () => {
+    const h = harness();
+    const oldBob = await h.login("bob", 7);
+    expect((await h.call("POST", "v1/scopes", { token: oldBob, json: { scope: "@bobcorp" } })).status).toBe(201);
+    // GitHub user 7 renames to "robert"; a different GitHub user (8) now has "bob" and signs in.
+    const newBob = await h.login("bob", 8);
+    const who = (await (await h.call("GET", "v1/whoami", { token: newBob })).json()) as { login: string; scopes: { scope: string }[] };
+    expect(who.login).toBe("bob");
+    // @bob stays with the account that made it (user 7); the new bob gets no personal scope.
+    expect(who.scopes).toEqual([]);
+    expect(h.d1.db.query("SELECT github_id, login FROM users ORDER BY github_id").all()).toEqual([
+      { github_id: 7, login: "bob~7" },
+      { github_id: 8, login: "bob" },
+    ]);
+    // The old token still works, as user 7; signing in again takes the new login.
+    expect(((await (await h.call("GET", "v1/whoami", { token: oldBob })).json()) as { login: string }).login).toBe("bob~7");
+    const robert = await h.login("robert", 7);
+    const me = (await (await h.call("GET", "v1/whoami", { token: robert })).json()) as { login: string; scopes: { scope: string }[] };
+    expect(me.login).toBe("robert");
+    expect(me.scopes.map((s) => s.scope)).toEqual(["@bob", "@bobcorp", "@robert"]);
+    // Swapping logins between two accounts works too.
+    await h.login("robert", 8);
+    const bobAgain = await h.login("bob", 7);
+    expect(((await (await h.call("GET", "v1/whoami", { token: bobAgain })).json()) as { login: string }).login).toBe("bob");
+    expect(h.d1.db.query("SELECT github_id, login FROM users ORDER BY github_id").all()).toEqual([
+      { github_id: 7, login: "bob" },
+      { github_id: 8, login: "robert" },
+    ]);
+  });
+
   test("signing in again keeps the same user and scope", async () => {
     const h = harness();
     await h.login("bob", 7);
@@ -504,7 +534,7 @@ describe("publishing", () => {
     const bytes = buildPackage("acme-zendesk");
     const sha = createHash("sha256").update(bytes).digest("hex");
     expect(((await (await h.publish(token, bytes)).json()) as { sha256: string }).sha256).toBe(sha);
-    expect(h.r2.objects.has("files/@acme/zendesk/1.0.0.halotool")).toBe(true);
+    expect([...h.r2.objects.keys()]).toEqual([`files/@acme/zendesk/1.0.0/${sha}.halotool`]);
 
     const res = await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool");
     expect(res.status).toBe(200);
@@ -520,6 +550,30 @@ describe("publishing", () => {
     expect(h.d1.db.query("SELECT version, count FROM downloads_daily").all()).toEqual([{ version: "1.0.0", count: 2 }]);
     expect(((await (await h.call("GET", "v1/index.json")).json()) as PackageSummary[])[0]!.downloads).toBe(2);
     expect((await h.call("GET", "v1/files/@acme/zendesk/9.9.9.halotool")).status).toBe(404);
+  });
+
+  test("two publishes of one version racing: one wins, and the file served is the winner's", async () => {
+    const a = buildPackage("acme-zendesk");
+    const b = buildPackage("acme-zendesk", { files: (f) => void (f["README.md"] += "\nthe other one") });
+    const results = await Promise.all([h.publish(token, a), h.publish(token, b)]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    const doc = (await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc;
+    const sha = doc.versions["1.0.0"]!.sha256;
+    const file = new Uint8Array(await (await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool")).arrayBuffer());
+    expect(createHash("sha256").update(file).digest("hex")).toBe(sha);
+    // The loser's file was removed; only the winner's is stored.
+    expect([...h.r2.objects.keys()]).toEqual([`files/@acme/zendesk/1.0.0/${sha}.halotool`]);
+  });
+
+  test("a package just under the raw size cap publishes (base64 makes it bigger on the wire); over it, it's refused", async () => {
+    const near = buildPackage("acme-zendesk", { files: (f) => void (f["data/blob.txt"] = "x".repeat(MAX_PACKAGE_BYTES - 64 * 1024)) });
+    expect(near.byteLength).toBeGreaterThan(MAX_PACKAGE_BYTES);
+    expect(near.byteLength).toBeLessThan(MAX_PACKAGE_WIRE_BYTES);
+    expect((await h.publish(token, near)).status).toBe(201);
+    const over = buildPackage("acme-zendesk", { manifest: (m) => void (m.version = "1.0.1"), files: (f) => void (f["data/blob.txt"] = "x".repeat(MAX_PACKAGE_BYTES + 1)) });
+    const res = await h.publish(token, over);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { code: string }).code).toBe("too_large");
   });
 
   test("a version can't be published twice", async () => {
@@ -579,12 +633,12 @@ describe("publishing", () => {
     const wrongType = await h.call("PUT", "v1/packages/@acme/zendesk", { token, body: buildPackage("acme-zendesk"), headers: { "content-type": "application/json" } });
     expect(wrongType.status).toBe(415);
 
-    const big = await h.publish(token, new Uint8Array(MAX_PACKAGE_BYTES + 1), "@acme/zendesk");
+    const big = await h.publish(token, new Uint8Array(MAX_PACKAGE_WIRE_BYTES + 1), "@acme/zendesk");
     expect(big.status).toBe(413);
     // A stream with no content-length is cut off too.
     const stream = new ReadableStream({
       start(c) {
-        for (let i = 0; i < 6; i++) c.enqueue(new Uint8Array(1024 * 1024));
+        for (let i = 0; i < 9; i++) c.enqueue(new Uint8Array(1024 * 1024));
         c.close();
       },
     });

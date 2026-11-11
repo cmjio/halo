@@ -149,7 +149,7 @@ export function analyzePackage(files: Record<string, string>, manifest: PackageM
         const slot = agent.modelId.slice("models.".length);
         if (!Object.hasOwn(manifest.models ?? {}, slot)) report("error", path, `Agent "${agent.name}" uses model slot "${slot}", which halo.json "models" doesn't declare (add { "description": "...", "suggested": "..." })`, agent.loc);
       } else if (!allowIds) {
-        report("error", path, `Agent "${agent.name}" names a model (${agent.modelId}); a package's agents use model slots, [models.<slot>], so the people using it choose their models`, agent.loc);
+        report("error", path, `Agent "${agent.name}" hard-codes the model "${agent.modelId}"; a package's agents use model slots, [models.<slot>], so the people using it choose (and pay for) their models`, agent.loc);
       }
     }
   }

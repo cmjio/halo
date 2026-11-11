@@ -4,6 +4,7 @@ import {
   checkPackageManifest,
   ManifestError,
   MAX_PACKAGE_BYTES,
+  MAX_PACKAGE_WIRE_BYTES,
   MAX_README_BYTES,
   PACK_EXCLUDE,
   PACKAGE_FORMAT_V2,
@@ -14,6 +15,8 @@ import {
   README_FILE,
   type HostedPipelineInterface,
   type HostedSpec,
+  type DeprecateResponse,
+  type DistTagsResponse,
   type ModelSlot,
   type PackageDoc,
   type PackageExports,
@@ -24,16 +27,22 @@ import {
   type PublishResponse,
   type SearchResponse,
   type VersionDoc,
+  type YankResponse,
 } from "../../../src/registry/contract.ts";
+import { checkPackageFiles, type ExportAnalyzer } from "../../../src/registry/check.ts";
 import { safeRelative } from "../../../src/registry/manifest.ts";
 import { compare, isPrerelease, isValidRange, isValidVersion, maxSatisfying, satisfies, sortDescending } from "../../../src/registry/semver.ts";
-import { analyze as defaultAnalyze, hardCodedModels, type Analyze } from "./analyze.ts";
 import { requireRole, type Caller } from "./auth.ts";
 import type { Ctx, Env } from "./env.ts";
 import { cached, CORS_HEADERS, fail, fromBase64, json, now, purge, rateLimit, readCapped, readJson, sha256Hex } from "./http.ts";
 
-/** R2 key of a package file: written once, never overwritten. */
-export const fileKey = (name: string, version: string) => `files/${name}/${version}.halotool`;
+/**
+ * R2 key of a package file: content-addressed under its version, written once, never
+ * overwritten. Two publishes of one version that race write different keys (or the same
+ * bytes to the same key), so the loser of the D1 insert can never replace the winner's file.
+ * Downloads find the key through the sha256 D1 recorded.
+ */
+export const fileKey = (name: string, version: string, sha256: string) => `files/${name}/${version}/${sha256}.halotool`;
 
 const TAG = /^[a-z][a-z0-9._-]{0,63}$/;
 
@@ -247,7 +256,10 @@ function clampInt(text: string | null, fallback: number, min: number, max: numbe
 }
 
 export async function getFile(req: Request, env: Env, ctx: Ctx, name: string, version: string): Promise<Response> {
-  const obj = await env.PACKAGES.get(fileKey(name, version));
+  const row = await env.DB.prepare(`SELECT v.sha256 FROM versions v JOIN packages p ON p.id = v.package_id WHERE p.name = ? AND v.version = ?`)
+    .bind(name, version)
+    .first<{ sha256: string }>();
+  const obj = row ? await env.PACKAGES.get(fileKey(name, version, row.sha256)) : null;
   if (!obj) return fail(404, "not_found", `No file for ${name}@${version}`);
   const sha = obj.customMetadata?.sha256;
   const etag = sha ? `"${sha}"` : obj.httpEtag;
@@ -301,14 +313,14 @@ function problemsOf(e: ManifestError): string[] {
     .filter(Boolean);
 }
 
-export async function publish(req: Request, env: Env, caller: Caller, name: string, analyze: Analyze = defaultAnalyze): Promise<Response> {
+export async function publish(req: Request, env: Env, caller: Caller, name: string, analyze?: ExportAnalyzer): Promise<Response> {
   const parsed = parsePackageName(name)!;
   const scope = await requireRole(env, caller, parsed.scope, "publisher");
   await rateLimit(env, "publish", String(caller.userId));
 
   const type = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
   if (type !== PACKAGE_MEDIA_TYPE) return fail(415, "unsupported_media_type", `Send the package file with Content-Type: ${PACKAGE_MEDIA_TYPE}`);
-  const bytes = await readCapped(req, MAX_PACKAGE_BYTES);
+  const bytes = await readCapped(req, MAX_PACKAGE_WIRE_BYTES);
 
   let pkg: PackageFileV2;
   try {
@@ -333,6 +345,8 @@ export async function publish(req: Request, env: Env, caller: Caller, name: stri
     else raw[path] = data;
   }
   if (pathProblems.length) return fail(400, "invalid_package", "The package has bad files", pathProblems);
+  const rawTotal = Object.values(raw).reduce((n, d) => n + d.byteLength, 0);
+  if (rawTotal > MAX_PACKAGE_BYTES) return fail(413, "too_large", `The package's files come to ${rawTotal} bytes, over ${MAX_PACKAGE_BYTES / 1024 / 1024}MB`);
   const text: Record<string, string> = {};
   const decoder = new TextDecoder();
   for (const [path, data] of Object.entries(raw)) text[path] = decoder.decode(data);
@@ -356,10 +370,12 @@ export async function publish(req: Request, env: Env, caller: Caller, name: stri
   const version = manifest.version;
   if (raw[README_FILE]!.byteLength > MAX_README_BYTES) return fail(400, "readme_too_large", `${README_FILE} is over ${MAX_README_BYTES / 1024}KB`);
 
-  const problems = hardCodedModels(text);
+  // The same check `halo publish` runs (src/registry/check.ts): the linker's analysis of the
+  // .halo files (syntax, hard-coded models, model slots, exported names, uses), the README,
+  // hosted interfaces; and the exports and permissions, computed here, never trusted from the client.
   const hosted = manifest.hosted;
-  if (hosted) for (const p of hosted.exports) if (!pkg.hosted?.[p] || typeof pkg.hosted[p] !== "object") problems.push(`hosted: no interface for ${p}; publish with \`halo publish\` so it writes one`);
-  if (problems.length) return fail(400, "invalid_package", "The package has problems", problems);
+  const check = checkPackageFiles(text, manifest, { hosted: pkg.hosted, analyze });
+  if (check.problems.length) return fail(400, "invalid_package", "The package has problems", check.problems);
 
   // The version must be new, and every dependency must exist here.
   const pkgRow = await env.DB.prepare(`SELECT id FROM packages WHERE name = ?`).bind(name).first<{ id: number }>();
@@ -377,16 +393,8 @@ export async function publish(req: Request, env: Env, caller: Caller, name: stri
   }
   if (missing.length) return fail(400, "missing_dependencies", "Some dependencies can't be resolved in this registry", missing);
 
-  // Computed here, never trusted from the client.
-  const analysis = analyze(text, manifest);
-  const exportsDoc: PackageExports = { ...analysis.exports, pipelines: [...new Set([...analysis.exports.pipelines, ...(hosted?.exports ?? [])])].sort() };
-  const permissions: PackagePermissions = {
-    network: analysis.network,
-    env: [...new Set([...analysis.env, ...(hosted?.auth?.env ? [hosted.auth.env] : [])])].sort(),
-    spawn: analysis.spawn,
-    code: analysis.code,
-    hosted: hosted ? [new URL(hosted.endpoint).host] : [],
-  };
+  const exportsDoc: PackageExports = check.exports;
+  const permissions: PackagePermissions = check.permissions;
   const hostedRow: HostedRow | undefined = hosted
     ? { endpoint: hosted.endpoint, ...(hosted.auth ? { auth: hosted.auth } : {}), pipelines: hosted.exports, interfaces: Object.fromEntries(hosted.exports.map((p) => [p, pkg.hosted![p]!])) }
     : undefined;
@@ -396,8 +404,10 @@ export async function publish(req: Request, env: Env, caller: Caller, name: stri
   const cur = current?.version;
   const becomesLatest = !cur || (!isPrerelease(version) && (isPrerelease(cur) || compare(version, cur) > 0));
 
+  // The file goes in first, at a key no other publish of different bytes can write (fileKey),
+  // and becomes reachable only once the D1 insert below records its sha256.
   const sha256 = await sha256Hex(bytes);
-  const key = fileKey(name, version);
+  const key = fileKey(name, version, sha256);
   await env.PACKAGES.put(key, bytes, { httpMetadata: { contentType: PACKAGE_MEDIA_TYPE }, customMetadata: { sha256, version, publishedBy: caller.login } });
 
   const at = now();
@@ -450,6 +460,13 @@ export async function publish(req: Request, env: Env, caller: Caller, name: stri
   try {
     await db.batch(statements);
   } catch (e) {
+    // Lost (or failed) the insert: drop our file unless the winner published the same bytes.
+    const winner = await db
+      .prepare(`SELECT v.sha256 FROM versions v JOIN packages p ON p.id = v.package_id WHERE p.name = ? AND v.version = ?`)
+      .bind(name, version)
+      .first<{ sha256: string }>()
+      .catch(() => null);
+    if (winner?.sha256 !== sha256) await env.PACKAGES.delete(key).catch(() => undefined);
     // Two publishes of one version raced; the unique (package, version) let only one in.
     if (/UNIQUE/i.test(String(e))) return fail(409, "version_exists", `${name}@${version} is already published`);
     throw e;
@@ -495,7 +512,8 @@ export async function yank(req: Request, env: Env, caller: Caller, name: string,
   if (best && ((on && latest === version) || unyankedBetter)) await setTag(env, pkg.id, name, "latest", best);
   await env.DB.prepare(`UPDATE packages SET updated_at = ? WHERE id = ?`).bind(now(), pkg.id).run();
   await purgePackage(env, name);
-  return json({ name, version, yanked: on ? reason : null });
+  const out: YankResponse = { name, version, yanked: on ? reason : null };
+  return json(out);
 }
 
 export async function deprecate(req: Request, env: Env, caller: Caller, name: string): Promise<Response> {
@@ -508,7 +526,8 @@ export async function deprecate(req: Request, env: Env, caller: Caller, name: st
   if (!matched.length) return fail(404, "no_matching_versions", `No version of ${name} matches ${range}`);
   await env.DB.batch(matched.map((v) => env.DB.prepare(`UPDATE versions SET deprecated = ? WHERE package_id = ? AND version = ?`).bind(text, pkg.id, v)));
   await purgePackage(env, name);
-  return json({ name, versions: sortDescending(matched), deprecated: text });
+  const out: DeprecateResponse = { name, versions: sortDescending(matched), deprecated: text };
+  return json(out);
 }
 
 /** A prerelease matches a deprecation range by its release version too (`<2.0.0` covers 1.5.0-beta). */
@@ -556,7 +575,8 @@ export async function putDistTag(req: Request, env: Env, caller: Caller, name: s
   if (tag === "latest" && row.yanked !== null) return fail(400, "yanked", `${name}@${version} is yanked; it can't be latest`);
   await setTag(env, pkg.id, name, tag, version);
   await purgePackage(env, name);
-  return json({ name, distTags: await tagsOf(env, pkg.id) });
+  const out: DistTagsResponse = { name, distTags: await tagsOf(env, pkg.id) };
+  return json(out);
 }
 
 export async function deleteDistTag(env: Env, caller: Caller, name: string, tag: string): Promise<Response> {
@@ -565,7 +585,8 @@ export async function deleteDistTag(env: Env, caller: Caller, name: string, tag:
   const res = await env.DB.prepare(`DELETE FROM dist_tags WHERE package_id = ? AND tag = ?`).bind(pkg.id, tag).run();
   if (!res.meta.changes) return fail(404, "not_found", `${name} has no tag ${tag}`);
   await purgePackage(env, name);
-  return json({ name, distTags: await tagsOf(env, pkg.id) });
+  const out: DistTagsResponse = { name, distTags: await tagsOf(env, pkg.id) };
+  return json(out);
 }
 
 async function tagsOf(env: Env, packageId: number): Promise<Record<string, string>> {

@@ -15,6 +15,7 @@ import { Glob } from "bun";
 import {
   checkPackageManifest,
   MAX_PACKAGE_BYTES,
+  MAX_PACKAGE_WIRE_BYTES,
   PACK_EXCLUDE,
   PACKAGE_FORMAT_V2,
   PROJECT_FILE,
@@ -25,8 +26,8 @@ import {
   type PackageManifest,
   type PackagePermissions,
 } from "./contract.js";
-import { checkManifest, hostOf, MANIFEST_FILE, permissionsOf, safeRelative, type Permissions, type ToolManifest } from "./manifest.js";
-import { parse } from "../parser/index.js";
+import { checkManifest, MANIFEST_FILE, permissionsOf, safeRelative, type ToolManifest } from "./manifest.js";
+import { checkPackageFiles, linkerAnalyzer, type ExportAnalyzer, type PackageCheck } from "./check.js";
 
 export const PACKAGE_FORMAT_V1 = "halo-tool/1";
 export { PACKAGE_FORMAT_V2 };
@@ -111,6 +112,7 @@ export function pack(dir: string): Packed {
   checkContents(manifest, files, dir);
   const file: PackageFileV2 = { format: PACKAGE_FORMAT_V2, manifest, files };
   const bytes = new TextEncoder().encode(JSON.stringify(file));
+  if (bytes.length > MAX_PACKAGE_WIRE_BYTES) throw new PackageError(`${dir} packs to ${bytes.length} bytes, over the ${MAX_PACKAGE_WIRE_BYTES / 1024 / 1024}MB a registry accepts`);
   return { bytes, sha256: sha256(bytes), pkg: { format: PACKAGE_FORMAT_V2, name: manifest.name, version: manifest.version, manifest, files } };
 }
 
@@ -142,7 +144,7 @@ export function fromV1(v1: ToolManifest, files: Record<string, string>, name = v
  * files (what gets installed), not the copy beside them. `rename` gives a v1 package its v2 name.
  */
 export function readPackage(bytes: Uint8Array, options: { reservedProviders?: Iterable<string>; rename?: string } = {}): PackageData {
-  if (bytes.length > MAX_PACKAGE_BYTES * 1.5) throw new PackageError("Package is too large");
+  if (bytes.length > MAX_PACKAGE_WIRE_BYTES) throw new PackageError(`Package file is over ${MAX_PACKAGE_WIRE_BYTES / 1024 / 1024}MB`);
   let raw: { format?: string; files?: Record<string, string>; hosted?: Record<string, HostedPipelineInterface> };
   try {
     raw = JSON.parse(new TextDecoder().decode(bytes));
@@ -168,49 +170,45 @@ export const fileText = (pkg: PackageData, path: string) => (pkg.files[path] ===
 
 // ── What a package exports and can reach ──
 
-export interface ExportReach extends Permissions {
-  /** What the exports declare, when the analyzer knows (the linker's analyzePackage does). */
-  exports?: Partial<PackageExports>;
-}
+export type { ExportAnalyzer, ExportReach } from "./check.js";
+
+let analyzer: ExportAnalyzer = linkerAnalyzer;
+const checks = new WeakMap<PackageData, { analyzer: ExportAnalyzer; check: PackageCheck }>();
 
 /**
- * The hook for what a package's .halo exports can reach (tools they declare, env they read).
- * `files` maps each path in the package to its text. The default reaches nothing; the linker's
- * `analyzePackage` (src/linker/) is wired in with `setExportAnalyzer` during integration.
+ * Replace the analyzer for package exports (tests use stand-ins). The default is the linker's
+ * analyzePackage; pass undefined to restore it.
  */
-export type ExportAnalyzer = (files: Record<string, string>, manifest: PackageManifest) => ExportReach;
-
-const noReach: ExportAnalyzer = () => ({ network: [], env: [], spawn: [], code: false });
-let analyzer: ExportAnalyzer = noReach;
-
-/** Install the analyzer for package exports (the linker's). Pass undefined to restore the no-op. */
 export function setExportAnalyzer(fn: ExportAnalyzer | undefined) {
-  analyzer = fn ?? noReach;
+  analyzer = fn ?? linkerAnalyzer;
 }
 
-/** Run the export analyzer on a package. */
-export function analyzeExports(pkg: PackageData): ExportReach {
+/** The package's text files (what the analyzer reads). */
+export function packageTexts(pkg: PackageData): Record<string, string> {
   const texts: Record<string, string> = {};
   for (const path of Object.keys(pkg.files)) if (/\.(halo|json|md)$/.test(path)) texts[path] = fileText(pkg, path)!;
-  return analyzer(texts, pkg.manifest);
+  return texts;
 }
 
-const union = (...lists: string[][]) => [...new Set(lists.flat())];
+/** Exports, permissions and publish problems of a package: the same check the registry service runs (check.ts). */
+export function checkPackage(pkg: PackageData): PackageCheck {
+  const known = checks.get(pkg);
+  if (known && known.analyzer === analyzer) return known.check;
+  const check = checkPackageFiles(packageTexts(pkg), pkg.manifest, { hosted: pkg.hosted, analyze: analyzer });
+  checks.set(pkg, { analyzer, check });
+  return check;
+}
 
 /** A package's own permissions: its providers, its env, its hosted endpoints, and its exports' reach. */
 export function permissionsOfPackage(pkg: PackageData): PackagePermissions {
-  const m = pkg.manifest;
-  const providers = permissionsOf({ providers: m.providers ?? {} } as ToolManifest);
-  const reach = analyzeExports(pkg);
-  const hosted = m.hosted ? [hostOf(m.hosted.endpoint)] : [];
-  return {
-    network: union(providers.network, reach.network, hosted),
-    env: union(providers.env, m.env ?? [], reach.env, m.hosted?.auth ? [m.hosted.auth.env] : []),
-    spawn: union(providers.spawn, reach.spawn),
-    code: providers.code || reach.code,
-    hosted,
-  };
+  if (pkg.format !== PACKAGE_FORMAT_V2) {
+    const p = permissionsOf({ providers: pkg.manifest.providers ?? {} } as ToolManifest);
+    return { ...p, env: union(p.env, pkg.manifest.env ?? []), hosted: [] };
+  }
+  return checkPackage(pkg).permissions;
 }
+
+const union = (...lists: string[][]) => [...new Set(lists.flat())];
 
 /** Everything several packages may do together. */
 export function totalPermissions(list: PackagePermissions[]): PackagePermissions {
@@ -223,61 +221,19 @@ export function totalPermissions(list: PackagePermissions[]): PackagePermissions
   };
 }
 
-/** Parse a package's .halo files with the current parser. Files that don't parse are skipped. */
-function parsedFiles(pkg: PackageData, paths: string[]) {
-  return paths.flatMap((path) => {
-    const text = fileText(pkg, path);
-    if (text === undefined) return [];
-    try {
-      const ast = parse(text);
-      return ast.errors.length ? [] : [{ path, ast }];
-    } catch {
-      return [];
-    }
-  });
-}
-
-/** What a package exports: the analyzer's answer when it has one, else what the current parser can read. */
+/** What a package exports (v1 packages: their providers). */
 export function exportsOf(pkg: PackageData): PackageExports {
-  const m = pkg.manifest;
-  const out: PackageExports = { pipelines: [], agents: [], tools: [], stores: [], schemas: [], policies: [], providers: Object.keys(m.providers ?? {}), skills: [] };
-  if (m.skills) {
-    const base = m.skills.replace(/\/+$/, "") + "/";
-    out.skills = [...new Set(Object.keys(pkg.files).filter((p) => p.startsWith(base) && p.endsWith("/SKILL.md")).map((p) => p.slice(base.length).split("/")[0]!))].sort();
-  }
-  const reach = analyzeExports(pkg).exports;
-  if (reach) {
-    for (const key of Object.keys(out) as (keyof PackageExports)[]) if (reach[key]) out[key] = union(out[key], reach[key]!);
-    return out;
-  }
-  for (const { ast } of parsedFiles(pkg, m.exports ?? [])) {
-    out.pipelines.push(...ast.pipelines.map((d) => d.name));
-    out.agents.push(...ast.agents.map((d) => d.name));
-    out.tools.push(...ast.tools.map((d) => d.name));
-    out.stores.push(...ast.stores.map((d) => d.name));
-    out.schemas.push(...ast.schemas.map((d) => d.name));
-    out.policies.push(...ast.policies.map((d) => d.name));
-  }
-  if (m.hosted) out.pipelines = union(out.pipelines, m.hosted.exports);
-  return out;
+  if (pkg.format !== PACKAGE_FORMAT_V2) return { pipelines: [], agents: [], tools: [], stores: [], schemas: [], policies: [], providers: Object.keys(pkg.manifest.providers ?? {}), skills: [] };
+  return checkPackage(pkg).exports;
 }
 
 /**
- * Publish-time checks beyond the manifest: a package that isn't hosted may not hard-code a
- * model in any agent (its consumers pay for the tokens, so they choose). Returns problems.
+ * Why a package can't be published (empty when it can): the linker's error diagnostics
+ * (syntax errors, hard-coded model ids in a package that isn't hosted, undeclared model slots,
+ * names declared twice in exported files, `use` outside the package or its dependencies), a
+ * missing README, and hosted pipelines without interfaces. The registry service refuses the same.
  */
 export function publishProblems(pkg: PackageData): string[] {
-  const problems: string[] = [];
-  if (pkg.format !== PACKAGE_FORMAT_V2) return problems;
-  if (!pkg.files[README_FILE]) problems.push(`${README_FILE} is required`);
-  if (pkg.manifest.hosted) return problems;
-  const halo = Object.keys(pkg.files).filter((p) => p.endsWith(".halo"));
-  for (const { path, ast } of parsedFiles(pkg, halo)) {
-    for (const agent of ast.agents) {
-      if (agent.modelId && !agent.modelId.startsWith("models.")) {
-        problems.push(`${path}: agent ${agent.name} hard-codes the model "${agent.modelId}". Declare a slot in halo.json "models" and use [models.<slot>], so consumers pick the model they pay for`);
-      }
-    }
-  }
-  return problems;
+  if (pkg.format !== PACKAGE_FORMAT_V2) return [];
+  return checkPackage(pkg).problems;
 }

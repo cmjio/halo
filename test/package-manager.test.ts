@@ -136,6 +136,38 @@ describe("package files", () => {
     const good = pack(v2({ name: "@t/m", version: "1.0.0", exports: ["lib/a.halo"], models: { fast: { description: "d" } } }, { "lib/a.halo": "agent A [models.fast]\npipeline P(x: String) -> Result:\n  x |> A.prompt(\"hi\")\n" })).pkg;
     expect(publishProblems(good)).toEqual([]);
   });
+
+  test("publish checks are the linker's: syntax errors, undeclared slots and uses outside the package fail; hosted packages may name models", () => {
+    const problems = (files: Record<string, string>, extra: Record<string, unknown> = {}) =>
+      publishProblems(pack(v2({ name: "@t/c", version: "1.0.0", exports: ["lib/a.halo"], models: { fast: { description: "d" } }, ...extra }, files)).pkg);
+    expect(problems({ "lib/a.halo": "pipeline P(x: String) ->\n" }).join("\n")).toContain("lib/a.halo:");
+    expect(problems({ "lib/a.halo": "agent A [models.smart]\n" }).join("\n")).toContain(`uses model slot "smart", which halo.json "models" doesn't declare`);
+    expect(problems({ "lib/a.halo": `use "../../outside.halo" { X }\n` }).join("\n")).toContain("a package can only use files inside it");
+    expect(problems({ "lib/a.halo": `use "@t/other" { X }\n` }).join("\n")).toContain("@t/other is not in the package's dependencies");
+    // A private file counts too: every agent in the package runs on the consumer's keys.
+    expect(problems({ "lib/a.halo": "agent A [models.fast]\n", "lib/private.halo": "agent B [openai/gpt-4o]\n" }).join("\n")).toContain(`lib/private.halo:1: Agent "B" hard-codes the model "openai/gpt-4o"`);
+    const hosted = { hosted: { endpoint: "https://halo.acme.com", exports: ["P"] } };
+    expect(problems({ "lib/a.halo": "agent B [openai/gpt-4o]\n" }, hosted)).toEqual(["hosted: no interface for P; publish with `halo publish` so it writes one"]);
+  });
+
+  test("the client and the registry Worker run the same check", async () => {
+    const { checkPackageFiles } = await import("../src/registry/check");
+    const pkg = pack(v2({ name: "@t/c", version: "1.0.0", exports: ["lib/a.halo"] }, { "lib/a.halo": "agent A [openai/gpt-4o]\n" })).pkg;
+    const texts = Object.fromEntries(Object.entries(pkg.files).map(([k, v]) => [k, Buffer.from(v, "base64").toString("utf8")]));
+    const shared = checkPackageFiles(texts, pkg.manifest);
+    expect(publishProblems(pkg)).toEqual(shared.problems);
+    expect(permissionsOfPackage(pkg)).toEqual(shared.permissions);
+    expect(exportsOf(pkg)).toEqual(shared.exports);
+    const worker = await Bun.file(join(import.meta.dir, "../services/registry/src/packages.ts")).text();
+    expect(worker).toContain("checkPackageFiles(");
+  });
+
+  test("a package just under the 5MB raw cap packs and reads back, though base64 makes the file bigger", () => {
+    const dir = v2({ name: "@t/near", version: "1.0.0" }, { "data/blob.txt": "x".repeat(5 * 1024 * 1024 - 64 * 1024) });
+    const packed = pack(dir);
+    expect(packed.bytes.length).toBeGreaterThan(5 * 1024 * 1024);
+    expect(readPackage(packed.bytes).name).toBe("@t/near");
+  });
 });
 
 describe("static folder registries", () => {

@@ -27,7 +27,7 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `MCP` | Any Model Context Protocol server's tools (see [MCP](../guide/integrations/mcp.md)) |
 | `Slack`, `Email`, `GitHub`, `Linear`, `Figma` | API clients for those services |
 
-More providers come as [tool packages](../guide/tool-packages.md) (`halo add stripe`), and `halo tools` lists every provider in a project with its methods and their effects.
+More providers come in [packages](../guide/tool-packages.md) (`halo add stripe`), and `halo tools` lists every provider in a project with its methods and their effects.
 
 ## `REST` / `GET` and `POST`
 
@@ -158,4 +158,4 @@ pipeline Sync(note: String) -> Result:
 
 ## Not built in
 
-Hosted vector databases other than Postgres with pgvector (Pinecone, Chroma, …) have no provider. Jira, Stripe, Notion and Sentry are [tool packages](../guide/tool-packages.md) rather than built-ins. For anything else, install or write a package, use an [MCP](../guide/integrations/mcp.md) server, or register a provider in TypeScript (see [Custom Tools](../guide/integrations/custom-tools.md)).
+Hosted vector databases other than Postgres with pgvector (Pinecone, Chroma, …) have no provider. Jira, Stripe, Notion and Sentry are [packages](../guide/tool-packages.md) (`@halo/jira`, ...) rather than built-ins. For anything else, install or write a package, use an [MCP](../guide/integrations/mcp.md) server, or register a provider in TypeScript (see [Custom Tools](../guide/integrations/custom-tools.md)).

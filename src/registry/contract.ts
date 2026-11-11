@@ -99,6 +99,11 @@ export interface PackageManifest {
 
 /** The fields of an app's halo.json that packages use (the rest is serve/evolve config). */
 export interface ProjectPackageConfig {
+  /**
+   * Packages, by semver range. Unlike a package's own dependencies (registry ranges only), an
+   * app's may also be local or remote sources: a folder ("./vendor/kit", "file:../kit"), a
+   * .halotool file, or an https URL to one. halo.lock pins each with its sha256.
+   */
   dependencies?: Record<string, string>;
   /** Project-wide model bindings: slot name → model id. A `use … with models(…)` overrides them. */
   models?: Record<string, string | ModelSlot>;
@@ -194,7 +199,14 @@ function isHttps(url: string): boolean {
 /** v2 package files. v1 (`halo-tool/1`, halo-tool.json) stays readable. */
 export const PACKAGE_FORMAT_V2 = "halo-package/2";
 export const PACKAGE_MEDIA_TYPE = "application/vnd.halo.package+json";
+/** The cap on a package's files, raw (before base64), as `halo pack` adds them up. */
 export const MAX_PACKAGE_BYTES = 5 * 1024 * 1024;
+/**
+ * The cap on a package file on the wire: the encoded JSON (`PackageFileV2`) that `halo publish`
+ * sends and the registry stores. Base64 makes files 4/3 bigger, and the JSON adds paths, the
+ * manifest and hosted interfaces, so a package just under MAX_PACKAGE_BYTES still fits.
+ */
+export const MAX_PACKAGE_WIRE_BYTES = 8 * 1024 * 1024;
 /** Never packed: local state, secrets, other packages. */
 export const PACK_EXCLUDE = [/^node_modules\//, /^\.halo\//, /^\.git\//, /\.halotool$/, /^halo\.lock$/, /(^|\/)\.env(\..*)?$/, /^\.dev\.vars$/];
 
@@ -247,17 +259,22 @@ export interface PackagePermissions extends Permissions {
 //   POST   v1/packages/@scope/name/versions/<v>/yank      { reason } → 200
 //   DELETE v1/packages/@scope/name/versions/<v>/yank      unyank → 200
 //   POST   v1/packages/@scope/name/deprecate              { range, message } (empty message clears) → 200
-//   PUT    v1/packages/@scope/name/dist-tags/<tag>        { version } → 200
+//   PUT    v1/packages/@scope/name/dist-tags/<tag>        { version } → 200 DistTagsResponse
+//   DELETE v1/packages/@scope/name/dist-tags/<tag>        → 200 DistTagsResponse ("latest" can't be removed)
 //   POST   v1/auth/device                                 DeviceStart
 //   POST   v1/auth/device/token                           { device_code } → 200 TokenResponse | 428 authorization_pending | 429 slow_down | 410 expired_token
 //   GET    v1/whoami                                      WhoAmI
-//   GET    v1/tokens  POST v1/tokens  DELETE v1/tokens/<id>
-//   POST   v1/scopes                                      { scope } → 201 (creates an org scope; you become its owner)
+//   GET    v1/tokens                                      TokenList
+//   POST   v1/tokens                                      CreateTokenRequest → 201 CreatedToken (the secret is shown once)
+//   DELETE v1/tokens/<id>                                 → 200 { deleted: id }
+//   POST   v1/scopes                                      { scope } → 201 ScopeDoc (creates an org scope; you become its owner)
 //   GET    v1/scopes/@scope                               ScopeDoc
-//   PUT    v1/scopes/@scope/members/<login>               { role } ; DELETE removes
-//   POST   v1/scopes/@scope/verify                        { domain } → { record, value, verified }
+//   PUT    v1/scopes/@scope/members/<login>               { role } → 200 ScopeDoc ; DELETE removes → 200 ScopeDoc
+//   POST   v1/scopes/@scope/verify                        { domain } → VerifyResponse
 //
 // Writes need `Authorization: Bearer <token>`. Errors are ApiError JSON with a 4xx/5xx status.
+// A publish body is at most MAX_PACKAGE_WIRE_BYTES (413 above it). Yank and unyank answer
+// YankResponse; deprecate answers DeprecateResponse.
 // Package pages (HTML) are served at /@scope/name and /@scope/name/v/<version>.
 
 export const API_PREFIX = "v1";
@@ -342,6 +359,33 @@ export interface PublishResponse {
   url: string;
 }
 
+/** POST …/versions/<v>/yank and DELETE (unyank). `yanked` is the reason, or null after unyank. */
+export interface YankResponse {
+  name: string;
+  version: string;
+  yanked: string | null;
+}
+
+/** POST …/deprecate: the versions the range matched, and the message (null when cleared). */
+export interface DeprecateResponse {
+  name: string;
+  versions: string[];
+  deprecated: string | null;
+}
+
+/** PUT and DELETE …/dist-tags/<tag>: every tag after the change. */
+export interface DistTagsResponse {
+  name: string;
+  distTags: Record<string, string>;
+}
+
+/** POST v1/scopes/@scope/verify: the TXT record to add, and whether it's there yet. */
+export interface VerifyResponse {
+  record: string;
+  value: string;
+  verified: boolean;
+}
+
 export interface DeviceStart {
   device_code: string;
   user_code: string;
@@ -359,6 +403,41 @@ export interface WhoAmI {
   login: string;
   scopes: { scope: string; role: ScopeRole }[];
   token: { id: string; name: string; readOnly: boolean; scopes?: string[] };
+}
+
+/** An API token as listed (never with its secret). */
+export interface TokenInfo {
+  id: string;
+  name: string;
+  readOnly: boolean;
+  /** The scopes it may write to; absent for every scope the user is in. */
+  scopes?: string[];
+  createdAt: string;
+  lastUsedAt?: string;
+  /** This is the token making the request. */
+  current?: boolean;
+}
+
+/** GET v1/tokens */
+export interface TokenList {
+  tokens: TokenInfo[];
+}
+
+/** POST v1/tokens. A token limited to some scopes can only create tokens within them. */
+export interface CreateTokenRequest {
+  name?: string;
+  readOnly?: boolean;
+  scopes?: string[];
+}
+
+/** POST v1/tokens → 201. `token` is the secret, shown only here. */
+export interface CreatedToken {
+  id: string;
+  name: string;
+  token: string;
+  readOnly: boolean;
+  scopes?: string[];
+  createdAt: string;
 }
 
 export type ScopeRole = "owner" | "publisher";
