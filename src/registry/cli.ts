@@ -11,12 +11,13 @@ import { isPackageName, normalizePackageName, parsePackageName, PROJECT_FILE, RE
 import { defaultRangeFor, isValidRange, isValidVersion } from "./semver.js";
 import { BUNDLED_REGISTRY, HOSTED_REGISTRY, readProjectConfig, registryFor, registrySettings, removeCredential, saveCredential, tokenFor, type RegistrySettings } from "./config.js";
 import { RegistryClient, RegistryError, versionsOf } from "./client.js";
-import { exportsOf, pack, PackageError, permissionsOfPackage, publishProblems, readPackage, sha256, type PackageData } from "./format.js";
-import { addDependencies, describeInstall, describeOwn, HALO_VERSION, installProject, type InstallReport } from "./install.js";
+import { exportsOf, PackageError, permissionsOfPackage, publishProblems, readPackage, sha256, type PackageData } from "./format.js";
+import { describeHosted, hostedPackageProblems, packWithHosted } from "./hosted.js";
+import { addDependencies, describeHostedUse, describeInstall, describeOwn, HALO_VERSION, installProject, type InstallReport } from "./install.js";
 import { readAnyLock, readLockV2 } from "./lockfile.js";
 import { isLocalSpec, readLocal, specOfSource } from "./resolve.js";
 import { publish as publishV1, uninstall as uninstallV1 } from "./packages.js";
-import { ManifestError } from "./manifest.js";
+import { hostOf, ManifestError } from "./manifest.js";
 
 /** Commands this module handles (`init` only with --package). */
 export const PACKAGE_COMMANDS = ["add", "install", "remove", "uninstall", "outdated", "update", "search", "info", "pack", "publish", "yank", "unyank", "deprecate", "dist-tag", "owner", "scope", "login", "logout", "whoami", "token"] as const;
@@ -216,6 +217,8 @@ function printReport(ctx: Ctx, report: InstallReport, only?: Set<string>) {
     if (only && !only.has(r.name)) continue;
     ctx.log(`${green("✓")} ${bold(`${r.name}@${r.version}`)}${r.direct ? "" : dim(` (added by ${r.addedBy.join(", ")})`)}`);
     for (const line of describeOwn(r.permissions)) ctx.log(dim(`    ${line}`));
+    // Not dimmed: hosted pipelines send the consumer's data to someone else's server.
+    for (const line of describeHostedUse(r.pkg.manifest)) ctx.log(yellow(`  ! ${line}`));
   }
   const shown = report.packages.filter((r) => !only || only.has(r.name));
   if (report.packages.length > 1 && shown.length !== 1) {
@@ -436,7 +439,11 @@ function printInfo(ctx: Ctx, doc: PackageDoc, wantVersion?: string) {
     ctx.log(`\n${bold("model slots")} ${dim("(you fill these: use … with models(slot: <model id>))")}`);
     for (const [slot, s] of slots) ctx.log(`  ${slot.padEnd(10)} ${s.description}${s.suggested ? dim(` (suggested: ${s.suggested})`) : ""}`);
   }
-  if (v!.hosted) ctx.log(`\n${bold("hosted")}    ${v!.hosted.pipelines.join(", ")} run on ${v!.hosted.endpoint} (your inputs are sent there)`);
+  if (v!.hosted) {
+    const host = hostOf(v!.hosted.endpoint);
+    ctx.log(`\n${bold("hosted")}    ${v!.hosted.pipelines.join(", ")} run on ${v!.hosted.endpoint}, not on your machine`);
+    ctx.log(yellow(`  This package sends your inputs to ${host}${v!.permissions.env.length ? ` and reads ${v!.permissions.env.join(", ")}` : ""}`));
+  }
   const deps = Object.entries(v!.dependencies ?? {});
   if (deps.length) ctx.log(`\n${bold("dependencies")}\n${deps.map(([d, r]) => `  ${d} ${r}`).join("\n")}`);
   ctx.log(`\n${bold("permissions")}`);
@@ -489,14 +496,16 @@ function fileName(name: string, version: string) {
 
 function cmdPack(ctx: Ctx): number {
   const dir = resolve(ctx.root, ctx.flags.positional[0] ?? ".");
-  const { bytes, sha256: digest, pkg } = pack(dir);
+  // A hosted package leaves out its hosted sources and carries their interfaces instead.
+  const { bytes, sha256: digest, pkg } = packWithHosted(dir);
   const outDir = resolve(ctx.root, last(ctx.flags, "out") ?? ".");
   mkdirSync(outDir, { recursive: true });
   const out = join(outDir, fileName(pkg.name, pkg.version));
   writeFileSync(out, bytes);
   ctx.log(`${green("✓")} ${out} ${dim(`(${bytes.length} bytes, sha256 ${digest})`)}`);
   for (const line of describeOwn(permissionsOfPackage(pkg))) ctx.log(dim(`    ${line}`));
-  for (const p of publishProblems(pkg)) ctx.log(yellow(`! ${p}`));
+  for (const line of describeHosted(pkg.manifest, pkg.hosted)) ctx.log(dim(`    ${line}`));
+  for (const p of [...publishProblems(pkg), ...hostedPackageProblems(pkg)]) ctx.log(yellow(`! ${p}`));
   return 0;
 }
 
@@ -509,7 +518,8 @@ async function cmdPublish(ctx: Ctx): Promise<number> {
     bytes = readFileSync(target);
     pkg = readPackage(bytes);
   } else {
-    const packed = pack(target);
+    // A hosted package: its hosted pipelines are linked, checked (no pauses) and published as interfaces only.
+    const packed = packWithHosted(target);
     bytes = packed.bytes;
     pkg = packed.pkg;
   }
@@ -532,7 +542,7 @@ async function cmdPublish(ctx: Ctx): Promise<number> {
     }
   }
   if (!parsePackageName(pkg.name)) fail(`${pkg.name} is a v1 package (halo-tool.json) with a bare name. Registries need a scoped name: move it to a halo.json with "name": "@you/${pkg.name}" and a ${README_FILE}`);
-  const problems = publishProblems(pkg);
+  const problems = [...publishProblems(pkg), ...hostedPackageProblems(pkg)];
   if (problems.length) fail(`${pkg.name}@${pkg.version} can't be published:\n  - ${problems.join("\n  - ")}`);
 
   const settings = ctx.settings();
@@ -547,6 +557,7 @@ async function cmdPublish(ctx: Ctx): Promise<number> {
   const slots = Object.keys(pkg.manifest.models ?? {});
   if (slots.length) ctx.log(dim(`    model slots: ${slots.join(", ")}`));
   for (const line of describeOwn(permissionsOfPackage(pkg))) ctx.log(dim(`    ${line}`));
+  for (const line of describeHosted(pkg.manifest, pkg.hosted)) ctx.log(`    ${line}`);
   if (ctx.flags.bools.has("dry-run")) {
     ctx.log(`Dry run: not published to ${client.base}`);
     return 0;

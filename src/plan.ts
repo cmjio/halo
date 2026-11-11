@@ -15,6 +15,7 @@ import { toolMatches } from "./runtime/policies.js";
 import type { ProviderInfo, ToolEffect, ToolMethod } from "./runtime/tools.js";
 import { stageLabel } from "./parser/labels.js";
 import { displayText } from "./linker/names.js";
+import { HOSTED_PROVIDER } from "./linker/hosted.js";
 
 export interface PlanStep {
   /** e.g. "3" or "3.1" for a stage inside a called pipeline. */
@@ -141,6 +142,14 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     }
     if (tool) {
       const effect = effectOf(tool.name, stage.method);
+      if (tool.provider === HOSTED_PROVIDER) {
+        // A package's hosted pipeline: one external call to the publisher's server.
+        const arg = (name: string) => tool.argList.find((a) => a.name === name)?.value;
+        const text = (name: string) => ((v) => (v?.kind === "string" ? v.value : ""))(arg(name));
+        const host = text("endpoint").replace(/^[a-z]+:\/\//i, "").split("/")[0];
+        steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect: "external" }], notes: [`hosted by ${text("package")}: sends its inputs to ${host}${text("env") ? ` (key from ${text("env")})` : ""}`] });
+        return;
+      }
       steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? " (effect not described)" : ""}`] });
       return;
     }
