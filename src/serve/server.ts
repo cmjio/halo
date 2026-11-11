@@ -33,7 +33,7 @@ import { createMcpServer } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
 import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
-import { loadInstalled } from "../registry/packages.js";
+import { loadPackageProviders } from "../registry/resolver.js";
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
 
@@ -262,7 +262,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   // ── Load pipelines ──
   const registry = new AdapterRegistry();
-  const installed = await loadInstalled(options.root ?? process.cwd()).catch((err: unknown) => {
+  const installed = await loadPackageProviders(options.root ?? process.cwd()).catch((err: unknown) => {
     throw new ServeError(err instanceof Error ? err.message : String(err));
   });
   const entries = new Map<string, Entry>();

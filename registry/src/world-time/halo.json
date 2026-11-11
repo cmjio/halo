@@ -1,0 +1,17 @@
+{
+  "name": "@halo/world-time",
+  "version": "1.0.0",
+  "description": "Time zones without an API: the time anywhere, and converting a time between zones",
+  "license": "MIT",
+  "keywords": [
+    "time",
+    "timezones"
+  ],
+  "providers": {
+    "WorldTime": {
+      "kind": "module",
+      "description": "Time zone arithmetic (runs locally, no network)",
+      "entry": "index.ts"
+    }
+  }
+}

@@ -69,7 +69,7 @@ describe("manifests", () => {
   });
 });
 
-describe("registries and installs", () => {
+describe("v1 registries and installs (kept for Halo 0.8 lockfiles and registries)", () => {
   test("pack, publish, search, install, and load from a local registry", async () => {
     const reg = join(fresh(), "index.json");
     const src = writePackage(join(fresh(), "acme"), apiPackage("https://api.acme.io/v1"));
@@ -141,7 +141,7 @@ describe("registries and installs", () => {
     await expect(install({ root, builtins }, writePackage(join(fresh(), "b"), { ...apiPackage("https://b.example"), name: "acme-two" }))).rejects.toThrow(/already a provider/);
   });
 
-  test("the bundled registry's packages are all valid", async () => {
+  test("the frozen v1 registry (registry/index.json) still installs", async () => {
     const found = await search(DEFAULT_REGISTRY);
     expect(found.map((p) => p.name).sort()).toEqual(["cloudflare", "github-mcp", "jira", "notion", "sentry", "stripe", "world-time"]);
     for (const p of found) await install({ root: fresh(), builtins }, p.name, { registry: DEFAULT_REGISTRY, trust: true });

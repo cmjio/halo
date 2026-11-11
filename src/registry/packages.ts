@@ -1,4 +1,8 @@
 /**
+ * v1 tool packages (halo-tool.json, `halo-tool/1`, halo.lock `tools`, .halo/tools), kept so
+ * Halo 0.8 lockfiles and registries keep working. New code uses the v2 package manager:
+ * format.ts, client.ts, resolve.ts, install.ts, resolver.ts and cli.ts in this folder.
+ *
  * Packing, publishing, installing, and loading tool packages.
  *
  *   halo pack ./my-tool            → my-tool-1.0.0.halotool (one file: manifest + files)

@@ -1,0 +1,49 @@
+{
+  "name": "@halo/stripe",
+  "description": "Stripe payments: customers, charges, refunds, and balance",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "950904228e8751d0be1ba7a008f4117cbe99ec219ee2be53f362427b6e84be65",
+      "size": 7279,
+      "file": "v1/files/@halo/stripe/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.750Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "Stripe"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [
+          "api.stripe.com"
+        ],
+        "env": [
+          "STRIPE_API_KEY"
+        ],
+        "spawn": [],
+        "code": false,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.750Z",
+  "keywords": [
+    "stripe",
+    "payments"
+  ],
+  "license": "MIT",
+  "homepage": "https://docs.stripe.com/api",
+  "readme": "# @halo/stripe\n\nStripe payments: customers, charges, refunds, and balance.\n\n```halo\nuse \"@halo/stripe\" { Stripe }\n\ntool Pay : Stripe()\n```\n\nSet `STRIPE_API_KEY`. `Stripe(apiKey: Env.OTHER_KEY)` reads another variable.\n\n`halo add stripe` installs it (short for `halo add @halo/stripe`). `halo tools` then lists its methods and their effects.\n"
+}

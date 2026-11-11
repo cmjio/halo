@@ -11,7 +11,7 @@
  *   halo serve [files or folders] [--port 8080]
  *   halo plan <file.halo>              (what a run could do, before it runs)
  *   halo mcp <files or folders>        (serve pipelines as MCP tools over stdio)
- *   halo add | remove | install | tools | search | pack | publish   (tool packages)
+ *   halo add | remove | install | outdated | update | search | info | pack | publish | ...   (packages: src/registry/cli.ts)
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -40,8 +40,8 @@ import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
-import { describePermissions, permissionsOf } from "./registry/manifest.js";
-import { DEFAULT_REGISTRY, install, installFromLock, loadInstalled, pack, publish, readLock, search, uninstall, type LoadedProvider } from "./registry/packages.js";
+import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
+import { PACKAGE_COMMANDS, PACKAGE_HELP, runPackageCommand } from "./registry/cli.js";
 
 const HELP = `
 Halo CLI - AI Workflow Language
@@ -87,17 +87,7 @@ USAGE:
   halo evolve apply <dir> [variant]     Write a variant (default: the winner) over the evolved file
                                         (--pr: open a pull request with it instead)
 
-TOOL PACKAGES:
-  halo search [query]                   Find tool packages in the registry
-  halo add <name[@version]|file|url|dir> Install a tool package (--trust if it runs code)
-  halo remove <name>                    Uninstall a tool package
-  halo install [--trust]                Install everything halo.lock pins (--trust: also the
-                                        packages that run code; trust is never read from the lock)
-  halo tools [--json]                   List every tool provider and its methods
-  halo agents [--json]                  List the built-in agent presets (agent X [model, preset: Name])
-  halo skills [name] [--dir skills]     List skills (yours and built-in), or print one
-  halo pack <dir>                       Bundle a package folder into a .halotool file
-  halo publish <file.halotool> --registry <index.json>   Add it to a registry index
+${PACKAGE_HELP}
 
 RUN OPTIONS:
   --pipeline, -p <name>  Pipeline to run (default: the file's entry pipeline)
@@ -287,7 +277,7 @@ const canHandleModel = (id: string) => !!registry.findAdapter(id);
 /** Providers from the tool packages halo.lock (in the current folder) pins. */
 let installedTools: Promise<LoadedProvider[]> | undefined;
 async function installed(): Promise<LoadedProvider[]> {
-  installedTools ??= loadInstalled(process.cwd());
+  installedTools ??= loadPackageProviders(process.cwd());
   try {
     return await installedTools;
   } catch (err) {
@@ -296,7 +286,7 @@ async function installed(): Promise<LoadedProvider[]> {
 }
 
 // Checking a file only needs the names of installed providers: no package code is loaded for it.
-const validateOptions = async () => ({ canHandleModel, toolProviders: Object.values(readLock(process.cwd()).tools).flatMap((t) => t.providers) });
+const validateOptions = async () => ({ canHandleModel, toolProviders: installedProviderNames(process.cwd()) });
 
 function registerInstalled(rt: HaloRuntime, providers: LoadedProvider[]) {
   for (const p of providers) rt.registerToolProvider(p.name, p.provider, p.info);
@@ -1208,29 +1198,6 @@ async function cmdUpgrade(): Promise<number> {
 
 // ── Tool packages ──
 
-async function registryIndex(flags: Flags): Promise<string> {
-  const flag = last(flags, "registry");
-  if (flag) return flag;
-  if (Bun.env.HALO_REGISTRY) return Bun.env.HALO_REGISTRY;
-  const config = Bun.file("halo.json");
-  const fromConfig = (await config.exists()) ? ((await config.json()) as { registry?: string }).registry : undefined;
-  return fromConfig ?? DEFAULT_REGISTRY;
-}
-
-const project = () => ({ root: process.cwd(), builtins: [...TOOL_PROVIDERS] });
-
-async function cmdAdd(flags: Flags): Promise<number> {
-  const specs = flags.positional;
-  if (!specs.length) fail("Usage: halo add <name[@version] | file.halotool | https://... | ./folder> [--trust]");
-  const registry = await registryIndex(flags);
-  for (const spec of specs) {
-    const r = await install(project(), spec, { registry, trust: flags.bools.has("trust") });
-    console.log(`${green("✓")} ${bold(`${r.name}@${r.version}`)} → ${r.providers.map((p) => `tool X : ${p}(...)`).join(", ")}`);
-    for (const line of describePermissions(r.permissions)) console.log(dim(`    ${line}`));
-  }
-  return 0;
-}
-
 async function cmdTools(flags: Flags): Promise<number> {
   const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
   const providers = await installed();
@@ -1290,32 +1257,10 @@ function cmdSkills(flags: Flags): number {
   return 0;
 }
 
-async function cmdSearch(flags: Flags): Promise<number> {
-  const index = await registryIndex(flags);
-  const found = await search(index, flags.positional.join(" "));
-  const lock = readLock(process.cwd());
-  if (!found.length) console.log("No packages found.");
-  for (const p of found) {
-    const have = lock.tools[p.name];
-    console.log(`${bold(p.name)}@${p.latest}${have ? green(` (installed ${have.version})`) : ""}  ${p.description}`);
-    console.log(dim(`    providers: ${p.latestVersion.providers.join(", ")} · ${describePermissions(p.latestVersion.permissions).join(" · ")}${p.publisher ? ` · by ${p.publisher}` : ""}`));
-  }
-  return 0;
-}
-
-async function cmdPack(flags: Flags): Promise<number> {
-  const dir = flags.positional[0];
-  if (!dir) fail("Usage: halo pack <package folder> [--out <folder>]");
-  const { bytes, manifest, sha256 } = pack(dir);
-  const out = join(last(flags, "out") ?? ".", `${manifest.name}-${manifest.version}.halotool`);
-  await Bun.write(out, bytes);
-  console.log(`${green("✓")} ${out} ${dim(`(${bytes.length} bytes, sha256 ${sha256})`)}`);
-  for (const line of describePermissions(permissionsOf(manifest))) console.log(dim(`    ${line}`));
-  return 0;
-}
-
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+  // Package commands parse their own flags (--dry-run, --registry, ...).
+  if (command && (PACKAGE_COMMANDS as readonly string[]).includes(command) && !rest.includes("--help")) return await runPackageCommand(command, rest);
   try {
     const flags = parseFlags(rest);
     if (command === "--version" || command === "-v" || flags.bools.has("version")) {
@@ -1358,6 +1303,7 @@ export async function main(argv: string[]): Promise<number> {
       case "history":
         return await cmdHistory(flags);
       case "init":
+        if (rest.includes("--package")) return await runPackageCommand("init", rest);
         const template = last(flags, "template");
         return await initProject(flags.positional[0] ?? template ?? "my-halo-project", console, template);
       case "upgrade":
@@ -1377,39 +1323,12 @@ export async function main(argv: string[]): Promise<number> {
         return flags.positional[0] === "apply" ? await cmdEvolveApply(flags) : await cmdEvolve(flags);
       case "mcp":
         return await cmdMcp(flags);
-      case "add":
-        return await cmdAdd(flags);
-      case "remove":
-      case "uninstall": {
-        const name = flags.positional[0];
-        if (!name) fail("Usage: halo remove <name>");
-        if (!uninstall(process.cwd(), name)) fail(`"${name}" is not installed`);
-        console.log(`${green("✓")} removed ${name}`);
-        return 0;
-      }
-      case "install": {
-        const done = await installFromLock(project(), { trust: flags.bools.has("trust") });
-        console.log(done.length ? done.map((r) => `${green("✓")} ${r.name}@${r.version}`).join("\n") : "Nothing to install (halo.lock lists no tools).");
-        return 0;
-      }
       case "tools":
         return await cmdTools(flags);
       case "agents":
         return cmdAgents(flags);
       case "skills":
         return cmdSkills(flags);
-      case "search":
-        return await cmdSearch(flags);
-      case "pack":
-        return await cmdPack(flags);
-      case "publish": {
-        const file = flags.positional[0];
-        const index = last(flags, "registry");
-        if (!file || !index) fail("Usage: halo publish <file.halotool> --registry <path/to/index.json>");
-        const r = publish(file, index);
-        console.log(`${green("✓")} published ${r.name}@${r.version} to ${index} (${r.file})`);
-        return 0;
-      }
       default:
         // `halo file.halo` runs the file.
         if (command.endsWith(".halo")) return await cmdRun(parseFlags(argv), false);
