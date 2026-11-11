@@ -1,0 +1,7 @@
+# Copy to .dev.vars (never committed) for `bun run registry:dev`.
+# A GitHub OAuth app with "Enable Device Flow" ticked. Only the client id is needed for the
+# device flow; the secret is sent when set.
+GITHUB_CLIENT_ID=Iv1.0000000000000000
+GITHUB_CLIENT_SECRET=
+# Local dev serves pages and API at this address.
+PUBLIC_URL=http://localhost:8787
