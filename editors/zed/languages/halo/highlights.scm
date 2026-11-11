@@ -4,6 +4,8 @@
 
 ; === Keywords ===
 [
+  "use"
+  "with"
   "policy"
   "tool"
   "store"
@@ -53,6 +55,13 @@
 ; === Punctuation ===
 ["[" "]" "(" ")" "{" "}"] @punctuation.bracket
 ["," "." ":"] @punctuation.delimiter
+
+; === Imports ===
+(use_decl source: (string) @string.special)
+(use_decl models: (identifier) @keyword)
+(use_item name: (identifier) @variable.special)
+(use_item alias: (identifier) @variable.special)
+(model_binding slot: (identifier) @property)
 
 ; === Declarations ===
 (agent_decl name: (identifier) @type.definition)

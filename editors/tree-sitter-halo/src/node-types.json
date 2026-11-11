@@ -737,6 +737,40 @@
     }
   },
   {
+    "type": "model_binding",
+    "named": true,
+    "fields": {
+      "model": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "dotted_ident",
+            "named": true
+          },
+          {
+            "type": "model_ref",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      },
+      "slot": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "model_param",
     "named": true,
     "fields": {
@@ -1208,6 +1242,10 @@
         {
           "type": "tool_decl",
           "named": true
+        },
+        {
+          "type": "use_decl",
+          "named": true
         }
       ]
     }
@@ -1353,6 +1391,72 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "use_decl",
+    "named": true,
+    "fields": {
+      "models": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "source": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "model_binding",
+          "named": true
+        },
+        {
+          "type": "use_item",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "use_item",
+    "named": true,
+    "fields": {
+      "alias": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1554,6 +1658,14 @@
   },
   {
     "type": "true",
+    "named": false
+  },
+  {
+    "type": "use",
+    "named": false
+  },
+  {
+    "type": "with",
     "named": false
   },
   {

@@ -43,6 +43,7 @@ import { render } from "../parser/index.js";
 import { stageLabel } from "../parser/labels.js";
 export { stageLabel };
 import { producedKeys } from "../parser/validate.js";
+import { displayText, isQualified } from "../linker/names.js";
 import { AdapterRegistry, type LLMMessage, type LLMRequest, type LLMToolCall, type LLMToolSpec, type ProviderAdapter } from "./adapter.js";
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
@@ -642,6 +643,8 @@ export class HaloRuntime {
   private guard = new PolicyEngine(this.policies);
   private shadowMinds = new Map<string, Agent[]>();
   private shadowModels = new Map<string, string[]>();
+  /** Qualified internal names (from the linker) → the names people see. */
+  private names: Record<string, string> = {};
 
   private config: RuntimeConfig;
   private mocks: Record<string, MockValue> | null = null;
@@ -690,6 +693,7 @@ export class HaloRuntime {
   /** Load a parsed program into the runtime. */
   load(ast: ParseResult): this {
     if (ast.errors.length > 0) throw new HaloError(`Cannot load a program with parse errors:\n  ${ast.errors.join("\n  ")}`);
+    if (ast.names && Object.keys(ast.names).length) this.names = { ...this.names, ...ast.names };
     for (const s of ast.pipelines) {
       for (const stage of s.pipeline) {
         const unsafe = producedKeys(stage).find((k) => !isSafeKey(k));
@@ -836,9 +840,14 @@ export class HaloRuntime {
     return this.runTop(ctx, 0);
   }
 
-  /** The pipelines this runtime has loaded. */
+  /** The pipelines this runtime has loaded, as entry points: not those a linked program imported (they're callable from these). */
   listPipelines(): PipelineDeclaration[] {
-    return [...this.pipelines.values()];
+    return [...this.pipelines.values()].filter((p) => !isQualified(p.name));
+  }
+
+  /** A name or message with the linker's internal names replaced by the names people see. */
+  displayName(text: string): string {
+    return displayText(this.names, text);
   }
 
   /**
@@ -987,7 +996,7 @@ export class HaloRuntime {
       }
       if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
       ctx.stageIndex = snap.nextStage;
-      this.config.recorder?.({ kind: stage.kind === "interrupt" ? "yield" : "listen", target: snap.waitingFor, value: payload });
+      this.record({ kind: stage.kind === "interrupt" ? "yield" : "listen", target: snap.waitingFor, value: payload });
       this.deliver(stage, ctx, payload, snap.waitingFor);
       this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
       // The paused stage is done now that it has its response.
@@ -1024,6 +1033,12 @@ export class HaloRuntime {
       return result;
     } catch (err) {
       await Promise.all([closeChromeSessions(ctx.meta.runId), closeRemoteSessions(ctx.meta.runId)]);
+      // Errors name things as people know them, not by the linker's internal names.
+      if (err instanceof Error && err.message.includes("#")) {
+        try {
+          err.message = this.displayName(err.message);
+        } catch {}
+      }
       this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost });
       throw err;
     }
@@ -1266,8 +1281,24 @@ export class HaloRuntime {
   }
 
   private emit(event: RuntimeEvent): void {
+    if (Object.keys(this.names).length) event = this.displayEvent(event);
     this.config.onEvent?.(event);
     for (const l of this.listeners) l(event);
+  }
+
+  /** An event with display names in the fields that name things (never in prompts or outputs). */
+  private displayEvent(event: RuntimeEvent): RuntimeEvent {
+    const out: Record<string, unknown> = { ...event };
+    for (const key of ["pipeline", "agent", "tool", "target", "label", "error", "policy", "primary", "shadow"]) {
+      if (typeof out[key] === "string") out[key] = this.displayName(out[key] as string);
+    }
+    if (out.record && typeof out.record === "object") out.record = this.displayEvent(out.record as RuntimeEvent);
+    return out as RuntimeEvent;
+  }
+
+  /** Record an answer from outside, under its display name. */
+  private record(entry: RecordedCall): void {
+    this.config.recorder?.({ ...entry, target: this.displayName(entry.target) });
   }
 
   /**
@@ -1418,7 +1449,8 @@ export class HaloRuntime {
 
   private async callStage(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
     const value = await this.dispatchCall(stage, ctx);
-    if (stage.callee !== "System" && !this.isThreadCall(stage.callee)) this.store(ctx, stage.callee, stage.method, value);
+    // Stored under the name the pipeline wrote (a linked program's callee may be an internal name).
+    if (stage.callee !== "System" && !this.isThreadCall(stage.callee)) this.store(ctx, stage.alias ?? stage.callee, stage.method, value);
     if (stage.bind) ctx.data[stage.bind] = value;
     return value;
   }
@@ -1471,7 +1503,8 @@ export class HaloRuntime {
   /** The mock installed for the first of `keys` that has one, as given to mockAll. */
   private rawMock(...keys: string[]): MockValue | undefined {
     if (!this.mocks) return undefined;
-    const key = keys.find((k) => Object.hasOwn(this.mocks!, k));
+    // Mocks name things as people see them ("Triager.classify"), or by their internal names.
+    const key = keys.flatMap((k) => [k, this.displayName(k)]).find((k) => Object.hasOwn(this.mocks!, k));
     return key === undefined ? undefined : this.mocks[key];
   }
 
@@ -1632,7 +1665,7 @@ export class HaloRuntime {
       if (!agent.equips?.includes(toolName)) throw new HaloError(`Agent "${agent.name}" is not equipped with tool "${toolName}" (add \`equips ${toolName}\`)`);
       this.checkSql(tool, stage, false);
       toolResult = await this.toolCall(tool, stage.method, inputs, params, ctx, true);
-      this.store(ctx, toolName, stage.method, toolResult);
+      this.store(ctx, this.displayName(toolName), stage.method, toolResult);
     }
 
     const parts: PromptParts = {
@@ -1815,15 +1848,17 @@ export class HaloRuntime {
       for (const method of methods) {
         const target = `${name}.${method.name}`;
         // Function names allow letters, digits, _ and - (64 at most), so "Repo.create_pr" becomes "Repo__create_pr".
-        let fn = `${name}__${method.name}`.replace(/[^\w-]/g, "_").slice(0, 64);
+        const shown = this.displayName(name);
+        let fn = `${shown}__${method.name}`.replace(/[^\w-]/g, "_").slice(0, 64);
         for (let i = 2; kit.byName.has(fn); i++) fn = `${fn.slice(0, 60)}_${i}`;
         const entry = { tool, method, target };
         kit.byName.set(fn, entry);
         kit.byName.set(target, entry);
+        if (shown !== name) kit.byName.set(`${shown}.${method.name}`, entry);
         // A method its policies hide isn't offered; a model that calls it anyway is refused by checkToolCall.
         if (!this.guard.toolVisible(agent, target, method.effect)) continue;
-        kit.offered.push(target);
-        const about = info?.description ? `${name} (${info.description}): ${method.description}` : `${name}: ${method.description}`;
+        kit.offered.push(this.displayName(target));
+        const about = info?.description ? `${shown} (${info.description}): ${method.description}` : `${shown}: ${method.description}`;
         kit.specs.push({ name: fn, description: about.slice(0, 1024), parameters: method.params ?? { type: "object", properties: {} } });
       }
     }
@@ -1956,12 +1991,12 @@ export class HaloRuntime {
     if (ctx.approvals && Object.hasOwn(ctx.approvals, ctx.stageIndex)) {
       const answer = ctx.approvals[ctx.stageIndex];
       delete ctx.approvals[ctx.stageIndex];
-      this.config.recorder?.({ kind: "approval", target, value: answer });
+      this.record({ kind: "approval", target, value: answer });
       return answer;
     }
     const mock = this.mockFor(target + "?", "approval");
     const req: InterruptRequest = { pipeline: ctx.pipeline.name, message, channel: "approval", attachments: [args], args: [], named: { target, args, policy, agent: agent.name }, current: ctx.current, context: this.snapshot(ctx) };
-    const recorded = (answer: unknown) => (this.config.recorder?.({ kind: "approval", target, value: answer }), answer);
+    const recorded = (answer: unknown) => (this.record({ kind: "approval", target, value: answer }), answer);
     if (mock) return recorded(await mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current }));
     if (this.config.onInterrupt) return recorded(await raceAbort(Promise.resolve(this.config.onInterrupt(req)), ctx.signal));
     // Only a top-level stage that is itself the agent call can stop and pick up again.
@@ -2085,10 +2120,10 @@ export class HaloRuntime {
       ctx.meta.tokens.prompt += result.tokens.prompt;
       ctx.meta.tokens.completion += result.tokens.completion;
     }
-    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
+    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
     const toolCalls = result.toolCalls;
-    if (kind !== "shadow") this.config.recorder?.({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}), fingerprint, cost: result.cost });
+    if (kind !== "shadow") this.record({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}), fingerprint, cost: result.cost });
     if (kind !== "shadow") {
       // Telemetry keeps what the agent's policies let out: redacted, or withheld if blocked.
       const shown = this.guard.forLog(agent, value);
@@ -2235,8 +2270,8 @@ export class HaloRuntime {
     );
 
     const latencyMs = Math.round(performance.now() - t0);
-    this.config.recorder?.({ kind: "tool", target, value: result.value, fingerprint });
-    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: chosenBy } : {}) });
+    this.record({ kind: "tool", target, value: result.value, fingerprint });
+    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: this.displayName(chosenBy) } : {}) });
     // A result an agent chose to fetch is logged as its policies let it out (as the agent itself sees it).
     const chooser = chosenBy ? this.agents.get(chosenBy) : undefined;
     const output = chooser ? this.guard.forLog(chooser, result.value) : result.value;
@@ -2426,7 +2461,7 @@ export class HaloRuntime {
       work = raceAbort(work, controller.signal).finally(() => (clearTimeout(timer), controller.abort(DONE)));
     }
     const answer = await work;
-    this.config.recorder?.({ kind: "yield", target: "yield", value: answer });
+    this.record({ kind: "yield", target: "yield", value: answer });
     this.deliver(stage, ctx, answer, "yield");
   }
 
@@ -2460,7 +2495,7 @@ export class HaloRuntime {
       throw new Pause(target);
     }
     const event = await raceAbort(Promise.resolve(handler({ pipeline: ctx.pipeline.name, target, current: ctx.current, context: this.snapshot(ctx) })), ctx.signal);
-    this.config.recorder?.({ kind: "listen", target, value: event });
+    this.record({ kind: "listen", target, value: event });
     this.deliver(stage, ctx, event, target);
   }
 }

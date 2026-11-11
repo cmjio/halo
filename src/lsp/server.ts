@@ -11,6 +11,8 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { getDiagnostics } from "./diagnostics.js";
 import { getCompletions } from "./completions.js";
 import { getHover } from "./hover.js";
+import { getDefinition } from "./definition.js";
+import { fileURLToPath } from "node:url";
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -32,9 +34,11 @@ connection.onInitialize((params: InitializeParams) => {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: {
-        resolveProvider: false
+        resolveProvider: false,
+        triggerCharacters: ['"', "/", "{", ","]
       },
-      hoverProvider: true
+      hoverProvider: true,
+      definitionProvider: true
     }
   };
   if (hasWorkspaceFolderCapability) {
@@ -53,21 +57,53 @@ connection.onInitialized(() => {
   }
 });
 
+/** A document's file path (undefined for untitled buffers), so `use` lines can be linked. */
+function pathOf(uri: string): string | undefined {
+  try {
+    return uri.startsWith("file:") ? fileURLToPath(uri) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Unsaved text of every open .halo document, by path: linking reads these before the disk. */
+function openBuffers(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const doc of documents.all()) {
+    const path = pathOf(doc.uri);
+    if (path) map.set(path, doc.getText());
+  }
+  return map;
+}
+
+function publish(doc: TextDocument) {
+  const diagnostics = getDiagnostics(doc.getText(), pathOf(doc.uri), openBuffers());
+  connection.sendDiagnostics({ uri: doc.uri, diagnostics });
+}
+
 documents.onDidChangeContent(change => {
-  const diagnostics = getDiagnostics(change.document.getText());
-  connection.sendDiagnostics({ uri: change.document.uri, diagnostics });
+  publish(change.document);
+  // Files that use this one may have new problems (or fewer).
+  for (const other of documents.all()) if (other.uri !== change.document.uri && /\buse\s+["']/.test(other.getText())) publish(other);
 });
 
 connection.onCompletion((textDocumentPosition) => {
   const doc = documents.get(textDocumentPosition.textDocument.uri);
   if (!doc) return [];
-  return getCompletions(doc.getText(), textDocumentPosition.position);
+  return getCompletions(doc.getText(), textDocumentPosition.position, pathOf(doc.uri), openBuffers());
 });
 
 connection.onHover((textDocumentPosition) => {
   const doc = documents.get(textDocumentPosition.textDocument.uri);
   if (!doc) return null;
-  return getHover(doc.getText(), textDocumentPosition.position);
+  return getHover(doc.getText(), textDocumentPosition.position, pathOf(doc.uri), openBuffers());
+});
+
+connection.onDefinition((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const path = doc && pathOf(doc.uri);
+  if (!doc || !path) return null;
+  return getDefinition(doc.getText(), params.position, path, openBuffers());
 });
 
 documents.listen(connection);

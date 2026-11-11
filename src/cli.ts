@@ -19,6 +19,8 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parse } from "./parser/index.js";
 import { validate, type Diagnostic } from "./parser/validate.js";
+import { checkLinked, displayName, entryPipelines, type LinkedProgram } from "./linker/index.js";
+import { linkFile } from "./linker/node.js";
 import type { CallStage, ParseResult, PipelineStage, PipelineDeclaration } from "./parser/types.js";
 import { AdapterRegistry } from "./runtime/adapter.js";
 import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type ListenRequest, type RunResult, type RuntimeEvent } from "./runtime/runtime.js";
@@ -253,19 +255,31 @@ function inputArgs(flags: Flags): Record<string, unknown> {
 
 // ── Loading ──
 
-async function load(file: string | undefined): Promise<{ path: string; ast: ParseResult }> {
+/** Programs load() linked, so checks can report problems in the files they came from. */
+const linkedPrograms = new WeakMap<ParseResult, LinkedProgram>();
+
+/** Load a .halo file and everything it `use`s (local files and installed packages) as one program. */
+async function load(file: string | undefined, source?: string): Promise<{ path: string; ast: ParseResult }> {
   if (!file) fail("No .halo file specified");
   const path = resolve(file);
-  const f = Bun.file(path);
-  if (!(await f.exists())) fail(`File not found: ${file}`);
-  const ast = parse(await f.text());
+  if (source === undefined && !(await Bun.file(path).exists())) fail(`File not found: ${file}`);
+  const linked = linkFile(path, source === undefined ? {} : { overrides: { [path]: source } });
+  const ast = linked.program;
   if (ast.errors.length) {
     fail(`Parse errors in ${relative(process.cwd(), path)}:\n${ast.errors.map((e) => "  " + e).join("\n")}`);
   }
+  linkedPrograms.set(ast, linked);
   return { path, ast };
 }
 
-function formatDiag(d: Diagnostic, file: string): string {
+/** Link problems and the validator's diagnostics for a program from load(). */
+async function check(ast: ParseResult): Promise<Diagnostic[]> {
+  const linked = linkedPrograms.get(ast);
+  return linked ? checkLinked(linked, await validateOptions()) : validate(ast, await validateOptions());
+}
+
+function formatDiag(d: Diagnostic, fallback: string): string {
+  const file = d.file ? relative(process.cwd(), d.file) || d.file : fallback;
   const where = d.line ? `${file}:${d.line}:${d.column ?? 0}` : file;
   const tag = d.severity === "error" ? red("error") : yellow("warning");
   return `${dim(where)} ${tag} ${d.message}`;
@@ -318,13 +332,8 @@ async function cmdValidate(flags: Flags): Promise<number> {
   let warnings = 0;
   for (const file of files) {
     const rel = relative(process.cwd(), file) || file;
-    const ast = parse(await Bun.file(file).text());
-    const diags: Diagnostic[] = ast.errors.length
-      ? ast.errors.map((message) => {
-          const m = message.match(/^\[(\d+):(\d+)\] (.*)$/s);
-          return m ? { severity: "error", message: m[3]!, line: Number(m[1]), column: Number(m[2]) } : { severity: "error", message };
-        })
-      : validate(ast, await validateOptions());
+    // Each file is checked with everything it uses; problems in those files are reported where they are.
+    const diags: Diagnostic[] = checkLinked(linkFile(file), await validateOptions());
     const e = diags.filter((d) => d.severity === "error").length;
     errors += e;
     warnings += diags.length - e;
@@ -341,23 +350,30 @@ async function cmdValidate(flags: Flags): Promise<number> {
 }
 
 async function cmdParse(flags: Flags): Promise<number> {
-  const { ast } = await load(flags.positional[0]);
+  // The file's own syntax tree, `use` lines included (not linked).
+  const file = flags.positional[0];
+  if (!file) fail("No .halo file specified");
+  if (!(await Bun.file(resolve(file)).exists())) fail(`File not found: ${file}`);
+  const ast = parse(await Bun.file(resolve(file)).text());
+  if (ast.errors.length) fail(`Parse errors in ${file}:\n${ast.errors.map((e) => "  " + e).join("\n")}`);
   console.log(JSON.stringify(ast, null, 2));
   return 0;
 }
 
 function pickStream(ast: ParseResult, name: string | undefined): PipelineDeclaration {
+  // Only the file's own pipelines are entry points; imported ones are called from them.
+  const own = entryPipelines(ast);
   if (name) {
-    const s = ast.pipelines.find((s) => s.name === name);
-    if (!s) fail(`Pipeline "${name}" not found. Available: ${ast.pipelines.map((s) => s.name).join(", ")}`);
+    const s = own.find((s) => s.name === name);
+    if (!s) fail(`Pipeline "${name}" not found. Available: ${own.map((s) => s.name).join(", ")}`);
     return s;
   }
-  if (ast.pipelines.length === 0) fail("No pipelines found in file");
+  if (own.length === 0) fail("No pipelines found in file");
   // Default to the entry point: the one pipeline no other pipeline calls.
-  const called = new Set(ast.pipelines.flatMap((s) => s.pipeline.flatMap(calls)).filter((c) => !c.method).map((c) => c.callee));
-  const entries = ast.pipelines.filter((s) => !called.has(s.name));
+  const called = new Set(own.flatMap((s) => s.pipeline.flatMap(calls)).filter((c) => !c.method).map((c) => c.callee));
+  const entries = own.filter((s) => !called.has(s.name));
   if (entries.length === 1) return entries[0]!;
-  fail(`File has ${ast.pipelines.length} pipelines; pick one with --pipeline (${ast.pipelines.map((s) => s.name).join(", ")})`);
+  fail(`File has ${own.length} pipelines; pick one with --pipeline (${own.map((s) => s.name).join(", ")})`);
 }
 
 /** Every call a stage makes, including those inside fan-out, branch, and each. */
@@ -430,8 +446,9 @@ async function readMocks(file: string, ast: ParseResult, source: string): Promis
     fail(`Mocks file ${file} is not valid JSON: ${e instanceof Error ? e.message : e}`);
   }
   if (!data || typeof data !== "object" || Array.isArray(data)) fail(`Mocks file ${file} must be a JSON object of target → answer`);
-  const tools = new Set([...ast.tools, ...ast.stores].map((t) => t.name));
-  const names = new Set([...tools, ...ast.agents.map((a) => a.name)]);
+  // Mocks name imported agents and tools as people see them ("Triager"), or by internal name.
+  const tools = new Set([...ast.tools, ...ast.stores].flatMap((t) => [t.name, displayName(ast.names, t.name)]));
+  const names = new Set([...tools, ...ast.agents.flatMap((a) => [a.name, displayName(ast.names, a.name)])]);
   const mocks: Record<string, unknown> = {};
   const live = new Set<string>();
   for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
@@ -478,7 +495,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   const { path, ast } = await load(flags.positional[0]);
   const rel = relative(process.cwd(), path);
 
-  const diags = validate(ast, await validateOptions());
+  const diags = await check(ast);
   for (const d of diags) console.error(formatDiag(d, rel));
   if (diags.some((d) => d.severity === "error")) return 1;
 
@@ -673,12 +690,12 @@ async function cmdServe(flags: Flags): Promise<number> {
 
 async function cmdPlan(flags: Flags): Promise<number> {
   const { path, ast } = await load(flags.positional[0]);
-  const diags = validate(ast, await validateOptions());
+  const diags = await check(ast);
   for (const d of diags.filter((x) => x.severity === "error")) console.error(formatDiag(d, relative(process.cwd(), path)));
   const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
   registerInstalled(rt, await installed());
   const target = last(flags, "pipeline");
-  const names = target ? [pickStream(ast, target).name] : ast.pipelines.map((p) => p.name);
+  const names = target ? [pickStream(ast, target).name] : entryPipelines(ast).map((p) => p.name);
   const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider) }));
   if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));
   else console.log(plans.map((p) => formatPlan(p, { bold, dim, red, yellow })).join("\n\n"));
@@ -695,8 +712,11 @@ function loadRevision(rev: string, path: string): ParseResult {
   if (!rev.trim() || rev.startsWith("-")) fail(`--from needs a git revision, such as main or HEAD~1 (got "${rev}")`);
   const p = Bun.spawnSync(["git", "show", `${rev}:./${basename(path)}`], { cwd: dirname(path), stderr: "pipe" });
   if (p.exitCode !== 0) fail(`Can't read ${relative(process.cwd(), path)} at ${rev}: ${p.stderr.toString().trim() || `git exited with ${p.exitCode}`}`);
-  const ast = parse(p.stdout.toString());
+  // Linked against the files it uses as they are now.
+  const linked = linkFile(path, { overrides: { [resolve(path)]: p.stdout.toString() } });
+  const ast = linked.program;
   if (ast.errors.length) fail(`Parse errors in ${relative(process.cwd(), path)} at ${rev}:\n${ast.errors.map((e) => "  " + e).join("\n")}`);
+  linkedPrograms.set(ast, linked);
   return ast;
 }
 
@@ -712,7 +732,7 @@ async function cmdCompare(flags: Flags): Promise<number> {
   const relA = from === undefined ? relative(process.cwd(), a.path) : `${relB}@${from}`;
   let invalid = false;
   for (const [ast, rel] of [[a.ast, relA], [b.ast, relB]] as const) {
-    for (const d of validate(ast, await validateOptions()).filter((x) => x.severity === "error")) {
+    for (const d of (await check(ast)).filter((x) => x.severity === "error")) {
       console.error(formatDiag(d, rel));
       invalid = true;
     }
@@ -840,7 +860,7 @@ async function cmdEvolve(flags: Flags): Promise<number> {
   const { path, ast } = await load(file);
   const rel = relative(process.cwd(), path);
   const source = await Bun.file(path).text();
-  for (const d of validate(ast, await validateOptions()).filter((x) => x.severity === "error")) {
+  for (const d of (await check(ast)).filter((x) => x.severity === "error")) {
     console.error(formatDiag(d, rel));
     fail(`${rel} doesn't validate; fix it before evolving it`);
   }
@@ -1128,14 +1148,16 @@ async function cmdMcp(flags: Flags): Promise<number> {
   const entries = new Map<string, { rt: HaloRuntime; decl: PipelineDeclaration; file: string }>();
   const runtimes: HaloRuntime[] = [];
   for (const file of files) {
-    const ast = parse(await Bun.file(file).text());
+    // Each file is linked with what it uses; its own pipelines are the tools.
+    const linked = linkFile(file);
+    const ast = linked.program;
     const rel = relative(process.cwd(), file);
     if (ast.errors.length) fail(`Parse errors in ${rel}`);
-    if (validate(ast, await validateOptions()).some((d) => d.severity === "error")) fail(`${rel} has errors; run halo validate`);
+    if (checkLinked(linked, await validateOptions()).some((d) => d.severity === "error")) fail(`${rel} has errors; run halo validate`);
     const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs") }).load(ast);
     registerInstalled(rt, providers);
     runtimes.push(rt);
-    for (const decl of ast.pipelines) entries.set(decl.name, { rt, decl, file: rel });
+    for (const decl of entryPipelines(ast)) entries.set(decl.name, { rt, decl, file: rel });
   }
   const server = createMcpServer(
     {

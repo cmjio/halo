@@ -4,6 +4,37 @@
 export interface Loc {
   line: number;
   column: number;
+  /** The file it came from, set by the linker on declarations from every file it loads. */
+  file?: string;
+}
+
+/** `Name` or `Name as Alias` in a `use` line. */
+export interface UseItem {
+  name: string;
+  /** The local name, when renamed with `as`. */
+  as?: string;
+  loc?: Loc;
+}
+
+/** `fast: anthropic/claude-haiku-4-5` in `with models(...)`. */
+export interface ModelBinding {
+  slot: string;
+  model: string;
+  loc?: Loc;
+}
+
+/**
+ * `use "./shared.halo" { A, B as C }` or `use "@acme/kit" { X } with models(fast: m)`.
+ * The linker (src/linker) resolves it; the parser only records it.
+ */
+export interface UseDeclaration {
+  /** As written: a relative path ("./x.halo", "../x.halo") or a package name ("@acme/kit", or bare "stripe" for "@halo/stripe"). */
+  source: string;
+  /** The imported names; undefined when the line has no `{ ... }` (then it imports nothing). */
+  items?: UseItem[];
+  /** `with models(...)`: model slots of the package's agents, filled by this program. */
+  models?: ModelBinding[];
+  loc?: Loc;
 }
 
 /** A typed value as written in source. */
@@ -133,6 +164,11 @@ export interface CallStage {
   bind?: string;
   /** True for a bare agent name inside a fan-out block (`|* { A, B }`). */
   implicit?: boolean;
+  /**
+   * The callee as written, when the linker replaced `callee` with a qualified internal name
+   * (`@acme/kit#Triager`). Results are stored in context.data under this name.
+   */
+  alias?: string;
   loc?: Loc;
 }
 
@@ -204,6 +240,8 @@ export interface LoopStage {
   kind: "loop";
   /** The agent asked to retry. */
   target: string;
+  /** The agent as written, when the linker qualified `target`. */
+  alias?: string;
   /** Condition source text, as written in the string. */
   condition: string;
   expr?: CondExpr;
@@ -232,4 +270,11 @@ export interface ParseResult {
   agents: Agent[];
   pipelines: PipelineDeclaration[];
   errors: string[];
+  /** `use` lines, in source order. */
+  uses?: UseDeclaration[];
+  /**
+   * Set by the linker: internal qualified names (`@acme/kit#Triager`, `lib/shared#Careful`)
+   * to the names people see in mocks, recordings, events, plans and errors.
+   */
+  names?: Record<string, string>;
 }

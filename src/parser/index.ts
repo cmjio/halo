@@ -34,6 +34,7 @@ import {
   type StoreDeclContext,
   type SchemaDeclContext,
   type TypeRefContext,
+  type UseDeclContext,
   type ValueContext,
   type BindingContext,
   EquipsModifierContext,
@@ -70,6 +71,7 @@ import type {
   PipelineStage,
   SchemaDeclaration,
   ToolDeclaration,
+  UseDeclaration,
   Value,
 } from "./types.js";
 
@@ -107,7 +109,7 @@ function makeParser(source: string) {
   return { input, parser, listener };
 }
 
-const empty = (errors: string[]): ParseResult => ({ policies: [], tools: [], stores: [], schemas: [], agents: [], pipelines: [], errors });
+const empty = (errors: string[]): ParseResult => ({ policies: [], tools: [], stores: [], schemas: [], agents: [], pipelines: [], errors, uses: [] });
 
 /** Longest run of letters, digits and dots allowed outside strings: the lexer tries a model name from every dot, so longer runs parse in quadratic time. */
 const MAX_NAME = 512;
@@ -136,6 +138,13 @@ function parseProgram(source: string): ParseResult {
   const result = empty([]);
   const walker = new Walker(input);
   for (const decl of program.declaration()) {
+    const u = decl.useDecl();
+    if (u) {
+      const use = walker.use(u);
+      if (typeof use === "string") result.errors.push(use);
+      else result.uses!.push(use);
+      continue;
+    }
     const p = decl.policyDecl();
     const t = decl.toolDecl();
     const st = decl.storeDecl();
@@ -149,6 +158,7 @@ function parseProgram(source: string): ParseResult {
     else if (a) result.agents.push(walker.agent(a));
     else if (pl) result.pipelines.push(walker.pipeline(pl));
   }
+  if (result.errors.length) return empty(result.errors);
   return result;
 }
 
@@ -183,6 +193,27 @@ class Walker {
   private sourceText(ctx: ParserRuleContext): string {
     if (!ctx.start || !ctx.stop) return ctx.getText();
     return this.input.getTextFromRange(ctx.start.start, ctx.stop.stop);
+  }
+
+  /** A `use` line, or a syntax error message when `with` is followed by something other than `models`. */
+  use(ctx: UseDeclContext): UseDeclaration | string {
+    const use: UseDeclaration = { source: unquote(ctx.STRING().getText()), loc: this.loc(ctx) };
+    // `{ ... }` present (even empty) means a list of imports; without it the line imports nothing.
+    if (ctx.children.some((c) => c.getText() === "{")) {
+      use.items = ctx.useItem().map((item) => {
+        const [name, as] = item.IDENTIFIER();
+        return { name: name!.getText(), ...(as ? { as: as.getText() } : {}), loc: this.loc(item) };
+      });
+    }
+    const withWord = ctx.IDENTIFIER();
+    if (withWord) {
+      if (withWord.getText() !== "models") return `[${withWord.symbol.line}:${withWord.symbol.column}] expected "models" after "with" near "${withWord.getText()}"`;
+      use.models = ctx.modelBinding().map((b) => {
+        const str = b.modelRef().STRING();
+        return { slot: b.name().getText(), model: str ? unquote(str.getText()) : b.modelRef().getText(), loc: this.loc(b) };
+      });
+    }
+    return use;
   }
 
   policy(ctx: PolicyDeclContext): PolicyDeclaration {

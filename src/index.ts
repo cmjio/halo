@@ -17,9 +17,19 @@ export function compile(source: string, options?: ValidateOptions): { ast: Parse
   if (ast.errors.length) {
     return { ast, diagnostics: ast.errors.map((message) => ({ severity: "error", message })), ok: false };
   }
+  if (ast.uses?.length) {
+    // One file on its own: its `use` lines have nothing to find, and say so.
+    const linked = link("main.halo", { readFile: () => undefined, source });
+    const diagnostics = checkLinked(linked, options);
+    return { ast: linked.program, diagnostics, ok: !diagnostics.some((d) => d.severity === "error") };
+  }
   const diagnostics = validate(ast, options);
   return { ast, diagnostics, ok: !diagnostics.some((d) => d.severity === "error") };
 }
+
+// Linking: `use` across files and packages.
+export { link, checkLinked, entryPipelines, analyzePackage, displayName, displayText, isQualified, type LinkOptions, type LinkedProgram, type LinkDiagnostic, type LinkedFile, type PackageAnalysis } from "./linker/index.js";
+import { link, checkLinked } from "./linker/index.js";
 
 // Built-in agent presets and skills.
 export { AGENT_PRESETS, PRESET_NAMES, applyPreset, findPreset, type AgentPreset } from "./runtime/presets.js";
