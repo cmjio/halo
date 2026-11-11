@@ -7,6 +7,7 @@ Directives go before an `agent` or `pipeline` declaration. Unknown directives pr
 | `@timeout(d)` | each call to the agent | the whole run of the pipeline |
 | `@retry(n, delay)` | calls to the agent | every agent and tool call in the pipeline |
 | `@correct(n)` | the agent's policy failures | every agent in the pipeline |
+| `@cascade(model, ...)` | move up to a bigger model when a call fails or its answer is rejected | — |
 | `@checkpoint` | — | snapshot after every stage |
 | `@shadow(target)` | run alongside another agent | — |
 | `@thread(input, Name?)` | — | keep state between runs, per value of `input` |
@@ -52,6 +53,31 @@ pipeline Extract(text: String) -> Result:
 ```
 
 When an output policy rejects an answer, the agent is asked again, up to `n` times. The new prompt includes the rejected answer and the policy's message. Each correction emits a `correction` event, and the violation stays in `context.meta.violations` marked `corrected: true`, so the audit trail shows what was fixed. The CLI shows a corrected violation as `✎ … asked to fix it` rather than as a failure. Input-side violations, such as a blocked prompt, are not corrected.
+
+## `@cascade`
+
+```halo
+policy Short : MaxWords(80)
+
+@cascade(anthropic/claude-sonnet-4-5, anthropic/claude-opus-4-5)
+agent Triage [anthropic/claude-haiku-4-5]
+  requires Short
+
+pipeline Label(issue: String) -> Labels:
+  issue |> Triage.label()
+```
+
+Each call goes to the agent's own model first. A bigger model is tried next, in the order listed, only when the call on the current one:
+
+- fails, after any `@retry` attempts (a provider outage, a timeout, a 4xx or 5xx, a missing key)
+- has its answer rejected by an output policy, after any `@correct` tries
+- misses the pipeline's `-> Schema`, when the agent's stage is the last one and its answer becomes the pipeline's output
+
+The next model gets the original prompt, not the smaller model's rejected answer. An agent with tools starts its conversation over on the next model, so tools it already called may be called again. A spent `MaxSpend` budget, a stopped run, and a pause for approval never move up; a run paused mid-conversation resumes on the model that was answering. When the last model fails too, the run fails with that model's error.
+
+A name in the list can also be an agent, which contributes its model (not its system prompt or policies; those stay the cascading agent's). Each move emits an `escalate` event and is kept in `context.meta.escalations` as `{ target, from, to, error }`. A policy violation that caused one stays in `context.meta.violations`, marked `escalated: true`. `context.meta.calls` shows which model answered and what each one cost. The CLI shows a move as `⇡ … trying <model>`.
+
+In `halo test` and mocks, `Agent@model` (or `Agent.method@model`) answers for one model of the cascade; without one, the agent's usual mock answers every model.
 
 ## `@checkpoint`
 

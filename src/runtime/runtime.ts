@@ -197,6 +197,8 @@ export interface RunMeta {
   calls: CallRecord[];
   violations: Violation[];
   shadows: ShadowRecord[];
+  /** Each time `@cascade` moved a call up to a bigger model. */
+  escalations?: EscalationRecord[];
   halted?: { stage: number; condition: string };
   /** Set while the run waits at `|! yield` (`waitingFor: "yield"`) or `~> listen(T)` (`waitingFor: T`). */
   /** `id` is new for every pause, so an approval for one pause can't answer a later one. */
@@ -254,6 +256,17 @@ export interface AgentSession {
   messages: LLMMessage[];
   pending: LLMToolCall[];
   step: number;
+  /** Under `@cascade`, which model of the cascade was answering (0 is the agent's own). */
+  tier?: number;
+}
+
+/** `@cascade` moved an agent call up to the next model. */
+export interface EscalationRecord {
+  target: string;
+  from: string;
+  to: string;
+  /** What the lower model's call ran into: an error, a policy rejection, or a schema miss. */
+  error: string;
 }
 
 /** Where paused runs are kept until `signal()` resumes them. */
@@ -366,6 +379,8 @@ export type RuntimeEvent =
   | { type: "loop"; runId: string; pipeline: string; index: number; to: number; iteration: number; condition: string }
   /** An output policy rejected an agent's answer and `@correct` asked it to try again. */
   | { type: "correction"; runId: string; pipeline: string; target: string; attempt: number; error: string }
+  /** `@cascade`: the call failed or its answer was rejected on `from`, so it is asked again on `to`. */
+  | { type: "escalate"; runId: string; pipeline: string; target: string; from: string; to: string; error: string }
   /** Text from a model, in order (the whole answer as one chunk unless the adapter streams). */
   | { type: "token"; runId: string; pipeline: string; target: string; text: string }
   | { type: "paused"; pipeline: string; runId: string; index: number; waitingFor: string }
@@ -1654,33 +1669,82 @@ export class HaloRuntime {
     const session = ctx.sessions?.[ctx.stageIndex];
     if (session) delete ctx.sessions![ctx.stageIndex];
     const kit = toolNames.length ? await this.toolKit(agent, toolNames, ctx) : undefined;
-    const conversation: LLMMessage[] | undefined = kit ? (session?.messages ?? [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user", content: user }]) : undefined;
-    const steps = { done: session?.step ?? 0, pending: session?.pending };
+    const opening = (): LLMMessage[] => [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user", content: user }];
+    let conversation: LLMMessage[] | undefined = kit ? (session?.messages ?? opening()) : undefined;
+    let steps: { done: number; pending?: LLMToolCall[] } = { done: session?.step ?? 0, pending: session?.pending };
 
     if (!session) this.startShadows(agent, stage.method, user, system, options, ctx);
     const corrections = this.correctLimit(ctx, agent);
-    let ask = user;
-    for (let attempt = 0; ; attempt++) {
-      const { value, tokens } = kit
-        ? await this.converse(agent, target, stage, ctx, kit, conversation!, steps, system, options, callOptions)
-        : await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], ask, system, options, stage, ctx);
+    // @cascade(m2, m3, ...): the agent's own model first, then each bigger one in turn when a call fails,
+    // an output policy rejects the answer (after any @correct tries), or the answer misses the pipeline's schema.
+    const tiers = this.cascadeTiers(agent);
+    // The answer becomes the pipeline's output: under a cascade, hold it to the declared `-> Type` here, while a bigger model can still try.
+    const last = ctx.pipeline.pipeline.at(-1) === stage;
+    for (let tier = Math.min(session?.tier ?? 0, tiers.length - 1); ; tier++) {
+      const model = tiers[tier]!;
+      // `Agent@model` (or `Agent.method@model`) mocks one model of the cascade; otherwise the agent's own mock answers.
+      const mockKeys = tier === 0 ? [target, agent.name, "*"] : [`${target}@${model}`, `${agent.name}@${model}`, target, agent.name, "*"];
+      let ask = user;
       try {
-        const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
-        await memory.remember?.(checked);
-        (ctx.answers ??= {})[ctx.stageIndex] = checked;
-        return checked;
+        for (let attempt = 0; ; attempt++) {
+          const { value, tokens } = kit
+            ? await this.converse(agent, model, mockKeys, target, stage, ctx, kit, conversation!, steps, system, options, callOptions)
+            : await this.complete(agent, model, target, mockKeys, ask, system, options, stage, ctx);
+          try {
+            const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
+            if (last && tier < tiers.length - 1) this.checkSchema(ctx.pipeline, checked);
+            await memory.remember?.(checked);
+            (ctx.answers ??= {})[ctx.stageIndex] = checked;
+            return checked;
+          } catch (err) {
+            // @correct(n): show the model what the policy rejected and let it try again.
+            if (!(err instanceof PolicyViolation) || attempt >= corrections) throw err;
+            // The audit trail keeps the violation, marked as one the agent was asked to fix.
+            const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected);
+            if (v) v.corrected = true;
+            this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
+            ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
+            // A conversation with tools continues: the agent keeps what its tools told it.
+            conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
+          }
+        }
       } catch (err) {
-        // @correct(n): show the model what the policy rejected and let it try again.
-        if (!(err instanceof PolicyViolation) || attempt >= corrections) throw err;
-        // The audit trail keeps the violation, marked as one the agent was asked to fix.
-        const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected);
-        if (v) v.corrected = true;
-        this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
-        ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
-        // A conversation with tools continues: the agent keeps what its tools told it.
-        conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
+        // A run paused for approval mid-conversation resumes on the model that was answering.
+        if (err instanceof Pause) {
+          const paused = ctx.sessions?.[ctx.stageIndex];
+          if (paused && tier > 0) paused.tier = tier;
+          throw err;
+        }
+        if (tier >= tiers.length - 1 || !this.escalates(err, ctx)) throw err;
+        const next = tiers[tier + 1]!;
+        const error = err instanceof Error ? err.message : String(err);
+        if (err instanceof PolicyViolation) {
+          const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected && !x.escalated);
+          if (v) v.escalated = true;
+        }
+        (ctx.meta.escalations ??= []).push({ target, from: model, to: next, error });
+        this.emit({ type: "escalate", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, from: model, to: next, error });
+        this.logger.log(`[Cascade] ${target}: ${model} -> ${next} (${error})`);
+        // The next model starts the conversation over: it sees the task, not the lower model's tool calls.
+        if (kit) {
+          conversation = opening();
+          steps = { done: 0, pending: undefined };
+        }
       }
     }
+  }
+
+  /** The models an agent's calls go through: its own, then each `@cascade` model, in order. */
+  private cascadeTiers(agent: Agent): string[] {
+    const more = directiveArgs(findDirective(agent.directives, "cascade")).filter(Boolean);
+    return [agent.modelId, ...more.map((m) => this.agents.get(m)?.modelId ?? m)];
+  }
+
+  /** Whether `@cascade` should try a bigger model after this failure. A spent budget, a stopped run, or a loop limit never moves up. */
+  private escalates(err: unknown, ctx: ExecutionContext): boolean {
+    if (ctx.signal.aborted || err instanceof Pause || err instanceof LoopLimitError) return false;
+    if (err instanceof PolicyViolation && err.rule === "MaxSpend") return false;
+    return true;
   }
 
   /**
@@ -1774,6 +1838,8 @@ export class HaloRuntime {
    */
   private async converse(
     agent: Agent,
+    model: string,
+    mockKeys: string[],
     target: string,
     stage: CallStage,
     ctx: ExecutionContext,
@@ -1801,7 +1867,7 @@ export class HaloRuntime {
       const shown = messages.slice(Math.max(0, shownFrom)).map((m) => (m.role === "tool" ? `[${m.name} result]\n${m.content}` : m.content)).join("\n\n");
       const turn: Turn = { messages, tools: kit.specs, toolChoice: last ? "none" : "auto", targets: kit.offered, step: steps.done + 1, shown };
       const estimate = messages.map((m) => m.content).join("\n") + JSON.stringify(kit.specs);
-      const r = await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], estimate, system, options, stage, ctx, "agent", turn);
+      const r = await this.complete(agent, model, target, mockKeys, estimate, system, options, stage, ctx, "agent", turn);
       if (r.tokens) (tokens.prompt += r.tokens.prompt), (tokens.completion += r.tokens.completion);
       shownFrom = messages.length;
       if (!r.toolCalls?.length || last) {

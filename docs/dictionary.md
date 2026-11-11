@@ -203,6 +203,14 @@ Annotations placed above agents or pipelines that control how they run.
 | **Applies to** | An agent, or a pipeline (all its agents) |
 | **Example** | `@correct(2)` |
 
+### `@cascade(model, ...)`
+
+| Field | Value |
+|---|---|
+| **Definition** | On an agent: when a call fails, an output policy rejects the answer, or the answer misses the pipeline's schema, ask the next model in the list instead |
+| **Use case** | A cheap model for most calls, a bigger one only when it is needed |
+| **Example** | `@cascade(anthropic/claude-sonnet-4-5, anthropic/claude-opus-4-5)` |
+
 ## 5. Native Primitives (The Built-ins)
 
 Reserved functions for state mechanics.

@@ -29,7 +29,7 @@ agent Name [model, param: value, ...]
 - **system**: the system prompt.
 - **equips**: tools and stores the agent may use with `tool:` or `tools:`. Equipped `VectorStore`s and `File` stores also add context automatically (see [Stores](../stdlib/stores.md)).
 - **requires**: policies checked on every call (see [Policies](../stdlib/policies.md)).
-- **directives**: `@timeout`, `@retry`, `@shadow`, `@correct` (see [Directives](../reference/compiler-directives.md)).
+- **directives**: `@timeout`, `@retry`, `@shadow`, `@correct`, `@cascade` (see [Directives](../reference/compiler-directives.md)).
 
 ## `tool` and `store`
 

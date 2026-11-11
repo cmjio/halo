@@ -458,14 +458,15 @@ async function readMocks(file: string, ast: ParseResult, source: string): Promis
 }
 
 function tracer(debug: boolean): (e: RuntimeEvent) => void {
-  // A violation that @correct sends back is shown as a correction, not as a failure,
+  // A violation that @correct sends back (or @cascade hands to a bigger model) is shown as that, not as a failure,
   // so hold each violation until the next event says which it was.
   let pending: Extract<RuntimeEvent, { type: "violation" }> | undefined;
   return (e) => {
-    if (pending && e.type !== "correction") console.error(red(`  ⊘ ${pending.policy}/${pending.rule}: ${pending.message}`));
+    if (pending && e.type !== "correction" && e.type !== "escalate") console.error(red(`  ⊘ ${pending.policy}/${pending.rule}: ${pending.message}`));
     if (e.type !== "violation") pending = undefined;
     if (e.type === "violation") pending = e;
     if (e.type === "correction") console.error(yellow(`  ✎ ${e.target}: ${e.error}; asked to fix it (attempt ${e.attempt + 1})`));
+    if (e.type === "escalate") console.error(yellow(`  ⇡ ${e.target}: ${e.error}; trying ${e.to} (was ${e.from})`));
     if (e.type === "retry") console.error(yellow(`  ↻ retry ${e.target} (attempt ${e.attempt}): ${e.error}`));
     if (!debug) return;
     if (e.type === "stage" && e.status === "start") console.error(dim(`▸ [${e.index}] ${e.label}`));
