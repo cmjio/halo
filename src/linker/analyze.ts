@@ -28,6 +28,8 @@ export interface ToolEffectSummary {
   local?: boolean;
   /** No description of this provider: its reach isn't known. */
   unknown?: boolean;
+  /** The provider comes from a package (this one's halo.json, or a dependency): its reach is the package manager's to add. */
+  fromPackage?: boolean;
 }
 
 export interface PackageAnalysis {
@@ -153,9 +155,11 @@ export function analyzePackage(files: Record<string, string>, manifest: PackageM
     const ast = parsed.get(path)!;
     const imported = new Set((ast.uses ?? []).flatMap((u) => (u.items ?? []).map((i) => i.as ?? i.name)));
     for (const t of [...ast.tools, ...ast.stores]) {
-      // A provider from a package (its own or a dependency) is the package manager's to describe.
-      if (imported.has(t.provider) || Object.hasOwn(manifest.providers ?? {}, t.provider)) continue;
-      effects.push(toolEffect(t, path));
+      // A provider from a package (its own or a dependency) is the package manager's to describe;
+      // the Env variables the tool's declaration reads still count.
+      const fromPackage = imported.has(t.provider) || Object.hasOwn(manifest.providers ?? {}, t.provider);
+      const e = toolEffect(t, path);
+      effects.push(fromPackage ? { tool: e.tool, file: e.file, provider: e.provider, network: [], env: e.env, spawn: [], code: false, fromPackage: true } : e);
     }
   }
   const union = (key: "network" | "env" | "spawn") => [...new Set(effects.flatMap((e) => e[key]))].sort();
