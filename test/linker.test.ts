@@ -8,6 +8,9 @@ import { HaloRuntime, type MockRequest, type RuntimeEvent } from "../src/runtime
 import { plan } from "../src/plan";
 import { qualifiedProvider, type PackageManifest, type PackageResolver, type ResolvedPackage } from "../src/registry/contract";
 import { startServer } from "../src/serve/server";
+import { RegistryClient } from "../src/registry/client";
+import { pack } from "../src/registry/format";
+import { installProject } from "../src/registry/install";
 import { compile } from "../src/index";
 import { getDiagnostics } from "../src/lsp/diagnostics";
 import { getCompletions } from "../src/lsp/completions";
@@ -435,20 +438,23 @@ describe("importableNames", () => {
   });
 });
 
-/** A copy of the support app with its packages installed under .halo/packages. */
-function installedApp(): string {
+/**
+ * A copy of the support app with its packages installed for real: both fixtures are
+ * published to a folder registry, then installed (halo.lock, checksums) from it.
+ */
+async function installedApp(): Promise<string> {
   const dir = mkdtempSync(join(tmp, "app-"));
   cpSync(join(FIXTURES, "projects/support-app"), dir, { recursive: true });
-  for (const [scope, name, folder] of [["@acme", "support-kit", "acme-support-kit"], ["@acme", "zendesk", "acme-zendesk"]] as const) {
-    mkdirSync(join(dir, ".halo/packages", scope), { recursive: true });
-    cpSync(join(FIXTURES, "packages", folder), join(dir, ".halo/packages", scope, name), { recursive: true });
-  }
+  const registry = mkdtempSync(join(tmp, "registry-"));
+  const client = new RegistryClient(registry);
+  for (const folder of ["acme-zendesk", "acme-support-kit"]) await client.publish(pack(join(FIXTURES, "packages", folder)).bytes);
+  await installProject({ root: dir, registry });
   return dir;
 }
 
 describe("editor support", () => {
-  test("diagnostics, completions, hover and go-to-definition see imported names", () => {
-    const dir = installedApp();
+  test("diagnostics, completions, hover and go-to-definition see imported names", async () => {
+    const dir = await installedApp();
     const main = join(dir, "main.halo");
     const text = readFileSync(main, "utf8");
     expect(getDiagnostics(text, main)).toEqual([]);
@@ -494,7 +500,7 @@ describe("end to end", () => {
   });
 
   test("the CLI runs the support app from .halo/packages", async () => {
-    const dir = installedApp();
+    const dir = await installedApp();
     const cli =(...args: string[]) => {
       const p = Bun.spawnSync(["bun", join(root, "index.ts"), ...args], { cwd: dir, env: { ...Bun.env, NO_COLOR: "1" } });
       return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
