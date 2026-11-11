@@ -15,7 +15,8 @@ import { PackageError, permissionsOfPackage, readPackage, sha256, totalPermissio
 import { PACKAGE_FILE, packageDir, readAnyLock, readTrust, writeLockV2, writeTrust } from "./lockfile.js";
 import { clientFor, resolveGraph, specOfSource, type ResolvedNode } from "./resolve.js";
 import { RegistryClient } from "./client.js";
-import { describePermissions } from "./manifest.js";
+import { describePermissions, hostOf } from "./manifest.js";
+import type { PackageManifest } from "./contract.js";
 import pkgJson from "../../package.json" with { type: "json" };
 
 export const HALO_VERSION: string = pkgJson.version;
@@ -226,6 +227,7 @@ export function describeInstall(report: InstallReport): string[] {
   for (const r of report.packages) {
     lines.push(`${r.name}@${r.version}${r.direct ? "" : ` (added by ${r.addedBy.join(", ")})`}`);
     for (const l of describeOwn(r.permissions)) lines.push(`    ${l}`);
+    for (const l of describeHostedUse(r.pkg.manifest)) lines.push(`    ${l}`);
   }
   if (report.packages.length > 1) {
     lines.push("total:");
@@ -236,6 +238,19 @@ export function describeInstall(report: InstallReport): string[] {
 
 export function describeOwn(p: PackagePermissions): string[] {
   return [...describePermissions(p), ...(p.hosted?.length ? [`sends your inputs to: ${p.hosted.join(", ")}`] : [])];
+}
+
+/**
+ * The plain-words disclosure for a package with hosted pipelines: they run on the publisher's
+ * server, so calling them sends your inputs there, with a key read from an env variable.
+ */
+export function describeHostedUse(manifest: PackageManifest): string[] {
+  const h = manifest.hosted;
+  if (!h) return [];
+  const host = hostOf(h.endpoint);
+  const names = h.exports.join(", ");
+  const key = h.auth ? ` and reads ${h.auth.env} (the key ${manifest.name}'s publisher issues you)` : "";
+  return [`hosted: ${names} ${h.exports.length === 1 ? "runs" : "run"} on ${host}, not on this machine. This package sends your inputs to ${host}${key}`];
 }
 
 export { PACKAGES_DIR };
