@@ -1,0 +1,4 @@
+{
+  "Triager.classify": { "category": { "name": "account" }, "urgency": "normal", "summary": "Invite email never arrived." },
+  "Writer.prompt": "Hi! Sorry about the missing invite. Resend it from Settings, Members."
+}
