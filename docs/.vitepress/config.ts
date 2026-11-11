@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
 import fs from 'fs'
 import path from 'path'
+import { haloDark, haloLight } from './shiki'
 
 // Read the VS Code TextMate grammar for Halo
 const haloGrammarPath = path.resolve(__dirname, '../../editors/vscode/syntaxes/halo.tmLanguage.json')
@@ -25,6 +26,7 @@ export default defineConfig({
   sitemap: { hostname: 'https://halolang.com' },
   head: [
     ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+    ['meta', { name: 'theme-color', content: '#0d1016' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
     ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap' }],
@@ -36,8 +38,8 @@ export default defineConfig({
   ],
   markdown: {
     theme: {
-      light: 'light-plus',
-      dark: 'dark-plus'
+      light: haloLight,
+      dark: haloDark
     },
     languages: [
       haloGrammar

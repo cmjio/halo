@@ -13,6 +13,8 @@ halo add world-time --trust # it runs its own code, so it needs --trust
 halo tools                  # every provider you can use, and its methods
 ```
 
+## In the registry
+
 <PackageList />
 
 Method colors are their effects: <span class="e read">read</span> <span class="e write">write</span> <span class="e external">external</span>. Policies and `halo plan` use them.
