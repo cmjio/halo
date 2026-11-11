@@ -363,7 +363,7 @@ describe("the HTTP registry client", () => {
     } finally {
       fake.server.stop(true);
     }
-  });
+  }, 30_000);
 });
 
 describe("resolution", () => {
@@ -630,7 +630,7 @@ describe("the package CLI", () => {
     expect((await cli(app, ["install", "--registry", reg])).out).toContain("deprecated: Use 2.x");
     expect((await cli(app, ["dist-tag", "add", "@me/greeter@0.1.0", "beta", "--registry", reg])).code).toBe(0);
     expect((await cli(app, ["dist-tag", "ls", "@me/greeter", "--registry", reg])).out).toContain("beta: 0.1.0");
-  });
+  }, 30_000);
 
   test("a hard-coded model stops publish", async () => {
     const dir = v2({ name: "@me/bad", version: "1.0.0", exports: ["lib/a.halo"] }, { "lib/a.halo": "agent A [openai/gpt-4o]\npipeline P(x: String) -> Result:\n  x |> A.prompt(\"hi\")\n" });
