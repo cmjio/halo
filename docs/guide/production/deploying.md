@@ -39,7 +39,8 @@ COPY --chown=halo . .
 ```
 
 - It refuses to serve without `HALO_SERVE_TOKEN`, because it listens on every interface inside the container.
-- Paused runs, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart.
+- Paused runs, schedule state, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart, and so scheduled runs aren't repeated or forgotten.
+- The container's clock is UTC. Set `timezone` in `halo.json` for schedules in local time (see [Schedules](./serving.md#schedules)).
 - On Linux, a bind-mounted folder must be writable by uid 1000. Otherwise add `--user "$(id -u)"`.
 - `halo upgrade` doesn't replace the binary in the image. Use a newer tag.
 
