@@ -9,20 +9,13 @@ import data from './.vitepress/generated/lite.json'
 </script>
 
 <section class="h-hero">
-<div class="h-grid-bg" aria-hidden="true"></div>
+<div class="h-hero-copy">
 
-<p class="h-eyebrow"><a href="https://github.com/cmjio/halo"><span class="h-dot"></span>v{{ data.version }} · MIT · open source</a></p>
+<h1 class="h-title"><svg class="h-mark" viewBox="0 0 32 26" aria-hidden="true"><ellipse cx="16" cy="6.2" rx="12.4" ry="4.6" fill="none" stroke="currentColor" stroke-width="2.6"/><circle class="h-mark-dot" cx="16" cy="18.6" r="6.2"/></svg><span>halo</span></h1>
 
-<h1 class="h-title">A declarative language for AI pipelines.</h1>
+<p class="h-tagline">A declarative language for AI pipelines.</p>
 
-<p class="h-lede">A <code>.halo</code> file declares agents, tools, policies, and schemas, and wires them into pipelines with six operators. The runtime checks every tool call against policy in code, records every run, and can replay it without calling a model. This page explains how each part works.</p>
-
-<div class="h-actions">
-  <a class="h-btn primary" href="/guide/quickstart">Quickstart</a>
-  <a class="h-btn" href="/guide/reference">Language reference</a>
-  <a class="h-btn" href="/spec">Specification</a>
-  <a class="h-btn" href="/playground">Playground</a>
-</div>
+<p class="h-lede">A <code>.halo</code> file declares agents, tools, policies, and schemas, and wires them into pipelines with six operators. The runtime checks every tool call against policy in code, records every run, and can replay it without calling a model.</p>
 
 <div class="h-install">
 
@@ -31,30 +24,47 @@ curl -fsSL https://halolang.com/install.sh | sh
 ```
 
 </div>
+
+<div class="h-actions">
+  <a class="h-btn primary" href="/guide/quickstart">Quickstart</a>
+  <a class="h-btn" href="/guide/reference">Language reference</a>
+  <a class="h-btn" href="/playground">Playground</a>
+  <a class="h-btn" href="https://github.com/cmjio/halo">Source</a>
+</div>
+
+</div>
+<svg class="h-figure" viewBox="0 0 520 300" role="img" aria-label="A pipeline of five stages. The two agent stages each have a ring above them.">
+  <path class="h-fig-line" d="M40 196 H480"/>
+  <g class="h-fig-ring"><ellipse cx="150" cy="148" rx="46" ry="16"/><ellipse cx="370" cy="148" rx="46" ry="16"/></g>
+  <g class="h-fig-stage"><circle cx="40" cy="196" r="7"/><circle cx="260" cy="196" r="7"/><circle cx="480" cy="196" r="7"/></g>
+  <g class="h-fig-agent"><circle cx="150" cy="196" r="22"/><circle cx="370" cy="196" r="22"/></g>
+  <g class="h-fig-op"><text x="95" y="184">|&gt;</text><text x="205" y="184">|&gt;</text><text x="315" y="184">|?</text><text x="425" y="184">|&gt;</text></g>
+  <g class="h-fig-label"><text x="40" y="246">input</text><text x="150" y="246">agent</text><text x="260" y="246">tool</text><text x="370" y="246">agent</text><text x="480" y="246">result</text></g>
+  <g class="h-fig-label h-fig-policy"><text x="150" y="116">policy</text><text x="370" y="116">policy</text></g>
+</svg>
 </section>
 
 <nav class="h-toc" aria-label="On this page">
-  <a href="#program"><b>01</b>Program structure</a>
-  <a href="#context"><b>02</b>Execution model</a>
-  <a href="#operators"><b>03</b>Operators</a>
-  <a href="#tool-calls"><b>04</b>Tool calls under policy</a>
-  <a href="#policies"><b>05</b>Policies and effects</a>
-  <a href="#plan"><b>06</b>Static planning</a>
-  <a href="#replay"><b>07</b>Recording and replay</a>
-  <a href="#toolchain"><b>08</b>Toolchain</a>
-  <a href="#runtime"><b>09</b>Models and runtime</a>
-  <a href="#install"><b>10</b>Install</a>
+  <a href="#program">Program structure</a>
+  <a href="#context">Execution model</a>
+  <a href="#operators">Operators</a>
+  <a href="#tool-calls">Tool calls under policy</a>
+  <a href="#policies">Policies and effects</a>
+  <a href="#plan">Static planning</a>
+  <a href="#replay">Recording and replay</a>
+  <a href="#toolchain">Toolchain</a>
+  <a href="#runtime">Models and runtime</a>
+  <a href="#install">Install</a>
 </nav>
 
 <section class="h-section" id="program">
 <div class="h-head">
-<p class="h-kicker"><b>01</b>Program structure</p>
-<h2 class="h-h2">A program is a set of declarations and the pipelines that use them.</h2>
+<h2 class="h-h2">Program structure</h2>
 <p class="h-sub">Each agent is a model plus a configuration. A pipeline calls it as one step in a fixed sequence of stages. The file below is complete: it validates, plans, and runs as written.</p>
 </div>
 <div class="h-anatomy">
-<div class="h-window single">
-<p class="h-pane-title"><i></i><i></i><i></i><span>triage.halo</span></p>
+<div class="h-file">
+<p class="h-file-name">triage.halo</p>
 
 <!--@include: ./.vitepress/generated/hero-file.md-->
 
@@ -71,8 +81,7 @@ curl -fsSL https://halolang.com/install.sh | sh
 
 <section class="h-section h-split" id="context">
 <div class="h-head">
-<p class="h-kicker"><b>02</b>Execution model</p>
-<h2 class="h-h2">One value flows through the stages. Every result is also addressable by name.</h2>
+<h2 class="h-h2">Execution model</h2>
 <p class="h-sub">A pipeline starts from a value, usually a parameter. Each stage's result becomes the next stage's input, <code>context.current</code>, and is stored under <code>context.data</code> by callee and method, by method alone, and by its <code>as</code> binding.</p>
 <p class="h-sub">Strings reference parameters and results with <code v-pre>{{name}}</code>. <code>halo validate</code> follows what each stage writes and warns when a path is read before anything sets it.</p>
 <p class="h-more"><a href="/reference/context-and-scope">Context and scope →</a></p>
@@ -105,9 +114,8 @@ pipeline Process(email: String) -> Result:
 
 <section class="h-section" id="operators">
 <div class="h-head">
-<p class="h-kicker"><b>03</b>Operators</p>
-<h2 class="h-h2">Control flow is a pipeline stage, not a statement.</h2>
-<p class="h-sub">Each operator adds one stage. Any stage that produces a value can end with <code>as name</code>, which stores it at <code>context.data.name</code>.</p>
+<h2 class="h-h2">Operators</h2>
+<p class="h-sub">Gates, branches, and loops are pipeline stages, not statements. Each operator adds one stage. Any stage that produces a value can end with <code>as name</code>, which stores it at <code>context.data.name</code>.</p>
 </div>
 <div class="h-ops">
 <a href="/reference/operators#pipe"><b>|&gt;</b><strong>Pipe</strong><span>Calls an agent, tool, <code>System</code> method, or pipeline. The result becomes the flowing value.</span><code>|&gt; Writer.draft(context.data.outline)</code></a>
@@ -122,8 +130,7 @@ pipeline Process(email: String) -> Result:
 
 <section class="h-section h-split" id="tool-calls">
 <div class="h-head">
-<p class="h-kicker"><b>04</b>Tool calls under policy</p>
-<h2 class="h-h2">The model proposes a call. The runtime decides whether it runs.</h2>
+<h2 class="h-h2">Tool calls under policy</h2>
 <p class="h-sub">With <code>tools:</code>, an agent asks for a tool, sees the result, and asks again until it answers, using each provider's native tool calling. Each request passes through the same sequence:</p>
 <ol class="h-steps">
   <li><strong>Offer</strong><span>Only methods that every <code>AllowTools</code> and <code>AllowEffects</code> rule permits are sent to the model, as functions named <code>Tool__method</code> with JSON Schema arguments. Hidden methods are not offered.</span></li>
@@ -143,9 +150,8 @@ pipeline Process(email: String) -> Result:
 
 <section class="h-section" id="policies">
 <div class="h-head">
-<p class="h-kicker"><b>05</b>Policies and effects</p>
-<h2 class="h-h2">Rules are evaluated in code. No model judges the content.</h2>
-<p class="h-sub">An agent applies a policy with <code>requires</code>. A failed rule throws a <code>PolicyViolation</code>, is recorded in <code>context.meta.violations</code>, and is never retried. The detectors are regular expressions: they catch common patterns, not every variant.</p>
+<h2 class="h-h2">Policies and effects</h2>
+<p class="h-sub">Every rule runs in code: no model judges the content, and the checks cost nothing. An agent applies a policy with <code>requires</code>. A failed rule throws a <code>PolicyViolation</code>, is recorded in <code>context.meta.violations</code>, and is never retried. The detectors are regular expressions: they catch common patterns, not every variant.</p>
 </div>
 <div class="h-cols">
 <div class="h-table">
@@ -177,9 +183,8 @@ pipeline Process(email: String) -> Result:
 
 <section class="h-section h-split" id="plan">
 <div class="h-head">
-<p class="h-kicker"><b>06</b>Static planning</p>
-<h2 class="h-h2"><code>halo plan</code> reads the file and runs nothing.</h2>
-<p class="h-sub">No model calls, no tool calls, no API keys. For each stage it lists the model and a worst-case cost, the tool calls the pipeline makes, and the ones an agent may choose, each with its effect.</p>
+<h2 class="h-h2">Static planning</h2>
+<p class="h-sub"><code>halo plan</code> reads the file and runs nothing: no model calls, no tool calls, no API keys. For each stage it lists the model and a worst-case cost, the tool calls the pipeline makes, and the ones an agent may choose, each with its effect.</p>
 <p class="h-sub">The cost is an upper bound from the model's price list, not a forecast:</p>
 <ul class="h-list">
   <li>Each model call counts its instructions, 2,000 tokens for inputs it can't know, and a full reply of <code>max_tokens</code>.</li>
@@ -202,8 +207,7 @@ pipeline Process(email: String) -> Result:
 
 <section class="h-section h-split" id="replay">
 <div class="h-head">
-<p class="h-kicker"><b>07</b>Recording and replay</p>
-<h2 class="h-h2">Replay runs the pipeline against a recording, not against the world.</h2>
+<h2 class="h-h2">Recording and replay</h2>
 <p class="h-sub">Every <code>halo run</code> keeps what the run got from outside, in order: each model answer with a fingerprint of its request, each tool result, each approval, and each <code>yield</code> and <code>listen</code> answer.</p>
 <p class="h-sub"><code>halo replay</code> runs the current file against that recording. Nothing is sent to a model, no tool runs, and nobody is asked. If the pipeline asks for something the recording doesn't have, the run fails with <code>REPLAY_MISMATCH</code>.</p>
 <p class="h-note">Recordings are not redacted. They hold model answers and tool results as they arrived. Keep <code>.halo/recordings</code> out of version control, or pass <code>--no-record</code>.</p>
@@ -234,8 +238,8 @@ halo replay tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
 
 <section class="h-section" id="toolchain">
 <div class="h-head">
-<p class="h-kicker"><b>08</b>Toolchain</p>
-<h2 class="h-h2">One binary covers the path from a file to a service.</h2>
+<h2 class="h-h2">Toolchain</h2>
+<p class="h-sub">One binary provides every command.</p>
 </div>
 <div class="h-flow">
 <a href="/reference/cli"><code>halo validate</code><span>Parses and checks the file. Reports undefined policies and unknown tools with line and column.</span></a>
@@ -247,7 +251,7 @@ halo replay tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
 </div>
 <div class="h-split h-gap">
 <div class="h-head">
-<h3 class="h-h3">Errors surface before a model is called.</h3>
+<h3 class="h-h3">Validation and tests</h3>
 <p class="h-sub"><code>halo validate</code> output for a file with two mistakes, and <code>halo test</code> running a pipeline with its model mocked. Both are real CLI output from this site's build.</p>
 <p class="h-more"><a href="/dx/testing-and-mocks">Testing and mocks →</a> · <a href="/dx/editor-support">Editor support →</a></p>
 </div>
@@ -261,8 +265,8 @@ halo replay tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
 
 <section class="h-section" id="runtime">
 <div class="h-head">
-<p class="h-kicker"><b>09</b>Models and runtime</p>
-<h2 class="h-h2">A model id's prefix selects the provider. The runtime is a Bun process you host.</h2>
+<h2 class="h-h2">Models and runtime</h2>
+<p class="h-sub">A model id's prefix selects the provider. The runtime is a Bun process that you host.</p>
 </div>
 <div class="h-cols even">
 <div class="h-table">
@@ -277,7 +281,7 @@ halo replay tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
 | Replicate | `replicate/` | Not supported |
 
 </div>
-<div class="h-openlist">
+<div class="h-rows">
 <a href="/guide/production/deploying"><strong>Runtime</strong><span>Requires Bun. Runs on a VM, in a container (<code>ghcr.io/cmjio/halo</code>), or on a PaaS that runs images. Node-based hosts can't run it.</span></a>
 <a href="/guide/production/serving#security"><strong>Serving</strong><span><code>halo serve</code> listens on <code>127.0.0.1</code> by default and refuses any other interface without <code>HALO_SERVE_TOKEN</code>.</span></a>
 <a href="/guide/integrations/mcp"><strong>MCP</strong><span>Use an MCP server as a tool, or expose pipelines as MCP tools with <code>halo mcp</code>.</span></a>
@@ -290,9 +294,8 @@ halo replay tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77
 
 <section class="h-cta" id="install">
 <div class="h-head">
-<p class="h-kicker"><b>10</b>Install</p>
-<h2 class="h-h2">One standalone binary.</h2>
-<p class="h-sub">The script picks the build for your OS and CPU, checks it against the release's <code>SHA256SUMS</code>, and puts it in <code>~/.halo/bin</code>. <a href="/install.sh">Read the script</a> before piping it to a shell; <code>halo upgrade</code> updates it.</p>
+<h2 class="h-h2">Install</h2>
+<p class="h-sub">One standalone binary with Bun built in. The script picks the build for your OS and CPU, checks it against the release's <code>SHA256SUMS</code>, and puts it in <code>~/.halo/bin</code>. <a href="/install.sh">Read the script</a> before piping it to a shell; <code>halo upgrade</code> updates it.</p>
 </div>
 <div class="h-cta-code">
 
@@ -332,7 +335,7 @@ halo run main.halo --arg topic=tides    # with ANTHROPIC_API_KEY, OPENAI_API_KEY
 
 <section class="h-section">
 <div class="h-head">
-<p class="h-kicker">Continue reading</p>
+<h2 class="h-h2">Reference</h2>
 </div>
 <div class="h-cards">
   <a href="/guide/quickstart"><strong>Quickstart</strong><span>Install, write a pipeline, run it</span></a>
