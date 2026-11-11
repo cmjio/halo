@@ -81,8 +81,8 @@
   margin: 0;
   padding: 0;
   border: 0;
-  max-width: 15ch;
-  font-size: clamp(40px, 6.6vw, 76px);
+  max-width: 18ch;
+  font-size: clamp(36px, 5.2vw, 60px);
   line-height: 1.04;
   font-weight: 600;
   letter-spacing: -0.035em;
@@ -101,7 +101,7 @@
 }
 .vp-doc .h-lede {
   margin: 24px 0 32px;
-  max-width: 41em;
+  max-width: 44em;
   font-size: clamp(16px, 1.5vw, 18.5px);
   line-height: 1.65;
   text-wrap: pretty;
@@ -641,4 +641,307 @@
   font-size: 13.5px;
   line-height: 1.5;
   color: var(--vp-c-text-2);
+}
+
+/* Primer: contents, numbered sections, annotated code, sequences, tables */
+.h-toc {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 24px;
+  border: 1px solid var(--h-line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--h-line);
+}
+@media (min-width: 720px) {
+  .h-toc { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.vp-doc .h-toc a {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px 16px;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-decoration: none;
+  color: var(--vp-c-text-2);
+  background: var(--vp-c-bg);
+  transition: background 0.2s, color 0.2s;
+}
+.vp-doc .h-toc a:hover {
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg-soft);
+}
+.h-toc b,
+.h-kicker b {
+  font: 500 11.5px var(--vp-font-family-mono);
+  color: var(--vp-c-text-3);
+}
+.h-kicker b {
+  margin-right: 12px;
+  padding-right: 12px;
+  border-right: 1px solid var(--h-line);
+}
+.h-section,
+.h-cta {
+  scroll-margin-top: calc(var(--vp-nav-height) + 24px);
+}
+.vp-doc .h-h2 {
+  max-width: 26ch;
+  font-size: clamp(26px, 3vw, 38px);
+  line-height: 1.14;
+}
+.vp-doc .h-h2 code,
+.vp-doc .h-h3 code {
+  font-size: 0.88em;
+  padding: 0.05em 0.3em;
+}
+.vp-doc .h-h3 {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.vp-doc .h-hero code,
+.vp-doc .h-sub code,
+.vp-doc .h-notes span code,
+.vp-doc .h-steps code,
+.vp-doc .h-list code,
+.vp-doc .h-note code,
+.vp-doc .h-ops span code,
+.vp-doc .h-caption code {
+  font-size: 0.86em;
+  padding: 1px 5px;
+}
+.vp-doc .h-section > .h-more {
+  margin: 24px 0 0;
+}
+.vp-doc .h-more a + a {
+  margin-left: 4px;
+}
+
+.h-anatomy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px 48px;
+  align-items: start;
+}
+@media (min-width: 1040px) {
+  .h-anatomy { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+}
+.h-window.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.vp-doc .h-notes,
+.vp-doc .h-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: n;
+}
+.vp-doc .h-notes li,
+.vp-doc .h-steps li {
+  position: relative;
+  counter-increment: n;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 14px 0 16px 40px;
+  border-top: 1px solid var(--h-line);
+}
+.vp-doc .h-notes li:last-child,
+.vp-doc .h-steps li:last-child {
+  border-bottom: 1px solid var(--h-line);
+}
+.vp-doc .h-notes li::before,
+.vp-doc .h-steps li::before {
+  content: counter(n);
+  position: absolute;
+  left: 0;
+  top: 15px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  font: 500 11.5px var(--vp-font-family-mono);
+  color: var(--vp-c-brand-1);
+  border: 1px solid var(--vp-c-brand-soft);
+  border-radius: 50%;
+  background: var(--vp-c-brand-soft);
+}
+.vp-doc .h-notes li > code {
+  justify-self: start;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+  background: none;
+}
+.vp-doc .h-steps strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+.vp-doc .h-notes span,
+.vp-doc .h-steps span {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+.vp-doc .h-steps {
+  margin: 20px 0;
+}
+.vp-doc .h-steps li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 41px;
+  bottom: -15px;
+  width: 1px;
+  background: var(--h-line);
+}
+@media (min-width: 1040px) {
+  .h-split .h-head:has(.h-steps) { position: static; }
+  .h-split:has(.h-steps) > div:last-child {
+    position: sticky;
+    top: calc(var(--vp-nav-height) + 32px);
+  }
+}
+
+.vp-doc .h-list {
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+.vp-doc .h-list li {
+  position: relative;
+  margin: 0;
+  padding: 9px 0 9px 20px;
+  border-top: 1px solid var(--h-line);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+.vp-doc .h-list li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 19px;
+  width: 6px;
+  height: 1px;
+  background: var(--vp-c-text-3);
+}
+.vp-doc .h-note {
+  margin: 16px 0;
+  padding: 12px 16px;
+  max-width: 38em;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+  border-left: 2px solid var(--vp-c-brand-1);
+  background: var(--vp-c-bg-soft);
+  border-radius: 0 8px 8px 0;
+}
+
+.h-table {
+  border: 1px solid var(--h-line);
+  border-radius: 12px;
+  overflow-x: auto;
+}
+.vp-doc .h-table table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+}
+.vp-doc .h-table tr {
+  border: 0;
+  background: none;
+}
+.vp-doc .h-table th,
+.vp-doc .h-table td {
+  padding: 11px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--h-line);
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: left;
+  vertical-align: top;
+  color: var(--vp-c-text-2);
+}
+.vp-doc .h-table th {
+  font: 500 11.5px var(--vp-font-family-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-3);
+  background: var(--vp-c-bg-soft);
+}
+.vp-doc .h-table tr:last-child td {
+  border-bottom: 0;
+}
+.vp-doc .h-table td:first-child {
+  white-space: nowrap;
+  color: var(--vp-c-text-1);
+}
+.vp-doc .h-table code {
+  font-size: 12.5px;
+}
+.vp-doc .h-split .h-table {
+  margin-top: 16px;
+}
+.h-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 32px 48px;
+  align-items: start;
+}
+@media (min-width: 1040px) {
+  .h-cols { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); }
+  .h-cols.even { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+}
+.vp-doc .h-effects-title {
+  margin: 0 0 12px;
+  font: 500 11.5px var(--vp-font-family-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-3);
+}
+.vp-doc .h-effects dl {
+  margin: 0;
+  border-top: 1px solid var(--h-line);
+}
+.vp-doc .h-effects dl div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--h-line);
+}
+.vp-doc .h-effects dt,
+.vp-doc .h-effects dd {
+  margin: 0;
+  padding: 0;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--vp-c-text-2);
+}
+.h-gap {
+  margin-top: 56px;
+}
+.h-split.h-gap .h-head {
+  position: static;
+}
+.vp-doc .h-split > div > .h-caption {
+  margin: 20px 2px 8px;
+}
+.vp-doc .h-split > div > .h-caption.top {
+  margin: 0 0 8px;
+}
+@media (max-width: 719px) {
+  .vp-doc .h-table table { min-width: 580px; }
 }
