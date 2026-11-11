@@ -6,6 +6,7 @@ import { parse } from "../src/parser/index";
 import { analyzePackage, checkLinked, entryPipelines, importableNames, link, type LinkOptions } from "../src/linker/index";
 import { HaloRuntime, type MockRequest, type RuntimeEvent } from "../src/runtime/runtime";
 import { plan } from "../src/plan";
+import { PolicyEngine, toolMatches } from "../src/runtime/policies";
 import { qualifiedProvider, type PackageManifest, type PackageResolver, type ResolvedPackage } from "../src/registry/contract";
 import { startServer } from "../src/serve/server";
 import { RegistryClient } from "../src/registry/client";
@@ -369,6 +370,50 @@ describe("display names", () => {
   });
 });
 
+describe("tool patterns with qualified names", () => {
+  test("toolMatches splits a qualified tool after its #, so dots and slashes in the path don't break it", () => {
+    for (const tool of ["lib/v1.2/desk#Desk", "@acme/x.y#Desk", "../x#Desk", "@acme/kit/lib/a.b#Desk"]) {
+      expect(toolMatches(tool, `${tool}.get`)).toBe(true);
+      expect(toolMatches(`${tool}.*`, `${tool}.get`)).toBe(true);
+      expect(toolMatches(`${tool}.get`, `${tool}.get`)).toBe(true);
+      expect(toolMatches(`${tool}.get`, `${tool}.put`)).toBe(false);
+      expect(toolMatches("*.delete", `${tool}.delete`)).toBe(true);
+      expect(toolMatches("*.delete", `${tool}.get`)).toBe(false);
+      expect(toolMatches(tool, `${tool}x.get`)).toBe(false);
+    }
+    expect(toolMatches("Repo", "Repo.create_pr")).toBe(true);
+    expect(toolMatches("Repo.*", "Repo.create_pr")).toBe(true);
+    expect(toolMatches("Repo.create_*", "Repo.create_pr")).toBe(true);
+    expect(toolMatches("*.delete", "Repo.delete")).toBe(true);
+    expect(toolMatches("Rep", "Repo.get")).toBe(false);
+    expect(toolMatches("*", "@acme/x.y#Desk.get")).toBe(true);
+  });
+
+  test("a policy on a tool imported from a dotted path is enforced, and validate doesn't warn about it", () => {
+    const l = memLink({
+      "/p/main.halo": `use "./lib/v1.2/desk.halo" { Desk }
+use "../outside.v2/files.halo" { Files }
+policy Rules : AllowTools(Desk, Files) & DenyTools("*.write", "Files.delete")
+agent Clerk [openai/gpt-4o] equips Desk, Files requires Rules
+pipeline Main(x: String) -> Result:
+  x |> Clerk.work()`,
+      "/p/lib/v1.2/desk.halo": `tool Desk : Workspace("/tmp")`,
+      "/outside.v2/files.halo": `tool Files : Workspace("/tmp")`,
+    });
+    expect(errors(l)).toEqual([]);
+    expect(l.program.tools.map((t) => t.name).sort()).toEqual(["../outside.v2/files#Files", "lib/v1.2/desk#Desk"]);
+    expect(checkLinked(l).filter((d) => d.message.includes("not a declared tool"))).toEqual([]);
+    const rt = new HaloRuntime({ logger: quiet }).load(l.program);
+    const engine = new PolicyEngine(new Map(l.program.policies.map((p) => [p.name, p])));
+    const clerk = l.program.agents.find((a) => a.name === "Clerk")!;
+    expect(engine.toolVisible(clerk, "lib/v1.2/desk#Desk.read", "read")).toBe(true);
+    expect(engine.toolVisible(clerk, "lib/v1.2/desk#Desk.write", "write")).toBe(false);
+    expect(engine.toolVisible(clerk, "../outside.v2/files#Files.read", "read")).toBe(true);
+    expect(engine.toolVisible(clerk, "../outside.v2/files#Files.delete", "write")).toBe(false);
+    expect(rt.listPipelines().map((p) => p.name)).toEqual(["Main"]);
+  });
+});
+
 describe("analyzePackage", () => {
   const filesOf = (folder: string) => {
     const dir = join(FIXTURES, "packages", folder);
@@ -410,7 +455,7 @@ describe("analyzePackage", () => {
     expect(a.code).toBe(true);
     expect(a.effects.find((e) => e.tool === "Mem")).toMatchObject({ local: true });
     expect(a.diagnostics.map((d) => [d.file, d.message])).toEqual([
-      ["main.halo", `Agent "B" names a model (openai/gpt-4o); a package's agents use model slots, [models.<slot>], so the people using it choose their models`],
+      ["main.halo", `Agent "B" hard-codes the model "openai/gpt-4o"; a package's agents use model slots, [models.<slot>], so the people using it choose (and pay for) their models`],
       ["main.halo", `Agent "C" uses model slot "nope", which halo.json "models" doesn't declare (add { "description": "...", "suggested": "..." })`],
     ]);
   });

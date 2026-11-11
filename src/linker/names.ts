@@ -41,3 +41,14 @@ export function displayText(names: Record<string, string> | undefined, text: str
 export function displayName(names: Record<string, string> | undefined, name: string): string {
   return names?.[name] ?? name;
 }
+
+/**
+ * Split a tool path, `Tool.method` (or a pattern like `Tool.*`), into the tool and the rest.
+ * A qualified tool name may hold dots and slashes before its `#` (`@acme/x.y#Desk`,
+ * `lib/v1.2/shared#Desk`), so the split is at the first dot after the `#`.
+ */
+export function splitToolPath(path: string): { tool: string; method?: string } {
+  const from = path.lastIndexOf("#") + 1;
+  const dot = path.indexOf(".", from);
+  return dot < 0 ? { tool: path } : { tool: path.slice(0, dot), method: path.slice(dot + 1) };
+}

@@ -89,6 +89,21 @@ USAGE:
   halo evolve apply <dir> [variant]     Write a variant (default: the winner) over the evolved file
                                         (--pr: open a pull request with it instead)
 
+FILES AND use:
+  Every command that takes a <file.halo> (run, test, validate, plan, compare, evolve, serve,
+  mcp, ...) links it first: the file and everything its use lines bring in, as one program.
+    use "./shared.halo" { Careful, Helper as H }    another file, relative to this one
+    use "@acme/support-kit" { Triage } with models(fast: anthropic/claude-haiku-4-5)
+                                                    an installed package (.halo/packages;
+                                                    halo add / halo install put it there)
+  The project is the nearest folder up with a halo.json. Its "models" fill the model slots
+  packages declare (with models(...) on a use line overrides them for that package), and
+  halo.lock pins the package versions. Imported names work like local ones; mocks and
+  --mocks keys use the name you imported (H.method). serve and mcp expose each file's own
+  pipelines; the pipelines it imports run when it calls them. A directory argument links
+  each .halo file in it as its own entry. Errors in imported files are reported at their
+  file and line.
+
 ${PACKAGE_HELP}
 
 RUN OPTIONS:
@@ -942,6 +957,8 @@ async function cmdEvolve(flags: Flags): Promise<number> {
   const mark = (v: Variant) => (v.status === "scored" ? (v.score!.winRate > 0.5 ? green("✓") : v.score!.winRate === 0.5 ? yellow("~") : red("✗")) : v.status === "outside" ? red("⊘") : v.status === "invalid" ? red("✗") : dim("·"));
   const result = await evolve({
     source,
+    // Each variant is linked in place of the file, so its `use` lines resolve as the original's do.
+    path,
     pipeline,
     recordings,
     runtime,

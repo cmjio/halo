@@ -214,7 +214,7 @@ halolang.com already runs on Workers (`site/`, with an R2 bucket for releases). 
 | Need | Cloudflare product | How |
 |---|---|---|
 | API and package pages | **Worker** (`halo-registry`) | One `fetch` handler routes `v1/*` (JSON API) and `/@scope/name` (HTML pages). It imports `src/registry/contract.ts` and `semver.ts`, so client and server enforce the same rules. |
-| Package files | **R2** bucket `halo-packages` | Keys `files/@scope/name/<version>.halotool`, written once and never overwritten. Served through the Worker with `Cache-Control: public, max-age=31536000, immutable` and the sha256 as ETag. |
+| Package files | **R2** bucket `halo-packages` | Keys `files/@scope/name/<version>/<sha256>.halotool`, written once and never overwritten (the sha256 in the key means a losing concurrent publish can't replace the winner's file). Served through the Worker with `Cache-Control: public, max-age=31536000, immutable` and the sha256 as ETag. |
 | Metadata | **D1** database `halo-registry` | Tables: `users`, `tokens` (sha256 of the token only), `scopes`, `scope_members`, `packages`, `versions` (manifest JSON, README, exports, permissions, yank/deprecate), `dist_tags`, `downloads_daily`, `device_codes`, `scope_verifications`. Search uses an FTS5 table over name, description, keywords and README. Unique `(package, version)` makes double publishes impossible without locks. Migrations live in `services/registry/migrations/`. |
 | Read performance | **Cache API** | Package docs and the index are cached at the edge for 60s and purged on publish, yank, deprecate and dist-tag changes. Files are cached forever. |
 | Abuse limits | **Rate Limiting binding** | Publish, login and token creation are limited per user and per IP. |

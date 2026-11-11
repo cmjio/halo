@@ -108,7 +108,8 @@ export default defineConfig({
         text: 'Agents & Tools',
         items: [
           { text: 'Agents with Tools', link: '/guide/agents-with-tools' },
-          { text: 'Tool Packages', link: '/guide/tool-packages' },
+          { text: 'Packages', link: '/guide/tool-packages' },
+          { text: 'Hosted Packages', link: '/guide/hosted-packages' },
           { text: 'Package Registry', link: '/packages' },
           { text: 'Plan and Replay', link: '/guide/plan-and-replay' },
           { text: 'Thread State', link: '/guide/thread-state' },

@@ -4,7 +4,7 @@
  * makes.
  */
 
-import { RESERVED_SCOPES, type DeviceStart, type ScopeRole, type TokenResponse, type WhoAmI } from "../../../src/registry/contract.ts";
+import { RESERVED_SCOPES, type CreatedToken, type DeviceStart, type ScopeRole, type TokenInfo, type TokenList, type TokenResponse, type WhoAmI } from "../../../src/registry/contract.ts";
 import type { Env } from "./env.ts";
 import { clientIp, fail, json, now, randomToken, rateLimit, readJson, sha256Hex } from "./http.ts";
 
@@ -188,12 +188,17 @@ export async function pollDevice(req: Request, env: Env): Promise<Response> {
 
 async function upsertUser(env: Env, githubId: number, login: string, name: string | null): Promise<number> {
   const at = now();
-  await env.DB.prepare(
-    `INSERT INTO users (github_id, login, name, created_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(github_id) DO UPDATE SET login = excluded.login, name = excluded.name`,
-  )
-    .bind(githubId, login, name, at)
-    .run();
+  // A user is their GitHub id; the login is only a label that follows GitHub's. If another row
+  // still holds this login (its owner renamed on GitHub and hasn't signed in since), that row
+  // gives the login up: it becomes `<login>~<github id>` (never a valid GitHub login) until its
+  // owner signs in again and gets their new one. Scopes and packages stay with the ids.
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE users SET login = login || '~' || github_id WHERE login = ? AND github_id != ?`).bind(login, githubId),
+    env.DB.prepare(
+      `INSERT INTO users (github_id, login, name, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(github_id) DO UPDATE SET login = excluded.login, name = excluded.name`,
+    ).bind(githubId, login, name, at),
+  ]);
   const user = await env.DB.prepare(`SELECT id FROM users WHERE github_id = ?`).bind(githubId).first<{ id: number }>();
   const userId = user!.id;
   // Their own scope, @<login>, unless it's reserved or someone already has it.
@@ -231,18 +236,6 @@ export async function whoami(caller: Caller, env: Env): Promise<Response> {
   return json(body);
 }
 
-/** A token as listed (never with its secret). Not in the contract: GET/POST v1/tokens bodies are registry-local. */
-export interface TokenInfo {
-  id: string;
-  name: string;
-  readOnly: boolean;
-  scopes?: string[];
-  createdAt: string;
-  lastUsedAt?: string;
-  /** This is the token making the request. */
-  current?: boolean;
-}
-
 export async function listTokens(caller: Caller, env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(`SELECT id, name, read_only, scopes, created_at, last_used_at FROM tokens WHERE user_id = ? ORDER BY created_at`)
     .bind(caller.userId)
@@ -256,7 +249,8 @@ export async function listTokens(caller: Caller, env: Env): Promise<Response> {
     ...(t.last_used_at ? { lastUsedAt: t.last_used_at } : {}),
     ...(t.id === caller.tokenId ? { current: true } : {}),
   }));
-  return json({ tokens });
+  const body: TokenList = { tokens };
+  return json(body);
 }
 
 export async function createToken(req: Request, caller: Caller, env: Env): Promise<Response> {
@@ -279,7 +273,8 @@ export async function createToken(req: Request, caller: Caller, env: Env): Promi
   }
   const readOnly = body.readOnly === true;
   const t = await mintToken(env, caller.userId, { name, readOnly, scopes });
-  return json({ id: t.id, name, token: t.secret, readOnly, ...(scopes ? { scopes } : {}), createdAt: t.createdAt }, 201);
+  const created: CreatedToken = { id: t.id, name, token: t.secret, readOnly, ...(scopes ? { scopes } : {}), createdAt: t.createdAt };
+  return json(created, 201);
 }
 
 export async function deleteToken(id: string, caller: Caller, env: Env): Promise<Response> {

@@ -123,7 +123,9 @@ pipeline Inbox(ticket: String):
 
 The linker loads a file and everything it uses into one program. Declarations from other files keep their own names inside, so two files (or two packages) can each have a private `Writer` without a clash. Mocks, recordings, `halo plan`, telemetry and errors use the names you see: `"Triager.classify"` in `mocks.json` mocks the package's `Triager`. When two things would show the same name, they show their internal names (`@acme/support-kit#Triager`, `lib/shared#Writer`), and a mock can use those.
 
-Only the file's own pipelines are entry points (`halo run`, `halo serve`, `halo mcp`). Imported pipelines are called from them. `halo serve` links each file, so a pipeline can call a pipeline in another file.
+Only the file's own pipelines are entry points (`halo run`, `halo serve`, `halo mcp`). Imported pipelines are called from them. `halo serve` links each file, so a pipeline can call a pipeline in another file. `halo compare` and `halo evolve` link each version of the file in its place, so its `use` lines resolve the same way.
+
+Policies name imported tools as the file imported them: `AllowTools(Desk, "Desk.get_ticket")`, `DenyTools("*.delete")` work on a `Desk` from another file or package, whatever its path.
 
 ### Model slots
 
@@ -141,6 +143,8 @@ A slot is filled, in order, by:
 An unfilled slot is an error that names the slot, what the package says it needs, and a model that works. A project's own agents can use `[models.<slot>]` too, filled from `halo.json`. In a package's own `halo.json`, `models` holds `{ "description", "suggested" }` for each slot, and the `suggested` model fills it when the package runs its own tests.
 
 A binding can name a slot of the program doing the `use`: `with models(fast: models.smart)`.
+
+Every agent in a package (exported file or not) must use a slot that its `halo.json` declares. `halo publish` and the registry refuse a package with a hard-coded model id in any `.halo` file it ships. A [hosted](/guide/hosted-packages) pipeline's source may name models, because it runs on its publisher's server with their keys, and it never ships: the package carries only its interface.
 
 ## Operators
 

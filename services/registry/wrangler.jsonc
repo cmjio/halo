@@ -19,7 +19,7 @@
       "migrations_dir": "./migrations"
     }
   ],
-  // Package files: files/@scope/name/<version>.halotool, written once.
+  // Package files: files/@scope/name/<version>/<sha256>.halotool, written once (src/packages.ts fileKey).
   "r2_buckets": [{ "binding": "PACKAGES", "bucket_name": "halo-packages" }],
   // Publish, login and token creation, keyed per user or per IP (src/http.ts rateLimit).
   "ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "4801", "simple": { "limit": 20, "period": 60 } }],

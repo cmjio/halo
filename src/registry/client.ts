@@ -18,15 +18,23 @@ import {
   parsePackageName,
   README_FILE,
   type ApiError,
+  type CreatedToken,
+  type CreateTokenRequest,
+  type DeprecateResponse,
   type DeviceStart,
+  type DistTagsResponse,
   type PackageDoc,
   type PackageSummary,
   type PublishResponse,
   type ScopeDoc,
   type ScopeRole,
   type SearchResponse,
+  type TokenInfo,
+  type TokenList,
   type TokenResponse,
+  type VerifyResponse,
   type VersionDoc,
+  type YankResponse,
   type WhoAmI,
 } from "./contract.js";
 import { compare, isPrerelease, satisfies, sortDescending } from "./semver.js";
@@ -45,15 +53,7 @@ export class RegistryError extends PackageError {
 
 export type RegistryKind = "http" | "folder" | "legacy";
 
-/** A token as `halo token list` shows it. The contract leaves the shape open; these are the fields used. */
-export interface TokenInfo {
-  id: string;
-  name?: string;
-  readOnly?: boolean;
-  scopes?: string[];
-  createdAt?: string;
-  lastUsedAt?: string;
-}
+export type { TokenInfo };
 
 export interface RegistryClientOptions {
   fetch?: typeof fetch;
@@ -300,13 +300,13 @@ export class RegistryClient {
       const v = mustVersion(doc, version);
       v.yanked = reason || "yanked";
     });
-    await this.call("POST", `${packageApiPath(name)}/versions/${version}/yank`, { reason }, `Yanking ${name}@${version}`);
+    await this.call<YankResponse>("POST", `${packageApiPath(name)}/versions/${version}/yank`, { reason }, `Yanking ${name}@${version}`);
   }
 
   async unyank(name: string, version: string): Promise<void> {
     this.refresh(name);
     if (this.kind === "folder") return editFolderDoc(this.base, name, (doc) => void delete mustVersion(doc, version).yanked);
-    await this.call("DELETE", `${packageApiPath(name)}/versions/${version}/yank`, undefined, `Unyanking ${name}@${version}`);
+    await this.call<YankResponse>("DELETE", `${packageApiPath(name)}/versions/${version}/yank`, undefined, `Unyanking ${name}@${version}`);
   }
 
   /** Mark every version in `range` deprecated (an empty message clears it). */
@@ -320,7 +320,7 @@ export class RegistryClient {
         else delete v.deprecated;
       }
     });
-    await this.call("POST", `${packageApiPath(name)}/deprecate`, { range, message }, `Deprecating ${name}@${range}`);
+    await this.call<DeprecateResponse>("POST", `${packageApiPath(name)}/deprecate`, { range, message }, `Deprecating ${name}@${range}`);
   }
 
   async setDistTag(name: string, tag: string, version: string): Promise<void> {
@@ -329,7 +329,7 @@ export class RegistryClient {
       mustVersion(doc, version);
       doc.distTags[tag] = version;
     });
-    await this.call("PUT", `${packageApiPath(name)}/dist-tags/${encodeURIComponent(tag)}`, { version }, `Tagging ${name}@${version} as ${tag}`);
+    await this.call<DistTagsResponse>("PUT", `${packageApiPath(name)}/dist-tags/${encodeURIComponent(tag)}`, { version }, `Tagging ${name}@${version} as ${tag}`);
   }
 
   async removeDistTag(name: string, tag: string): Promise<void> {
@@ -339,8 +339,7 @@ export class RegistryClient {
       if (!doc.distTags[tag]) throw new RegistryError(`${name} has no "${tag}" tag`);
       delete doc.distTags[tag];
     });
-    // Not in the contract's route list yet: DELETE on the same path as PUT.
-    await this.call("DELETE", `${packageApiPath(name)}/dist-tags/${encodeURIComponent(tag)}`, undefined, `Removing ${name}'s ${tag} tag`);
+    await this.call<DistTagsResponse>("DELETE", `${packageApiPath(name)}/dist-tags/${encodeURIComponent(tag)}`, undefined, `Removing ${name}'s ${tag} tag`);
   }
 
   // ── Accounts (the service only) ──
@@ -364,11 +363,11 @@ export class RegistryClient {
   }
 
   async listTokens(): Promise<TokenInfo[]> {
-    const body = await this.call<TokenInfo[] | { tokens: TokenInfo[] }>("GET", `${API_PREFIX}/tokens`, undefined, "Listing tokens", true);
-    return Array.isArray(body) ? body : (body.tokens ?? []);
+    const body = await this.call<TokenList>("GET", `${API_PREFIX}/tokens`, undefined, "Listing tokens", true);
+    return body.tokens ?? [];
   }
 
-  createToken(options: { name: string; readOnly?: boolean; scopes?: string[] }): Promise<TokenInfo & { token: string }> {
+  createToken(options: CreateTokenRequest): Promise<CreatedToken> {
     return this.call("POST", `${API_PREFIX}/tokens`, options, "Creating a token");
   }
 
@@ -392,7 +391,7 @@ export class RegistryClient {
     await this.call("DELETE", `${API_PREFIX}/scopes/${scope}/members/${encodeURIComponent(login)}`, undefined, `Removing ${login} from ${scope}`);
   }
 
-  verifyScope(scope: string, domain: string): Promise<{ record: string; value: string; verified: boolean }> {
+  verifyScope(scope: string, domain: string): Promise<VerifyResponse> {
     return this.call("POST", `${API_PREFIX}/scopes/${scope}/verify`, { domain }, `Verifying ${scope}`);
   }
 }

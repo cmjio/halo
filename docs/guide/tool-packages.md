@@ -150,7 +150,7 @@ Commit `halo.json` and `halo.lock`. `halo install` installs exactly what the loc
 | `vendor/acme-kit`, `vendor/acme-kit-1.0.0.halotool` | A folder or file inside the project |
 | `https://…/acme-kit-1.0.0.halotool`, `/abs/path/…` | A URL, or a file or folder outside the project |
 
-`halo run`, `debug`, `test`, `plan`, `tools`, `serve` and `mcp` load packages from `.halo/packages`. `halo validate` only reads provider names, and never loads package code. Each package's `package.halotool` must match the pinned sha256, or the command stops and asks you to run `halo install`. The unpacked files are rewritten from that verified package before anything loads, so an edited file in `.halo/packages` never runs.
+`halo run`, `debug`, `test`, `plan`, `tools`, `serve` and `mcp` load packages from `.halo/packages`. `halo validate` reads the packages' `.halo` files and provider names (to check what you `use`), and never loads package code. Each package's `package.halotool` must match the pinned sha256, or the command stops and asks you to run `halo install`. The unpacked files are rewritten from that verified package before anything loads, so an edited file in `.halo/packages` never runs.
 
 A Halo 0.8 `halo.lock` (with `tools`) still loads. The next `halo install` (or `halo add`) moves its packages into `halo.json` `dependencies` (`stripe` becomes `@halo/stripe`) and rewrites the lock as version 2.
 
@@ -223,11 +223,22 @@ A package is a folder with a `halo.json` that has a `name` and a `version`, and 
 | `skills` | A folder of skills (`SKILL.md` layout) |
 | `env` | Environment variables it reads beyond what the providers declare |
 | `dependencies` | Other packages, by range |
-| `hosted` | Pipelines that run on your own server. See the [registry proposal](https://github.com/cmjio/halo/blob/main/proposals/halo-registry.md) |
+| `hosted` | Pipelines that run on your own server, on your models and keys. See [Hosted packages](./hosted-packages.md) |
 
 A package must export something: `exports`, `providers`, `skills` or `hosted`. `halo pack` and `halo publish` check the manifest and list every problem at once.
 
-**Agents use model slots, not model ids.** Everyone who uses your package pays for its tokens, so they choose the model: `halo publish` refuses a package whose agents hard-code one (`[openai/gpt-4o]`). Declare a slot in `models` with a description of what it needs, and write `[models.<slot>]`.
+**Agents use model slots, not model ids.** Everyone who uses your package pays for its tokens, so they choose the model: `halo publish` refuses a package whose agents hard-code one (`[openai/gpt-4o]`), in any of its `.halo` files, exported or not. Declare a slot in `models` with a description of what it needs, and write `[models.<slot>]`. Only the sources of [hosted pipelines](./hosted-packages.md) may name a model: they run on your server with your keys, and they never ship (the package holds only their interfaces).
+
+`halo pack` and `halo publish` run the same checks on the `.halo` files as the registry does when it receives the package, so what passes `halo publish --dry-run` is accepted:
+
+- every file parses;
+- every agent in a shipped file uses a slot declared in `models`;
+- no two exported files declare the same name;
+- `use` names only files inside the package, or packages in its `dependencies`;
+- there is a `README.md`;
+- for a [hosted package](./hosted-packages.md): every hosted pipeline has a well-formed interface, `hosted.auth` is set, and no `.halo` file that `exports` doesn't reach (a hosted source) is in the package.
+
+The registry also computes the exports and permissions itself from the files (the tools your `.halo` files declare, the hosts and env they reach, your providers, and hosted endpoints), rather than trusting the client.
 
 A v1 package (a `halo-tool.json` with only `providers` and a bare name) still packs and installs. To publish it to a registry, move its fields into a `halo.json` with a scoped name, and add a README.
 
@@ -294,9 +305,9 @@ halo publish --dry-run            # check, and print the exports, model slots an
 halo publish                      # to the registry for its scope (or --registry)
 ```
 
-`halo pack` writes one file: JSON holding `halo.json` and every file in the folder (base64), except dotfiles, `node_modules`, `.halo/`, `halo.lock`, `.env` files and other `.halotool` files. A package can be at most 5 MB. It prints the sha256 and the permissions.
+`halo pack` writes one file: JSON holding `halo.json` and every file in the folder (base64), except dotfiles, `node_modules`, `.halo/`, `halo.lock`, `.env` files and other `.halotool` files. A package's files can add up to at most 5 MB (the packed file, with base64 and the JSON around it, may be up to 8 MB, which is what a registry accepts). It prints the sha256 and the permissions.
 
-`halo publish` packs the folder (or takes a `.halotool`), runs the checks, and prints what it computed before uploading. A version can be published once; bump the version for a new one. `halo login` saves a token in `~/.halo/credentials.json` (readable only by you), per registry; `HALO_TOKEN` overrides it, which is how CI publishes.
+`halo publish` packs the folder (or takes a `.halotool`), runs the checks, and prints what it computed before uploading. For a package with `hosted`, `halo pack` and `halo publish` leave the hosted sources out and write each hosted pipeline's interface (parameters, return type, schemas and tool effects) instead; see [Hosted packages](./hosted-packages.md). A version can be published once; bump the version for a new one. `halo login` saves a token in `~/.halo/credentials.json` (readable only by you), per registry; `HALO_TOKEN` overrides it, which is how CI publishes.
 
 After publishing:
 

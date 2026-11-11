@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:e2e": "bun test test/e2e-registry.test.ts",
     "typecheck": "bunx tsc --noEmit && bunx tsc -p studio/tsconfig.json && bunx tsc -p tsconfig.tooling.json",
     "generate": "bash generate-grammar.sh",
     "validate": "bun run index.ts validate examples/",

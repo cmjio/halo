@@ -11,6 +11,7 @@
 
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
 import { HaloError, PolicyViolation } from "./errors.js";
+import { splitToolPath } from "../linker/names.js";
 
 export interface Violation {
   policy: string;
@@ -28,9 +29,12 @@ export type ToolEffectName = "read" | "write" | "external";
 /** `Repo`, `Repo.create_pr`, `Repo.*`, `*.delete`, `*`: a tool pattern, matched against "Tool.method". */
 export function toolMatches(pattern: string, target: string): boolean {
   if (pattern === "*") return true;
-  if (!pattern.includes(".")) return target.split(".")[0] === pattern;
-  const re = new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^.]*")}$`);
-  return re.test(target);
+  // Tool names the linker qualifies (`@acme/x.y#Desk`) may hold dots: split after the `#`.
+  const p = splitToolPath(pattern);
+  const t = splitToolPath(target);
+  if (p.method === undefined) return t.tool === p.tool;
+  const glob = (g: string, star: string) => new RegExp(`^${g.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(star)}$`);
+  return glob(p.tool, "[^]*").test(t.tool) && t.method !== undefined && glob(p.method, "[^.]*").test(t.method);
 }
 
 interface Detector {
