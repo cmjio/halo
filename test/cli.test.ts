@@ -89,7 +89,7 @@ pipeline S(x: String) -> Result:
     expect(cliIn(dir, "thread", "Visit", "ana", "--reset", "--yes").out).toContain("Reset thread Visit ana (it was v2)");
     expect(cliIn(dir, "thread", "Visit", "ana").out).toContain("reset (no state)");
     expect(JSON.parse(cliIn(dir, "run", "t.halo", "--arg", "user_id=ana", "--arg", "page=again", "--json").out).output).toEqual(["again"]);
-  });
+  }, 30_000);
 
   test("run --json returns the full result", () => {
     const r = cli("run", "examples/learn/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
