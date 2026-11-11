@@ -20,12 +20,14 @@ import { parse, render } from "../parser/index.js";
 import { validate, type Diagnostic, type ValidateOptions } from "../parser/validate.js";
 import { TOOL_RULES, includes } from "../parser/builtins.js";
 import type { Agent, Arg, CallStage, Loc, ParseResult, PipelineDeclaration, PipelineStage, PolicyDeclaration, SchemaDeclaration, ToolDeclaration, UseDeclaration, Value } from "../parser/types.js";
-import { normalizePackageName, parsePackageName, qualifiedProvider, type ModelSlot, type PackageResolver, type ResolvedPackage } from "../registry/contract.js";
+import { normalizePackageName, parsePackageName, qualifiedProvider, type HostedPipelineInterface, type ModelSlot, type PackageResolver, type ResolvedPackage } from "../registry/contract.js";
 import { displayText, isQualified } from "./names.js";
 import { dirnameOf, isInside, joinPath, normalizePath, relativePath } from "./paths.js";
+import { HOSTED_PROVIDER, hostedCallProblems, hostedDeclarations, type HostedDeclarations } from "./hosted.js";
 
 export { bareName, displayName, displayText, isQualified } from "./names.js";
 export { analyzePackage, type PackageAnalysis, type ToolEffectSummary } from "./analyze.js";
+export { HOSTED_METHOD, HOSTED_PROVIDER, hostedToolName } from "./hosted.js";
 
 export interface LinkOptions {
   /** A file's text, or undefined when it doesn't exist. Paths are POSIX, as joined from the entry path. */
@@ -156,7 +158,7 @@ export function checkLinked(linked: LinkedProgram, options: ValidateOptions = {}
   if (linked.program.errors.length) return out;
   const providers = linked.packages.flatMap((p) => Object.keys(p.manifest.providers ?? {}).map((name) => qualifiedProvider(p.name, name)));
   const packageFiles = new Set(linked.files.filter((f) => f.package).map((f) => f.path));
-  const diags = validate(linked.program, { ...options, toolProviders: [...(options.toolProviders ?? []), ...providers] });
+  const diags = validate(linked.program, { ...options, toolProviders: [...(options.toolProviders ?? []), ...providers, HOSTED_PROVIDER] });
   for (const d of diags) {
     const file = d.file ?? linked.entry;
     if (d.severity === "warning" && packageFiles.has(file)) continue;
@@ -178,6 +180,10 @@ class Linker {
   /** Qualified name → the local name the entry file imported it as. */
   private entryAliases = new Map<string, string>();
   private phantoms = new Map<string, string>();
+  /** Hosted pipelines' stub declarations, by package. */
+  private hosted = new Map<string, HostedDeclarations>();
+  /** A hosted stub pipeline's internal name → its interface. */
+  private hostedInterfaces = new Map<string, HostedPipelineInterface>();
 
   constructor(entry: string, private options: LinkOptions) {
     this.entry = normalizePath(entry);
@@ -369,9 +375,43 @@ class Linker {
       }
       state.exports.set(provider, { qualified: qualifiedProvider(name, provider), kind: "provider", name: provider, file: manifestPath });
     }
+    if (resolved.manifest.hosted) this.loadHosted(state, manifestPath);
     state.units = this.order.filter((u) => u.pkg?.name === name);
     this.packages.set(name, state);
     return state;
+  }
+
+  /** A package's hosted pipelines: stubs that call the publisher's server (see hosted.ts). */
+  private loadHosted(state: PackageState, manifestPath: string): void {
+    const pkg = state.resolved;
+    const exportedSchemas = new Map([...state.exports.values()].filter((s) => s.kind === "schema").map((s) => [s.name, s.qualified]));
+    const decls = hostedDeclarations(pkg, exportedSchemas, manifestPath);
+    for (const p of decls.problems) this.report("error", manifestPath, p);
+    for (const [name, q] of decls.stubs) {
+      if (state.exports.has(name)) {
+        this.report("error", manifestPath, `${pkg.name}: "${name}" is both a hosted pipeline and a declaration in an exported file`);
+        continue;
+      }
+      state.exports.set(name, { qualified: q, kind: "pipeline", name, file: manifestPath });
+      this.hostedInterfaces.set(q, pkg.hosted![name]!);
+    }
+    for (const [name, q] of decls.schemaNames) if (!state.exports.has(name)) state.exports.set(name, { qualified: q, kind: "schema", name, file: manifestPath });
+    this.hosted.set(pkg.name, decls);
+  }
+
+  /** Calls from the project's own files to hosted pipelines: their arguments must match the interface. */
+  private checkHostedCalls(unit: Unit, p: PipelineDeclaration): void {
+    const check = (c: CallStage) => {
+      const i = c.method ? undefined : this.hostedInterfaces.get(c.callee);
+      if (!i) return;
+      for (const m of hostedCallProblems(c, c.alias ?? c.callee, i)) this.report("error", unit.path, `Pipeline "${p.name.slice(p.name.lastIndexOf("#") + 1)}": ${m}`, c.loc);
+    };
+    for (const s of p.pipeline) {
+      if (s.kind === "call") check(s);
+      else if (s.kind === "fanout") s.stages.forEach(check);
+      else if (s.kind === "branch") s.arms.forEach((a) => check(a.call));
+      else if (s.kind === "each") check(s.call);
+    }
   }
 
   private bind(pkgName: string, slot: string, model: string, unit: Unit, loc: Loc | undefined, pkg: ResolvedPackage): void {
@@ -497,7 +537,14 @@ class Linker {
       program.stores.push(...ast.stores.map((t) => withFile(this.tool(unit, t), file)));
       program.schemas.push(...ast.schemas.map((s) => withFile(this.schema(unit, s), file)));
       program.agents.push(...ast.agents.map((a) => withFile(this.agent(unit, a), file)));
-      program.pipelines.push(...ast.pipelines.map((p) => withFile(this.pipeline(unit, p), file)));
+      const pipelines = ast.pipelines.map((p) => withFile(this.pipeline(unit, p), file));
+      if (!unit.pkg && this.hostedInterfaces.size) pipelines.forEach((p) => this.checkHostedCalls(unit, p));
+      program.pipelines.push(...pipelines);
+    }
+    for (const h of this.hosted.values()) {
+      program.schemas.push(...h.schemas);
+      program.tools.push(...h.tools);
+      program.pipelines.push(...h.pipelines);
     }
     program.names = this.displayNames();
     return program;
@@ -598,12 +645,17 @@ class Linker {
     for (const state of this.packages.values()) {
       for (const sym of state?.exports.values() ?? []) if (sym.kind === "provider") wanted.set(sym.qualified, this.entryAliases.get(sym.qualified) ?? sym.name);
     }
+    for (const h of this.hosted.values()) {
+      for (const [name, q] of [...h.stubs, ...h.schemaNames]) wanted.set(q, this.entryAliases.get(q) ?? name);
+    }
     const count = new Map<string, number>();
     for (const name of this.entryNames()) count.set(name, 1);
     for (const d of wanted.values()) count.set(d, (count.get(d) ?? 0) + 1);
     const names: Record<string, string> = {};
     for (const [q, d] of wanted) names[q] = count.get(d)! > 1 ? q : d;
     for (const [q, d] of this.phantoms) names[q] = d;
+    // A hosted pipeline's tool shows as its pipeline: mocks, recordings and plans say "DraftReply".
+    for (const h of this.hosted.values()) for (const [tool, pipeline] of h.toolOf) names[tool] = names[pipeline] ?? pipeline;
     return names;
   }
 }

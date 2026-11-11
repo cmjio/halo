@@ -1,0 +1,17 @@
+{
+  "name": "@acme/hosted-replies",
+  "version": "1.0.0",
+  "description": "Ticket tagging on your models, and reply drafting on Acme's",
+  "license": "MIT",
+  "keywords": ["support", "hosted"],
+  "halo": ">=0.8.0",
+  "exports": ["lib/replies.halo"],
+  "models": {
+    "fast": { "description": "Tags tickets with a topic. Any small chat model works.", "suggested": "anthropic/claude-haiku-4-5" }
+  },
+  "hosted": {
+    "endpoint": "http://localhost:4573",
+    "auth": { "type": "bearer", "env": "ACME_REPLIES_KEY" },
+    "exports": ["DraftReply"]
+  }
+}

@@ -62,6 +62,7 @@ import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
 import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } from "./threads.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
+import { HOSTED_PROVIDER, HOSTED_PROVIDER_INFO, hostedProvider } from "./hosted.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
@@ -661,8 +662,9 @@ export class HaloRuntime {
   private pipelineCalls = new WeakMap<RunMeta, number>();
   /** Model calls in flight per run, and calls waiting under MaxSpend for one of them to settle. */
   private inflight = new WeakMap<RunMeta, { calls: number; waiting: Array<() => void> }>();
-  private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
-  private providerInfo = new Map<string, ProviderInfo>(Object.entries(BUILTIN_PROVIDER_INFO));
+  // Packages' hosted pipelines (the linker's stubs) call the publisher's server through halo#hosted.
+  private providers = new Map<string, ToolProvider>([...Object.entries(BUILTIN_PROVIDERS), [HOSTED_PROVIDER, hostedProvider]]);
+  private providerInfo = new Map<string, ProviderInfo>([...Object.entries(BUILTIN_PROVIDER_INFO), [HOSTED_PROVIDER, HOSTED_PROVIDER_INFO]]);
   private systems = new Map<string, SystemHandler>();
   private vectorStore?: LocalVectorStore;
   private threadStore?: ThreadStore;
@@ -761,7 +763,8 @@ export class HaloRuntime {
 
   /** Names of every registered tool provider. */
   toolProviderNames(): string[] {
-    return [...this.providers.keys()];
+    // halo#hosted is internal: only the linker's hosted-pipeline stubs use it.
+    return [...this.providers.keys()].filter((n) => n !== HOSTED_PROVIDER);
   }
 
   /** Register a `System.<name>(...)` method. A non-undefined return value replaces the pipeline value. */

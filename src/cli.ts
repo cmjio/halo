@@ -122,6 +122,10 @@ SERVE OPTIONS:
   --config <file>        Config file (default ./halo.json if present): schedules,
                          timezone, webhooks, notify.slack, publicUrl, files
   --no-studio            Don't serve Halo Studio
+  --package [dir]        Serve a package's hosted pipelines (halo.json "hosted") to its consumers:
+                         keys from HALO_PACKAGE_KEYS or .halo/package-keys.json, the Halo-Package
+                         header checked, usage per key in .halo/telemetry.db (hosted_usage)
+  --keys <file>          With --package: a JSON file of consumer keys, { "<id>": "<key>" }
 
 COMPARE OPTIONS:
   --pipeline, -p <name>  Pipeline to compare (default: the entry pipeline)
@@ -196,7 +200,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -648,30 +652,57 @@ function stageAt(ast: ParseResult, pipeline: string, index: number): string {
 async function cmdServe(flags: Flags): Promise<number> {
   let server;
   let config: ServeConfig;
+  const asPackage = flags.bools.has("package");
   try {
-    config = await loadServeConfig(last(flags, "config"));
-    const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
-    server = await startServer({
-      ...config,
-      files: flags.positional.length ? flags.positional : config.files,
-      port: listen.port,
-      host: listen.host,
-      hostFrom: listen.from,
-      studio: !flags.bools.has("no-studio"),
-    });
+    if (asPackage) {
+      // halo serve --package [dir]: the package's hosted pipelines, for its consumers. Its halo.json is
+      // a package manifest; only the serve settings in it apply (port, host, token, publicUrl, stateDir, mcp, keysFile).
+      const dir = resolve(flags.positional[0] ?? ".");
+      const raw = (await loadServeConfig(last(flags, "config") ?? join(dir, "halo.json"))) as ServeConfig & { keysFile?: string };
+      config = { port: raw.port, host: raw.host, token: raw.token, publicUrl: raw.publicUrl, stateDir: raw.stateDir, mcp: raw.mcp, recordings: raw.recordings };
+      const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
+      server = await startServer({
+        ...config,
+        package: dir,
+        keysFile: last(flags, "keys") ?? raw.keysFile,
+        port: listen.port,
+        host: listen.host,
+        hostFrom: listen.from,
+        studio: false,
+      });
+    } else {
+      config = await loadServeConfig(last(flags, "config"));
+      const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
+      server = await startServer({
+        ...config,
+        files: flags.positional.length ? flags.positional : config.files,
+        port: listen.port,
+        host: listen.host,
+        hostFrom: listen.from,
+        studio: !flags.bools.has("no-studio"),
+      });
+    }
   } catch (err) {
     if (err instanceof ServeError) fail(err.message);
     throw err;
   }
-  console.log(bold(`\nHalo is serving ${server.pipelines.length} pipeline(s) at ${server.url}`));
-  if (!flags.bools.has("no-studio")) console.log(`  Studio     ${server.url}/`);
-  console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  {"args": {...}}`);
-  for (const w of config.webhooks ?? []) console.log(`  Webhook    POST ${server.url}/hooks/${w.path.replace(/^\/+/, "")} → ${w.pipeline}`);
-  for (const s of server.schedules()) {
-    const next = s.next ? new Date(s.next).toLocaleString("en-US", { timeZone: s.tz }) : "never";
-    console.log(`  Schedule   ${s.cron} ${dim(s.tz)} → ${s.pipeline}${dim(` (next ${next})`)}`);
+  if (asPackage) {
+    console.log(bold(`\nHalo is serving hosted pipeline(s) ${server.pipelines.join(", ")} at ${server.url}`));
+    console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  (Halo-Package header and a consumer key required)`);
+    console.log(`  MCP        ${server.url}/mcp`);
+    console.log(`  Usage      GET ${server.url}/api/usage  (HALO_SERVE_TOKEN), or the hosted_usage table in .halo/telemetry.db`);
+    console.log(dim("  Consumer keys: HALO_PACKAGE_KEYS=\"id=key,...\" or .halo/package-keys.json (re-read on change). Ctrl-C to stop.\n"));
+  } else {
+    console.log(bold(`\nHalo is serving ${server.pipelines.length} pipeline(s) at ${server.url}`));
+    if (!flags.bools.has("no-studio")) console.log(`  Studio     ${server.url}/`);
+    console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  {"args": {...}}`);
+    for (const w of config.webhooks ?? []) console.log(`  Webhook    POST ${server.url}/hooks/${w.path.replace(/^\/+/, "")} → ${w.pipeline}`);
+    for (const s of server.schedules()) {
+      const next = s.next ? new Date(s.next).toLocaleString("en-US", { timeZone: s.tz }) : "never";
+      console.log(`  Schedule   ${s.cron} ${dim(s.tz)} → ${s.pipeline}${dim(` (next ${next})`)}`);
+    }
+    console.log(dim("  Paused runs get an approval link (logged here; also sent to notify.slack if set). Ctrl-C to stop.\n"));
   }
-  console.log(dim("  Paused runs get an approval link (logged here; also sent to notify.slack if set). Ctrl-C to stop.\n"));
 
   await new Promise<void>((done) => {
     const stop = () => {
