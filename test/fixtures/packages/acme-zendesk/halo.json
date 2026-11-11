@@ -1,0 +1,19 @@
+{
+  "name": "@acme/zendesk",
+  "version": "1.0.0",
+  "description": "Zendesk tickets: read tickets and add comments",
+  "license": "MIT",
+  "keywords": ["support", "zendesk"],
+  "providers": {
+    "Zendesk": {
+      "kind": "http",
+      "description": "The Zendesk Support API",
+      "baseUrl": "https://{{subdomain}}.zendesk.com/api/v2",
+      "auth": { "type": "bearer", "env": "ZENDESK_TOKEN" },
+      "methods": [
+        { "name": "get_ticket", "description": "Read a ticket by id", "effect": "read", "http": { "method": "GET", "path": "/tickets/{id}.json" } },
+        { "name": "add_comment", "description": "Add a comment to a ticket", "effect": "write", "http": { "method": "PUT", "path": "/tickets/{id}.json" } }
+      ]
+    }
+  }
+}
