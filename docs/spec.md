@@ -144,7 +144,7 @@ An unfilled slot is an error that names the slot, what the package says it needs
 
 A binding can name a slot of the program doing the `use`: `with models(fast: models.smart)`.
 
-Every agent in a package (exported file or not) must use a slot that its `halo.json` declares. `halo publish` and the registry refuse a package with a hard-coded model id, unless the package is hosted: a hosted pipeline runs on its publisher's server, with their keys.
+Every agent in a package (exported file or not) must use a slot that its `halo.json` declares. `halo publish` and the registry refuse a package with a hard-coded model id in any `.halo` file it ships. A [hosted](/guide/hosted-packages) pipeline's source may name models, because it runs on its publisher's server with their keys, and it never ships: the package carries only its interface.
 
 ## Operators
 

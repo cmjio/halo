@@ -12,7 +12,7 @@ import { defaultRangeFor, isValidRange, isValidVersion } from "./semver.js";
 import { BUNDLED_REGISTRY, HOSTED_REGISTRY, readProjectConfig, registryFor, registrySettings, removeCredential, saveCredential, tokenFor, type RegistrySettings } from "./config.js";
 import { RegistryClient, RegistryError, versionsOf } from "./client.js";
 import { exportsOf, PackageError, permissionsOfPackage, publishProblems, readPackage, sha256, type PackageData } from "./format.js";
-import { describeHosted, hostedPackageProblems, packWithHosted } from "./hosted.js";
+import { describeHosted, packWithHosted } from "./hosted.js";
 import { addDependencies, describeHostedUse, describeInstall, describeOwn, HALO_VERSION, installProject, type InstallReport } from "./install.js";
 import { readAnyLock, readLockV2 } from "./lockfile.js";
 import { isLocalSpec, readLocal, specOfSource } from "./resolve.js";
@@ -505,7 +505,7 @@ function cmdPack(ctx: Ctx): number {
   ctx.log(`${green("✓")} ${out} ${dim(`(${bytes.length} bytes, sha256 ${digest})`)}`);
   for (const line of describeOwn(permissionsOfPackage(pkg))) ctx.log(dim(`    ${line}`));
   for (const line of describeHosted(pkg.manifest, pkg.hosted)) ctx.log(dim(`    ${line}`));
-  for (const p of [...publishProblems(pkg), ...hostedPackageProblems(pkg)]) ctx.log(yellow(`! ${p}`));
+  for (const p of publishProblems(pkg)) ctx.log(yellow(`! ${p}`));
   return 0;
 }
 
@@ -542,7 +542,8 @@ async function cmdPublish(ctx: Ctx): Promise<number> {
     }
   }
   if (!parsePackageName(pkg.name)) fail(`${pkg.name} is a v1 package (halo-tool.json) with a bare name. Registries need a scoped name: move it to a halo.json with "name": "@you/${pkg.name}" and a ${README_FILE}`);
-  const problems = [...publishProblems(pkg), ...hostedPackageProblems(pkg)];
+  // The registry's own check (src/registry/check.ts), hosted rules included.
+  const problems = publishProblems(pkg);
   if (problems.length) fail(`${pkg.name}@${pkg.version} can't be published:\n  - ${problems.join("\n  - ")}`);
 
   const settings = ctx.settings();

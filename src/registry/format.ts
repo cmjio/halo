@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Glob } from "bun";
 import {
   checkPackageManifest,
+  hostedInterfaceProblems,
   MAX_PACKAGE_BYTES,
   MAX_PACKAGE_WIRE_BYTES,
   PACK_EXCLUDE,
@@ -88,8 +89,21 @@ export interface Packed {
   pkg: PackageData;
 }
 
-/** Bundle a package folder (v2 halo.json, or v1 halo-tool.json) into one .halotool file's bytes. */
+/**
+ * Bundle a package folder (v2 halo.json, or v1 halo-tool.json) into one .halotool file's bytes.
+ * A hosted package is refused: its hosted sources must stay out and its interfaces go in, which
+ * is `packWithHosted` (src/registry/hosted.ts), what `halo pack` and `halo publish` run.
+ */
 export function pack(dir: string): Packed {
+  const packed = packFiles(dir);
+  if (packed.pkg.manifest.hosted) {
+    throw new PackageError(`${packed.pkg.name} has "hosted": pack it with \`halo pack\` or \`halo publish\` (packWithHosted), which leave its hosted sources out and write their interfaces`);
+  }
+  return packed;
+}
+
+/** Every file of a package folder, packed as is: no hosted handling (packWithHosted builds on it). */
+export function packFiles(dir: string): Packed {
   const kind = packageKind(dir);
   if (!kind) throw new PackageError(`No package in ${dir}: it needs a ${PROJECT_FILE} with "name" and "version" (or a v1 ${MANIFEST_FILE})`);
   if (kind === 1) {
@@ -163,6 +177,11 @@ export function readPackage(bytes: Uint8Array, options: { reservedProviders?: It
   if (!raw.files[PROJECT_FILE]) throw new PackageError(`Package has no ${PROJECT_FILE}`);
   const manifest = checkPackageManifest(JSON.parse(text(PROJECT_FILE)), { files: Object.keys(raw.files), reservedProviders: options.reservedProviders });
   checkContents(manifest, raw.files, `${manifest.name}@${manifest.version}`);
+  if (raw.hosted !== undefined) {
+    if (!raw.hosted || typeof raw.hosted !== "object" || Array.isArray(raw.hosted)) throw new PackageError(`${manifest.name}@${manifest.version}: "hosted" must map pipeline names to interfaces`);
+    const problems = Object.entries(raw.hosted).flatMap(([name, i]) => hostedInterfaceProblems(name, i));
+    if (problems.length) throw new PackageError(`${manifest.name}@${manifest.version} has bad hosted interfaces:\n  - ${problems.join("\n  - ")}`);
+  }
   return { format: PACKAGE_FORMAT_V2, name: manifest.name, version: manifest.version, manifest, files: raw.files, ...(raw.hosted ? { hosted: raw.hosted } : {}) };
 }
 
@@ -229,9 +248,10 @@ export function exportsOf(pkg: PackageData): PackageExports {
 
 /**
  * Why a package can't be published (empty when it can): the linker's error diagnostics
- * (syntax errors, hard-coded model ids in a package that isn't hosted, undeclared model slots,
+ * (syntax errors, hard-coded model ids in any shipped file, undeclared model slots,
  * names declared twice in exported files, `use` outside the package or its dependencies), a
- * missing README, and hosted pipelines without interfaces. The registry service refuses the same.
+ * missing README, and the hosted rules (interfaces, hosted sources left out). The registry
+ * service refuses the same.
  */
 export function publishProblems(pkg: PackageData): string[] {
   if (pkg.format !== PACKAGE_FORMAT_V2) return [];

@@ -223,19 +223,20 @@ A package is a folder with a `halo.json` that has a `name` and a `version`, and 
 | `skills` | A folder of skills (`SKILL.md` layout) |
 | `env` | Environment variables it reads beyond what the providers declare |
 | `dependencies` | Other packages, by range |
-| `hosted` | Pipelines that run on your own server. See the [registry proposal](https://github.com/cmjio/halo/blob/main/proposals/halo-registry.md) |
+| `hosted` | Pipelines that run on your own server, on your models and keys. See [Hosted packages](./hosted-packages.md) |
 
 A package must export something: `exports`, `providers`, `skills` or `hosted`. `halo pack` and `halo publish` check the manifest and list every problem at once.
 
-**Agents use model slots, not model ids.** Everyone who uses your package pays for its tokens, so they choose the model: `halo publish` refuses a package whose agents hard-code one (`[openai/gpt-4o]`), in any of its `.halo` files, exported or not. Declare a slot in `models` with a description of what it needs, and write `[models.<slot>]`. Only a hosted package's agents (`hosted` in the table above) may name a model, because they run on your servers with your keys.
+**Agents use model slots, not model ids.** Everyone who uses your package pays for its tokens, so they choose the model: `halo publish` refuses a package whose agents hard-code one (`[openai/gpt-4o]`), in any of its `.halo` files, exported or not. Declare a slot in `models` with a description of what it needs, and write `[models.<slot>]`. Only the sources of [hosted pipelines](./hosted-packages.md) may name a model: they run on your server with your keys, and they never ship (the package holds only their interfaces).
 
 `halo pack` and `halo publish` run the same checks on the `.halo` files as the registry does when it receives the package, so what passes `halo publish --dry-run` is accepted:
 
 - every file parses;
-- every agent uses a slot declared in `models` (or the package is hosted);
+- every agent in a shipped file uses a slot declared in `models`;
 - no two exported files declare the same name;
 - `use` names only files inside the package, or packages in its `dependencies`;
-- there is a `README.md`, and every hosted pipeline has an interface.
+- there is a `README.md`;
+- for a [hosted package](./hosted-packages.md): every hosted pipeline has a well-formed interface, `hosted.auth` is set, and no `.halo` file that `exports` doesn't reach (a hosted source) is in the package.
 
 The registry also computes the exports and permissions itself from the files (the tools your `.halo` files declare, the hosts and env they reach, your providers, and hosted endpoints), rather than trusting the client.
 
@@ -306,7 +307,7 @@ halo publish                      # to the registry for its scope (or --registry
 
 `halo pack` writes one file: JSON holding `halo.json` and every file in the folder (base64), except dotfiles, `node_modules`, `.halo/`, `halo.lock`, `.env` files and other `.halotool` files. A package's files can add up to at most 5 MB (the packed file, with base64 and the JSON around it, may be up to 8 MB, which is what a registry accepts). It prints the sha256 and the permissions.
 
-`halo publish` packs the folder (or takes a `.halotool`), runs the checks, and prints what it computed before uploading. A version can be published once; bump the version for a new one. `halo login` saves a token in `~/.halo/credentials.json` (readable only by you), per registry; `HALO_TOKEN` overrides it, which is how CI publishes.
+`halo publish` packs the folder (or takes a `.halotool`), runs the checks, and prints what it computed before uploading. For a package with `hosted`, `halo pack` and `halo publish` leave the hosted sources out and write each hosted pipeline's interface (parameters, return type, schemas and tool effects) instead; see [Hosted packages](./hosted-packages.md). A version can be published once; bump the version for a new one. `halo login` saves a token in `~/.halo/credentials.json` (readable only by you), per registry; `HALO_TOKEN` overrides it, which is how CI publishes.
 
 After publishing:
 

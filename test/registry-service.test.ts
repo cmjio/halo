@@ -576,6 +576,24 @@ describe("publishing", () => {
     expect(((await res.json()) as { code: string }).code).toBe("too_large");
   });
 
+  test("hosted packages: hosted sources, badly shaped interfaces and a missing auth are refused, as the CLI refuses them", async () => {
+    await h.publish(token, buildPackage("acme-zendesk"));
+    const hosted = (m: Record<string, unknown>) => {
+      m.version = "1.3.0";
+      m.hosted = { endpoint: "https://halo.acme.com", auth: { type: "bearer", env: "ACME_HALO_KEY" }, exports: ["DraftReply"] };
+    };
+    const iface = { DraftReply: { params: [{ name: "ticket", type: "String" }], returns: "String", effects: [{ target: "Desk.add_comment", effect: "write" }] } };
+    const source = await h.publish(token, buildPackage("acme-support-kit", { manifest: hosted, hosted: iface, files: (f) => void (f["hosted/draft.halo"] = "agent W [openai/gpt-4o]\npipeline DraftReply(ticket: String) -> String:\n  ticket |> W.prompt(\"hi\")\n") }));
+    expect(source.status).toBe(400);
+    expect(((await source.json()) as { problems: string[] }).problems).toContain("hosted/draft.halo isn't reached by exports, so it would be a hosted source; hosted sources must not be in the package");
+    const shape = await h.publish(token, buildPackage("acme-support-kit", { manifest: hosted, hosted: { DraftReply: { params: "ticket" } } }));
+    expect(((await shape.json()) as { problems: string[] }).problems).toContain("hosted: DraftReply: params must be a list of { name, type } strings");
+    const noAuth = await h.publish(token, buildPackage("acme-support-kit", { manifest: (m) => (hosted(m), delete (m.hosted as { auth?: unknown }).auth), hosted: iface }));
+    expect(((await noAuth.json()) as { problems: string[] }).problems.join()).toContain("hosted.auth is required");
+    const ok = await h.publish(token, buildPackage("acme-support-kit", { manifest: hosted, hosted: iface }));
+    expect(ok.status).toBe(201);
+  });
+
   test("a version can't be published twice", async () => {
     expect((await h.publish(token, buildPackage("acme-zendesk"))).status).toBe(201);
     const again = await h.publish(token, buildPackage("acme-zendesk", { files: (f) => void (f["README.md"] += "\nchanged") }));

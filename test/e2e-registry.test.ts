@@ -299,6 +299,22 @@ describe.skipIf(!!skipReason)("the CLI against the registry Worker (wrangler dev
       expect(winner.url).toBe(`${BASE}@acme/support-kit/v/1.4.0`);
       expect((await fetch(winner.url)).status).toBe(200);
 
+      // ── A hosted package: interfaces ship, sources don't, and the page says where inputs go ──
+      const hostedPub = await ok(work, "publish", join(FIXTURES, "packages/acme-hosted-replies"));
+      expect(hostedPub.out).toContain("published @acme/hosted-replies@1.0.0");
+      const hostedDoc = await doc("@acme/hosted-replies");
+      const hv = hostedDoc.versions["1.0.0"]!;
+      expect(hv.hosted).toEqual({ endpoint: "http://localhost:4573", pipelines: ["DraftReply"] });
+      expect(hv.permissions.hosted).toEqual(["localhost:4573"]);
+      expect(hv.permissions.env).toContain("ACME_REPLIES_KEY");
+      const hostedFile = JSON.parse(await (await fetch(`${BASE}v1/files/@acme/hosted-replies/1.0.0.halotool`)).text()) as { files: Record<string, string>; hosted: Record<string, { params: unknown[] }> };
+      expect(Object.keys(hostedFile.files)).not.toContain("hosted/draft.halo");
+      expect(hostedFile.hosted.DraftReply!.params).toEqual([{ name: "ticket", type: "String" }, { name: "tone", type: "String" }]);
+      const hostedPage = await (await fetch(`${BASE}@acme/hosted-replies`)).text();
+      expect(hostedPage).toContain(`<span class="badge hosted">Hosted by localhost:4573</span>`);
+      expect(hostedPage).toContain("Sends your inputs to");
+      expect(hostedPage).toContain("ACME_REPLIES_KEY");
+
       // ── The package page ──
       expect((await fetch(`${BASE}@acme/support-kit`)).status).toBe(200);
       const pageRes = await fetch(`${BASE}@acme/support-kit/v/1.3.0`);

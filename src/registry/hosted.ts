@@ -27,7 +27,6 @@ import { join, resolve } from "node:path";
 import { Glob } from "bun";
 import { checkLinked, type LinkedProgram } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
-import { dirnameOf, joinPath, normalizePath } from "../linker/paths.js";
 import { parse } from "../parser/index.js";
 import { SCHEMA_TYPES } from "../parser/builtins.js";
 import type { CallStage, ParseResult, PipelineDeclaration } from "../parser/types.js";
@@ -40,7 +39,11 @@ import {
   type PackageFileV2,
   type PackageManifest,
 } from "./contract.js";
-import { pack, PackageError, sha256, type PackageData, type Packed } from "./format.js";
+import { packFiles, PackageError, sha256, type PackageData, type Packed } from "./format.js";
+import { hostedProblems, reachableFromExports } from "./check.js";
+import { HaloRuntime } from "../runtime/runtime.js";
+import { plan } from "../plan.js";
+import type { ProviderInfo } from "../runtime/tools.js";
 import { hostOf } from "./manifest.js";
 
 export interface HostedSources {
@@ -60,23 +63,8 @@ function haloFiles(dir: string): string[] {
     .sort();
 }
 
-/** The .halo files `exports` reach through relative `use` lines. `text` reads a file (relative path). */
-export function reachableFromExports(manifest: PackageManifest, text: (path: string) => string | undefined): string[] {
-  const seen: string[] = [];
-  const visit = (path: string) => {
-    if (seen.includes(path)) return;
-    const source = text(path);
-    if (source === undefined) return;
-    seen.push(path);
-    for (const use of parse(source).uses ?? []) {
-      if (!use.source.startsWith("./") && !use.source.startsWith("../")) continue;
-      const target = joinPath(dirnameOf(path), use.source);
-      if (!target.startsWith("../")) visit(target);
-    }
-  };
-  for (const e of manifest.exports ?? []) visit(normalizePath(e));
-  return seen;
-}
+// Shared with the registry Worker (pure), so client and server agree on what ships.
+export { reachableFromExports };
 
 /** Where each hosted pipeline is declared, and which .halo files ship. Throws PackageError on a problem. */
 export function hostedSources(dir: string, manifest: PackageManifest): HostedSources {
@@ -99,7 +87,6 @@ export function hostedSources(dir: string, manifest: PackageManifest): HostedSou
     else if (found.length > 1) problems.push(`hosted pipeline ${name} is declared in more than one file (${found.join(", ")})`);
     else sources[name] = found[0]!;
   }
-  if (!hosted.auth) problems.push(`hosted.auth is required: halo serve --package only answers consumers with a key, e.g. "auth": { "type": "bearer", "env": "ACME_HALO_KEY" }`);
   if (problems.length) throw new PackageError(`${manifest.name}: hosted exports:\n  - ${problems.join("\n  - ")}`);
   return { sources, shipped, excluded };
 }
@@ -184,12 +171,39 @@ export function interfaceOf(linked: LinkedProgram, pipeline: string, source?: st
   for (const p of decl.params) collect(p.type);
   if (decl.returnType) collect(decl.returnType);
   const description = source && decl.loc ? docComment(source, decl.loc.line) : undefined;
+  const effects = effectsOf(linked, pipeline);
   return {
     ...(description ? { description } : {}),
     params: decl.params.map((p) => ({ name: p.name, type: show(p.type || "Any") })),
     ...(decl.returnType ? { returns: show(decl.returnType) } : {}),
     ...(Object.keys(out).length ? { schemas: out } : {}),
+    ...(effects.length ? { effects } : {}),
   };
+}
+
+/**
+ * The tool calls a hosted pipeline can make on the publisher's side, from `halo plan`: built-in
+ * providers describe themselves; http providers of the package or its dependencies by their
+ * manifest's methods; anything else is "unknown".
+ */
+export function effectsOf(linked: LinkedProgram, pipeline: string): { target: string; effect: string }[] {
+  const builtins = new HaloRuntime({ logger: { log() {}, warn() {} } });
+  const manifestInfo = (spec: unknown): ProviderInfo | undefined => {
+    const s = spec as { kind?: string; description?: string; methods?: { name: string; description: string; effect: string }[] } | undefined;
+    if (s?.kind !== "http" || !Array.isArray(s.methods)) return undefined;
+    return { description: s.description ?? "", methods: s.methods.map((m) => ({ name: m.name, description: m.description, effect: m.effect })) } as unknown as ProviderInfo;
+  };
+  const providerInfo = (name: string): ProviderInfo | undefined => {
+    const hash = name.lastIndexOf("#");
+    if (hash > 0) {
+      const pkg = linked.packages.find((p) => p.name === name.slice(0, hash));
+      return manifestInfo(pkg?.manifest.providers?.[name.slice(hash + 1)]);
+    }
+    return builtins.toolProviderInfo(name);
+  };
+  const seen = new Map<string, string>();
+  for (const step of plan(linked.program, pipeline, { providerInfo }).steps) for (const e of step.effects) if (!seen.has(e.target)) seen.set(e.target, e.effect);
+  return [...seen].map(([target, effect]) => ({ target, effect }));
 }
 
 export interface HostedBuild {
@@ -250,7 +264,7 @@ export function readManifest(dir: string): PackageManifest {
  * hosted pipelines' interfaces. Other packages pack exactly as `pack` does.
  */
 export function packWithHosted(dir: string): Packed & { build?: HostedBuild } {
-  const packed = pack(dir);
+  const packed = packFiles(dir);
   const manifest = packed.pkg.manifest;
   if (!manifest.hosted || packed.pkg.format !== PACKAGE_FORMAT_V2) return packed;
   const build = buildHosted(dir, manifest);
@@ -260,27 +274,15 @@ export function packWithHosted(dir: string): Packed & { build?: HostedBuild } {
   return { bytes, sha256: sha256(bytes), pkg: { ...packed.pkg, files, hosted: build.interfaces }, build };
 }
 
-/** Problems with an already-packed hosted package (a .halotool given to publish). */
+/**
+ * Problems with an already-packed hosted package (a .halotool given to publish): the hosted
+ * part of the check the registry runs (src/registry/check.ts), which publishProblems includes.
+ */
 export function hostedPackageProblems(pkg: PackageData): string[] {
-  const h = pkg.manifest.hosted;
-  if (!h) return [];
-  const problems: string[] = [];
-  for (const name of h.exports) if (!pkg.hosted?.[name]) problems.push(`hosted: no interface for ${name}; pack it with halo pack or halo publish from the package folder`);
-  const text = (p: string) => (pkg.files[p] === undefined ? undefined : Buffer.from(pkg.files[p]!, "base64").toString("utf8"));
-  const shipped = reachableFromExports(pkg.manifest, text);
-  for (const p of Object.keys(pkg.files).filter((f) => f.endsWith(".halo") && !shipped.includes(f))) {
-    problems.push(`${p} isn't reached by exports, so it would be a hosted source; hosted sources must not be in the package`);
-  }
-  for (const p of shipped) {
-    const ast = parse(text(p)!);
-    for (const n of ast.pipelines.map((d) => d.name).filter((n) => h.exports.includes(n))) problems.push(`${p} declares hosted pipeline ${n}; its source must not be in the package`);
-    // Shipped files run on the consumer's machine and keys, hosted package or not.
-    for (const a of ast.agents) {
-      if (a.modelId && !a.modelId.startsWith("models.")) problems.push(`${p}: agent ${a.name} hard-codes the model "${a.modelId}". It ships to consumers and runs on their keys: declare a slot in halo.json "models" and use [models.<slot>] (only hosted sources may name models)`);
-    }
-  }
-  if (!h.auth) problems.push("hosted.auth is required");
-  return problems;
+  if (!pkg.manifest.hosted) return [];
+  const text: Record<string, string> = {};
+  for (const p of Object.keys(pkg.files)) if (p.endsWith(".halo")) text[p] = Buffer.from(pkg.files[p]!, "base64").toString("utf8");
+  return hostedProblems(text, pkg.manifest, pkg.hosted);
 }
 
 /** Lines describing a package's hosted pipelines, for publish --dry-run and pack. */

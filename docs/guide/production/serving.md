@@ -160,6 +160,10 @@ In your Slack app's settings, turn on Interactivity and set its Request URL to `
 
 A [`Slack` tool](../../stdlib/tools.md#slack) that posts `buttons:` during a run also gets its clicks here. Each button carries the run id, how many times the run had paused when it posted, and its label. A click answers only the run's **next** pause after the post, with the label as the answer, and only while the run is waiting there: post the buttons, then `|! yield` or `~> listen`. A click on a button whose pause is over, or that came before the run paused, changes nothing. These buttons never answer a tool-call approval (`waitingFor: "approval"`); use the announcement's buttons or the approval link for those.
 
+## Serving a hosted package
+
+`halo serve --package <dir>` serves the hosted pipelines of a package you publish, on your models and keys, to the people who installed it: exactly the pipelines in its `hosted.exports`, behind the key in `hosted.auth`, checked against the `Halo-Package` version each call sends. See [Hosted packages](../hosted-packages.md).
+
 ## MCP
 
 `/mcp` serves every pipeline as an MCP tool over Streamable HTTP, behind the API token. See [MCP](../integrations/mcp.md#http).

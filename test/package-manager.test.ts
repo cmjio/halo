@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { packageApiPath, packageDocPath, packageFilePath, INDEX_PATH, type PackageDoc, type PackageSummary } from "../src/registry/contract";
-import { exportsOf, pack, PackageError, permissionsOfPackage, publishProblems, readPackage, setExportAnalyzer, sha256 } from "../src/registry/format";
+import { exportsOf, pack, packFiles, PackageError, permissionsOfPackage, publishProblems, readPackage, setExportAnalyzer, sha256 } from "../src/registry/format";
 import { RegistryClient, versionDocOf } from "../src/registry/client";
 import { resolveGraph, ResolveError } from "../src/registry/resolve";
 import { installProject } from "../src/registry/install";
@@ -110,7 +110,9 @@ describe("package files", () => {
 
   test("hosted endpoints and exports' reach count as permissions; the analyzer hook adds the exports' reach", () => {
     const dir = v2({ name: "@t/hosted", version: "1.0.0", hosted: { endpoint: "https://halo.acme.com", auth: { type: "bearer", env: "ACME_HALO_KEY" }, exports: ["Triage"] } });
-    const pkg = pack(dir).pkg;
+    // pack() refuses a hosted package (halo pack / publish use packWithHosted); packFiles packs it as is.
+    expect(() => pack(dir)).toThrow(/pack it with `halo pack` or `halo publish`/);
+    const pkg = packFiles(dir).pkg;
     expect(permissionsOfPackage(pkg)).toEqual({ network: ["halo.acme.com"], env: ["ACME_HALO_KEY"], spawn: [], code: false, hosted: ["halo.acme.com"] });
     expect(exportsOf(pkg).pipelines).toEqual(["Triage"]);
     setExportAnalyzer((files, manifest) => ({ network: ["api.tools.example"], env: ["TOOL_KEY"], spawn: [], code: false, exports: { agents: [`${manifest.name}-agent`] } }));
@@ -137,17 +139,38 @@ describe("package files", () => {
     expect(publishProblems(good)).toEqual([]);
   });
 
-  test("publish checks are the linker's: syntax errors, undeclared slots and uses outside the package fail; hosted packages may name models", () => {
+  test("publish checks are the linker's: syntax errors, undeclared slots, uses outside the package, and models named in shipped files fail", () => {
     const problems = (files: Record<string, string>, extra: Record<string, unknown> = {}) =>
-      publishProblems(pack(v2({ name: "@t/c", version: "1.0.0", exports: ["lib/a.halo"], models: { fast: { description: "d" } }, ...extra }, files)).pkg);
+      publishProblems(packFiles(v2({ name: "@t/c", version: "1.0.0", exports: ["lib/a.halo"], models: { fast: { description: "d" } }, ...extra }, files)).pkg);
     expect(problems({ "lib/a.halo": "pipeline P(x: String) ->\n" }).join("\n")).toContain("lib/a.halo:");
     expect(problems({ "lib/a.halo": "agent A [models.smart]\n" }).join("\n")).toContain(`uses model slot "smart", which halo.json "models" doesn't declare`);
     expect(problems({ "lib/a.halo": `use "../../outside.halo" { X }\n` }).join("\n")).toContain("a package can only use files inside it");
     expect(problems({ "lib/a.halo": `use "@t/other" { X }\n` }).join("\n")).toContain("@t/other is not in the package's dependencies");
     // A private file counts too: every agent in the package runs on the consumer's keys.
     expect(problems({ "lib/a.halo": "agent A [models.fast]\n", "lib/private.halo": "agent B [openai/gpt-4o]\n" }).join("\n")).toContain(`lib/private.halo:1: Agent "B" hard-codes the model "openai/gpt-4o"`);
-    const hosted = { hosted: { endpoint: "https://halo.acme.com", exports: ["P"] } };
-    expect(problems({ "lib/a.halo": "agent B [openai/gpt-4o]\n" }, hosted)).toEqual(["hosted: no interface for P; publish with `halo publish` so it writes one"]);
+    // In a hosted package too: shipped files run on the consumer's keys (only hosted sources, which don't ship, may name models).
+    const hosted = { hosted: { endpoint: "https://halo.acme.com", auth: { type: "bearer", env: "K" }, exports: ["P"] } };
+    const hostedProblems = problems({ "lib/a.halo": "agent B [openai/gpt-4o]\n", "hosted/p.halo": "pipeline P(x: String):\n  x |> System.Print(\"hi\")\n" }, hosted).join("\n");
+    expect(hostedProblems).toContain(`Agent "B" hard-codes the model "openai/gpt-4o"`);
+    expect(hostedProblems).toContain("hosted: no interface for P");
+    expect(hostedProblems).toContain("hosted/p.halo isn't reached by exports, so it would be a hosted source");
+  });
+
+  test("hosted interfaces carry the pipeline's tool effects, and readPackage checks their shape", async () => {
+    const { packWithHosted } = await import("../src/registry/hosted");
+    const dir = v2(
+      { name: "@t/h", version: "1.0.0", exports: ["lib/a.halo"], hosted: { endpoint: "https://halo.t.com", auth: { type: "bearer", env: "T_KEY" }, exports: ["Save"] } },
+      { "lib/a.halo": "schema Note {\n  text: String,\n}\n", "hosted/save.halo": `tool Notes : Workspace("/tmp", write: true)\npipeline Save(text: String) -> Result:\n  text |> Notes.write(path: "n.md", content: text)\n` },
+    );
+    const packed = packWithHosted(dir);
+    expect(packed.pkg.hosted!.Save!.effects).toEqual([{ target: "Notes.write", effect: "write" }]);
+    expect(Object.keys(packed.pkg.files)).not.toContain("hosted/save.halo");
+    expect(readPackage(packed.bytes).hosted!.Save!.effects).toEqual([{ target: "Notes.write", effect: "write" }]);
+    expect(publishProblems(packed.pkg)).toEqual([]);
+    const file = JSON.parse(new TextDecoder().decode(packed.bytes));
+    file.hosted.Save.params = [{ name: 1 }];
+    file.hosted.Save.effects = "write";
+    expect(() => readPackage(new TextEncoder().encode(JSON.stringify(file)))).toThrow(/params must be a list of \{ name, type \} strings[\s\S]*effects must be a list/);
   });
 
   test("the client and the registry Worker run the same check", async () => {
