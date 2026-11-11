@@ -3,9 +3,14 @@
  * time and shown on the package's page and at install. Pure and in memory (the registry
  * Worker runs it too).
  *
- * Only tools declared in the package's .halo files with built-in providers are counted here.
- * The package's own providers (halo.json `providers`) and its dependencies are added by the
- * package manager (permissionsOf in src/registry/manifest.ts).
+ * Tools in the files the package's exports reach are counted: for built-in providers, their
+ * hosts, commands and code; for every tool, the Env variables its declaration reads. Tools on
+ * the package's own providers (halo.json `providers`) or a dependency's are marked `fromPackage`:
+ * the package manager adds what those reach (permissionsOf in src/registry/manifest.ts).
+ *
+ * It also checks the package's rules: every agent in any .halo file uses a declared model slot
+ * (unless the package is hosted), exported files don't declare the same name twice, and `use`
+ * only names files inside the package or packages in its dependencies.
  */
 
 import { parse } from "../parser/index.js";

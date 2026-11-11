@@ -94,6 +94,54 @@ pipeline Name(arg: Type, other: Type) -> ReturnType:
 
 A pipeline starts with an expression (usually an argument) and continues with stages.
 
+## Files and Packages: `use`
+
+`use` brings names from another `.halo` file, or from an installed package, into a file.
+
+```halo
+use "./shared/policies.halo" { Careful }
+use "@acme/support-kit" { Triage, Triager as AcmeTriager } with models(fast: anthropic/claude-haiku-4-5)
+use "@halo/stripe" { Stripe }
+
+tool Pay : Stripe()
+
+agent Closer [anthropic/claude-sonnet-4-5] equips Pay requires Careful
+
+pipeline Inbox(ticket: String):
+  ticket |> Triage() as triaged |> Closer.reply(context.data.triaged)
+```
+
+- The string is a relative path (`"./x.halo"`, `"../shared/x.halo"`) or a package name (`"@acme/support-kit"`). A bare name like `"stripe"` means `"@halo/stripe"`.
+- `{ Name, Other as Alias }` lists what to import. An imported name works everywhere a local one does: calls, `equips`, `requires`, `tool X : Provider()`, and types.
+- Every top-level declaration in a file is importable. A package exports only what its exported files declare (`exports` in its `halo.json`), plus its tool providers. Its other files are private.
+- Two imports that bring the same name, or an import with the same name as a declaration in the file, is an error. Rename one with `as`.
+- `use` lines can't go round in a circle (`a.halo` uses `b.halo`, which uses `a.halo`). Move what both need into a third file.
+- A `use` with no `{ ... }` imports nothing. It still checks that the file or package is there, and its `with models(...)` still applies.
+- A package can only `use` the packages in its own `dependencies`.
+- Versions live in `halo.json` and `halo.lock`, not in the source.
+- `use` and `with` are soft keywords: they still work as argument names and `as` bindings.
+
+The linker loads a file and everything it uses into one program. Declarations from other files keep their own names inside, so two files (or two packages) can each have a private `Writer` without a clash. Mocks, recordings, `halo plan`, telemetry and errors use the names you see: `"Triager.classify"` in `mocks.json` mocks the package's `Triager`. When two things would show the same name, they show their internal names (`@acme/support-kit#Triager`, `lib/shared#Writer`), and a mock can use those.
+
+Only the file's own pipelines are entry points (`halo run`, `halo serve`, `halo mcp`). Imported pipelines are called from them. `halo serve` links each file, so a pipeline can call a pipeline in another file.
+
+### Model slots
+
+A package's agents don't pick a model. They name a slot, and the program that uses the package fills it:
+
+```halo
+agent Triager [models.fast, temp: 0]
+```
+
+A slot is filled, in order, by:
+
+1. the `with models(...)` of the `use` line that imports the package (for that package's agents only),
+2. `"models"` in the project's `halo.json`: `{ "models": { "fast": "anthropic/claude-haiku-4-5" } }`.
+
+An unfilled slot is an error that names the slot, what the package says it needs, and a model that works. A project's own agents can use `[models.<slot>]` too, filled from `halo.json`. In a package's own `halo.json`, `models` holds `{ "description", "suggested" }` for each slot, and the `suggested` model fills it when the package runs its own tests.
+
+A binding can name a slot of the program doing the `use`: `with models(fast: models.smart)`.
+
 ## Operators
 
 | Operator | Name | Purpose |
@@ -208,7 +256,7 @@ pipeline ResolveSalesDrop(event: String) -> Diagnosis:
 
 | Editor | Status | Path |
 |---|---|---|
-| VS Code | Highlighting + language server (errors, hover, completion) | `editors/vscode/` |
+| VS Code | Highlighting + language server (errors, hover, completion, go to definition, across `use`) | `editors/vscode/` |
 | Zed | Tree-sitter highlighting | `editors/zed/` |
 | Sublime Text | Highlighting | `editors/sublime/` |
 | JetBrains | Planned | — |
