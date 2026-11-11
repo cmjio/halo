@@ -20,8 +20,8 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { parse } from "../parser/index.js";
-import { validate } from "../parser/validate.js";
+import { checkLinked, entryPipelines } from "../linker/index.js";
+import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
@@ -280,16 +280,20 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   if (!files.length) throw new ServeError(`No .halo files found in ${(options.files ?? ["."]).join(", ")}`);
   for (const file of files) {
     const rel = relative(process.cwd(), file) || file;
-    const ast = parse(await Bun.file(file).text());
+    // Each file is linked with everything it `use`s, so its pipelines can call pipelines in other files.
+    const linked = linkFile(file, options.root ? { root: options.root } : {});
+    const ast = linked.program;
     if (ast.errors.length) throw new ServeError(`${rel} has syntax errors:\n  ${ast.errors.join("\n  ")}`);
-    const errors = validate(ast, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
-    if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${d.line ?? "?"}: ${d.message}`).join("\n  ")}`);
-    if (!ast.pipelines.length) continue;
+    const errors = checkLinked(linked, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
+    const where = (d: { file: string; line?: number }) => `${d.file === resolve(file) ? "" : `${relative(process.cwd(), d.file)}:`}${d.line ?? "?"}`;
+    if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${where(d)}: ${d.message}`).join("\n  ")}`);
+    const own = entryPipelines(ast);
+    if (!own.length) continue;
     const runtime = new HaloRuntime({ logger, ...options.runtime, ...recorder, env, runStore, onEvent }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
-    for (const decl of ast.pipelines) {
+    for (const decl of own) {
       const prev = entries.get(decl.name);
       if (prev) throw new ServeError(`Pipeline "${decl.name}" is declared in both ${prev.file} and ${rel}`);
       entries.set(decl.name, { name: decl.name, file: rel, runtime, decl, ast, path: resolve(file) });

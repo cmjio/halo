@@ -14,6 +14,7 @@ import { AdapterRegistry } from "./runtime/adapter.js";
 import { toolMatches } from "./runtime/policies.js";
 import type { ProviderInfo, ToolEffect, ToolMethod } from "./runtime/tools.js";
 import { stageLabel } from "./parser/labels.js";
+import { displayText } from "./linker/names.js";
 
 export interface PlanStep {
   /** e.g. "3" or "3.1" for a stage inside a called pipeline. */
@@ -220,13 +221,21 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   const callers = new Set(steps.filter((s) => s.agent).map((s) => s.agent!));
   const limitOf = (name: string) => Math.min(...spendLimits.filter((l) => l.agent === name).map((l) => l.limit));
   const cappedAt = callers.size && [...callers].every((a) => Number.isFinite(limitOf(a))) ? Math.max(...[...callers].map(limitOf)) : undefined;
+  // A linked program's imported pipelines, agents and tools have internal names: show the names people know.
+  const show = (s: string) => displayText(ast.names, s);
   return {
-    pipeline: pipelineName,
-    steps,
+    pipeline: show(pipelineName),
+    steps: steps.map((s) => ({
+      ...s,
+      label: show(s.label),
+      ...(s.agent ? { agent: show(s.agent) } : {}),
+      effects: s.effects.map((e) => ({ ...e, target: show(e.target), ...(e.via ? { via: show(e.via) } : {}), ...(e.approval ? { approval: show(e.approval) } : {}) })),
+      notes: s.notes.map(show),
+    })),
     maxCost,
     cappedAt,
     costNote: unbounded ? "depends on how many items `each` gets" : costs.length < steps.filter((s) => s.kind === "model" || s.kind === "agent-tools").length ? "some models have no price list" : undefined,
-    spendLimits,
+    spendLimits: spendLimits.map((l) => ({ ...l, agent: show(l.agent), policy: show(l.policy) })),
   };
 }
 

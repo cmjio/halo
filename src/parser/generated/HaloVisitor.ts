@@ -8,6 +8,9 @@ import { DeclarationContext } from "./HaloParser.js";
 import { NameContext } from "./HaloParser.js";
 import { DottedIdContext } from "./HaloParser.js";
 import { PathPartContext } from "./HaloParser.js";
+import { UseDeclContext } from "./HaloParser.js";
+import { UseItemContext } from "./HaloParser.js";
+import { ModelBindingContext } from "./HaloParser.js";
 import { PolicyDeclContext } from "./HaloParser.js";
 import { PolicyRuleContext } from "./HaloParser.js";
 import { ToolDeclContext } from "./HaloParser.js";
@@ -100,6 +103,24 @@ export class HaloVisitor<Result> extends AbstractParseTreeVisitor<Result> {
      * @return the visitor result
      */
     visitPathPart?: (ctx: PathPartContext) => Result;
+    /**
+     * Visit a parse tree produced by `HaloParser.useDecl`.
+     * @param ctx the parse tree
+     * @return the visitor result
+     */
+    visitUseDecl?: (ctx: UseDeclContext) => Result;
+    /**
+     * Visit a parse tree produced by `HaloParser.useItem`.
+     * @param ctx the parse tree
+     * @return the visitor result
+     */
+    visitUseItem?: (ctx: UseItemContext) => Result;
+    /**
+     * Visit a parse tree produced by `HaloParser.modelBinding`.
+     * @param ctx the parse tree
+     * @return the visitor result
+     */
+    visitModelBinding?: (ctx: ModelBindingContext) => Result;
     /**
      * Visit a parse tree produced by `HaloParser.policyDecl`.
      * @param ctx the parse tree

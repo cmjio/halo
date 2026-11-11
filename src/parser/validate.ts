@@ -44,6 +44,8 @@ export interface Diagnostic {
   column?: number;
   /** The text the problem is about (a type or field name), on or after `line`, so editors can underline it. */
   token?: string;
+  /** The file it's in, for a linked program (from the declaration's `loc.file`). */
+  file?: string;
 }
 
 export interface ValidateOptions {
@@ -80,7 +82,7 @@ class Validator {
   }
 
   private add(severity: Diagnostic["severity"], message: string, loc?: Loc, token?: string) {
-    this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}), ...(token ? { token } : {}) });
+    this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}), ...(token ? { token } : {}), ...(loc?.file ? { file: loc.file } : {}) });
   }
 
   run(): Diagnostic[] {
@@ -96,7 +98,7 @@ class Validator {
     for (const s of this.ast.pipelines) this.checkPipeline(s);
     const seen = new Set<string>();
     this.diags = this.diags.filter((d) => {
-      const key = `${d.severity}|${d.line}|${d.message}`;
+      const key = `${d.severity}|${d.file ?? ""}|${d.line}|${d.message}`;
       return !seen.has(key) && !!seen.add(key);
     });
     return this.diags.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
@@ -651,7 +653,7 @@ export function producedKeys(stage: PipelineStage): string[] {
     case "each":
       return [...callKeys(stage.call), ...(stage.bind ? [stage.bind] : [])];
     case "loop":
-      return [stage.target, ...(stage.bind ? [stage.bind] : [])];
+      return [stage.alias ?? stage.target, ...(stage.bind ? [stage.bind] : [])];
     case "listen":
       return [stage.target.split(".")[0]!, ...(stage.bind ? [stage.bind] : [])];
     case "interrupt":
@@ -670,7 +672,8 @@ function boundNames(stage: PipelineStage): string[] {
 /** A call's result is stored at `context.data.<Callee>.<method>` and `context.data.<method>`. */
 function callKeys(call: CallStage): string[] {
   if (call.callee === "System" || (call.callee === "Thread" && includes(THREAD_METHODS, call.method))) return [];
-  return call.method ? [call.callee, call.method] : [call.callee];
+  const callee = call.alias ?? call.callee;
+  return call.method ? [callee, call.method] : [callee];
 }
 
 const UNSAFE_NAMES = new Set(["__proto__", "prototype", "constructor"]);
