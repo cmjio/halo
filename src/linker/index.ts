@@ -73,11 +73,27 @@ export interface LinkedProgram {
   packages: ResolvedPackage[];
   /** Qualified internal name → display name (same object as program.names). */
   names: Record<string, string>;
+  /** The names the entry file imports, by local name: what each is and where it's declared (for editors). */
+  imports: Record<string, ImportedName>;
   /** False when there are syntax errors or link errors. */
   ok: boolean;
 }
 
-type Kind = "pipeline" | "agent" | "tool" | "store" | "schema" | "policy" | "provider";
+export interface ImportedName {
+  /** The name it's declared as (before any `as`). */
+  name: string;
+  /** Its internal name in the linked program. */
+  qualified: string;
+  kind: Kind;
+  /** The `use` line's string: "./shared.halo" or "@acme/support-kit". */
+  from: string;
+  /** Where it's declared (a package provider: the package's halo.json). */
+  file?: string;
+  line?: number;
+  column?: number;
+}
+
+export type Kind = "pipeline" | "agent" | "tool" | "store" | "schema" | "policy" | "provider";
 
 interface Sym {
   qualified: string;
@@ -118,6 +134,11 @@ const isRelative = (s: string) => s.startsWith("./") || s.startsWith("../");
 /** Link an entry file and everything it uses. See the module comment. */
 export function link(entry: string, options: LinkOptions): LinkedProgram {
   return new Linker(entry, options).run();
+}
+
+/** The names `use "<source>" { ... }` in the file `from` could import, with their kinds (for editors). */
+export function importableNames(from: string, source: string, options: LinkOptions): Array<{ name: string; kind: Kind }> {
+  return new Linker(from, options).importable(source);
 }
 
 /** The pipelines that are the program's entry points: the entry file's own (not imported ones). */
@@ -178,7 +199,26 @@ class Linker {
     const files: LinkedFile[] = this.order.map((u) => ({ path: u.path, ...(u.pkg ? { package: u.pkg.name, exported: u.exported } : {}) }));
     const packages = [...this.packages.values()].filter((p): p is PackageState => !!p).map((p) => p.resolved);
     const ok = !program.errors.length && !this.diagnostics.some((d) => d.severity === "error");
-    return { entry: this.entry, program, diagnostics: this.diagnostics, files, packages, names: program.names!, ok };
+    const imports: Record<string, ImportedName> = {};
+    for (const [local, s] of this.units.get(this.entry)?.imports ?? []) {
+      imports[local] = { name: s.name, qualified: s.qualified, kind: s.kind, from: s.from, ...(s.file ? { file: s.file } : {}), ...(s.loc ? { line: s.loc.line, column: s.loc.column } : {}) };
+    }
+    return { entry: this.entry, program, diagnostics: this.diagnostics, files, packages, names: program.names!, imports, ok };
+  }
+
+  /** What `use "<src>" { ... }` in the entry file could import (for editors' completions). */
+  importable(src: string): Array<{ name: string; kind: Kind }> {
+    const unit: Unit = { path: this.entry, rel: relativePath(this.root, this.entry), prefix: null, exported: false, ast: parse(""), own: new Map(), imports: new Map() };
+    this.units.set(this.entry, unit);
+    let syms: Iterable<Sym> = [];
+    if (isRelative(src)) {
+      const target = joinPath(dirnameOf(this.entry), src);
+      const t = target === this.entry ? undefined : this.load(target, undefined, relativePath(this.root, target));
+      syms = t?.own.values() ?? [];
+    } else if (parsePackageName(normalizePackageName(src))) {
+      syms = this.loadPackage(normalizePackageName(src), unit, { source: src })?.exports.values() ?? [];
+    }
+    return [...syms].map((s) => ({ name: s.name, kind: s.kind }));
   }
 
   // ── Loading ──

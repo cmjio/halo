@@ -8,7 +8,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { installedResolver } from "../registry/resolver.js";
 import type { ModelSlot, PackageResolver } from "../registry/contract.js";
-import { link, type LinkedProgram } from "./index.js";
+import { link, type LinkedProgram, type LinkOptions } from "./index.js";
 
 export interface LinkFileOptions {
   /** The project folder (halo.json, .halo/packages). Default: the nearest folder up from the file with a halo.json, else the file's folder. */
@@ -50,15 +50,19 @@ export function readTextFile(path: string): string | undefined {
   }
 }
 
-/** Link a .halo file from disk. */
-export function linkFile(file: string, options: LinkFileOptions = {}): LinkedProgram {
-  const path = resolve(file);
-  const root = resolve(options.root ?? projectRoot(path));
+/** Link options that read from disk, for a file in a project. */
+export function diskLinkOptions(file: string, options: LinkFileOptions = {}): LinkOptions {
+  const root = resolve(options.root ?? projectRoot(resolve(file)));
   const overrides = options.overrides instanceof Map ? options.overrides : new Map(Object.entries(options.overrides ?? {}));
-  return link(path, {
+  return {
     readFile: (p) => overrides.get(p) ?? readTextFile(p),
     resolver: options.resolver ?? installedResolver(root),
     projectModels: options.projectModels ?? projectModels(root),
     root,
-  });
+  };
+}
+
+/** Link a .halo file from disk. */
+export function linkFile(file: string, options: LinkFileOptions = {}): LinkedProgram {
+  return link(resolve(file), diskLinkOptions(file, options));
 }
