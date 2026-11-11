@@ -151,7 +151,7 @@ In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a 
 
 `halo serve` turns a folder of pipelines into a service, in one Bun process:
 
-- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), cron schedules, and watches (a URL, file, or command's output changed)
+- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), cron schedules (in any time zone, safe across restarts and clock changes, with catch-up after downtime), and watches (a URL, file, or command's output changed)
 - **Approvals**: when a run pauses at `|! yield` or for a tool call, it gets a signed approve/reject link, logged and optionally posted to Slack, with Approve/Reject buttons when you give it your Slack app's signing secret. Paused runs survive restarts
 - **MCP** at `/mcp`: every pipeline as a tool for Claude, Cursor, and other MCP clients, behind the API token
 - **Halo Studio** at `/`: start runs, watch them, and approve paused ones
@@ -159,6 +159,7 @@ In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a 
 ```json
 // halo.json (optional)
 {
+  "timezone": "America/New_York",
   "schedules": [{ "pipeline": "TriageIssues", "cron": "0 9 * * 1-5", "args": { "repo": "acme/api", "limit": 10 } }],
   "webhooks": [{ "path": "github", "pipeline": "TriageIssues", "secret": "Env.GITHUB_WEBHOOK_SECRET" }],
   "notify": { "slack": "Env.SLACK_WEBHOOK_URL" },

@@ -51,7 +51,7 @@ interface PipelineInfo {
   name: string;
   file: string;
   params: Array<{ name: string; type: string }>;
-  schedules: Array<{ cron: string; next?: string }>;
+  schedules: Array<{ cron: string; tz?: string; next?: string }>;
   webhooks: string[];
 }
 
@@ -91,7 +91,7 @@ function PipelineItem({ p, onStarted }: { p: PipelineInfo; onStarted: (runId: st
       </div>
       {(p.schedules.length > 0 || p.webhooks.length > 0) && (
         <div className="pipeline-triggers">
-          {p.schedules.map((s) => <span key={s.cron}><IconClock size={13} stroke={2} className="ti" /> {s.cron}</span>)}
+          {p.schedules.map((s) => <span key={s.cron}><IconClock size={13} stroke={2} className="ti" /> {s.cron}{s.tz ? ` ${s.tz}` : ""}</span>)}
           {p.webhooks.map((w) => <span key={w}><IconArrowForward size={13} stroke={2} className="ti" /> {w}</span>)}
         </div>
       )}

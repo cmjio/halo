@@ -12,7 +12,7 @@ Halo is serving 3 pipeline(s) at http://127.0.0.1:8080
   Studio     http://127.0.0.1:8080/
   API        POST http://127.0.0.1:8080/api/pipelines/<name>/runs  {"args": {...}}
   Webhook    POST http://127.0.0.1:8080/hooks/github → TriageIssues
-  Schedule   0 9 * * 1-5 → TriageIssues (next 11/3/2026, 9:00:00 AM)
+  Schedule   0 9 * * 1-5 America/New_York → TriageIssues (next 11/3/2026, 9:00:00 AM)
 ```
 
 Every file must validate, and pipeline names must be unique across the files you serve.
@@ -26,6 +26,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
   "files": ["workflows/"],
   "port": 8080,
   "publicUrl": "https://halo.example.com",
+  "timezone": "America/New_York",
   "schedules": [
     { "pipeline": "TriageIssues", "cron": "0 9 * * 1-5", "args": { "repo": "acme/api", "limit": 10 } }
   ],
@@ -46,26 +47,49 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `port`, `host` | Where to listen. Default `127.0.0.1:8080`. `PORT` and `HALO_HOST` in the environment win over these, and `--port` and `--host` win over everything (see [On a hosting platform](#on-a-hosting-platform)) |
 | `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one |
 | `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used, then the address Render, Railway or Fly gives the app |
-| `schedules` | Start `pipeline` with `args` on a cron schedule |
+| `timezone` | The IANA time zone schedules run in unless they name their own `tz`, e.g. `"Europe/London"`. Default: the server's, which is usually UTC in a container |
+| `schedules` | Start `pipeline` with `args` on a cron schedule (see [Schedules](#schedules)) |
 | `webhooks` | `POST /hooks/<path>` starts `pipeline` |
 | `watches` | Start `pipeline` when a URL, file, or command's output changes |
 | `notify.slack` | A Slack incoming-webhook URL to announce paused runs |
 | `slack.signingSecret` | Your Slack app's signing secret. Adds Approve / Reject buttons to the announcements, answered at `POST /slack/actions`. If it names a variable that is empty or not set, the server refuses to start |
 | `mcp` | `false` turns off the MCP endpoint at `/mcp`. Default on |
-| `stateDir` | Where telemetry, paused runs, watch readings, and the link-signing secret are kept. Default `.halo` |
+| `stateDir` | Where telemetry, paused runs, schedule and watch state, and the link-signing secret are kept. Default `.halo` |
 | `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted |
 | `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
 | `registry` | The tool package registry for `halo add` and `halo search` (not used by `halo serve` itself; see [Tool Packages](../tool-packages.md)) |
 
 ### Schedules
 
-Standard 5-field cron in the server's local time: minute, hour, day of month, month, day of week. Fields take `*`, numbers, ranges (`1-5`), lists (`1,15`), steps (`*/15`), and names (`jan`, `mon`). When day of month and day of week are both set, a day matches if either does.
+```json
+"timezone": "Europe/London",
+"schedules": [
+  { "pipeline": "NightlyReorder", "cron": "0 2 * * *", "tz": "America/Los_Angeles", "catchup": "6h" },
+  { "pipeline": "OptimizeHVAC", "cron": "*/15 * * * *", "args": { "campus": "lakeside" }, "catchup": "none" }
+]
+```
+
+| Key | Meaning |
+|---|---|
+| `pipeline`, `args` | The pipeline to start, and its arguments |
+| `cron` | Standard 5-field cron: minute, hour, day of month, month, day of week. Fields take `*`, numbers, ranges (`1-5`), lists (`1,15`), steps (`*/15`), and names (`jan`, `mon`). When day of month and day of week are both set, a day matches if either does |
+| `tz` | The IANA time zone the cron is read in. Default: `timezone`, else the server's |
+| `overlap` | `"skip"` (default): while this schedule's last run is still running, or paused waiting for an answer, a due run is skipped (and a paused run's notice is sent again). `"allow"` starts it anyway |
+| `catchup` | How late a missed run may still start, e.g. `"30m"` or `"24h"`. Default `"1h"`. `"none"` never starts a run late |
 
 | Expression | Runs |
 |---|---|
 | `0 9 * * 1-5` | 9:00 on weekdays |
 | `*/15 * * * *` | every 15 minutes |
 | `30 8 1 * *` | 8:30 on the 1st of each month |
+
+**Restarts and outages.** `halo serve` records each schedule's last run in `<stateDir>/schedules.json`. A restart never runs the same slot twice. When the server was stopped or asleep through a slot, it runs the most recent missed one **once**, if that was due within `catchup`, and logs how many it missed. It never replays every missed slot, so a server that was down for a week doesn't start 672 runs of a 15-minute job. A schedule that's new to the state folder doesn't catch up on slots from before it existed.
+
+**Clock changes** follow Vixie cron. A fixed time that doesn't exist on the day clocks go forward (`30 2 * * *` in most of the US and Europe) runs once at the jump, and one that happens twice when they go back runs once, the first time. A job whose minute or hour starts with `*` (`*/15 * * * *`, `0 * * * *`) follows real time, so it runs in both copies of a repeated hour.
+
+**Only one server runs the schedules.** The first `halo serve` on a state folder takes `<stateDir>/scheduler.lock`. Another one on the same folder serves the API but doesn't start scheduled runs, and takes over when the first stops (or is gone for more than about two minutes). Servers with separate state folders, such as two machines or two containers without a shared volume, each run every schedule.
+
+`GET /api/pipelines` lists each pipeline's schedules with their zone, next run, `lastStatus`, and how many runs were `skipped` and `missed`.
 
 ### Webhooks
 
@@ -146,7 +170,7 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 
 | Request | Does |
 |---|---|
-| `GET /api/pipelines` | Pipelines with their parameters, schedules (and next run), and webhooks |
+| `GET /api/pipelines` | Pipelines with their parameters, webhooks, and schedules: each one's `cron`, `tz`, `next` run, `lastSlot`, `lastRunId`, `lastStatus`, and how many runs were `skipped` and `missed` |
 | `POST /api/pipelines/<name>/runs` | Start a run. Body `{"args": {...}}`; returns `202 {"runId"}`. Add `"wait": true` to wait and get `status` and `output` |
 | `GET /api/runs` | Recent runs: pipeline, status, duration, cost |
 | `GET /api/runs/<id>` | A run's events, and `paused` (`waitingFor`, `message`, `approveUrl`) while it waits |
@@ -185,4 +209,6 @@ Render, Railway, Heroku, Cloud Run, Fly and similar hosts set `PORT` and expect 
 - `PORT` sets the port, over `halo.json`'s `port`. `--port` still wins.
 - When `PORT` is set and nothing names a host, it listens on `0.0.0.0`. That needs `HALO_SERVE_TOKEN`, as any address but localhost does, and it refuses to start without one. Set `HALO_HOST=127.0.0.1` to keep it local, for example behind a sidecar proxy.
 - Approval links use `publicUrl`, then `HALO_PUBLIC_URL`, then the address the platform gives the app: `RENDER_EXTERNAL_URL` on Render, `https://$RAILWAY_PUBLIC_DOMAIN` on Railway, `https://$FLY_APP_NAME.fly.dev` on Fly. With none of them, it warns at startup that links will point at an address people can't open.
-- Paused runs are files in `stateDir` (`.halo`). On a host without a persistent disk they're lost when the app restarts, so attach a volume at `/app/.halo` (Fly volumes, Render disks, Railway volumes).
+- Paused runs and schedule state are files in `stateDir` (`.halo`). On a host without a persistent disk they're lost when the app restarts, so attach a volume at `/app/.halo` (Fly volumes, Render disks, Railway volumes). Without one, a restart forgets which scheduled runs already happened and which are still paused.
+- Containers run in UTC. Set `timezone` in `halo.json` (or `tz` on a schedule) so `0 9 * * 1-5` means 9:00 where your users are.
+- Run one instance, or give every instance the same volume. Instances with their own `stateDir` each run every schedule.

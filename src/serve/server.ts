@@ -17,7 +17,8 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { parse } from "../parser/index.js";
 import { validate } from "../parser/validate.js";
@@ -26,7 +27,8 @@ import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
 import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
-import { cronMatches, nextRun, parseCron, type CronSchedule } from "./cron.js";
+import { checkTimeZone, CronError, nextSlot, parseCron, slotsBetween, type CronSchedule } from "./cron.js";
+import { parseDuration } from "../parser/builtins.js";
 import { createMcpServer } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
@@ -46,7 +48,9 @@ export interface ServeConfig {
   token?: string;
   /** Base URL for approval links, e.g. https://halo.example.com, or "Env.X". Default: HALO_PUBLIC_URL, else the server's own address. */
   publicUrl?: string;
-  schedules?: Array<{ pipeline: string; cron: string; args?: Record<string, unknown> }>;
+  /** IANA time zone for schedules that don't name one, e.g. "Europe/London". Default: the server's. */
+  timezone?: string;
+  schedules?: ScheduleConfig[];
   /** POST /hooks/<path> starts <pipeline>. With a secret, requests must carry it (or a GitHub signature). */
   webhooks?: Array<{ path: string; pipeline: string; secret?: string }>;
   /** Where to announce paused runs: a Slack incoming-webhook URL. */
@@ -71,6 +75,55 @@ export interface ServeConfig {
   /** Defaults for `halo evolve` and Studio's Evolve tab. */
   evolve?: EvolveConfig;
 }
+
+/** One entry of halo.json `schedules`. */
+export interface ScheduleConfig {
+  pipeline: string;
+  /** 5-field cron: minute hour day-of-month month day-of-week. */
+  cron: string;
+  args?: Record<string, unknown>;
+  /** IANA time zone. Default: `timezone`, else the server's. */
+  tz?: string;
+  /** While this schedule's last run is still running or paused: "skip" the slot (default) or "allow" another run. */
+  overlap?: "skip" | "allow";
+  /** How late a missed slot may still run, once, e.g. "1h" (default) or "24h"; "none" never runs late. */
+  catchup?: string;
+}
+
+/** A schedule as `halo serve` sees it: its config, its next slot, and what happened last. */
+export interface ScheduleInfo {
+  pipeline: string;
+  cron: string;
+  /** The zone it runs in (the server's, by name, when the config names none). */
+  tz: string;
+  next?: string;
+  lastSlot?: string;
+  lastRunId?: string;
+  lastStatus?: string;
+  skipped: number;
+  missed: number;
+}
+
+/** What `halo serve` keeps per schedule in <stateDir>/schedules.json, so restarts neither repeat nor forget. */
+interface ScheduleState {
+  /** When the schedule was first seen (it never catches up on slots before this). */
+  since?: string;
+  /** The last slot handled: run, skipped, or missed. */
+  lastSlot?: string;
+  lastRunId?: string;
+  lastStatus?: string;
+  lastStartedAt?: string;
+  skipped: number;
+  missed: number;
+}
+
+const MINUTE = 60_000;
+/** A slot this late is still on time (a slow timer, a restart within the minute). */
+const ON_TIME = 90_000;
+/** How far back a restart looks for missed slots to count. */
+const MISSED_LOOKBACK = 31 * 24 * 60 * MINUTE;
+/** A scheduler lock without a heartbeat for this long is abandoned. */
+const LOCK_STALE = 150_000;
 
 export interface ServeOptions extends ServeConfig {
   env?: Record<string, string | undefined>;
@@ -104,8 +157,13 @@ export interface HaloServer {
   url: string;
   port: number;
   pipelines: string[];
-  /** Run schedules that are due in the minute containing `now`. */
+  /**
+   * Run the schedules due at `now`, and (once each) a missed slot still within its catch-up window.
+   * Returns the ids of the runs started. Only the process holding the state folder's scheduler lock starts any.
+   */
   tick(now?: Date): string[];
+  /** Every schedule with its zone, next slot, and last outcome. */
+  schedules(): ScheduleInfo[];
   /** Check every watch now; resolves with the runs started by changes. */
   checkWatches(): Promise<string[]>;
   /** Start a run as the API would; resolves with its id. */
@@ -138,6 +196,16 @@ function collectHaloFiles(targets: string[]): string[] {
 function safeEqual(a: string, b: string): boolean {
   const [x, y] = [Buffer.from(a), Buffer.from(b)];
   return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function pidAlive(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code === "EPERM";
+  }
 }
 
 function json(body: unknown, status = 200): Response {
@@ -235,11 +303,43 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   };
 
   // ── Triggers from config ──
-  const schedules: Array<{ pipeline: string; cron: CronSchedule; args: Record<string, unknown>; last?: string }> = [];
+  const schedules: Array<{ key: string; label: string; pipeline: string; cron: CronSchedule; tz?: string; args: Record<string, unknown>; overlap: "skip" | "allow"; catchupMs: number }> = [];
   for (const s of options.schedules ?? []) {
     entry(s.pipeline);
-    schedules.push({ pipeline: s.pipeline, cron: parseCron(s.cron), args: s.args ?? {} });
+    const tz = s.tz ?? options.timezone;
+    const where = `Schedule "${s.cron}" for ${s.pipeline}`;
+    let cron: CronSchedule;
+    try {
+      cron = parseCron(s.cron);
+      if (tz) checkTimeZone(tz);
+    } catch (err) {
+      throw new ServeError(`${where}: ${err instanceof CronError ? err.message : err}`);
+    }
+    if (s.overlap !== undefined && s.overlap !== "skip" && s.overlap !== "allow") throw new ServeError(`${where}: overlap must be "skip" or "allow" (got "${s.overlap}")`);
+    const catchupMs = s.catchup === "none" ? 0 : parseDuration(s.catchup ?? "1h");
+    if (!(catchupMs >= 0)) throw new ServeError(`${where}: catchup must be "none" or a duration like 30m or 24h (got "${s.catchup}")`);
+    const key = `${s.pipeline} ${cron.source.trim().split(/\s+/).join(" ")}${tz ? ` ${tz}` : ""}`;
+    if (schedules.some((x) => x.key === key)) throw new ServeError(`${where} is listed twice`);
+    schedules.push({ key, label: `"${cron.source}"${tz ? ` (${tz})` : ""}`, pipeline: s.pipeline, cron, tz, args: s.args ?? {}, overlap: s.overlap ?? "skip", catchupMs });
   }
+  const scheduleFile = join(stateDir, "schedules.json");
+  let scheduleState: Record<string, ScheduleState> = {};
+  try {
+    if (existsSync(scheduleFile)) scheduleState = JSON.parse(readFileSync(scheduleFile, "utf8"));
+  } catch (err) {
+    logger.warn(`[halo] ${scheduleFile} could not be read, so schedules start fresh: ${err instanceof Error ? err.message : err}`);
+  }
+  const saveSchedules = () => {
+    try {
+      writeFileSync(`${scheduleFile}.tmp`, JSON.stringify(scheduleState, null, 2));
+      renameSync(`${scheduleFile}.tmp`, scheduleFile);
+    } catch (err) {
+      logger.error(`[halo] could not save ${scheduleFile}: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+  const stateOf = (key: string) => (scheduleState[key] ??= { skipped: 0, missed: 0 });
+  /** Which schedule started each run, so its outcome is recorded when the run ends (again, after a resume). */
+  const scheduledRuns = new Map<string, string>();
   const webhooks = new Map<string, { pipeline: string; secret?: string }>();
   for (const w of options.webhooks ?? []) {
     entry(w.pipeline);
@@ -281,11 +381,13 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
       (r) => {
         logger.log(`[halo] ${label} ${r.status} (run ${runId.slice(0, 8)})`);
         remember(runId, r);
+        scheduledRunEnded(runId, r.status);
         return r;
       },
       (err: unknown) => {
         logger.error(`[halo] ${label} failed (run ${runId.slice(0, 8)}): ${err instanceof Error ? err.message : err}`);
         remember(runId, undefined);
+        scheduledRunEnded(runId, "error");
         return undefined;
       },
     );
@@ -328,6 +430,14 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   }
 
   const settled = (runId: string) => inflight.get(runId) ?? Promise.resolve(recent.get(runId));
+
+  function scheduledRunEnded(runId: string, status: string) {
+    const key = scheduledRuns.get(runId);
+    const st = key ? scheduleState[key] : undefined;
+    if (!st || st.lastRunId !== runId) return;
+    st.lastStatus = status;
+    saveSchedules();
+  }
 
   /**
    * Claim a paused run and continue it. Resolves once the claim succeeds (the
@@ -417,20 +527,109 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   };
   const checkWatches = async () => (await Promise.all(watches.map(checkWatch))).filter((id): id is string => !!id);
 
-  const tick = (now = new Date()) => {
-    const minute = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()} ${now.getHours()}:${now.getMinutes()}`;
-    const started: string[] = [];
-    for (const s of schedules) {
-      if (s.last === minute || !cronMatches(s.cron, now)) continue;
-      s.last = minute;
-      try {
-        started.push(start(s.pipeline, s.args, `schedule "${s.cron.source}"`));
-      } catch (err) {
-        logger.error(`[halo] schedule "${s.cron.source}" could not start ${s.pipeline}: ${err instanceof Error ? err.message : err}`);
+  // ── Scheduler ──
+  // One `halo serve` per state folder runs the schedules; another one serves the API but doesn't fire them.
+  const lockFile = join(stateDir, "scheduler.lock");
+  const lockOwner = crypto.randomUUID();
+  let lockHeldBy: string | undefined;
+  const claimLock = (): boolean => {
+    let lock: { owner?: string; pid?: number; host?: string; processStart?: number; heartbeat?: number } | undefined;
+    try {
+      lock = existsSync(lockFile) ? JSON.parse(readFileSync(lockFile, "utf8")) : undefined;
+    } catch {}
+    if (lock?.owner && lock.owner !== lockOwner && Date.now() - (lock.heartbeat ?? 0) < LOCK_STALE) {
+      // A process on this machine that has exited (or whose pid now belongs to us after a restart) holds nothing.
+      const sameHost = lock.host === hostname();
+      const restarted = sameHost && lock.pid === process.pid && Math.abs((lock.processStart ?? 0) - performance.timeOrigin) > 1000;
+      if (!sameHost || (!restarted && pidAlive(lock.pid))) {
+        if (lockHeldBy !== lock.owner) logger.warn(`[halo] Another halo serve (pid ${lock.pid} on ${lock.host}) runs the schedules for ${stateDir}; this one won't until it stops.`);
+        lockHeldBy = lock.owner;
+        return false;
       }
     }
+    if (lockHeldBy && lockHeldBy !== lockOwner) logger.log(`[halo] Taking over the schedules for ${stateDir}`);
+    lockHeldBy = lockOwner;
+    try {
+      writeFileSync(`${lockFile}.${lockOwner}`, JSON.stringify({ owner: lockOwner, pid: process.pid, host: hostname(), processStart: performance.timeOrigin, heartbeat: Date.now() }));
+      renameSync(`${lockFile}.${lockOwner}`, lockFile);
+    } catch (err) {
+      logger.error(`[halo] could not write ${lockFile}: ${err instanceof Error ? err.message : err}`);
+    }
+    return true;
+  };
+
+  /** A run is active while it is running, or paused (its snapshot is in the run store). */
+  const active = (runId: string) => inflight.has(runId) || existsSync(join(stateDir, "runs", `${runId}.json`));
+  /** The minute up to which each schedule's slots have been handled by this process. */
+  const checked = new Map<string, number>();
+
+  const tick = (now = new Date()) => {
+    const started: string[] = [];
+    if (!schedules.length || !claimLock()) return started;
+    const t = now.getTime();
+    const minute = Math.floor(t / MINUTE) * MINUTE;
+    let dirty = false;
+    for (const s of schedules) {
+      const st = stateOf(s.key);
+      if (!st.since) {
+        // New schedules don't catch up on slots from before they existed.
+        st.since = new Date(t - ON_TIME).toISOString();
+        dirty = true;
+      }
+      const from = Math.max(Date.parse(st.lastSlot ?? st.since), checked.get(s.key) ?? -Infinity, minute - MISSED_LOOKBACK);
+      checked.set(s.key, minute);
+      if (from >= minute) continue;
+      const slots = slotsBetween(s.cron, from, minute, s.tz);
+      const slot = slots.at(-1);
+      if (slot === undefined) continue;
+      const late = t - slot;
+      const tooLate = late > Math.max(s.catchupMs, ON_TIME);
+      const missed = slots.length - 1 + (tooLate ? 1 : 0);
+      st.lastSlot = new Date(slot).toISOString();
+      dirty = true;
+      if (missed) {
+        st.missed += missed;
+        logger.warn(`[halo] Schedule ${s.label} → ${s.pipeline} missed ${missed} run(s) while the server was stopped or asleep (the latest was due ${new Date(tooLate ? slot : slots.at(-2)!).toISOString()})`);
+      }
+      if (tooLate) continue;
+      if (s.overlap === "skip" && st.lastRunId && active(st.lastRunId)) {
+        st.skipped++;
+        const paused = !inflight.has(st.lastRunId);
+        logger.warn(`[halo] Schedule ${s.label} → ${s.pipeline} skipped: its last run (${st.lastRunId.slice(0, 8)}) is still ${paused ? "paused, waiting for an answer" : "running"}`);
+        if (paused) void announcePause(st.lastRunId);
+        continue;
+      }
+      try {
+        const runId = start(s.pipeline, s.args, `schedule ${s.label}${late > ON_TIME ? `, ${Math.round(late / MINUTE)}m late` : ""}`);
+        Object.assign(st, { lastRunId: runId, lastStatus: "running", lastStartedAt: now.toISOString() });
+        scheduledRuns.set(runId, s.key);
+        started.push(runId);
+      } catch (err) {
+        st.lastStatus = "error";
+        logger.error(`[halo] schedule ${s.label} could not start ${s.pipeline}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    if (dirty) saveSchedules();
     return started;
   };
+
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const scheduleInfo = (): ScheduleInfo[] =>
+    schedules.map((s) => {
+      const st = scheduleState[s.key];
+      const next = nextSlot(s.cron, Date.now(), s.tz);
+      return {
+        pipeline: s.pipeline,
+        cron: s.cron.source,
+        tz: s.tz ?? localZone,
+        next: next === undefined ? undefined : new Date(next).toISOString(),
+        lastSlot: st?.lastSlot,
+        lastRunId: st?.lastRunId,
+        lastStatus: st?.lastStatus,
+        skipped: st?.skipped ?? 0,
+        missed: st?.missed ?? 0,
+      };
+    });
 
   // ── HTTP ──
   const authorized = (req: Request, url: URL) => {
@@ -679,7 +878,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
               file: e.file,
               params: e.decl.params,
               returnType: e.decl.returnType,
-              schedules: schedules.filter((s) => s.pipeline === e.name).map((s) => ({ cron: s.cron.source, next: nextRun(s.cron, new Date())?.toISOString() })),
+              schedules: scheduleInfo().filter((s) => s.pipeline === e.name),
               webhooks: [...webhooks].filter(([, w]) => w.pipeline === e.name).map(([p]) => `/hooks/${p}`),
             })),
           );
@@ -731,9 +930,10 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     logger.warn(`Approval links will point at ${baseUrl}, which people can't open. Set HALO_PUBLIC_URL (or publicUrl in halo.json) to the address they reach this server at.`);
   }
 
-  // Check schedules at the top of every minute.
+  // Check schedules now (to catch up after a restart), then at the top of every minute.
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (options.scheduler !== false && schedules.length) {
+    tick();
     const arm = () => {
       timer = setTimeout(() => {
         tick();
@@ -751,6 +951,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     port: server.port!,
     pipelines: [...entries.keys()],
     tick,
+    schedules: scheduleInfo,
     checkWatches,
     start,
     settled,
@@ -758,6 +959,11 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     async stop() {
       clearTimeout(timer);
       for (const t of watchTimers) clearInterval(t);
+      if (lockHeldBy === lockOwner) {
+        try {
+          if (JSON.parse(readFileSync(lockFile, "utf8")).owner === lockOwner) rmSync(lockFile);
+        } catch {}
+      }
       await server.stop(true);
       await Promise.allSettled([...inflight.values()]);
       await Promise.all(runtimes.map((r) => r.close()));

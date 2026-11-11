@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CronError, cronMatches, nextRun, parseCron } from "../src/serve/cron";
+import { CronError, checkTimeZone, cronMatches, nextRun, parseCron, slotsBetween } from "../src/serve/cron";
 import { listenAddress, platformPublicUrl, startServer, ServeError, type HaloServer, type ServeOptions } from "../src/serve/server";
 import type { MockRequest } from "../src/runtime/runtime";
 
@@ -34,6 +34,48 @@ describe("cron", () => {
 
   test("nextRun finds the next firing minute", () => {
     expect(nextRun(parseCron("0 9 * * 1-5"), at("2026-11-06T10:00:00"))).toEqual(at("2026-11-09T09:00:00")); // Fri → Mon
+  });
+
+  describe("time zones and clock changes", () => {
+    const LA = "America/Los_Angeles";
+    const slots = (cron: string, from: string, to: string, tz = LA) =>
+      slotsBetween(parseCron(cron), Date.parse(from), Date.parse(to), tz).map((t) => new Date(t).toISOString());
+
+    test("a cron is read in its zone", () => {
+      expect(nextRun(parseCron("0 9 * * *"), new Date("2026-11-11T00:00:00Z"), "Europe/London")).toEqual(new Date("2026-11-11T09:00:00Z"));
+      expect(nextRun(parseCron("0 9 * * *"), new Date("2026-11-11T00:00:00Z"), "Asia/Kolkata")).toEqual(new Date("2026-11-11T03:30:00Z"));
+      expect(nextRun(parseCron("0 9 * * 1-5"), new Date("2026-11-13T18:00:00Z"), LA)).toEqual(new Date("2026-11-16T17:00:00Z")); // Fri 10:00 → Mon 9:00 PST
+    });
+
+    test("a fixed time skipped by spring forward runs once, at the jump", () => {
+      // 8 March 2026: 2:00 PST jumps to 3:00 PDT, so 2:30 never happens.
+      expect(slots("30 2 * * *", "2026-03-07T00:00:00Z", "2026-03-10T00:00:00Z")).toEqual([
+        "2026-03-07T10:30:00.000Z", // 2:30 PST
+        "2026-03-08T10:00:00.000Z", // 3:00 PDT, the first minute after the jump
+        "2026-03-09T09:30:00.000Z", // 2:30 PDT
+      ]);
+      expect(slots("0 3 * * *", "2026-03-08T00:00:00Z", "2026-03-09T00:00:00Z")).toEqual(["2026-03-08T10:00:00.000Z"]); // not twice
+    });
+
+    test("a fixed time repeated by fall back runs once, the first time", () => {
+      // 1 November 2026: 2:00 PDT falls back to 1:00 PST, so 1:30 happens twice.
+      expect(slots("30 1 * * *", "2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z")).toEqual(["2026-11-01T08:30:00.000Z"]);
+    });
+
+    test("wildcard jobs follow real time through a clock change", () => {
+      expect(slots("*/30 * * * *", "2026-11-01T08:00:00Z", "2026-11-01T10:00:00Z")).toEqual([
+        "2026-11-01T08:30:00.000Z", // 1:30 PDT
+        "2026-11-01T09:00:00.000Z", // 1:00 PST
+        "2026-11-01T09:30:00.000Z", // 1:30 PST
+        "2026-11-01T10:00:00.000Z", // 2:00 PST
+      ]);
+      expect(slots("30 * * * *", "2026-03-08T09:00:00Z", "2026-03-08T11:00:00Z")).toEqual(["2026-03-08T09:30:00.000Z", "2026-03-08T10:30:00.000Z"]); // no 2:30
+    });
+
+    test("an unknown zone is an error", () => {
+      expect(() => checkTimeZone("Mars/Olympus")).toThrow(CronError);
+      expect(() => checkTimeZone("UTC")).not.toThrow();
+    });
   });
 
   test("bad expressions explain what's wrong", () => {
@@ -229,6 +271,125 @@ describe("halo serve", () => {
     } finally {
       await s.stop();
     }
+  });
+
+  describe("schedules across restarts", () => {
+    const at = (s: string) => new Date(s);
+    const sharedState = () => join(mkdtempSync(join(tmp, "state-")), ".halo");
+    const quick = (extra: Record<string, unknown> = {}) => ({ pipeline: "Quick", cron: "*/15 * * * *", args: { n: 1 }, tz: "UTC", ...extra });
+    const info = (s: HaloServer) => s.schedules()[0]!;
+
+    test("a restart in the same minute doesn't run the slot again", async () => {
+      const stateDir = sharedState();
+      const a = await serve({ stateDir, schedules: [quick()] });
+      try {
+        expect(a.tick(at("2026-11-02T09:05:00Z"))).toEqual([]);
+        expect(a.tick(at("2026-11-02T09:15:02Z"))).toHaveLength(1);
+      } finally {
+        await a.stop();
+      }
+      const b = await serve({ stateDir, schedules: [quick()] });
+      try {
+        expect(b.tick(at("2026-11-02T09:15:40Z"))).toEqual([]);
+        expect(b.tick(at("2026-11-02T09:30:00Z"))).toHaveLength(1);
+      } finally {
+        await b.stop();
+      }
+    });
+
+    test("after an outage, the latest missed slot runs once if it's within catchup", async () => {
+      const stateDir = sharedState();
+      const a = await serve({ stateDir, schedules: [quick()] });
+      try {
+        expect(a.tick(at("2026-11-02T09:00:00Z"))).toHaveLength(1);
+        await a.settled(info(a).lastRunId!);
+      } finally {
+        await a.stop();
+      }
+      // Down from 9:00 to 9:50: 9:15, 9:30 and 9:45 were due.
+      const b = await serve({ stateDir, schedules: [quick()] });
+      try {
+        const started = b.tick(at("2026-11-02T09:50:00Z"));
+        expect(started).toHaveLength(1);
+        expect(info(b)).toMatchObject({ lastSlot: "2026-11-02T09:45:00.000Z", missed: 2 });
+        expect(b.tick(at("2026-11-02T09:51:00Z"))).toEqual([]);
+        await b.settled(started[0]!);
+        expect(b.calls).toEqual(["count:1"]);
+        expect(info(b).lastStatus).toBe("completed");
+      } finally {
+        await b.stop();
+      }
+      // With catchup "none", a slot that's already gone is only counted.
+      const c = await serve({ stateDir, schedules: [quick({ catchup: "none" })] });
+      try {
+        expect(c.tick(at("2026-11-02T10:20:00Z"))).toEqual([]);
+        expect(info(c)).toMatchObject({ lastSlot: "2026-11-02T10:15:00.000Z", missed: 4 });
+        expect(c.tick(at("2026-11-02T10:30:01Z"))).toHaveLength(1);
+      } finally {
+        await c.stop();
+      }
+    });
+
+    test("a new schedule doesn't catch up on slots before it existed", async () => {
+      const s = await serve({ schedules: [quick({ catchup: "24h" })] });
+      try {
+        expect(s.tick(at("2026-11-02T09:50:00Z"))).toEqual([]);
+        expect(info(s).missed).toBe(0);
+      } finally {
+        await s.stop();
+      }
+    });
+
+    test("a schedule skips while its last run is paused, unless overlap is allow", async () => {
+      const draft = (overlap: "skip" | "allow") => ({ pipeline: "Draft", cron: "0 * * * *", args: { topic: "tides" }, tz: "UTC", overlap });
+      const stateDir = sharedState();
+      const a = await serve({ stateDir, schedules: [draft("skip")] });
+      try {
+        const [first] = a.tick(at("2026-11-02T09:00:00Z"));
+        expect((await a.settled(first!))?.status).toBe("paused");
+        expect(a.tick(at("2026-11-02T10:00:00Z"))).toEqual([]);
+        expect(info(a)).toMatchObject({ lastRunId: first, lastStatus: "paused", skipped: 1 });
+      } finally {
+        await a.stop();
+      }
+      // The paused run is still in the state folder after a restart, so it still blocks.
+      const b = await serve({ stateDir, schedules: [draft("skip")] });
+      try {
+        expect(b.tick(at("2026-11-02T11:00:00Z"))).toEqual([]);
+        expect(info(b).skipped).toBe(2);
+      } finally {
+        await b.stop();
+      }
+      const c = await serve({ stateDir, schedules: [draft("allow")] });
+      try {
+        expect(c.tick(at("2026-11-02T12:00:00Z"))).toHaveLength(1);
+      } finally {
+        await c.stop();
+      }
+    });
+
+    test("only one server on a state folder runs the schedules", async () => {
+      const stateDir = sharedState();
+      const a = await serve({ stateDir, schedules: [quick({ overlap: "allow" })] });
+      const b = await serve({ stateDir, schedules: [quick({ overlap: "allow" })] });
+      try {
+        a.tick(at("2026-11-02T09:00:00Z"));
+        expect(b.tick(at("2026-11-02T09:15:00Z"))).toEqual([]);
+        expect(a.tick(at("2026-11-02T09:15:00Z"))).toHaveLength(1);
+        await a.stop();
+        expect(b.tick(at("2026-11-02T09:30:00Z"))).toHaveLength(1);
+      } finally {
+        await a.stop().catch(() => {});
+        await b.stop();
+      }
+    });
+
+    test("bad schedule settings stop the server from starting", async () => {
+      await expect(serve({ schedules: [quick({ tz: "Mars/Olympus" })] })).rejects.toThrow('Schedule "*/15 * * * *" for Quick: "Mars/Olympus" is not a time zone');
+      await expect(serve({ schedules: [quick({ catchup: "soon" })] })).rejects.toThrow("catchup must be");
+      await expect(serve({ schedules: [quick({ overlap: "queue" })] })).rejects.toThrow('overlap must be "skip" or "allow"');
+      await expect(serve({ schedules: [quick(), quick()] })).rejects.toThrow("listed twice");
+    });
   });
 
   test("a paused run is announced to Slack with its approval link", async () => {

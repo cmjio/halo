@@ -25,7 +25,6 @@ import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type List
 import { SqliteTelemetry } from "./runtime/telemetry.js";
 import { initProject } from "./init.js";
 import { argsFromBody, listenAddress, loadServeConfig, startServer, ServeError, type ServeConfig } from "./serve/server.js";
-import { nextRun, parseCron } from "./serve/cron.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
@@ -129,7 +128,7 @@ SERVE OPTIONS:
                          or 0.0.0.0 when PORT is set; anything but localhost needs
                          HALO_SERVE_TOKEN)
   --config <file>        Config file (default ./halo.json if present): schedules,
-                         webhooks, notify.slack, publicUrl, files
+                         timezone, webhooks, notify.slack, publicUrl, files
   --no-studio            Don't serve Halo Studio
 
 COMPARE OPTIONS:
@@ -660,12 +659,9 @@ async function cmdServe(flags: Flags): Promise<number> {
   if (!flags.bools.has("no-studio")) console.log(`  Studio     ${server.url}/`);
   console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  {"args": {...}}`);
   for (const w of config.webhooks ?? []) console.log(`  Webhook    POST ${server.url}/hooks/${w.path.replace(/^\/+/, "")} → ${w.pipeline}`);
-  for (const s of config.schedules ?? []) {
-    let next = "";
-    try {
-      next = nextRun(parseCron(s.cron), new Date())?.toLocaleString() ?? "never";
-    } catch {}
-    console.log(`  Schedule   ${s.cron} → ${s.pipeline}${next ? dim(` (next ${next})`) : ""}`);
+  for (const s of server.schedules()) {
+    const next = s.next ? new Date(s.next).toLocaleString("en-US", { timeZone: s.tz }) : "never";
+    console.log(`  Schedule   ${s.cron} ${dim(s.tz)} → ${s.pipeline}${dim(` (next ${next})`)}`);
   }
   console.log(dim("  Paused runs get an approval link (logged here; also sent to notify.slack if set). Ctrl-C to stop.\n"));
 
