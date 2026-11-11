@@ -19,6 +19,8 @@ export interface Violation {
   phase: "input" | "output" | "budget" | "tool";
   /** True when `@correct` sent the answer back and the agent fixed it (set after the fact). */
   corrected?: boolean;
+  /** True when `@cascade` moved the call up to a bigger model because of it (set after the fact). */
+  escalated?: boolean;
 }
 
 export type ToolEffectName = "read" | "write" | "external";

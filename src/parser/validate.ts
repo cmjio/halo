@@ -203,6 +203,20 @@ class Validator {
           this.add("warning", `@shadow(${target}) on "${m.name}": "${target}" is not a defined agent or model, so it will never run`, m.loc);
         }
       }
+      if (d.name === "cascade") {
+        const seen = new Set([m.modelId]);
+        for (const target of d.value ? d.value.split(/\s*,\s*/).filter(Boolean) : []) {
+          const model = this.agents.get(target)?.modelId ?? target;
+          if (!this.agents.has(target) && !/[-/]/.test(target)) {
+            this.add("error", `@cascade(${d.value}) on "${m.name}": "${target}" is not a model id or a defined agent`, m.loc);
+          } else if (seen.has(model)) {
+            this.add("warning", `@cascade on "${m.name}": "${model}" is already ${model === m.modelId ? "the agent's own model" : "earlier in the cascade"}, so it adds nothing`, m.loc);
+          } else if (this.options.canHandleModel && !this.options.canHandleModel(model)) {
+            this.add("warning", `@cascade on "${m.name}": no adapter handles model "${model}"`, m.loc);
+          }
+          seen.add(model);
+        }
+      }
     }
   }
 
@@ -223,6 +237,8 @@ class Validator {
     }
     if (d.name === "shadow" && args.length !== 1) this.add("error", `@shadow needs exactly one target`, loc);
     if (d.name === "shadow" && on === "pipeline") this.add("warning", `@shadow only applies to agents`, loc);
+    if (d.name === "cascade" && !args.length) this.add("error", `@cascade needs at least one model to move up to, e.g. @cascade(anthropic/claude-opus-4-5)`, loc);
+    if (d.name === "cascade" && on === "pipeline") this.add("warning", `@cascade only applies to agents`, loc);
     if (d.name === "checkpoint" && on === "agent") this.add("warning", `@checkpoint only applies to pipelines`, loc);
     if (d.name === "thread" && on === "agent") this.add("warning", `@thread only applies to pipelines`, loc);
     if (d.name === "expect") {

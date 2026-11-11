@@ -1,6 +1,6 @@
 // ── Language-level catalog of built-ins, shared by the validator and runtime ──
 
-export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "thread", "expect"] as const;
+export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "cascade", "thread", "expect"] as const;
 
 /** Types a schema field, parameter or return can name (besides declared schemas). `Result` is the usual unchecked return type, like `Any`. */
 export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any", "Result"] as const;
