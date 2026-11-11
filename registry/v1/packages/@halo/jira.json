@@ -1,0 +1,51 @@
+{
+  "name": "@halo/jira",
+  "description": "Jira Cloud issues: search with JQL, read, create, comment, and transition",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "b17bf759ec8be2167bd39fdae6f6f5e5a170ff321cf057dc51acb67bbd12fdab",
+      "size": 8063,
+      "file": "v1/files/@halo/jira/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.745Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "Jira"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [
+          "*.atlassian.net"
+        ],
+        "env": [
+          "JIRA_EMAIL",
+          "JIRA_API_TOKEN"
+        ],
+        "spawn": [],
+        "code": false,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.745Z",
+  "keywords": [
+    "jira",
+    "issues",
+    "atlassian"
+  ],
+  "license": "MIT",
+  "homepage": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/",
+  "readme": "# @halo/jira\n\nJira Cloud issues: search with JQL, read, create, comment, and transition.\n\n```halo\nuse \"@halo/jira\" { Jira }\n\ntool Issues : Jira(site: \"acme\")\n```\n\nSet `JIRA_EMAIL` and `JIRA_API_TOKEN`. Declare it with your site: `Jira(site: \"acme\")` for acme.atlassian.net.\n\n`halo add jira` installs it (short for `halo add @halo/jira`). `halo tools` then lists its methods and their effects.\n"
+}
