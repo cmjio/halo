@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted. Being built: the contract (`src/registry/contract.ts`, `src/registry/semver.ts`, `test/fixtures/packages/`) is in; the rest is in progress. |
+| Status | Built on branch `claude/halo-package-registry-a9a967` (language, package manager, registry Worker, hosted exports, end-to-end tests, security review fixes). Not deployed: see `services/registry/README.md`. |
 | Date | 11 November 2026 |
 | Supersedes | The registry section of `halo-cloud.md` where they differ (naming, manifest, hosting). Its review checks, evals and org-private packages are later work. |
 | Builds on | Tool packages (`src/registry/`, `registry/`), `halo.lock`, `halo serve` (`/api/pipelines/<name>/runs`, `/mcp`), the parser (`grammars/Halo.g4`) |
