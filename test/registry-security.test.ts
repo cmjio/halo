@@ -310,3 +310,10 @@ describe("hosted auth can't name the consumer's other secrets", () => {
     expect(describeHostedUse(hosted("ACME_HALO_KEY", "https://api.acme.com") as never)[0]).toContain("api.acme.com");
   });
 });
+
+test("hostedEndpointConcern sees through a trailing dot", async () => {
+  const { hostedEndpointConcern } = await import("../src/registry/contract");
+  expect(hostedEndpointConcern("https://localhost./api")).toBe("points at this machine");
+  expect(hostedEndpointConcern("https://box.internal./api")).toBe("points at a private network address");
+  expect(hostedEndpointConcern("https://halo.acme.com./api")).toBeUndefined();
+});

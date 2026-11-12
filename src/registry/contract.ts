@@ -242,7 +242,8 @@ export function hostedEndpointConcern(endpoint: string): string | undefined {
   } catch {
     return "isn't a valid URL";
   }
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // A trailing dot (`localhost.`) names the same host.
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   const loopback = host === "localhost" || host.endsWith(".localhost") || /^127\./.test(host) || host === "::1" || host === "0.0.0.0" || host === "::";
   const v4 = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
   const [a, b] = v4 ? [Number(v4[1]), Number(v4[2])] : [NaN, NaN];
@@ -360,8 +361,8 @@ export interface PackagePermissions extends Permissions {
 //   GET    v1/whoami                                      WhoAmI
 //   GET    v1/tokens                                      TokenList
 //   POST   v1/tokens                                      CreateTokenRequest → 201 CreatedToken (the secret is shown once)
-//   DELETE v1/tokens/<id>                                 → 200 { deleted: id }
-//   POST   v1/scopes                                      { scope } → 201 ScopeDoc (creates an org scope; you become its owner)
+//   DELETE v1/tokens/<id>                                 → 200 { deleted: id } (a full token, or the token revoking itself)
+//   POST   v1/scopes                                      { scope } → 201 ScopeDoc (creates an org scope; you become its owner; needs a full token)
 //   GET    v1/scopes/@scope                               ScopeDoc
 //   PUT    v1/scopes/@scope/members/<login>               { role } → 200 ScopeDoc ; DELETE removes → 200 ScopeDoc
 //   POST   v1/scopes/@scope/verify                        { domain } → VerifyResponse
@@ -517,7 +518,7 @@ export interface TokenList {
   tokens: TokenInfo[];
 }
 
-/** POST v1/tokens. A token limited to some scopes can only create tokens within them. */
+/** POST v1/tokens. Needs a full token: not read-only and not limited to some scopes. */
 export interface CreateTokenRequest {
   name?: string;
   readOnly?: boolean;
