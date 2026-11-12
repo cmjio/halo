@@ -43,6 +43,25 @@ export function isValidVersion(text: string): boolean {
   return !!parseVersion(text);
 }
 
+/**
+ * A version as a package may publish it: exactly `MAJOR.MINOR.PATCH[-PRERELEASE]`, with no
+ * leading `v`, no surrounding whitespace, and no build metadata (`+...`). parseVersion accepts
+ * those (they're harmless in ranges and on the command line), but two spellings of one version
+ * must never be two versions in a registry.
+ */
+export function isCanonicalVersion(text: string): boolean {
+  const v = parseVersion(text);
+  return !!v && v.raw === text && !v.build.length;
+}
+
+/** Same precedence: canonical spellings first, then by text, so sorting never depends on input order. */
+function tiebreak(a: string, b: string): number {
+  const ca = isCanonicalVersion(a);
+  const cb = isCanonicalVersion(b);
+  if (ca !== cb) return ca ? -1 : 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** Precedence order: negative when a < b. Build metadata is ignored. Throws on invalid versions. */
 export function compare(a: string | SemVer, b: string | SemVer): number {
   const x = typeof a === "string" ? must(a) : a;
@@ -202,13 +221,17 @@ export function satisfies(version: string, range: string | Range): boolean {
 export function maxSatisfying(versions: Iterable<string>, range: string | Range): string | undefined {
   const r = typeof range === "string" ? parseRange(range) : range;
   let best: string | undefined;
-  for (const v of versions) if (satisfies(v, r) && (best === undefined || compare(v, best) > 0)) best = v;
+  for (const v of versions) {
+    if (!satisfies(v, r)) continue;
+    const d = best === undefined ? 1 : compare(v, best);
+    if (d > 0 || (d === 0 && tiebreak(v, best!) < 0)) best = v;
+  }
   return best;
 }
 
 /** Highest first. Invalid versions are dropped. */
 export function sortDescending(versions: Iterable<string>): string[] {
-  return [...versions].filter(isValidVersion).sort((a, b) => compare(b, a));
+  return [...versions].filter(isValidVersion).sort((a, b) => compare(b, a) || tiebreak(a, b));
 }
 
 /** The range `halo add` writes for a version: `^1.2.3`, or the exact version for a prerelease. */

@@ -109,7 +109,9 @@ The default registry is `https://registry.halolang.com/` (in a checkout of Halo,
 { "registries": { "@acme": "https://halo.acme.internal" } }
 ```
 
-A package stays with the registry it was locked from. Every file is checked against the sha256 in the registry's package document, and against `halo.lock`.
+A package stays with the registry it was locked from while your settings still name that registry for it (its scope's registry, or `--registry`, `HALO_REGISTRY`, `"registry"` or Halo's own), so `--registry` for one command doesn't move it. A `halo.lock` entry from any other registry is ignored with a warning, and the package is resolved from the registry your settings choose: `halo.lock` alone can't send a package, or your token, somewhere else. Every file is checked against the sha256 in the registry's package document, and against `halo.lock`.
+
+A version is written exactly `MAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH-PRERELEASE`: no leading `v`, no spaces, and no build metadata (`+...`), so one version has one spelling and can't be published twice.
 
 ### `halo.lock`
 
@@ -307,7 +309,7 @@ halo publish                      # to the registry for its scope (or --registry
 
 `halo pack` writes one file: JSON holding `halo.json` and every file in the folder (base64), except dotfiles, `node_modules`, `.halo/`, `halo.lock`, `.env` files and other `.halotool` files. A package's files can add up to at most 5 MB (the packed file, with base64 and the JSON around it, may be up to 8 MB, which is what a registry accepts). It prints the sha256 and the permissions.
 
-`halo publish` packs the folder (or takes a `.halotool`), runs the checks, and prints what it computed before uploading. For a package with `hosted`, `halo pack` and `halo publish` leave the hosted sources out and write each hosted pipeline's interface (parameters, return type, schemas and tool effects) instead; see [Hosted packages](./hosted-packages.md). A version can be published once; bump the version for a new one. `halo login` saves a token in `~/.halo/credentials.json` (readable only by you), per registry; `HALO_TOKEN` overrides it, which is how CI publishes.
+`halo publish` packs the folder (or takes a `.halotool`), runs the checks, and prints what it computed before uploading. For a package with `hosted`, `halo pack` and `halo publish` leave the hosted sources out and write each hosted pipeline's interface (parameters, return type, schemas and tool effects) instead; see [Hosted packages](./hosted-packages.md). A version can be published once; bump the version for a new one. `halo login` saves a token in `~/.halo/credentials.json` (readable only by you), per registry; `HALO_TOKEN` overrides it, which is how CI publishes: it applies to Halo's registry, or to the one `HALO_TOKEN_REGISTRY` names, never to a registry named only by a project's `halo.json` or `halo.lock`. A package can't ship a literal serve token or its consumer keys file: see [Hosted packages](./hosted-packages.md#consumer-keys).
 
 After publishing:
 

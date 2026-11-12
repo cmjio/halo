@@ -3,7 +3,7 @@
  *
  *   default registry:  --registry, then HALO_REGISTRY, then halo.json "registry", then Halo's own
  *   by scope:          halo.json "registries": { "@acme": "https://halo.acme.internal" }
- *   tokens:            HALO_TOKEN, then ~/.halo/credentials.json (by registry; mode 0600)
+ *   tokens:            HALO_TOKEN (for Halo's registry, or HALO_TOKEN_REGISTRY), then ~/.halo/credentials.json (by registry; mode 0600)
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -49,20 +49,41 @@ export interface RegistrySettings {
   /** Registries by scope, normalized. */
   scopes: Record<string, string>;
   root: string;
+  /**
+   * Every registry the settings name as a default (--registry, HALO_REGISTRY, halo.json
+   * "registry", Halo's own), normalized. A package halo.lock pinned to one of these stays
+   * there when another is chosen for one command. Default: just `default`.
+   */
+  named?: string[];
 }
 
 export function registrySettings(root: string, flag?: string): RegistrySettings {
   const config = readProjectConfig(root);
-  const chosen = flag ?? (Bun.env.HALO_REGISTRY || undefined) ?? config.registry ?? DEFAULT_REGISTRY;
+  const env = Bun.env.HALO_REGISTRY || undefined;
+  const fromConfig = typeof config.registry === "string" ? config.registry : undefined;
+  const chosen = flag ?? env ?? fromConfig ?? DEFAULT_REGISTRY;
   const scopes: Record<string, string> = {};
   for (const [scope, loc] of Object.entries(config.registries ?? {})) if (typeof loc === "string") scopes[scope] = normalizeRegistry(loc, root);
-  return { default: normalizeRegistry(chosen, root), scopes, root };
+  const named = [...new Set([flag, env, fromConfig, DEFAULT_REGISTRY].filter((l): l is string => !!l).map((l) => normalizeRegistry(l, root)))];
+  return { default: normalizeRegistry(chosen, root), scopes, root, named };
 }
 
 /** The registry a package comes from: its scope's, else the default. */
 export function registryFor(settings: RegistrySettings, name: string): string {
   const scope = parsePackageName(name)?.scope;
   return (scope && settings.scopes[scope]) || settings.default;
+}
+
+/**
+ * Whether halo.lock may keep a package on `location`: its scope's registry when halo.json maps
+ * the scope, else any registry the settings name as a default (or Halo's own). halo.lock alone
+ * can't send a package (or a token) to a registry the settings don't name.
+ */
+export function lockedRegistryAllowed(settings: RegistrySettings, name: string, location: string): boolean {
+  const scope = parsePackageName(name)?.scope;
+  const mapped = scope ? settings.scopes[scope] : undefined;
+  if (mapped) return location === mapped;
+  return location === settings.default || isDefault(location) || (settings.named ?? []).includes(location);
 }
 
 const isDefault = (location: string) => location === DEFAULT_REGISTRY || location === HOSTED_REGISTRY || location === BUNDLED_REGISTRY;
@@ -126,7 +147,21 @@ export function removeCredential(registry: string): boolean {
   return true;
 }
 
-/** The token for a registry: HALO_TOKEN wins, then what `halo login` saved. */
+/**
+ * The token for a registry: HALO_TOKEN, then what `halo login` saved for it. HALO_TOKEN is for
+ * one registry only: HALO_TOKEN_REGISTRY when it's set, else Halo's own. A registry named by a
+ * project's halo.json or halo.lock never gets it otherwise.
+ */
 export function tokenFor(registry: string): string | undefined {
-  return Bun.env.HALO_TOKEN || readCredentials()[registry]?.token;
+  const env = Bun.env.HALO_TOKEN;
+  if (env && haloTokenApplies(registry)) return env;
+  return readCredentials()[registry]?.token;
+}
+
+/** Whether HALO_TOKEN is meant for this registry (see tokenFor). */
+export function haloTokenApplies(registry: string): boolean {
+  const target = Bun.env.HALO_TOKEN_REGISTRY;
+  const location = normalizeRegistry(registry);
+  if (target) return normalizeRegistry(target) === location;
+  return isDefault(location);
 }

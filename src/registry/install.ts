@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { normalizePackageName, PACKAGES_DIR, type LockfileV2, type LockPackage, type PackagePermissions } from "./contract.js";
+import { hostedEndpointConcern, normalizePackageName, PACKAGES_DIR, type LockfileV2, type LockPackage, type PackagePermissions } from "./contract.js";
 import { DEFAULT_REGISTRY, readProjectConfig, registryOfSource, registrySettings, writeProjectConfig, type RegistrySettings } from "./config.js";
 import { PackageError, permissionsOfPackage, readPackage, sha256, totalPermissions, type PackageData } from "./format.js";
 import { PACKAGE_FILE, packageDir, readAnyLock, readTrust, writeLockV2, writeTrust } from "./lockfile.js";
@@ -42,6 +42,8 @@ export interface InstallReport {
   /** A v1 halo.lock was migrated. */
   migrated: string[];
   total: PackagePermissions;
+  /** Things the user should know (halo.lock entries that were ignored, hosted endpoints that aren't public https). */
+  warnings: string[];
 }
 
 export interface InstallOptions {
@@ -129,7 +131,7 @@ export async function installProject(options: InstallOptions): Promise<InstallRe
   }
   const locked: LockfileV2 = any.version === 2 ? any.lock : { lockfileVersion: 2, packages: {} };
 
-  const { nodes } = await resolveGraph({ root, dependencies: deps, registries: settings, locked, unlock: options.unlock, haloVersion, fetch: options.fetch, clients });
+  const { nodes, warnings } = await resolveGraph({ root, dependencies: deps, registries: settings, locked, unlock: options.unlock, haloVersion, fetch: options.fetch, clients });
 
   // Download and check everything before changing anything.
   const trust = readTrust(root);
@@ -172,7 +174,7 @@ export async function installProject(options: InstallOptions): Promise<InstallRe
   }
 
   const removed = Object.keys(locked.packages).filter((n) => !nodes.has(n));
-  const report: InstallReport = { packages: results, removed, migrated, total: totalPermissions(results.map((r) => r.permissions)) };
+  const report: InstallReport = { packages: results, removed, migrated, total: totalPermissions(results.map((r) => r.permissions)), warnings };
   if (options.dryRun) return report;
 
   for (const r of results) extract(packageDir(root, r.name), r.pkg, blobs.get(r.name)!);
@@ -250,7 +252,11 @@ export function describeHostedUse(manifest: PackageManifest): string[] {
   const host = hostOf(h.endpoint);
   const names = h.exports.join(", ");
   const key = h.auth ? ` and reads ${h.auth.env} (the key ${manifest.name}'s publisher issues you)` : "";
-  return [`hosted: ${names} ${h.exports.length === 1 ? "runs" : "run"} on ${host}, not on this machine. This package sends your inputs to ${host}${key}`];
+  const lines = [`hosted: ${names} ${h.exports.length === 1 ? "runs" : "run"} on ${host}, not on this machine. This package sends your inputs to ${host}${key}`];
+  const concern = hostedEndpointConcern(h.endpoint);
+  // The public registry refuses these endpoints; a folder or private registry may not.
+  if (concern) lines.push(`hosted: the endpoint ${h.endpoint} ${concern}, which the public registry wouldn't accept. Check you trust where ${manifest.name} came from`);
+  return lines;
 }
 
 export { PACKAGES_DIR };

@@ -26,4 +26,4 @@ Every `halo run` keeps a recording in `.halo/recordings` for [`halo replay`](/gu
 | `halo yank`, `unyank`, `deprecate`, `dist-tag` | Manage published versions |
 | `halo login`, `logout`, `whoami`, `token`, `owner`, `scope` | Accounts, tokens, and who can publish in a scope |
 
-Every package command takes `--registry <https URL or folder>`. Without it: `HALO_REGISTRY`, then `"registry"` in `halo.json`, then Halo's registry; `"registries"` in `halo.json` maps a scope to its own. `halo login` saves a token per registry in `~/.halo/credentials.json`; `HALO_TOKEN` overrides it. See [Packages](/guide/tool-packages).
+Every package command takes `--registry <https URL or folder>`. Without it: `HALO_REGISTRY`, then `"registry"` in `halo.json`, then Halo's registry; `"registries"` in `halo.json` maps a scope to its own. `halo login` saves a token per registry in `~/.halo/credentials.json`; `HALO_TOKEN` overrides it for Halo's registry, or for the registry `HALO_TOKEN_REGISTRY` names (and no other). The token is sent only on writes and account commands, never on reads. See [Packages](/guide/tool-packages).

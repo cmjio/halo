@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { Glob } from "bun";
 import {
   checkPackageManifest,
@@ -122,12 +122,52 @@ export function packFiles(dir: string): Packed {
     throw new PackageError(`${join(dir, PROJECT_FILE)} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
   const files = collect(dir, PACK_EXCLUDE);
+  const secrets = serveSecretProblems(raw, dir, files);
+  if (secrets.length) throw new PackageError(`Not packing ${dir}: it would publish secrets for halo serve --package:\n  - ${secrets.join("\n  - ")}`);
   const manifest = checkPackageManifest(raw, { files: Object.keys(files) });
   checkContents(manifest, files, dir);
   const file: PackageFileV2 = { format: PACKAGE_FORMAT_V2, manifest, files };
   const bytes = new TextEncoder().encode(JSON.stringify(file));
   if (bytes.length > MAX_PACKAGE_WIRE_BYTES) throw new PackageError(`${dir} packs to ${bytes.length} bytes, over the ${MAX_PACKAGE_WIRE_BYTES / 1024 / 1024}MB a registry accepts`);
   return { bytes, sha256: sha256(bytes), pkg: { format: PACKAGE_FORMAT_V2, name: manifest.name, version: manifest.version, manifest, files } };
+}
+
+const isEnvRef = (v: unknown) => typeof v === "string" && /^Env\.\w+$/.test(v);
+
+/**
+ * A package's halo.json doubles as `halo serve --package`'s config, so it can hold the
+ * publisher's secrets. Packing refuses (rather than quietly dropping files) when it would ship
+ * them: a literal serve token or other serve secret (write "Env.NAME" instead; serve reads
+ * the variable), the consumer keys file it names in `keysFile`, or anything in a `stateDir`
+ * inside the package (runs, telemetry, package-keys.json).
+ */
+export function serveSecretProblems(raw: unknown, dir: string, files: Record<string, string>): string[] {
+  if (!raw || typeof raw !== "object") return [];
+  const c = raw as { token?: unknown; keysFile?: unknown; stateDir?: unknown; webhooks?: unknown; slack?: { signingSecret?: unknown }; notify?: { slack?: unknown } };
+  const out: string[] = [];
+  const literal = (field: string, v: unknown) => {
+    if (v !== undefined && !isEnvRef(v)) out.push(`halo.json "${field}" is written out; set it from the environment instead ("${field}": "Env.HALO_SERVE_TOKEN" or another variable)`);
+  };
+  literal("token", c.token);
+  if (c.slack && typeof c.slack === "object") literal("slack.signingSecret", c.slack.signingSecret);
+  if (c.notify && typeof c.notify === "object") literal("notify.slack", c.notify.slack);
+  if (Array.isArray(c.webhooks)) c.webhooks.forEach((w, i) => w && typeof w === "object" && literal(`webhooks[${i}].secret`, (w as { secret?: unknown }).secret));
+  // The path relative to the package folder ("" for the folder itself), or undefined when it's outside.
+  const inside = (p: string) => {
+    const rel = relative(resolve(dir), resolve(dir, p)).split("\\").join("/");
+    return rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? undefined : rel;
+  };
+  if (typeof c.keysFile === "string") {
+    const rel = inside(c.keysFile);
+    if (rel !== undefined && files[rel] !== undefined) out.push(`halo.json "keysFile" (${c.keysFile}) is inside the package, so its consumer keys would be published; keep it outside the package folder, or set HALO_PACKAGE_KEYS`);
+  }
+  if (typeof c.stateDir === "string") {
+    const rel = inside(c.stateDir);
+    const under = rel === undefined ? [] : Object.keys(files).filter((f) => rel === "" || f.startsWith(`${rel}/`));
+    if (rel === "") out.push(`halo.json "stateDir" is the package folder itself; serve state (runs, telemetry, consumer keys) would be published. Use a folder outside it, or the default .halo`);
+    else if (under.length) out.push(`halo.json "stateDir" (${c.stateDir}) is inside the package, and ${under.slice(0, 3).join(", ")}${under.length > 3 ? ", ..." : ""} would be published; use a folder outside the package, or the default .halo`);
+  }
+  return out;
 }
 
 function checkContents(m: PackageManifest, files: Record<string, string>, where: string) {

@@ -82,8 +82,8 @@ Add `hosted` to the package's `halo.json`:
 }
 ```
 
-- `endpoint` is where your `halo serve --package` answers (https; http only for localhost).
-- `auth` says how consumers send their key: `bearer` (`Authorization: Bearer <key>`) or `header` with a `name` (`"name": "X-Acme-Key"`), read from the variable `env`. It is required.
+- `endpoint` is where your `halo serve --package` answers (https; http only for localhost). Halo never follows a redirect from it, so the key isn't sent anywhere else. `halo add` and `halo install` warn when an endpoint is plain http, this machine, or a private address.
+- `auth` says how consumers send their key: `bearer` (`Authorization: Bearer <key>`) or `header` with a `name` (`"name": "X-Acme-Key"`), read from the variable `env`. It is required. `env` must be a variable for your key only: the consumer's other secrets (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GITHUB_TOKEN`, `HALO_TOKEN`, `AWS_*` and the like) are refused.
 - `exports` lists the hosted pipelines by name.
 
 ### Where the hosted source goes
@@ -167,6 +167,12 @@ Issue one key per consumer, so you can revoke and meter each one. Keys come from
 ```
 
 `HALO_SERVE_TOKEN` is yours, not a consumer key: with it you reach every endpoint, including `GET /api/usage`. A consumer key only runs the hosted pipelines (and lists them at `GET /api/pipelines`).
+
+Keep keys out of what you publish. The package folder's `halo.json` is also what `halo pack` and `halo publish` read, so keys must live in the environment or outside the package folder:
+
+- `package-keys.json` is never packed, wherever it is.
+- `halo pack` refuses a package whose `"keysFile"` is a file inside the folder, or whose `"stateDir"` is inside it and has files in it. Point them outside the folder, or keep the default `.halo` (never packed).
+- `"token"` (and any other serve secret, such as `webhooks[].secret` or `slack.signingSecret`) must be an environment reference, `"token": "Env.HALO_SERVE_TOKEN"`, or left out (serve reads `HALO_SERVE_TOKEN`). A token written into `halo.json` stops `halo pack`.
 
 ### Metering
 

@@ -13,9 +13,9 @@ import { isAbsolute, relative, resolve as resolvePath } from "node:path";
 import { type LockfileV2, type PackageDoc, type VersionDoc } from "./contract.js";
 import { compare, isValidRange, satisfies, sortDescending } from "./semver.js";
 import { RegistryClient, readSource } from "./client.js";
-import { isUrl, lockSource, registryFor, registryOfSource, tokenFor, type RegistrySettings } from "./config.js";
+import { isUrl, lockedRegistryAllowed, lockSource, registryFor, registryOfSource, tokenFor, type RegistrySettings } from "./config.js";
 import { pack, PackageError, readPackage, sha256, type PackageData } from "./format.js";
-import { normalizePackageName, parsePackageName } from "./contract.js";
+import { normalizePackageName } from "./contract.js";
 
 export class ResolveError extends PackageError {}
 
@@ -68,6 +68,8 @@ export interface ResolveInput {
 
 export interface Resolution {
   nodes: Map<string, ResolvedNode>;
+  /** Things the user should know (halo.lock entries that were ignored). */
+  warnings: string[];
 }
 
 export function clientFor(location: string, clients: Map<string, RegistryClient>, fetchFn?: typeof fetch): RegistryClient {
@@ -105,6 +107,8 @@ export async function resolveGraph(input: ResolveInput): Promise<Resolution> {
   const { root, registries, locked, haloVersion } = input;
   const clients = input.clients ?? new Map<string, RegistryClient>();
   const unlocked = (name: string) => input.unlock === "all" || !!input.unlock?.has(name);
+  const warnings: string[] = [];
+  const warned = new Set<string>();
 
   // Folder, file and URL dependencies are read once; their version is whatever they hold.
   const locals = new Map<string, NonNullable<ResolvedNode["local"]> & { source: string }>();
@@ -125,11 +129,21 @@ export async function resolveGraph(input: ResolveInput): Promise<Resolution> {
   }
 
   const docOf = async (name: string, requiredBy: Requirement[]): Promise<{ doc: PackageDoc; client: RegistryClient }> => {
-    // A scope's mapped registry wins; otherwise a locked package stays with the registry it came from.
-    const scope = parsePackageName(name)?.scope;
+    // A locked package stays with the registry it came from while the settings still name that
+    // registry for it (so --registry for one command doesn't move it). Anything else halo.lock
+    // says is ignored: it can't send a package, or a token, to a registry of its choosing.
+    const chosenRegistry = registryFor(registries, name);
     const lockedSource = locked?.packages[name]?.source;
     const fromLock = lockedSource ? registryOfSource(lockedSource, root) : undefined;
-    const client = clientFor((scope && registries.scopes[scope]) || fromLock || registryFor(registries, name), clients, input.fetch);
+    let location = chosenRegistry;
+    if (fromLock && fromLock !== chosenRegistry) {
+      if (lockedRegistryAllowed(registries, name, fromLock)) location = fromLock;
+      else if (!warned.has(name)) {
+        warned.add(name);
+        warnings.push(`halo.lock has ${name} from ${fromLock}, which the registry settings don't name for it; resolving it from ${chosenRegistry} instead`);
+      }
+    }
+    const client = clientFor(location, clients, input.fetch);
     const doc = await client.doc(name);
     if (!doc) throw new ResolveError(`No package ${name} in ${client.base}\n  required by: ${requiredBy.map((r) => formatRequirement(name, r)).join("\n               ")}`);
     return { doc, client };
@@ -229,7 +243,7 @@ export async function resolveGraph(input: ResolveInput): Promise<Resolution> {
   for (const node of chosen.values()) {
     node.dependencies = Object.fromEntries(Object.keys(node.ranges).filter((d) => chosen.has(d)).map((d) => [d, chosen.get(d)!.version]));
   }
-  return { nodes: new Map([...chosen].sort(([a], [b]) => a.localeCompare(b))) };
+  return { nodes: new Map([...chosen].sort(([a], [b]) => a.localeCompare(b))), warnings };
 }
 
 function checkHalo(name: string, version: string, range: string | undefined, haloVersion: string) {

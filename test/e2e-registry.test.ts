@@ -56,6 +56,7 @@ async function freePort(): Promise<number> {
 const env = { ...Bun.env, CI: "1", WRANGLER_SEND_METRICS: "false", NO_COLOR: "1", FORCE_COLOR: "0" } as Record<string, string | undefined>;
 delete env.HALO_TOKEN;
 delete env.HALO_REGISTRY;
+delete env.HALO_TOKEN_REGISTRY;
 
 const port = await freePort();
 const BASE = `http://127.0.0.1:${port}/`;
@@ -274,10 +275,10 @@ describe.skipIf(!!skipReason)("the CLI against the registry Worker (wrangler dev
       const listed = await ok(work, "token", "list");
       expect(listed.out).toContain("ci-read");
       expect(listed.out).toContain("read only");
-      const roWho = await halo(work, ["whoami"], { HALO_TOKEN: readOnly });
+      const roWho = await halo(work, ["whoami"], { HALO_TOKEN: readOnly, HALO_TOKEN_REGISTRY: BASE });
       expect(roWho.code).toBe(0);
       expect(roWho.out).toContain("(read only)");
-      const roPublish = await halo(work, ["publish", packageCopy("acme-support-kit", "1.3.1")], { HALO_TOKEN: readOnly });
+      const roPublish = await halo(work, ["publish", packageCopy("acme-support-kit", "1.3.1")], { HALO_TOKEN: readOnly, HALO_TOKEN_REGISTRY: BASE });
       expect(roPublish.code).toBe(1);
       expect(roPublish.all).toContain("403");
       expect(roPublish.all).toContain("read-only");

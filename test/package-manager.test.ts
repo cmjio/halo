@@ -413,8 +413,9 @@ describe("the HTTP registry client", () => {
 
       expect((await cli(app, ["logout", "--registry", fake.url], env)).out).toContain("logged out");
       expect(JSON.parse(readFileSync(creds, "utf8"))[fake.url]).toBeUndefined();
-      // HALO_TOKEN works without logging in.
-      expect((await cli(app, ["whoami", "--registry", fake.url], { ...env, HALO_TOKEN: fake.TOKEN })).out).toContain("octo");
+      // HALO_TOKEN works without logging in, for Halo's registry or the one HALO_TOKEN_REGISTRY names.
+      expect((await cli(app, ["whoami", "--registry", fake.url], { ...env, HALO_TOKEN: fake.TOKEN, HALO_TOKEN_REGISTRY: fake.url })).out).toContain("octo");
+      expect((await cli(app, ["whoami", "--registry", fake.url], { ...env, HALO_TOKEN: fake.TOKEN })).out).not.toContain("octo");
     } finally {
       fake.server.stop(true);
     }
