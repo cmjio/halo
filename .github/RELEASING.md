@@ -60,6 +60,25 @@ after the rest of the release shipped, fix the setup and rerun only that job (`g
 After the first release, open the `halo` package under the account's GitHub Packages, and
 change its visibility to public so `docker pull` works without signing in.
 
+## Install counts
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… bun scripts/install-stats.ts [--days 30] [--json]
+```
+
+prints how many times Halo was downloaded, per source:
+
+| Source | What's counted | Window |
+|---|---|---|
+| halolang.com/dl | Each binary `site/worker.ts` serves, into the Workers Analytics Engine dataset `halo_downloads`, by version, platform, channel and country. The channel comes from `?via=` on the binary URL: `script` (install.sh/install.ps1), `ci` (the same under `$CI`), `action` (the GitHub Action, on a cache miss), `upgrade` (`halo upgrade`), `direct` (anything else). | up to 90 days (Analytics Engine's retention) |
+| GitHub releases | Each release asset's `download_count`. | all time only |
+| npm | `@halolang/halo` from api.npmjs.org. | the window |
+| ghcr.io | Not available by API; the package page shows pulls. | |
+
+The Cloudflare token needs **Account · Account Analytics · Read**; without it the script reports
+the other sources and says /dl was skipped. These are downloads, not people: nothing identifies
+a machine, and a CI job that installs on every run counts every run.
+
 ## By hand
 
 `bun scripts/release.ts` does steps 1 and 4's upload from your machine (with `wrangler`

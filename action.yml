@@ -70,6 +70,7 @@ runs:
         HALO_VERSION: ${{ steps.version.outputs.version }}
         HALO_INSTALL: ${{ steps.version.outputs.dir }}
         HALO_NO_MODIFY_PATH: "1"
+        HALO_INSTALLED_VIA: action
       run: curl -fsSL --retry 3 https://halolang.com/install.sh | sh
 
     - name: Install halo ${{ steps.version.outputs.version }}
@@ -79,6 +80,7 @@ runs:
         HALO_VERSION: ${{ steps.version.outputs.version }}
         HALO_INSTALL: ${{ steps.version.outputs.dir }}
         HALO_NO_MODIFY_PATH: "1"
+        HALO_INSTALLED_VIA: action
       run: irm https://halolang.com/install.ps1 | iex
 
     - name: Put halo on PATH

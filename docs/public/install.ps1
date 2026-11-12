@@ -33,7 +33,9 @@ try {
   $expected = ($line -split '\s+')[0].ToLower()
 
   $exe = Join-Path $tmp 'halo.exe'
-  Invoke-WebRequest "$base/$version/$asset" -OutFile $exe -UseBasicParsing
+  # Tell halolang.com how this install came about, for its download counts (nothing else is sent).
+  $via = if ($env:HALO_INSTALLED_VIA) { $env:HALO_INSTALLED_VIA } elseif ($env:CI) { 'ci' } else { 'script' }
+  Invoke-WebRequest "$base/$version/${asset}?via=$via" -OutFile $exe -UseBasicParsing
   $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
   if ($actual -ne $expected) { throw "Checksum mismatch for $asset (expected $expected, got $actual). Not installing." }
 
