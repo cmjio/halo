@@ -57,7 +57,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `stateDir` | Where telemetry, paused runs, schedule and watch state, and the link-signing secret are kept. Default `.halo` |
 | `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted |
 | `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
-| `registry` | The tool package registry for `halo add` and `halo search` (not used by `halo serve` itself; see [Tool Packages](../tool-packages.md)) |
+| `registry` | The package registry for `halo add`, `halo search` and `halo publish` (not used by `halo serve` itself; see [Packages](../tool-packages.md)). `registries` maps a scope to its own registry |
 
 ### Schedules
 
@@ -159,6 +159,10 @@ In your Slack app's settings, turn on Interactivity and set its Request URL to `
 - Anyone in the channel who can click the button can answer. Post announcements only to channels whose members may approve.
 
 A [`Slack` tool](../../stdlib/tools.md#slack) that posts `buttons:` during a run also gets its clicks here. Each button carries the run id, how many times the run had paused when it posted, and its label. A click answers only the run's **next** pause after the post, with the label as the answer, and only while the run is waiting there: post the buttons, then `|! yield` or `~> listen`. A click on a button whose pause is over, or that came before the run paused, changes nothing. These buttons never answer a tool-call approval (`waitingFor: "approval"`); use the announcement's buttons or the approval link for those.
+
+## Serving a hosted package
+
+`halo serve --package <dir>` serves the hosted pipelines of a package you publish, on your models and keys, to the people who installed it: exactly the pipelines in its `hosted.exports`, behind the key in `hosted.auth`, checked against the `Halo-Package` version each call sends. See [Hosted packages](../hosted-packages.md).
 
 ## MCP
 

@@ -1,0 +1,10 @@
+{
+  // The registry Worker. Bindings are typed structurally in src/env.ts, so the same code
+  // type-checks here and under `bun test` (which runs it against in-memory fakes).
+  // The root `bun run typecheck` covers it through tsconfig.tooling.json.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "DOM.AsyncIterable"]
+  },
+  "include": ["src/**/*.ts", "../../src/**/*.d.ts"]
+}

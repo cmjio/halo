@@ -129,6 +129,7 @@ export function evolveApi(o: EvolveApiOptions) {
     o.logger.log(`[halo] evolving ${p.name} (${runs.length} recorded runs, budget $${budget.toFixed(2)})`);
     void evolve({
       source,
+      path: p.path,
       pipeline: p.name,
       recordings: runs,
       runtime: o.runtime,

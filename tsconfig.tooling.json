@@ -10,6 +10,7 @@
     "registry/**/*.ts",
     "site/**/*.ts",
     "docs/.vitepress/**/*.ts",
+    "services/**/*.ts",
     // Shims for non-TS imports the code above pulls in from src (blueprints, skills' .md)
     "src/**/*.d.ts"
   ],

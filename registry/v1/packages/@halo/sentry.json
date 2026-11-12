@@ -1,0 +1,49 @@
+{
+  "name": "@halo/sentry",
+  "description": "Sentry error tracking: list, read, and resolve issues",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "c407e3275dc90106591cc3a47feba0cc5877e11165aa3e5dbb55a5a7a49f72f9",
+      "size": 6068,
+      "file": "v1/files/@halo/sentry/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.749Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "Sentry"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [
+          "sentry.io"
+        ],
+        "env": [
+          "SENTRY_AUTH_TOKEN"
+        ],
+        "spawn": [],
+        "code": false,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.749Z",
+  "keywords": [
+    "sentry",
+    "errors"
+  ],
+  "license": "MIT",
+  "homepage": "https://docs.sentry.io/api/",
+  "readme": "# @halo/sentry\n\nSentry error tracking: list, read, and resolve issues.\n\n```halo\nuse \"@halo/sentry\" { Sentry }\n\ntool Errors : Sentry()\n```\n\nSet `SENTRY_AUTH_TOKEN`.\n\n`halo add sentry` installs it (short for `halo add @halo/sentry`). `halo tools` then lists its methods and their effects.\n"
+}

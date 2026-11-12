@@ -14,6 +14,8 @@ import { AdapterRegistry } from "./runtime/adapter.js";
 import { toolMatches } from "./runtime/policies.js";
 import type { ProviderInfo, ToolEffect, ToolMethod } from "./runtime/tools.js";
 import { stageLabel } from "./parser/labels.js";
+import { displayText } from "./linker/names.js";
+import { HOSTED_PROVIDER } from "./linker/hosted.js";
 
 export interface PlanStep {
   /** e.g. "3" or "3.1" for a stage inside a called pipeline. */
@@ -140,6 +142,14 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     }
     if (tool) {
       const effect = effectOf(tool.name, stage.method);
+      if (tool.provider === HOSTED_PROVIDER) {
+        // A package's hosted pipeline: one external call to the publisher's server.
+        const arg = (name: string) => tool.argList.find((a) => a.name === name)?.value;
+        const text = (name: string) => ((v) => (v?.kind === "string" ? v.value : ""))(arg(name));
+        const host = text("endpoint").replace(/^[a-z]+:\/\//i, "").split("/")[0];
+        steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect: "external" }], notes: [`hosted by ${text("package")}: sends its inputs to ${host}${text("env") ? ` (key from ${text("env")})` : ""}`] });
+        return;
+      }
       steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? " (effect not described)" : ""}`] });
       return;
     }
@@ -220,13 +230,21 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   const callers = new Set(steps.filter((s) => s.agent).map((s) => s.agent!));
   const limitOf = (name: string) => Math.min(...spendLimits.filter((l) => l.agent === name).map((l) => l.limit));
   const cappedAt = callers.size && [...callers].every((a) => Number.isFinite(limitOf(a))) ? Math.max(...[...callers].map(limitOf)) : undefined;
+  // A linked program's imported pipelines, agents and tools have internal names: show the names people know.
+  const show = (s: string) => displayText(ast.names, s);
   return {
-    pipeline: pipelineName,
-    steps,
+    pipeline: show(pipelineName),
+    steps: steps.map((s) => ({
+      ...s,
+      label: show(s.label),
+      ...(s.agent ? { agent: show(s.agent) } : {}),
+      effects: s.effects.map((e) => ({ ...e, target: show(e.target), ...(e.via ? { via: show(e.via) } : {}), ...(e.approval ? { approval: show(e.approval) } : {}) })),
+      notes: s.notes.map(show),
+    })),
     maxCost,
     cappedAt,
     costNote: unbounded ? "depends on how many items `each` gets" : costs.length < steps.filter((s) => s.kind === "model" || s.kind === "agent-tools").length ? "some models have no price list" : undefined,
-    spendLimits,
+    spendLimits: spendLimits.map((l) => ({ ...l, agent: show(l.agent), policy: show(l.policy) })),
   };
 }
 

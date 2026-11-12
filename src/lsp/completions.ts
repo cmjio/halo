@@ -1,5 +1,9 @@
 import { CompletionItemKind, type CompletionItem, type Position } from "vscode-languageserver";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { parse } from "../parser/index.js";
+import { importableNames } from "../linker/index.js";
+import { diskLinkOptions, projectRoot } from "../linker/node.js";
 import { AGENT_PRESETS } from "../runtime/presets.js";
 import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SCHEMA_TYPES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS, TYPE_DESCRIPTIONS } from "../parser/builtins.js";
 
@@ -20,12 +24,28 @@ const KEYWORDS: Array<[string, string]> = [
   ["else", "The fallback arm of a branch"],
   ["as", "Bind a result: ... as name → context.data.name"],
   ["context", "context.current, context.input, context.data, context.meta, context.thread"],
+  ["use", "Import from a file or package: use \"./shared.halo\" { Name, Other as Alias }"],
+  ["with", "Fill a package's model slots: use \"@acme/kit\" { X } with models(fast: anthropic/claude-haiku-4-5)"],
 ];
 
-/** Keywords and declared names, plus System methods after `System.` and directives after `@`. */
-export function getCompletions(sourceText: string, position: Position): CompletionItem[] {
+/**
+ * Keywords and declared names, plus System methods after `System.` and directives after `@`.
+ * With the document's path: `.halo` files and installed packages inside `use "..."`, the
+ * names a file or package exports inside `use "..." { ... }`, and imported names everywhere.
+ */
+export function getCompletions(sourceText: string, position: Position, path?: string, overrides?: Map<string, string>): CompletionItem[] {
   const line = sourceText.split("\n")[position.line] ?? "";
   const before = line.slice(0, position.character);
+
+  const useString = /^\s*use\s+(["'])([^"']*)$/.exec(before);
+  if (useString) return path ? useTargets(path, useString[2]!) : [];
+  const useBraces = /^\s*use\s+(["'])([^"']+)\1\s*\{[^}]*$/.exec(before);
+  if (useBraces) {
+    if (!path) return [];
+    const file = resolve(path);
+    const names = importableNames(file, useBraces[2]!, diskLinkOptions(file, { overrides: new Map([...(overrides ?? []), [file, sourceText]]) }));
+    return names.map((n) => ({ label: n.name, kind: KIND_ICONS[n.kind], detail: `${n.kind} from ${useBraces[2]}` }));
+  }
 
   if (/System\.\w*$/.test(before)) {
     return [...SYSTEM_METHODS, ...SYSTEM_EVENTS].map((m) => ({ label: m, kind: CompletionItemKind.Method, detail: `System.${m}` }));
@@ -70,6 +90,53 @@ export function getCompletions(sourceText: string, position: Position): Completi
   for (const p of ast.policies) items.push({ label: p.name, kind: CompletionItemKind.Constant, detail: "policy" });
   for (const p of ast.pipelines) items.push({ label: p.name, kind: CompletionItemKind.Function, detail: `pipeline (${p.params.map((x) => x.name).join(", ")})` });
   for (const s of ast.schemas) items.push({ label: s.name, kind: CompletionItemKind.Struct, detail: "schema" });
+  for (const u of ast.uses ?? []) {
+    for (const i of u.items ?? []) items.push({ label: i.as ?? i.name, kind: CompletionItemKind.Reference, detail: `from ${u.source}${i.as ? ` (${i.name})` : ""}` });
+  }
+  return items;
+}
+
+const KIND_ICONS: Record<string, CompletionItemKind> = {
+  agent: CompletionItemKind.Class,
+  tool: CompletionItemKind.Interface,
+  store: CompletionItemKind.Interface,
+  policy: CompletionItemKind.Constant,
+  pipeline: CompletionItemKind.Function,
+  schema: CompletionItemKind.Struct,
+  provider: CompletionItemKind.Module,
+};
+
+/** `.halo` files next to the document (and in folders under it), and installed packages, for `use "..."`. */
+function useTargets(path: string, typed: string): CompletionItem[] {
+  const dir = dirname(resolve(path));
+  const items: CompletionItem[] = [];
+  if (!typed || typed.startsWith(".")) {
+    const base = typed.includes("/") ? typed.slice(0, typed.lastIndexOf("/") + 1) : "./";
+    const folder = resolve(dir, base);
+    try {
+      for (const entry of readdirSync(folder, { withFileTypes: true })) {
+        if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+        const full = join(folder, entry.name);
+        if (entry.isDirectory()) items.push({ label: `${base}${entry.name}/`, kind: CompletionItemKind.Folder });
+        else if (entry.name.endsWith(".halo") && full !== resolve(path)) items.push({ label: `${base}${entry.name}`, kind: CompletionItemKind.File });
+      }
+    } catch {}
+  }
+  if (!typed.startsWith(".")) {
+    const packages = join(projectRoot(path), ".halo", "packages");
+    try {
+      for (const scope of readdirSync(packages)) {
+        if (!scope.startsWith("@")) continue;
+        for (const name of readdirSync(join(packages, scope))) {
+          let description: string | undefined;
+          try {
+            description = (JSON.parse(readFileSync(join(packages, scope, name, "halo.json"), "utf8")) as { description?: string }).description;
+          } catch {}
+          items.push({ label: `${scope}/${name}`, kind: CompletionItemKind.Module, detail: description ?? "package" });
+        }
+      }
+    } catch {}
+  }
   return items;
 }
 

@@ -1,0 +1,50 @@
+{
+  "name": "@halo/github-mcp",
+  "description": "GitHub through its official MCP server: repositories, issues, pull requests, code search, and more",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "bd9d63e1e389e511b2d5859de5dd84b090e1a562f278bc0adb45927fc5ebe8be",
+      "size": 2004,
+      "file": "v1/files/@halo/github-mcp/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.743Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "GitHubMCP"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [],
+        "env": [
+          "GITHUB_PERSONAL_ACCESS_TOKEN"
+        ],
+        "spawn": [
+          "docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server"
+        ],
+        "code": true,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.743Z",
+  "keywords": [
+    "github",
+    "mcp",
+    "issues"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/github/github-mcp-server",
+  "readme": "# @halo/github-mcp\n\nGitHub through its official MCP server: repositories, issues, pull requests, code search, and more.\n\n```halo\nuse \"@halo/github-mcp\" { GitHubMCP }\n\ntool GH : GitHubMCP()\n```\n\nSet `GITHUB_PERSONAL_ACCESS_TOKEN`. It runs GitHub's MCP server in Docker, so it needs Docker and `halo add @halo/github-mcp --trust`.\n\n`halo add github-mcp` installs it (short for `halo add @halo/github-mcp`). `halo tools` then lists its methods and their effects.\n"
+}

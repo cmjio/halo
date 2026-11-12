@@ -8,7 +8,7 @@
 
 const commaSep1 = (rule) => seq(rule, repeat(seq(",", rule)), optional(","));
 
-const SOFT_KEYWORDS = ["policy", "tool", "store", "schema", "agent", "pipeline", "equips", "requires", "system", "context", "yield", "listen", "loop", "as", "each", "in", "else"];
+const SOFT_KEYWORDS = ["policy", "tool", "store", "schema", "agent", "pipeline", "equips", "requires", "system", "context", "yield", "listen", "loop", "as", "each", "in", "else", "use", "with"];
 
 module.exports = grammar({
   name: "halo",
@@ -18,12 +18,26 @@ module.exports = grammar({
   extras: ($) => [/\s/, $.comment],
 
   rules: {
-    program: ($) => repeat(choice($.policy_decl, $.tool_decl, $.store_decl, $.schema_decl, $.agent_decl, $.pipeline_decl)),
+    program: ($) => repeat(choice($.use_decl, $.policy_decl, $.tool_decl, $.store_decl, $.schema_decl, $.agent_decl, $.pipeline_decl)),
 
     // Identifiers plus keywords usable as names (named-arg keys, methods, context paths).
     _name: ($) => choice($.identifier, ...SOFT_KEYWORDS.map((k) => alias(k, $.identifier))),
 
     dotted_ident: ($) => prec.right(seq($.identifier, repeat(seq(".", choice($._name, $.number))))),
+
+    // === Imports ===
+    // `use "./shared.halo" { A, B as C }`, `use "@acme/kit" { X } with models(fast: anthropic/claude-haiku-4-5)`
+    use_decl: ($) =>
+      seq(
+        "use",
+        field("source", $.string),
+        optional(seq("{", optional(commaSep1($.use_item)), "}")),
+        optional(seq("with", field("models", $.identifier), "(", commaSep1($.model_binding), ")")),
+      ),
+
+    use_item: ($) => seq(field("name", $.identifier), optional(seq("as", field("alias", $.identifier)))),
+
+    model_binding: ($) => seq(field("slot", $._name), ":", field("model", choice($.model_ref, $.string, $.dotted_ident))),
 
     // === Policy ===
     policy_decl: ($) => seq("policy", field("name", $.identifier), ":", $.policy_rule, repeat(seq("&", $.policy_rule))),

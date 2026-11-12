@@ -20,8 +20,8 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { parse } from "../parser/index.js";
-import { validate } from "../parser/validate.js";
+import { checkLinked, entryPipelines } from "../linker/index.js";
+import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
@@ -33,7 +33,9 @@ import { createMcpServer } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
 import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
-import { loadInstalled } from "../registry/packages.js";
+import { loadPackageProviders } from "../registry/resolver.js";
+import { pausePath } from "../registry/hosted.js";
+import { checkPackageHeader, consumerKeys, keyOf, loadServedPackage, PACKAGE_KEYS_ENV, PackageServeError, UsageLog, type ServedPackage, type UsageRow } from "./package.js";
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
 
@@ -141,6 +143,15 @@ export interface ServeOptions extends ServeConfig {
   scheduler?: boolean;
   logger?: Pick<Console, "log" | "warn" | "error">;
   fetch?: typeof fetch;
+  /**
+   * `halo serve --package [dir]`: serve only this package's hosted pipelines, to consumers with
+   * keys, checking the Halo-Package header (see package.ts). `files` and `root` are ignored.
+   */
+  package?: string;
+  /** Consumer keys for --package, by consumer id (merged with HALO_PACKAGE_KEYS and the keys file). */
+  packageKeys?: Record<string, string>;
+  /** A JSON file of consumer keys for --package. Default <stateDir>/package-keys.json (if it exists). */
+  keysFile?: string;
 }
 
 interface Entry {
@@ -172,6 +183,8 @@ export interface HaloServer {
   settled(runId: string): Promise<RunResult | undefined>;
   /** The signed link answering a paused run's current pause (undefined if it isn't paused). */
   approvalUrl(runId: string): Promise<string | undefined>;
+  /** With --package: runs, cost and tokens per consumer key. */
+  usage(since?: number): UsageRow[];
   stop(): Promise<void>;
 }
 
@@ -240,7 +253,15 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const token = fromEnv(options.token) ?? env.HALO_SERVE_TOKEN;
   // A token that names an unset variable must not silently turn into "no token".
   if (options.token !== undefined && !token) throw new ServeError(`The API token "${options.token}" is empty or not set`);
-  if (!LOOPBACK.has(host) && !token) {
+  // --package: only the package's hosted pipelines, behind consumer keys.
+  let served: ServedPackage | undefined;
+  try {
+    served = options.package !== undefined ? loadServedPackage(options.package) : undefined;
+  } catch (err) {
+    if (err instanceof PackageServeError) throw new ServeError(err.message);
+    throw err;
+  }
+  if (!LOOPBACK.has(host) && !token && !served) {
     const why = options.hostFrom === "PORT" ? " (PORT is set, so Halo listens on every interface; set HALO_HOST=127.0.0.1 to keep it local)" : "";
     throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)${why}`);
   }
@@ -249,6 +270,20 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   mkdirSync(stateDir, { recursive: true });
   const runStore = new FileRunStore(join(stateDir, "runs"));
   const telemetry = new SqliteTelemetry(join(stateDir, "telemetry.db"));
+  let keys: ReturnType<typeof consumerKeys> | undefined;
+  let usage: UsageLog | undefined;
+  if (served) {
+    try {
+      keys = consumerKeys({ keys: options.packageKeys, keysFile: options.keysFile, stateDir, env });
+    } catch (err) {
+      if (err instanceof PackageServeError) throw new ServeError(err.message);
+      throw err;
+    }
+    if (!keys.count()) {
+      throw new ServeError(`${served.manifest.name}: no consumer keys. Issue one per consumer in ${PACKAGE_KEYS_ENV}="acme=<key>,..." or ${join(stateDir, "package-keys.json")} ({ "acme": "<key>" })`);
+    }
+    usage = new UsageLog(join(stateDir, "telemetry.db"));
+  }
 
   // Approval links are signed with the token, or with a secret kept in the state folder.
   const secretFile = join(stateDir, "serve-secret");
@@ -262,7 +297,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   // ── Load pipelines ──
   const registry = new AdapterRegistry();
-  const installed = await loadInstalled(options.root ?? process.cwd()).catch((err: unknown) => {
+  if (served) options = { ...options, root: served.dir, files: [...new Set(Object.values(served.sources))], studio: false, schedules: [], webhooks: [], watches: [] };
+  const installed = await loadPackageProviders(options.root ?? process.cwd()).catch((err: unknown) => {
     throw new ServeError(err instanceof Error ? err.message : String(err));
   });
   const entries = new Map<string, Entry>();
@@ -280,16 +316,26 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   if (!files.length) throw new ServeError(`No .halo files found in ${(options.files ?? ["."]).join(", ")}`);
   for (const file of files) {
     const rel = relative(process.cwd(), file) || file;
-    const ast = parse(await Bun.file(file).text());
+    // Each file is linked with everything it `use`s, so its pipelines can call pipelines in other files.
+    const linked = linkFile(file, served ? { root: served.dir, projectModels: served.manifest.models } : options.root ? { root: options.root } : {});
+    const ast = linked.program;
     if (ast.errors.length) throw new ServeError(`${rel} has syntax errors:\n  ${ast.errors.join("\n  ")}`);
-    const errors = validate(ast, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
-    if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${d.line ?? "?"}: ${d.message}`).join("\n  ")}`);
-    if (!ast.pipelines.length) continue;
+    const errors = checkLinked(linked, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
+    const where = (d: { file: string; line?: number }) => `${d.file === resolve(file) ? "" : `${relative(process.cwd(), d.file)}:`}${d.line ?? "?"}`;
+    if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${where(d)}: ${d.message}`).join("\n  ")}`);
+    // A package serves only its hosted exports, and only ones that can't pause.
+    const hostedHere = served ? served.manifest.hosted!.exports.filter((n) => served.sources[n] === file) : undefined;
+    for (const name of hostedHere ?? []) {
+      const pause = pausePath(ast, name);
+      if (pause) throw new ServeError(`${served!.manifest.name}: hosted pipeline ${name} can pause (${pause}). Hosted pipelines can't pause yet`);
+    }
+    const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
+    if (!own.length) continue;
     const runtime = new HaloRuntime({ logger, ...options.runtime, ...recorder, env, runStore, onEvent }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
-    for (const decl of ast.pipelines) {
+    for (const decl of own) {
       const prev = entries.get(decl.name);
       if (prev) throw new ServeError(`Pipeline "${decl.name}" is declared in both ${prev.file} and ${rel}`);
       entries.set(decl.name, { name: decl.name, file: rel, runtime, decl, ast, path: resolve(file) });
@@ -371,6 +417,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const inflight = new Map<string, Promise<RunResult | undefined>>();
   // Recent outcomes, so a caller asking after a fast run finished still gets its result.
   const recent = new Map<string, RunResult | undefined>();
+  /** Why recent runs failed, for callers waiting on them. */
+  const failures = new Map<string, string>();
   const remember = (runId: string, r: RunResult | undefined) => {
     recent.delete(runId);
     recent.set(runId, r);
@@ -386,6 +434,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
       },
       (err: unknown) => {
         logger.error(`[halo] ${label} failed (run ${runId.slice(0, 8)}): ${err instanceof Error ? err.message : err}`);
+        failures.set(runId, err instanceof Error ? err.message : String(err));
+        if (failures.size > 500) failures.delete(failures.keys().next().value!);
         remember(runId, undefined);
         scheduledRunEnded(runId, "error");
         return undefined;
@@ -642,6 +692,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   // name to 127.0.0.1 to read the API from the user's browser).
   const allowedHosts = new Set(["localhost", "127.0.0.1", "[::1]", host.includes(":") ? `[${host}]` : host]);
   if (options.publicUrl) allowedHosts.add(new URL(options.publicUrl).hostname);
+  // Consumers reach a package's server at the endpoint its halo.json publishes.
+  if (served) allowedHosts.add(new URL(served.manifest.hosted!.endpoint).hostname);
   /** Why a request looks like it came from another site's page, or undefined if it's fine. */
   const foreign = (req: Request, url: URL, checkHost = true): string | undefined => {
     const hostname = (req.headers.get("host") ?? url.host).replace(/:\d+$/, "");
@@ -772,6 +824,65 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     logger,
   });
 
+  // --package: which consumer key a request (and the MCP calls inside it) came with, and metering per key.
+  const callerKey = new AsyncLocalStorage<string>();
+  const meter = (key: string, pipeline: string, runId: string, r: RunResult | undefined, t0: number) => {
+    if (!usage || !served) return;
+    const meta = r?.context.meta;
+    usage.record({
+      key,
+      pkg: `${served.manifest.name}@${served.manifest.version}`,
+      pipeline,
+      runId,
+      status: r?.status ?? "error",
+      cost: meta?.cost ?? 0,
+      prompt: meta?.tokens.prompt ?? 0,
+      completion: meta?.tokens.completion ?? 0,
+      durationMs: Math.round(performance.now() - t0),
+    });
+  };
+
+  /** A request to a package's server (--package): consumers' keys, the Halo-Package header, hosted pipelines only. */
+  const packageRequest = async (req: Request, url: URL, path: string): Promise<Response | undefined> => {
+    const m = served!.manifest;
+    const refusedPkg = crossSite(req, url);
+    if (refusedPkg) return json({ error: refusedPkg, code: "forbidden" }, 403);
+    const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    const owner = !!token && safeEqual(bearer, token);
+    const consumer = owner ? undefined : keys!.idOf(keyOf(req, m));
+    if (!owner && !consumer) {
+      const how = m.hosted!.auth?.type === "header" ? `${m.hosted!.auth.name}: <key>` : "Authorization: Bearer <key>";
+      return json({ error: `Missing or unknown key: send the key the publisher of ${m.name} issued you (${how}; Halo reads it from ${m.hosted!.auth?.env ?? "the variable the package names"})`, code: "unauthorized" }, 401);
+    }
+    const who = consumer ?? "owner";
+    if (path === "/mcp") {
+      if (options.mcp === false) return json({ error: "Not found", code: "not_found" }, 404);
+      const bad = checkPackageHeader(req, m, false);
+      if (bad) return json(bad.body, bad.status);
+      return callerKey.run(who, () => mcp.handleHttp(req));
+    }
+    const startRun = path.match(/^\/api\/pipelines\/(\w+)\/runs$/);
+    if (startRun && req.method === "POST") {
+      const bad = checkPackageHeader(req, m);
+      if (bad) return json(bad.body, bad.status);
+      const name = startRun[1]!;
+      if (!entries.has(name)) return json({ error: `${name} is not a hosted pipeline of ${m.name} (it serves ${[...entries.keys()].join(", ")})`, code: "not_found" }, 404);
+      const body = ((await readJson(req)) ?? {}) as { args?: Record<string, unknown> };
+      const t0 = performance.now();
+      const runId = start(name, body.args ?? {}, `consumer ${who}`);
+      const result = await settled(runId);
+      meter(who, name, runId, result, t0);
+      if (!result) return json({ runId, status: "error", error: failures.get(runId) ?? "The run failed", code: "run_failed" }, 500);
+      return json({ runId, status: result.status, output: result.output });
+    }
+    if (path === "/api/pipelines" && req.method === "GET") {
+      return json([...entries.values()].map((e) => ({ name: e.name, params: e.decl.params, returnType: e.decl.returnType })));
+    }
+    if (!owner) return json({ error: `A consumer key can only run ${m.name}'s hosted pipelines`, code: "forbidden" }, 403);
+    if (path === "/api/usage" && req.method === "GET") return json(usage!.byKey(Number(url.searchParams.get("since") ?? 0) || 0));
+    return undefined;
+  };
+
   const mcp = createMcpServer(
     {
       list: () => [...entries.values()].map((e) => ({ name: e.name, description: describePipeline(e), params: e.decl.params })),
@@ -779,12 +890,16 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         const e = entry(name);
         const runId = crypto.randomUUID();
         logger.log(`[halo] ${name} started by MCP (run ${runId.slice(0, 8)})`);
+        const t0 = performance.now();
         const work = e.runtime.run(name, args, { runId, signal });
         track(runId, name, work);
+        const key = callerKey.getStore();
         try {
           const r = await work;
+          if (key) meter(key, name, runId, r, t0);
           return { status: r.status, output: r.output, runId, waitingFor: r.context.meta.paused?.waitingFor };
         } catch (err) {
+          if (key) meter(key, name, runId, undefined, t0);
           return { status: "failed", runId, error: err instanceof Error ? err.message : String(err) };
         }
       },
@@ -848,6 +963,11 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           }
           const runId = start(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`);
           return json({ runId, status: "running" }, 202);
+        }
+
+        if (served && (path === "/mcp" || path.startsWith("/api/"))) {
+          const handled = await packageRequest(req, url, path);
+          if (handled) return handled;
         }
 
         // Pipelines as MCP tools, for Claude, Cursor, and other agents. Same token as the API.
@@ -956,6 +1076,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     start,
     settled,
     approvalUrl,
+    usage: (since = 0) => usage?.byKey(since) ?? [],
     async stop() {
       clearTimeout(timer);
       for (const t of watchTimers) clearInterval(t);
@@ -968,6 +1089,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
       await Promise.allSettled([...inflight.values()]);
       await Promise.all(runtimes.map((r) => r.close()));
       telemetry.close();
+      usage?.close();
     },
   };
 }

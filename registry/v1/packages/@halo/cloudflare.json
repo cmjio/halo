@@ -1,0 +1,51 @@
+{
+  "name": "@halo/cloudflare",
+  "description": "Cloudflare: Workers, KV, D1, R2, Pages and Queues in an account; DNS records, settings and cache purges in a zone",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "ef744af9f116e2319cec38314ccfdad3154bd758bf64064100333f9df97ee97e",
+      "size": 22506,
+      "file": "v1/files/@halo/cloudflare/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.739Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "Cloudflare",
+          "CloudflareZone"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [
+          "api.cloudflare.com"
+        ],
+        "env": [
+          "CLOUDFLARE_API_TOKEN"
+        ],
+        "spawn": [],
+        "code": false,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.739Z",
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "dns"
+  ],
+  "license": "MIT",
+  "homepage": "https://developers.cloudflare.com/api/",
+  "readme": "# @halo/cloudflare\n\nCloudflare: Workers, KV, D1, R2, Pages and Queues in an account; DNS records, settings and cache purges in a zone.\n\n```halo\nuse \"@halo/cloudflare\" { Cloudflare, CloudflareZone }\n\ntool CF : Cloudflare(account: \"<account id>\")\ntool Zone : CloudflareZone(zone: \"<zone id>\")\n```\n\nSet `CLOUDFLARE_API_TOKEN`. Declare `Cloudflare` with your account ID and `CloudflareZone` with a zone ID.\n\n`halo add cloudflare` installs it (short for `halo add @halo/cloudflare`). `halo tools` then lists its methods and their effects.\n"
+}

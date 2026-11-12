@@ -1,0 +1,40 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // The Halo package registry: JSON API (v1/*) and package pages, at registry.halolang.com.
+  // See README.md in this folder for local dev and the one-time deploy steps.
+  "name": "halo-registry",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "registry.halolang.com", "custom_domain": true }],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "halo-registry",
+      // Placeholder: replace with the id `wrangler d1 create halo-registry` prints.
+      // Local dev (`wrangler dev --local`) ignores it.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  // Package files: files/@scope/name/<version>/<sha256>.halotool, written once (src/packages.ts fileKey).
+  "r2_buckets": [{ "binding": "PACKAGES", "bucket_name": "halo-packages" }],
+  // Publish, login and token creation, keyed per user or per IP (src/http.ts rateLimit).
+  "ratelimits": [{ "name": "RATE_LIMITER", "namespace_id": "4801", "simple": { "limit": 20, "period": 60 } }],
+
+  "vars": {
+    "GITHUB_URL": "https://github.com",
+    "GITHUB_API_URL": "https://api.github.com",
+    "PUBLIC_URL": "https://registry.halolang.com"
+    // ALLOW_LOCAL_HOSTED_ENDPOINTS is deliberately unset (false): only local registries set it
+    // ("true", e.g. `wrangler dev --var ALLOW_LOCAL_HOSTED_ENDPOINTS:true`) to accept hosted
+    // endpoints on http, localhost or private addresses (src/endpoints.ts).
+  },
+  // Secrets (wrangler secret put; locally in .dev.vars, see .dev.vars.example):
+  //   GITHUB_CLIENT_ID      the GitHub OAuth app's client id (device flow enabled)
+  //   GITHUB_CLIENT_SECRET  its client secret
+
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

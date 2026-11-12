@@ -1,0 +1,75 @@
+[
+  {
+    "name": "@halo/cloudflare",
+    "description": "Cloudflare: Workers, KV, D1, R2, Pages and Queues in an account; DNS records, settings and cache purges in a zone",
+    "latest": "1.0.0",
+    "keywords": [
+      "cloudflare",
+      "workers",
+      "dns"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.739Z"
+  },
+  {
+    "name": "@halo/github-mcp",
+    "description": "GitHub through its official MCP server: repositories, issues, pull requests, code search, and more",
+    "latest": "1.0.0",
+    "keywords": [
+      "github",
+      "mcp",
+      "issues"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.743Z"
+  },
+  {
+    "name": "@halo/jira",
+    "description": "Jira Cloud issues: search with JQL, read, create, comment, and transition",
+    "latest": "1.0.0",
+    "keywords": [
+      "jira",
+      "issues",
+      "atlassian"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.745Z"
+  },
+  {
+    "name": "@halo/notion",
+    "description": "Notion pages and databases: search, read, query, create, and append",
+    "latest": "1.0.0",
+    "keywords": [
+      "notion",
+      "docs"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.747Z"
+  },
+  {
+    "name": "@halo/sentry",
+    "description": "Sentry error tracking: list, read, and resolve issues",
+    "latest": "1.0.0",
+    "keywords": [
+      "sentry",
+      "errors"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.749Z"
+  },
+  {
+    "name": "@halo/stripe",
+    "description": "Stripe payments: customers, charges, refunds, and balance",
+    "latest": "1.0.0",
+    "keywords": [
+      "stripe",
+      "payments"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.750Z"
+  },
+  {
+    "name": "@halo/world-time",
+    "description": "Time zones without an API: the time anywhere, and converting a time between zones",
+    "latest": "1.0.0",
+    "keywords": [
+      "time",
+      "timezones"
+    ],
+    "updatedAt": "2026-11-11T22:39:48.752Z"
+  }
+]
