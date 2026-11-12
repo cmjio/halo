@@ -37,7 +37,7 @@ import {
   type YankResponse,
   type WhoAmI,
 } from "./contract.js";
-import { compare, isPrerelease, satisfies, sortDescending } from "./semver.js";
+import { compare, isPrerelease, isValidVersion, satisfies, sortDescending } from "./semver.js";
 import { exportsOf, fileText, PackageError, permissionsOfPackage, readPackage, sha256, type PackageData } from "./format.js";
 import { isUrl, normalizeRegistry } from "./config.js";
 
@@ -119,7 +119,9 @@ export class RegistryClient {
   private async request(method: string, path: string, body?: unknown, extra: { contentType?: string; auth?: boolean } = {}): Promise<Response> {
     if (this.kind !== "http") throw new RegistryError(`${this.base} is a static registry; this needs a registry service (an https URL)`);
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    // The token goes only to the calls that need it (writes, whoami, tokens), never to
+    // public reads (docs, package files, the index, search).
+    if (extra.auth && this.token) headers.Authorization = `Bearer ${this.token}`;
     else if (extra.auth) throw new RegistryError(`Not logged in to ${this.base}: run \`halo login${this.base === "https://registry.halolang.com/" ? "" : ` --registry ${this.base}`}\`, or set HALO_TOKEN`);
     let payload: Uint8Array<ArrayBuffer> | string | undefined;
     if (body instanceof Uint8Array) {
@@ -460,7 +462,9 @@ function publishToFolder(base: string, bytes: Uint8Array, pkg: PackageData, publ
   const m = pkg.manifest;
   const docPath = join(base, packageDocPath(pkg.name));
   const existing = readJson<PackageDoc>(docPath);
-  if (existing?.versions[pkg.version]) throw new RegistryError(`${pkg.name}@${pkg.version} is already published; bump the version`);
+  // By precedence, not by spelling: an older doc may hold "v1.0.0" or "1.0.0+x" for 1.0.0.
+  const same = Object.keys(existing?.versions ?? {}).find((v) => v === pkg.version || (isValidVersion(v) && compare(v, pkg.version) === 0));
+  if (same) throw new RegistryError(`${pkg.name}@${pkg.version} is already published${same === pkg.version ? "" : ` (as ${same})`}; bump the version`);
   const filePath = join(base, packageFilePath(pkg.name, pkg.version));
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, bytes);

@@ -14,6 +14,7 @@
  */
 
 import { parse } from "../parser/index.js";
+import { TOOL_PROVIDERS, includes } from "../parser/builtins.js";
 import type { Arg, Loc, ParseResult, ToolDeclaration } from "../parser/types.js";
 import { normalizePackageName, type PackageExports, type PackageManifest } from "../registry/contract.js";
 import type { LinkDiagnostic } from "./index.js";
@@ -158,11 +159,17 @@ export function analyzePackage(files: Record<string, string>, manifest: PackageM
   const effects: ToolEffectSummary[] = [];
   for (const path of reachable) {
     const ast = parsed.get(path)!;
-    const imported = new Set((ast.uses ?? []).flatMap((u) => (u.items ?? []).map((i) => i.as ?? i.name)));
+    // Providers come only from packages (relative files declare no providers).
+    const imported = new Set((ast.uses ?? []).filter((u) => !u.source.startsWith(".")).flatMap((u) => (u.items ?? []).map((i) => i.as ?? i.name)));
     for (const t of [...ast.tools, ...ast.stores]) {
       // A provider from a package (its own or a dependency) is the package manager's to describe;
       // the Env variables the tool's declaration reads still count.
       const fromPackage = imported.has(t.provider) || Object.hasOwn(manifest.providers ?? {}, t.provider);
+      // Anything else must be a built-in: a bare name would bind whatever provider the
+      // consuming project happens to have under that name (and its keys).
+      if (!fromPackage && !includes(TOOL_PROVIDERS, t.provider)) {
+        report("error", path, `Tool "${t.name}" uses provider "${t.provider}", which isn't a built-in, one of the package's own providers (halo.json "providers"), or imported from one of its dependencies (use "@scope/name" { ${t.provider} })`, t.loc);
+      }
       const e = toolEffect(t, path);
       effects.push(fromPackage ? { tool: e.tool, file: e.file, provider: e.provider, network: [], env: e.env, spawn: [], code: false, fromPackage: true } : e);
     }

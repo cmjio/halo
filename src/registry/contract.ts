@@ -7,7 +7,7 @@
  */
 
 import { checkProviders, ManifestError, safeRelative, type Permissions, type ProviderSpec } from "./manifest.js";
-import { isValidRange, isValidVersion } from "./semver.js";
+import { isCanonicalVersion, isValidRange, isValidVersion } from "./semver.js";
 
 export { ManifestError };
 
@@ -118,6 +118,46 @@ const PIPELINE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV = /^[A-Z_][A-Z0-9_]*$/;
 
 /**
+ * Environment variables a hosted package's `auth.env` may not name: the consumer's other
+ * secrets (Halo's own, the model adapters', the built-in providers', and well-known cloud and
+ * CI tokens). Halo sends the value of `auth.env` to the publisher's server on every call.
+ */
+export const RESERVED_AUTH_ENV = [
+  "HALO_SERVE_TOKEN",
+  "HALO_TOKEN",
+  "HALO_API_KEY",
+  // Model adapters (src/runtime/adapter.ts, embeddings.ts).
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "OPENROUTER_API_KEY",
+  "REPLICATE_API_KEY",
+  "REPLICATE_API_TOKEN",
+  "TOGETHER_API_KEY",
+  // Built-in providers.
+  "SLACK_BOT_TOKEN",
+  "RESEND_API_KEY",
+  "LINEAR_TOKEN",
+  "FIGMA_TOKEN",
+  "BRAVE_API_KEY",
+  "EXA_API_KEY",
+  "SERPER_API_KEY",
+  "TAVILY_API_KEY",
+  "DAYTONA_API_KEY",
+  "E2B_API_KEY",
+  // Well-known tokens.
+  "GITHUB_TOKEN",
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
+  "GH_TOKEN",
+  "NPM_TOKEN",
+  "CLOUDFLARE_API_TOKEN",
+] as const;
+
+/** Whether `auth.env` names one of the consumer's other secrets (RESERVED_AUTH_ENV, or any AWS_ variable). */
+export const isReservedAuthEnv = (name: string) => (RESERVED_AUTH_ENV as readonly string[]).includes(name) || name.startsWith("AWS_");
+
+/**
  * Check a package's halo.json. `files`, when given, is the set of paths in the package, so
  * exports and the README can be checked too. Throws ManifestError listing every problem.
  */
@@ -129,7 +169,10 @@ export function checkPackageManifest(raw: unknown, options: { files?: Iterable<s
   const files = options.files ? new Set(options.files) : undefined;
 
   if (typeof m.name !== "string" || !parsePackageName(m.name)) bad(`name must be a scoped name like "@acme/support-kit" (got ${JSON.stringify(m.name)})`);
+  // Exactly one spelling per version: no "v1.0.0", " 1.0.0" or "1.0.0+build", which would
+  // otherwise be a second, different key for a version that's already published.
   if (typeof m.version !== "string" || !isValidVersion(m.version)) bad(`version must be semver, like 1.2.3 (got ${JSON.stringify(m.version)})`);
+  else if (!isCanonicalVersion(m.version)) bad(`version must be written as MAJOR.MINOR.PATCH[-PRERELEASE], with no leading "v", spaces or build metadata ("+..."): ${JSON.stringify(m.version)}`);
   if (typeof m.description !== "string" || !m.description.trim()) bad("description is required");
   if (m.halo !== undefined && (typeof m.halo !== "string" || !isValidRange(m.halo))) bad(`halo must be a version range, like ">=0.9.0"`);
   if (m.keywords !== undefined && (!Array.isArray(m.keywords) || m.keywords.some((k) => typeof k !== "string" || !k.trim()))) bad("keywords must be a list of strings");
@@ -174,6 +217,7 @@ export function checkPackageManifest(raw: unknown, options: { files?: Iterable<s
       else {
         if (h.auth.type !== "bearer" && h.auth.type !== "header") bad("hosted.auth.type must be bearer or header");
         if (typeof h.auth.env !== "string" || !ENV.test(h.auth.env)) bad("hosted.auth.env must name an environment variable");
+        else if (isReservedAuthEnv(h.auth.env)) bad(`hosted.auth.env can't be ${h.auth.env}: that's one of the consumer's other secrets, and its value would go to ${typeof h.endpoint === "string" ? h.endpoint : "the endpoint"}. Name a variable for your key only, like ACME_HALO_KEY`);
         if (h.auth.type === "header" && !h.auth.name) bad("hosted.auth.name is required for header auth");
       }
     }
@@ -184,6 +228,32 @@ export function checkPackageManifest(raw: unknown, options: { files?: Iterable<s
 
   if (problems.length) throw new ManifestError(`Invalid ${PROJECT_FILE}${typeof m.name === "string" ? ` for "${m.name}"` : ""}:\n  - ${problems.join("\n  - ")}`);
   return m;
+}
+
+/**
+ * Why a hosted endpoint isn't an ordinary public https server, or undefined when it is: plain
+ * http, this machine, or a private-network address. The public registry refuses these; a
+ * folder registry may not, so `halo add` and `halo install` warn about them.
+ */
+export function hostedEndpointConcern(endpoint: string): string | undefined {
+  let u: URL;
+  try {
+    u = new URL(endpoint);
+  } catch {
+    return "isn't a valid URL";
+  }
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const loopback = host === "localhost" || host.endsWith(".localhost") || /^127\./.test(host) || host === "::1" || host === "0.0.0.0" || host === "::";
+  const v4 = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  const [a, b] = v4 ? [Number(v4[1]), Number(v4[2])] : [NaN, NaN];
+  const privateNet =
+    a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) ||
+    /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host) || host.startsWith("::ffff:") ||
+    host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".lan") || (!host.includes(".") && !host.includes(":"));
+  const where = loopback ? "this machine" : privateNet ? "a private network address" : undefined;
+  if (u.protocol === "http:") return `uses plain http${where ? ` to ${where}` : ""}`;
+  if (u.protocol !== "https:") return `uses ${u.protocol.replace(/:$/, "")}, not https`;
+  return where ? `points at ${where}` : undefined;
 }
 
 function isHttps(url: string): boolean {
@@ -209,7 +279,7 @@ export const MAX_PACKAGE_BYTES = 5 * 1024 * 1024;
  */
 export const MAX_PACKAGE_WIRE_BYTES = 8 * 1024 * 1024;
 /** Never packed: local state, secrets, other packages. */
-export const PACK_EXCLUDE = [/^node_modules\//, /^\.halo\//, /^\.git\//, /\.halotool$/, /^halo\.lock$/, /(^|\/)\.env(\..*)?$/, /^\.dev\.vars$/];
+export const PACK_EXCLUDE = [/^node_modules\//, /^\.halo\//, /^\.git\//, /\.halotool$/, /^halo\.lock$/, /(^|\/)\.env(\..*)?$/, /^\.dev\.vars$/, /(^|\/)package-keys\.json$/];
 
 /** What a hosted pipeline looks like from outside. Written by `halo publish`; the source is not shipped. */
 export interface HostedPipelineInterface {

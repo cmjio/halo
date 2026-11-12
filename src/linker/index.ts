@@ -18,7 +18,7 @@
 
 import { parse, render } from "../parser/index.js";
 import { validate, type Diagnostic, type ValidateOptions } from "../parser/validate.js";
-import { TOOL_RULES, includes } from "../parser/builtins.js";
+import { TOOL_PROVIDERS, TOOL_RULES, includes } from "../parser/builtins.js";
 import type { Agent, Arg, CallStage, Loc, ParseResult, PipelineDeclaration, PipelineStage, PolicyDeclaration, SchemaDeclaration, ToolDeclaration, UseDeclaration, Value } from "../parser/types.js";
 import { normalizePackageName, parsePackageName, qualifiedProvider, type HostedPipelineInterface, type ModelSlot, type PackageResolver, type ResolvedPackage } from "../registry/contract.js";
 import { displayText, isQualified } from "./names.js";
@@ -461,9 +461,25 @@ class Linker {
     return unit.own.has(name) || unit.imports.has(name);
   }
 
-  private resolveProvider(unit: Unit, name: string): string {
+  /**
+   * A tool's provider. In the project's own files a name it doesn't import stays bare (a
+   * built-in, or a direct dependency's provider registered under its bare name). In a package
+   * file it must be imported, the package's own (halo.json `providers`), or a built-in: a bare
+   * name would otherwise bind whatever provider the consuming project has under that name.
+   */
+  private resolveProvider(unit: Unit, t: ToolDeclaration): string {
+    const name = t.provider;
     const sym = unit.imports.get(name);
     if (sym) return sym.qualified;
+    if (!unit.pkg) return name;
+    if (Object.hasOwn(unit.pkg.manifest.providers ?? {}, name)) return qualifiedProvider(unit.pkg.name, name);
+    if (includes(TOOL_PROVIDERS, name)) return name;
+    this.report(
+      "error",
+      unit.path,
+      `Tool "${t.name}" in ${unit.pkg.name} uses provider "${name}", which isn't a built-in, one of ${unit.pkg.name}'s own providers (halo.json "providers"), or imported from one of its dependencies (use "@scope/name" { ${name} })`,
+      t.loc,
+    );
     return name;
   }
 
@@ -567,7 +583,7 @@ class Linker {
   }
 
   private tool(unit: Unit, t: ToolDeclaration): ToolDeclaration {
-    return { ...this.resolveArgs(unit, t), name: this.resolve(unit, t.name), provider: this.resolveProvider(unit, t.provider) };
+    return { ...this.resolveArgs(unit, t), name: this.resolve(unit, t.name), provider: this.resolveProvider(unit, t) };
   }
 
   private schema(unit: Unit, s: SchemaDeclaration): SchemaDeclaration {

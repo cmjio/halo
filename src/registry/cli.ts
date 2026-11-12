@@ -45,7 +45,7 @@ export const PACKAGE_HELP = `PACKAGES:
   halo dist-tag add <name>@<version> <tag> | rm <name> <tag> | ls <name>
   halo owner add|rm <name|@scope> <login> [--role owner|publisher] | ls <name|@scope>
   halo scope create <@scope> | verify <@scope> <domain>
-  halo login | logout | whoami          Sign in to the registry (device code; HALO_TOKEN overrides)
+  halo login | logout | whoami          Sign in to the registry (device code; HALO_TOKEN overrides, for Halo's registry or HALO_TOKEN_REGISTRY)
   halo token create [--name n] [--read-only] [--scope @s] | list | revoke <id>
   Registry: --registry, then HALO_REGISTRY, then "registry" in halo.json; scopes map with
   "registries": { "@acme": "https://..." } in halo.json.`;
@@ -212,6 +212,7 @@ function mustName(name: string): string {
 // ── Installing ──
 
 function printReport(ctx: Ctx, report: InstallReport, only?: Set<string>) {
+  for (const w of report.warnings ?? []) ctx.log(yellow(`! ${w}`));
   if (report.migrated.length) ctx.log(`${yellow("!")} migrated halo.lock to v2 (${report.migrated.join(", ")} → halo.json dependencies)`);
   for (const r of report.packages) {
     if (only && !only.has(r.name)) continue;

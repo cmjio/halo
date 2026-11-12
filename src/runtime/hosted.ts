@@ -53,10 +53,15 @@ export const hostedProvider: ToolProvider = async (call: ToolCall, services: Too
   const url = `${endpoint}/api/pipelines/${encodeURIComponent(pipeline)}/runs`;
   let res: Response;
   try {
-    res = await services.fetch(url, { method: "POST", headers, body: JSON.stringify({ args, wait: true }), signal: call.signal });
+    // Never follow a redirect: it would re-send the key and the inputs to wherever it points.
+    res = await services.fetch(url, { method: "POST", headers, body: JSON.stringify({ args, wait: true }), signal: call.signal, redirect: "manual" });
   } catch (err) {
     if (call.signal.aborted) throw err;
     throw new HaloError(`${label}: can't reach ${endpoint}: ${err instanceof Error ? err.message : String(err)}`, { code: "HTTP_ERROR", retryable: true, cause: err });
+  }
+  if (res.status >= 300 && res.status < 400) {
+    const to = res.headers.get("location");
+    throw new HttpError(`${label}: ${endpoint} answered a redirect (${res.status}${to ? ` to ${to}` : ""}); hosted calls don't follow redirects, so the key isn't sent anywhere else. Ask ${pkg}'s publisher to fix hosted.endpoint`, res.status, "");
   }
   const body = await res.text();
   let parsed: { output?: unknown; status?: string; error?: string; code?: string } | undefined;
