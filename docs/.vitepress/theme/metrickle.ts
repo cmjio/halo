@@ -84,10 +84,11 @@ function checkNotFound(router: Router) {
 export function installMetrickleEvents(router: Router) {
   document.addEventListener("click", onClick, { capture: true });
   const previous = router.onAfterRouteChange;
+  // VitePress runs this after every page load, the first one included (router.go() at
+  // startup). Don't also check at startup: until that first load finishes, route.data is
+  // the not-found placeholder, so every first page would look like a 404.
   router.onAfterRouteChange = async (to) => {
     await previous?.(to);
     checkNotFound(router);
   };
-  // The first page loads before any route change: check once it has.
-  setTimeout(() => checkNotFound(router), 0);
 }
