@@ -23,6 +23,8 @@ pipeline Answer(ticket: String) -> Draft:
     reads env: ACME_REPLIES_KEY
     sends your inputs to: replies.acme.com
   ! hosted: DraftReply runs on replies.acme.com, not on this machine. This package sends your inputs to replies.acme.com and reads ACME_REPLIES_KEY (the key @acme/hosted-replies's publisher issues you)
+  ! hosted: calling DraftReply POSTs its arguments to https://replies.acme.com/api/pipelines/DraftReply/runs; the answer comes back as its output, checked against its return type
+  ! hosted: there it runs on the publisher's models, tools and keys. Your policies, token budgets and tools don't apply inside it, and nothing on this machine is called on its behalf; you control what you pass in and what you do with the answer
 ```
 
 `halo info` shows the same, and `halo.lock` records the host under the package's `permissions.hosted`.
@@ -40,10 +42,24 @@ pipeline Answer(ticket: String) -> Draft:
   1      DraftReply(...)
   1.0    DraftReply.run
          calls DraftReply.run: external
-         hosted by @acme/hosted-replies: sends its inputs to replies.acme.com (key from ACME_REPLIES_KEY)
+         hosted by @acme/hosted-replies: sends its inputs to replies.acme.com (key from ACME_REPLIES_KEY): POST https://replies.acme.com/api/pipelines/DraftReply/runs. It runs there on the publisher's models and tools, outside your policies; only its answer comes back
 
 Acts on the world without asking: DraftReply.run
 ```
+
+### What you control, and what you don't
+
+A hosted call crosses a boundary. Your side of it is enforced on your machine; the other side is the publisher's, and you see only its answer.
+
+| You control (enforced here) | Opaque to you (on the publisher's server) |
+|---|---|
+| What you send: the arguments are typed and checked when linking, and only those arguments go (no context, history or other inputs) | Which models answer, and with what prompts |
+| Where it goes: exactly one `POST <endpoint>/api/pipelines/<Pipeline>/runs`. Redirects aren't followed, so your key and inputs never go anywhere else | Which tools it calls and what they reach (none of yours: nothing on your machine is called on its behalf) |
+| The answer: it is checked against the interface's return type, and a wrong shape fails the run | The publisher's own policies, logs and retention |
+| Whether it runs at all: `DenyTools(DraftReply)` or `AllowEffects(read)` in a policy, `@timeout`, `@retry`, cancellation, and mocks | What it costs the publisher: tokens are theirs, so your token budget doesn't count them |
+| Which hosts are acceptable: `"allow": { "hosted": [...] }` in halo.json makes `halo install` refuse any other ([allow-list](tool-packages.md#an-allow-list-in-halojson)) | |
+
+Your policies stop at the call: they can refuse or require approval for it, but they can't reach the agents inside it. Treat a hosted pipeline like any external API: send it only what you'd send that company, and validate what comes back before acting on it.
 
 ### Testing offline
 

@@ -152,6 +152,18 @@ export function analyzePackage(files: Record<string, string>, manifest: PackageM
       } else if (!allowIds) {
         report("error", path, `Agent "${agent.name}" hard-codes the model "${agent.modelId}"; a package's agents use model slots, [models.<slot>], so the people using it choose (and pay for) their models`, agent.loc);
       }
+      // @cascade and @shadow run more models on the consumer's keys: slots too, never fixed ids.
+      for (const d of agent.directives ?? []) {
+        if (d.name !== "cascade" && d.name !== "shadow") continue;
+        for (const target of d.value ? d.value.split(/\s*,\s*/).filter(Boolean) : []) {
+          if (target.startsWith("models.")) {
+            const slot = target.slice("models.".length);
+            if (!Object.hasOwn(manifest.models ?? {}, slot)) report("error", path, `@${d.name} on "${agent.name}" uses model slot "${slot}", which halo.json "models" doesn't declare (add { "description": "...", "suggested": "..." })`, agent.loc);
+          } else if (!allowIds && /[/]/.test(target)) {
+            report("error", path, `@${d.name} on "${agent.name}" hard-codes the model "${target}"; use a model slot, @${d.name}(models.<slot>), so the people using the package choose (and pay for) every model it runs`, agent.loc);
+          }
+        }
+      }
     }
   }
 

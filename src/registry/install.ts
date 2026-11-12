@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { hostedEndpointConcern, normalizePackageName, PACKAGES_DIR, type LockfileV2, type LockPackage, type PackagePermissions } from "./contract.js";
 import { DEFAULT_REGISTRY, readProjectConfig, registryOfSource, registrySettings, writeProjectConfig, type RegistrySettings } from "./config.js";
+import { allowListProblems, outsideAllowList, widened } from "./allow.js";
 import { PackageError, permissionsOfPackage, readPackage, sha256, totalPermissions, type PackageData } from "./format.js";
 import { PACKAGE_FILE, packageDir, readAnyLock, readTrust, writeLockV2, writeTrust } from "./lockfile.js";
 import { clientFor, resolveGraph, specOfSource, type ResolvedNode } from "./resolve.js";
@@ -167,6 +168,24 @@ export async function installProject(options: InstallOptions): Promise<InstallRe
     for (const other of results) if (other.dependencies[r.name]) r.addedBy.push(`${other.name}@${other.version}`);
   }
 
+  // halo.json "allow": every package, direct or not, stays inside it, or nothing is installed.
+  const allowProblems = allowListProblems(config.allow);
+  if (allowProblems.length) throw new PackageError(allowProblems.join("\n"));
+  if (config.allow) {
+    const outside = results.map((r) => ({ r, needs: outsideAllowList(r.permissions, config.allow!) })).filter((x) => x.needs.length);
+    if (outside.length) {
+      const lines = outside.flatMap(({ r, needs }) => [`  ${r.name}@${r.version}${r.direct ? "" : ` (added by ${r.addedBy.join(", ")})`}`, ...needs.map((n) => `      ${n}`)]);
+      throw new PackageError(`${outside.length === 1 ? "This package needs" : "These packages need"} more than halo.json "allow" permits:\n${lines.join("\n")}\nNothing was installed. Add what you accept to "allow" in halo.json, or stay on a version that fits.`);
+    }
+  }
+  // An update that reaches somewhere new says so, even without an allow-list.
+  for (const r of results) {
+    const previous = locked.packages[r.name];
+    if (!previous?.permissions || previous.version === r.version) continue;
+    const more = widened(previous.permissions, r.permissions);
+    if (more.length) warnings.push(`${r.name} ${previous.version} → ${r.version} reaches more than before: ${more.join("; ")}`);
+  }
+
   const untrusted = results.filter((r) => r.permissions.code && !options.trust && trust[r.name] !== r.sha256);
   if (untrusted.length) {
     const lines = untrusted.map((r) => `  ${r.name}@${r.version} ${r.permissions.spawn.length ? `starts ${r.permissions.spawn.join("; ")}` : "loads its own module"}${r.direct ? "" : ` (added by ${r.addedBy.join(", ")})`}`);
@@ -253,6 +272,11 @@ export function describeHostedUse(manifest: PackageManifest): string[] {
   const names = h.exports.join(", ");
   const key = h.auth ? ` and reads ${h.auth.env} (the key ${manifest.name}'s publisher issues you)` : "";
   const lines = [`hosted: ${names} ${h.exports.length === 1 ? "runs" : "run"} on ${host}, not on this machine. This package sends your inputs to ${host}${key}`];
+  const base = h.endpoint.replace(/\/+$/, "");
+  for (const name of h.exports) lines.push(`hosted: calling ${name} POSTs its arguments to ${base}/api/pipelines/${encodeURIComponent(name)}/runs; the answer comes back as its output, checked against its return type`);
+  lines.push(
+    `hosted: there it runs on the publisher's models, tools and keys. Your policies, token budgets and tools don't apply inside it, and nothing on this machine is called on its behalf; you control what you pass in and what you do with the answer`,
+  );
   const concern = hostedEndpointConcern(h.endpoint);
   // The public registry refuses these endpoints; a folder or private registry may not.
   if (concern) lines.push(`hosted: the endpoint ${h.endpoint} ${concern}, which the public registry wouldn't accept. Check you trust where ${manifest.name} came from`);

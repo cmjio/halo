@@ -147,7 +147,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         const arg = (name: string) => tool.argList.find((a) => a.name === name)?.value;
         const text = (name: string) => ((v) => (v?.kind === "string" ? v.value : ""))(arg(name));
         const host = text("endpoint").replace(/^[a-z]+:\/\//i, "").split("/")[0];
-        steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect: "external" }], notes: [`hosted by ${text("package")}: sends its inputs to ${host}${text("env") ? ` (key from ${text("env")})` : ""}`] });
+        steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect: "external" }], notes: [`hosted by ${text("package")}: sends its inputs to ${host}${text("env") ? ` (key from ${text("env")})` : ""}: POST ${text("endpoint").replace(/\/+$/, "")}/api/pipelines/${encodeURIComponent(text("pipeline"))}/runs. It runs there on the publisher's models and tools, outside your policies; only its answer comes back`] });
         return;
       }
       steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? " (effect not described)" : ""}`] });

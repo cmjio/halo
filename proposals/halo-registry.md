@@ -197,6 +197,22 @@ Later: signed packages with Sigstore provenance from CI, so the sha256 doesn't r
 4. **Hosted exports.** `halo serve --package`, interface-only packages, the endpoint stub and the install disclosure.
 5. **Signing and provenance.**
 
+## Trust boundaries
+
+What a consumer can rely on, as built (pre-merge review):
+
+- **Hosted calls.** The consumer controls the arguments (typed, checked when linking), the destination (one POST to the stub's URL, no redirects), whether the call runs at all (policies, `@timeout`, mocks), and the answer (checked against the interface's return type). The publisher's models, tools, policies and spend are opaque. Install and `halo plan` name the exact URL and say so.
+- **Policies and skills from packages.** Policy rules only narrow, and an agent under several policies gets the intersection, so a package policy can't loosen a consumer's. It binds nothing until a consumer agent `requires` it. Skills add prompt text, never tools. Consumer policies don't reach a package's own agents.
+- **Providers.** A package file can name only built-ins, its own providers, and providers imported from dependencies it declares, at any depth. A consumer's providers are out of reach, and a hosted call carries only its arguments and the consumer's key for that publisher.
+- **Permissions are machine-checkable.** `halo install` computes them from the downloaded package. They're in `halo.lock` and the registry JSON, and halo.json `"allow"` makes install fail closed on anything outside it, for nested packages too. An update that reaches somewhere new is called out.
+- **Cascades.** Slots hold one model. A package cascades through its own slots (`@cascade(models.smart)`), so every model it may run is one the consumer bound, and publish refuses fixed models in `@cascade` and `@shadow`.
+
+Not covered yet (follow-ups):
+- consumer policies applied to a package's agents
+- publisher 2FA or provenance (signed builds from CI)
+- owner notifications on publish
+- a permissions diff on the package page between versions
+
 ## Decisions
 
 | Question | Decision |

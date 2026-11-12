@@ -111,6 +111,12 @@ export interface ProjectPackageConfig {
   registry?: string;
   /** Registries by scope: { "@acme": "https://halo.acme.internal" }. */
   registries?: Record<string, string>;
+  /**
+   * What installed packages may reach (src/registry/allow.ts). When set, `halo install` fails
+   * if any package, direct or not, needs a host, env variable, hosted endpoint, command or
+   * own code outside it.
+   */
+  allow?: { network?: string[]; env?: string[]; hosted?: string[]; spawn?: string[]; code?: boolean };
 }
 
 const SLOT = /^[a-z][A-Za-z0-9_]{0,40}$/;

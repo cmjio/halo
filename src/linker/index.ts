@@ -595,14 +595,30 @@ class Linker {
     const out: Agent = { ...a, name: this.resolve(unit, a.name), modelId: this.agentModel(unit, a), params };
     if (a.equips) out.equips = a.equips.map((n) => this.resolve(unit, n));
     if (a.requires) out.requires = a.requires.map((n) => this.resolve(unit, n));
-    if (a.directives) out.directives = a.directives.map((d) => this.directive(unit, d));
+    if (a.directives) out.directives = a.directives.map((d) => this.directive(unit, d, a));
     return out;
   }
 
-  private directive(unit: Unit, d: NonNullable<Agent["directives"]>[number]) {
+  /**
+   * `@cascade` and `@shadow` name agents, model ids, or model slots (`models.smart`). A slot is
+   * bound like an agent's own model, so in a package every model a cascade moves up to is one
+   * the consumer chose (and pays for).
+   */
+  private directive(unit: Unit, d: NonNullable<Agent["directives"]>[number], agent: Agent) {
     if (d.name !== "shadow" && d.name !== "cascade") return d;
     const parts = d.value ? d.value.split(/\s*,\s*/) : [];
-    return { ...d, value: parts.map((p) => (this.known(unit, p) ? this.resolve(unit, p) : p)).join(", ") };
+    const resolved = parts.map((p) => {
+      if (p.startsWith("models.")) {
+        const slot = p.slice("models.".length);
+        const model = this.slotModel(unit, slot);
+        if (model) return model;
+        const where = unit.pkg ? `use "${unit.pkg.name}" { ... } with models(${slot}: <model id>), or in halo.json "models"` : `halo.json: "models": { "${slot}": "<model id>" }`;
+        this.report("error", unit.path, `@${d.name}(${d.value}) on "${agent.name}"${unit.pkg ? ` in ${unit.pkg.name}` : ""} uses model slot "${slot}", which has no model; fill it in ${where}`, agent.loc);
+        return p;
+      }
+      return this.known(unit, p) ? this.resolve(unit, p) : p;
+    });
+    return { ...d, value: resolved.join(", ") };
   }
 
   private pipeline(unit: Unit, p: PipelineDeclaration): PipelineDeclaration {

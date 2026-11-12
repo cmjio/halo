@@ -14,7 +14,7 @@ import { HaloRuntime, type MockRequest } from "../src/runtime/runtime";
 import { formatPlan, plan } from "../src/plan";
 import { startServer, type HaloServer } from "../src/serve/server";
 import { runPackageCommand } from "../src/registry/cli";
-import { installProject, describeInstall } from "../src/registry/install";
+import { installProject, describeInstall, describeHostedUse } from "../src/registry/install";
 import { packWithHosted, pausePath } from "../src/registry/hosted";
 import { readPackage, PackageError } from "../src/registry/format";
 import { HOSTED_PACKAGE_HEADER, type LockfileV2, type PackageFileV2, type PackageManifest } from "../src/registry/contract";
@@ -308,6 +308,32 @@ describe("consuming a hosted pipeline", () => {
       expect(r.output).toEqual(drafted("offline", "warm"));
       expect(r.context.meta.calls[0]).toMatchObject({ target: "DraftReply.run", mocked: true });
     }
+  });
+
+  test("the publisher's answer is held to the interface's return type; only the stub's URL is called", async () => {
+    const linked = linkFile(join(app, "main.halo"));
+    const seen: string[] = [];
+    const answering = (output: unknown) =>
+      (async (url: string | URL | Request) => {
+        seen.push(String(url));
+        return new Response(JSON.stringify({ status: "completed", output }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }) as unknown as typeof fetch;
+    const wrong = new HaloRuntime({ logger: quiet, env: { ACME_REPLIES_KEY: "k" }, fetch: answering({ reply: "not a Reply" }) }).load(linked.program);
+    await expect(wrong.run("Answer", { ticket: "t" })).rejects.toThrow(/Schema validation failed for "Draft"/);
+    expect(seen).toEqual([`${endpoint}/api/pipelines/DraftReply/runs`]);
+    const right = new HaloRuntime({ logger: quiet, env: { ACME_REPLIES_KEY: "k" }, fetch: answering(drafted("t", "warm")) }).load(linked.program);
+    expect((await right.run("Answer", { ticket: "t" })).output).toEqual(drafted("t", "warm"));
+  });
+
+  test("install and plan name the exact URL and what stays out of the consumer's hands", async () => {
+    const text = describeHostedUse(readPackage(readFileSync(join(app, ".halo/packages", PKG, "package.halotool"))).manifest).join("\n");
+    expect(text).toContain(`calling DraftReply POSTs its arguments to http://localhost:${server.port}/api/pipelines/DraftReply/runs`);
+    expect(text).toContain("Your policies, token budgets and tools don't apply inside it");
+    const linked = linkFile(join(app, "main.halo"));
+    const rt = new HaloRuntime({ logger: quiet });
+    const p = formatPlan(plan(linked.program, "Answer", { providerInfo: (provider) => rt.toolProviderInfo(provider) }));
+    expect(p).toContain(`POST http://localhost:${server.port}/api/pipelines/DraftReply/runs`);
+    expect(p).toContain("outside your policies; only its answer comes back");
   });
 
   test("halo plan shows one external call to the publisher's host", () => {

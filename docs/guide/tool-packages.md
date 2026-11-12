@@ -69,6 +69,8 @@ A package's agents don't pick a model: they declare slots in its `halo.json` (`m
 
 The `use` line wins. `halo info` lists a package's slots with what each needs and a suggested model, and `halo add` puts the suggestions in the example `use` line it prints.
 
+**Cascades.** A slot holds one model. A package that wants a bigger model when a call fails cascades through another of its slots, `@cascade(models.smart)`, so every model it can move up to is one you bound; `halo publish` refuses a package whose `@cascade` or `@shadow` names a fixed model, since you'd pay for a model you never chose. A cascade inside a package runs inside that package's agents: you choose the models at each step, the package chooses when to move up. You can't put your own `@cascade` on a package's agent; to get one, wrap its pipeline in yours, or ask the publisher for another slot. (Project files can use slots in cascades too: `@cascade(models.big)` takes `big` from `halo.json`.)
+
 ### What `halo add` takes
 
 | Spec | Adds |
@@ -173,7 +175,38 @@ What a package's providers can do depends on their kind.
 - **A hosted export** runs on its publisher's server: your inputs are sent there. The install summary says so (`sends your inputs to: …`).
 - **`--trust` is kept on this machine, not in `halo.lock`.** `halo add --trust` (or `halo install --trust`) records each code-running package's exact sha256 in `.halo/trust.json`. It loads only if `.halo/trust.json` has the checksum `halo.lock` pins, so a pull request that moves a package to a new version, or adds one that runs code, stops the next command with a message to trust it again. Don't commit `.halo/trust.json`.
 - **Checksums** catch a download that differs from the registry's package document or from `halo.lock`, and installed files that changed afterwards. They don't protect against a malicious publisher. A package installed from a folder, file or URL has no registry checksum; whatever was read is pinned.
+- **Updates.** A locked version never changes under you: `halo.lock` pins its sha256 and the registry never replaces a published file. When `halo update` moves to a version that reaches a new host, env variable, hosted endpoint or command, the install summary says `reaches more than before: …`.
+- **Policies a package exports only narrow.** Every rule restricts (`AllowTools` lists what's allowed, `DenyTools` removes, approval rules add a step), and an agent under several policies gets what all of them allow, so a package's policy can't loosen yours. It binds nothing until one of your agents `requires` it. Your policies, in turn, bind your agents: a package's agents run under the package's own policies, so read what its agents equip (and its `network`) the way you'd read any dependency.
+- **Skills a package ships** are instructions added to an agent's prompt when that agent names them. They don't add tools: an agent can only call what it `equips`, whatever a skill says.
 - **Effects** (`read`, `write`, `external`) are what the publisher wrote. Policies that select by effect (`AllowEffects(read)`) trust that. To be sure, name methods: `AllowTools("Pay.list_charges", "Pay.get_customer")`.
+
+### An allow-list in `halo.json`
+
+Without one, `halo install` shows what each package reaches and stops only for packages that run their own code. With one, it fails closed: every package, including those added by other packages, must stay inside it, or nothing is installed. Use it in CI so a new dependency or version can't reach somewhere you didn't approve:
+
+```json
+{
+  "allow": {
+    "network": ["*.zendesk.com", "api.stripe.com"],
+    "env": ["ZENDESK_*", "STRIPE_API_KEY"],
+    "hosted": ["replies.acme.com"],
+    "spawn": [],
+    "code": false
+  }
+}
+```
+
+A missing list allows nothing of its kind. In hosts, `*` is one DNS label; in env names, any characters; a lone `"*"` allows anything. A package whose base URL is `https://{{subdomain}}.zendesk.com` reaches `*.zendesk.com`, so only a pattern at least that broad covers it. `"code": true` allows code-running packages; they still need `--trust`.
+
+```
+These packages need more than halo.json "allow" permits:
+  @acme/inner@1.0.0 (added by @acme/support-kit@1.2.0)
+      network: collect.example.com
+      env: OPENAI_API_KEY
+Nothing was installed. Add what you accept to "allow" in halo.json, or stay on a version that fits.
+```
+
+The permissions it checks are computed by `halo install` from the downloaded package itself, not taken from the registry's page; the same lists are in `halo.lock` (`permissions`) and in the registry's JSON (`v1/packages/@scope/name.json`, each version's `permissions`), so other tools can check them too.
 
 ## Writing a package
 

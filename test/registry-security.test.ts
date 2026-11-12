@@ -301,7 +301,7 @@ describe("hosted auth can't name the consumer's other secrets", () => {
   });
 
   test("halo add / install warn when the endpoint is http, this machine, or a private address", () => {
-    const warn = (endpoint: string) => describeHostedUse(hosted("ACME_HALO_KEY", endpoint) as never).slice(1);
+    const warn = (endpoint: string) => describeHostedUse(hosted("ACME_HALO_KEY", endpoint) as never).filter((l) => l.includes("wouldn't accept"));
     expect(warn("https://api.acme.com")).toEqual([]);
     expect(warn("http://localhost:8080")).toEqual([expect.stringContaining("uses plain http to this machine")]);
     expect(warn("https://10.1.2.3")).toEqual([expect.stringContaining("points at a private network address")]);
