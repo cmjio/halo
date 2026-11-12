@@ -1079,9 +1079,9 @@ describe("stats", () => {
     const token = await setupAcme(h);
     await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool");
     await h.publish(token, dependent("@acme/inbox", { "@acme/support-kit": "^1.2.0" }));
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
       const pending: Promise<unknown>[] = [];
-      const res = await worker.fetch(new Request(input, init), h.env, { waitUntil: (p) => void pending.push(p) });
+      const res = await worker.fetch(input instanceof Request ? new Request(input, init) : new Request(String(input), init), h.env, { waitUntil: (p) => void pending.push(p) });
       await Promise.all(pending);
       return res;
     }) as typeof fetch;
