@@ -13,6 +13,7 @@
  * Stateless: no sessions, no server-sent streams. Each POST carries its own answer.
  */
 
+import pkg from "../../package.json" with { type: "json" };
 import { MCP_PROTOCOL_VERSION, MCP_SUPPORTED_VERSIONS } from "../runtime/mcp.js";
 import type { JsonSchema } from "../runtime/tools.js";
 
@@ -89,7 +90,7 @@ function outputText(output: unknown): string {
   return typeof output === "string" ? output : JSON.stringify(output, null, 2);
 }
 
-export function createMcpServer(source: McpPipelineSource, info: { name: string; version: string } = { name: "halo", version: "0.8.0" }): McpServer {
+export function createMcpServer(source: McpPipelineSource, info: { name: string; version: string } = { name: "halo", version: pkg.version }): McpServer {
   /** In-flight tools/call requests, so notifications/cancelled can stop them. */
   const inflight = new Map<Id, AbortController>();
 

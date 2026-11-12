@@ -17,6 +17,7 @@
  */
 
 import { HaloError, TimeoutError } from "./errors.js";
+import pkg from "../../package.json" with { type: "json" };
 import type { JsonSchema, ProviderInfo, ToolCall, ToolEffect, ToolInfoContext, ToolMethod, ToolProvider, ToolServices } from "./tools.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -24,7 +25,7 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_SUPPORTED_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const CLIENT_INFO = { name: "halo", version: "0.8.0" };
+const CLIENT_INFO = { name: "halo", version: pkg.version };
 
 /** Methods every MCP tool has, in addition to the server's own tools. */
 const BUILTIN_METHODS = new Set(["list_tools", "list_resources", "read_resource"]);
