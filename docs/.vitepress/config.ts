@@ -33,6 +33,8 @@ export default defineConfig({
     ['meta', { property: 'og:url', content: 'https://halolang.com/' }],
     ['meta', { property: 'og:image', content: 'https://halolang.com/video/halo-showcase.jpg' }],
     ['meta', { property: 'og:video', content: 'https://halolang.com/video/halo-showcase.mp4' }],
+    // Metrickle page analytics. The key is the site's public (mk_pub_) key, safe to ship.
+    ['script', { defer: '', src: 'https://app.metrickle.com/m.js', 'data-key': 'mk_pub_PoTEUPvgOlhEovx1iXsQqYRM' }],
   ],
   markdown: {
     theme: {
