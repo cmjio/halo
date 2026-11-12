@@ -14,7 +14,7 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | Worker `halo-registry` (`src/index.ts`) | Routes `v1/*` (JSON, `ApiError` on failure, CORS on GETs) and the HTML pages. |
 | D1 `halo-registry` (`DB`) | Users, tokens (sha256 only), scopes and members, packages, versions (manifest, README, computed exports and permissions), dist-tags, daily downloads, pending device logins, domain checks, and an FTS5 table for search. Schema: `migrations/`. |
 | R2 `halo-packages` (`PACKAGES`) | Package files at `files/@scope/name/<version>/<sha256>.halotool`, written once. Served at `v1/files/@scope/name/<version>.halotool` (found through the sha256 in D1) with `Cache-Control: immutable` and the sha256 as ETag. |
-| Cache API | Package docs, `v1/index.json` and the pages, cached 60s at the edge and purged on publish, yank, deprecate, dist-tag and verification changes. |
+| Cache API | Package docs, `v1/index.json` and the pages, cached 60s at the edge. Docs and package pages are keyed by the package's revision, so changes show everywhere at once; see [Caching](#caching). |
 | Rate Limiting (`RATE_LIMITER`) | Publish (per user), login start (per IP) and token creation (per user). Skipped when unbound. |
 
 | File | |
@@ -24,8 +24,9 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `src/scopes.ts` | Org scopes, members (owners only; the last owner can't leave), DNS TXT domain verification over DoH. |
 | `src/packages.ts` | Docs, index, search, file downloads, publishing, yank, deprecate, dist-tags, cache purges. |
 | `../../src/registry/check.ts` | Not in this folder: `checkPackageFiles`, shared with the CLI. Runs the linker's `analyzePackage` on the package's `.halo` files and returns the exports, the permissions and the problems that refuse a publish (syntax errors, hard-coded models in a package that isn't hosted, undeclared model slots, names declared twice in exported files, `use` outside the package or its dependencies, no README, hosted pipelines without interfaces). `halo publish` runs the same function, so the client refuses what the server refuses. |
-| `src/markdown.ts` | A small Markdown renderer that escapes all raw HTML and drops unsafe links. |
-| `src/pages.ts` | The HTML pages. No external assets; dark-mode aware. |
+| `src/markdown.ts` | A small Markdown renderer that escapes all raw HTML and drops unsafe links. Inline syntax is one left-to-right scan of the raw text: only `anchor()` writes an attribute, from a URL taken from the source and checked by `safeUrl` (http(s), mailto or relative; no quotes, angle brackets, backticks, backslashes, whitespace or controls). Finished HTML is never fed back into a URL. |
+| `src/pages.ts` | The HTML pages. No scripts, no external assets; dark-mode aware. |
+| `src/endpoints.ts` | Hosted endpoints must be https on a public host (no localhost, loopback, private, link-local, `.local`/`.internal` names, or bare IPs in those ranges, IPv4 or IPv6). The shared `hostedEndpointConcern` runs first, then a stricter pass. `ALLOW_LOCAL_HOSTED_ENDPOINTS=true` turns it off for local registries; the e2e test sets it with `wrangler dev --var`. |
 | `src/env.ts` | The bindings, typed structurally, so the code also type-checks and runs under `bun test`. |
 
 ### Routes
@@ -42,8 +43,8 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `PUT`/`DELETE v1/packages/@s/n/dist-tags/<tag>` | `{ version }`; `latest` can't be removed or point at a yanked version |
 | `POST v1/auth/device`, `POST v1/auth/device/token` | GitHub device flow → `TokenResponse` (428 pending, 429 slow_down, 410 expired) |
 | `GET v1/whoami` | `WhoAmI` |
-| `GET`/`POST v1/tokens`, `DELETE v1/tokens/<id>` | list, create `{ name, readOnly?, scopes? }` (secret shown once), revoke |
-| `POST v1/scopes`, `GET v1/scopes/@s` | create an org scope `{ scope }` → `ScopeDoc` |
+| `GET`/`POST v1/tokens`, `DELETE v1/tokens/<id>` | list, create `{ name, readOnly?, scopes? }` (secret shown once), revoke. Creating, and revoking another token, need a full token (neither read-only nor scope-limited); any token may revoke itself. |
+| `POST v1/scopes`, `GET v1/scopes/@s` | create an org scope `{ scope }` → `ScopeDoc` (needs a full token) |
 | `PUT`/`DELETE v1/scopes/@s/members/<login>` | `{ role: "owner" \| "publisher" }` |
 | `POST v1/scopes/@s/verify` | `{ domain }` → `{ record, value, verified }` |
 | `GET /`, `/?q=`, `/@s/n`, `/@s/n/v/<version>` | HTML pages |
@@ -56,6 +57,49 @@ racing publishes in; the loser gets 409 and deletes its own R2 object. Because t
 the sha256, the loser can never overwrite the winner's file, and a download only finds a file
 through the sha256 D1 recorded, so a file is never served before (or without) its version row.
 An object left behind by a Worker that died between the two writes is unreachable and harmless.
+
+Members: demoting or removing an owner is one conditional statement (`... WHERE role != 'owner'
+OR (SELECT COUNT(*) ... owners) > 1`), checked through `meta.changes`, so two concurrent
+demotions can't leave a scope without an owner.
+
+## Caching
+
+The Cache API is per data center: a write's purge only clears the colo that ran it. Docs and
+package pages would otherwise show a yank or deprecation late (up to the 60s TTL) everywhere else.
+So `packages.revision` (migration `0002`) is bumped after every write that changes what a package
+shows (publish, yank, deprecate, dist-tags, verification), and docs and pages are cached under
+`<path>?rev=<revision>.<verified domain>`. Each request reads that pair with one indexed D1
+lookup (`packages.name` is unique) before the cache; a change anywhere gives every colo a new key
+at once, and old entries age out after 60s. The bump runs after the write, never before it, so
+nothing older than a write is ever cached under its new revision.
+
+The trade-off: one small D1 read per doc or page request, even on a cache hit, in exchange for
+yanks, deprecations, dist-tags and badges showing at once. The alternative, a few seconds of TTL
+with `stale-while-revalidate`, needs no read but still serves stale docs for that window and
+rebuilds much more often. `v1/index.json` and the home page carry no revision: they're listings,
+installs resolve through the docs, and they stay on purge plus the 60s TTL.
+
+## Pages and headers
+
+Every response has `X-Content-Type-Options: nosniff` and `Referrer-Policy:
+strict-origin-when-cross-origin`; every HTML response (including cache hits and 404s, added by
+the router on the way out) also has `X-Frame-Options: DENY` and
+
+```
+Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+```
+
+The pages have no scripts and one inline `<style>`; READMEs render images as links, so nothing
+but the favicon request needs `img-src`; the search form submits to `/`.
+
+## Verified domains
+
+`POST v1/scopes/@s/verify` checks the `_halo.<domain>` TXT record over DNS over HTTPS. A badge
+lasts while the record does: when a scope's doc, or a package doc or page in it, is served and
+the verification is over 30 days old, the record is looked up again after the response
+(`ctx.waitUntil`). Still there, the date moves; gone, the badge is cleared (and, as it's part of
+the cache key, disappears everywhere). A DNS failure keeps the badge and retries an hour later; a
+conditional update claims each re-check, so concurrent requests look it up once.
 
 ## Logins
 

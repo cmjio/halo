@@ -28,6 +28,9 @@
     "GITHUB_URL": "https://github.com",
     "GITHUB_API_URL": "https://api.github.com",
     "PUBLIC_URL": "https://registry.halolang.com"
+    // ALLOW_LOCAL_HOSTED_ENDPOINTS is deliberately unset (false): only local registries set it
+    // ("true", e.g. `wrangler dev --var ALLOW_LOCAL_HOSTED_ENDPOINTS:true`) to accept hosted
+    // endpoints on http, localhost or private addresses (src/endpoints.ts).
   },
   // Secrets (wrangler secret put; locally in .dev.vars, see .dev.vars.example):
   //   GITHUB_CLIENT_ID      the GitHub OAuth app's client id (device flow enabled)

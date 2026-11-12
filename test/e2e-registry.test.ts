@@ -12,6 +12,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LockfileV2, PackageDoc } from "../src/registry/contract";
+import { PAGE_CSP } from "../services/registry/src/http";
 
 const ROOT = resolve(import.meta.dir, "..");
 const CONFIG = join(ROOT, "services/registry/wrangler.jsonc");
@@ -76,7 +77,9 @@ async function startWrangler(): Promise<string | undefined> {
   const migrate = Bun.spawnSync(["bunx", "wrangler", "d1", "migrations", "apply", "halo-registry", "--local", "--config", CONFIG, "--persist-to", STATE], { cwd: ROOT, env, stdout: "pipe", stderr: "pipe" });
   if (migrate.exitCode !== 0) return `wrangler d1 migrations apply failed: ${(migrate.stderr.toString() || migrate.stdout.toString()).trim().slice(-500)}`;
   const gh = `http://127.0.0.1:${github.port}`;
-  const vars = { GITHUB_URL: gh, GITHUB_API_URL: `${gh}/api`, DOH_URL: `${gh}/dns-query`, PUBLIC_URL: BASE.replace(/\/$/, ""), GITHUB_CLIENT_ID: "e2e-client", GITHUB_CLIENT_SECRET: "e2e-secret" };
+  const vars = { GITHUB_URL: gh, GITHUB_API_URL: `${gh}/api`, DOH_URL: `${gh}/dns-query`, PUBLIC_URL: BASE.replace(/\/$/, ""), GITHUB_CLIENT_ID: "e2e-client", GITHUB_CLIENT_SECRET: "e2e-secret",
+    // The hosted fixture's endpoint is http://localhost:4573, which the public registry refuses.
+    ALLOW_LOCAL_HOSTED_ENDPOINTS: "true" };
   wrangler = Bun.spawn(
     [
       "bunx", "wrangler", "dev", "--local", "--config", CONFIG, "--persist-to", STATE,
@@ -320,6 +323,12 @@ describe.skipIf(!!skipReason)("the CLI against the registry Worker (wrangler dev
       expect((await fetch(`${BASE}@acme/support-kit`)).status).toBe(200);
       const pageRes = await fetch(`${BASE}@acme/support-kit/v/1.3.0`);
       expect(pageRes.status).toBe(200);
+      // Security headers on pages, fresh and from the edge cache.
+      for (const res of [pageRes, await fetch(`${BASE}@acme/support-kit/v/1.3.0`)]) {
+        expect(res.headers.get("content-security-policy")).toBe(PAGE_CSP);
+        expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+      }
       const page = await pageRes.text();
       expect(page).toContain("@acme/support-kit");
       expect(page).toContain("ZENDESK_SUBDOMAIN");

@@ -67,7 +67,14 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   /** DNS over HTTPS endpoint for domain verification. Default https://cloudflare-dns.com/dns-query. */
   DOH_URL?: string;
+  /**
+   * "true" lets hosted packages point at http, localhost or private addresses. Only for local
+   * registries (the e2e test sets it with `wrangler dev --var`); unset in production.
+   */
+  ALLOW_LOCAL_HOSTED_ENDPOINTS?: string;
 }
+
+export const allowLocalHostedEndpoints = (env: Env) => /^(true|1|yes)$/i.test(env.ALLOW_LOCAL_HOSTED_ENDPOINTS ?? "");
 
 export interface Ctx {
   waitUntil(promise: Promise<unknown>): void;

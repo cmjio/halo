@@ -5,10 +5,10 @@
  */
 
 import type { PackageSummary, VersionDoc } from "../../../src/registry/contract.ts";
-import type { Env } from "./env.ts";
-import { cached } from "./http.ts";
+import type { Ctx, Env } from "./env.ts";
+import { cached, PAGE_HEADERS } from "./http.ts";
 import { escapeHtml as e, renderMarkdown } from "./markdown.ts";
-import { loadPackage, recentPackages, searchPackages, type PackageView } from "./packages.ts";
+import { loadPackage, packageRevision, recentPackages, searchPackages, type PackageView } from "./packages.ts";
 
 const CSS = `
 :root { color-scheme: light dark; --bg: #fff; --fg: #1c1c1f; --muted: #5f6068; --line: #e2e2e6; --code: #f4f4f6; --accent: #4b3fd8; --warn: #9a5b00; --bad: #b3261e; --ok: #1d7a3a; }
@@ -84,7 +84,8 @@ ${body}
 </html>`;
 }
 
-const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
+// The router adds PAGE_HEADERS to every HTML response on the way out too (cache hits included).
+const html = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", ...PAGE_HEADERS } });
 
 function summaryList(items: PackageSummary[]): string {
   if (!items.length) return `<p class="muted">No packages yet.</p>`;
@@ -119,15 +120,23 @@ ${summaryList(recent)}`,
   });
 }
 
-export async function packagePage(env: Env, name: string, version?: string): Promise<Response> {
-  return cached(env, version ? `${name}/v/${version}` : name, async () => {
-    const view = await loadPackage(env, name);
-    if (!view) return notFound(`No package ${name}`);
-    const v = version ?? view.doc.distTags.latest;
-    const doc = v ? view.doc.versions[v] : undefined;
-    if (!doc) return notFound(`${name} has no version ${version}`);
-    return html(layout(`${name}${version ? `@${version}` : ""} · Halo packages`, renderPackage(view, doc, !!version)));
-  });
+export async function packagePage(env: Env, ctx: Ctx | undefined, name: string, version?: string): Promise<Response> {
+  // Keyed by the package's revision, so a yank or deprecation shows at once in every colo.
+  const revision = await packageRevision(env, name, ctx);
+  if (revision === undefined) return notFound(`No package ${name}`);
+  return cached(
+    env,
+    version ? `${name}/v/${version}` : name,
+    async () => {
+      const view = await loadPackage(env, name);
+      if (!view) return notFound(`No package ${name}`);
+      const v = version ?? view.doc.distTags.latest;
+      const doc = v ? view.doc.versions[v] : undefined;
+      if (!doc) return notFound(`${name} has no version ${version}`);
+      return html(layout(`${name}${version ? `@${version}` : ""} · Halo packages`, renderPackage(view, doc, !!version)));
+    },
+    { revision },
+  );
 }
 
 function notFound(message: string): Response {

@@ -33,7 +33,9 @@ import { checkPackageFiles, type ExportAnalyzer } from "../../../src/registry/ch
 import { safeRelative } from "../../../src/registry/manifest.ts";
 import { compare, isPrerelease, isValidRange, isValidVersion, maxSatisfying, satisfies, sortDescending } from "../../../src/registry/semver.ts";
 import { requireRole, type Caller } from "./auth.ts";
-import type { Ctx, Env } from "./env.ts";
+import { hostedEndpointProblem } from "./endpoints.ts";
+import { recheckDomainLater } from "./scopes.ts";
+import { allowLocalHostedEndpoints, type Ctx, type Env } from "./env.ts";
 import { cached, CORS_HEADERS, fail, fromBase64, json, now, purge, rateLimit, readCapped, readJson, sha256Hex } from "./http.ts";
 
 /**
@@ -162,13 +164,35 @@ export async function loadPackage(env: Env, name: string): Promise<PackageView |
   return { doc, hosted, readmes, downloads: downloads?.n ?? 0, scopeKind: scope?.kind ?? "user" };
 }
 
-export async function getDoc(env: Env, name: string): Promise<Response> {
-  const res = await cached(env, `v1/packages/${name}.json`, async () => {
-    const view = await loadPackage(env, name);
-    if (!view) return fail(404, "not_found", `No package ${name}`);
-    return json(view.doc);
-  });
-  return res;
+/**
+ * What a package's cached doc and pages are keyed by: its revision and its scope's verified
+ * domain (one indexed read). Also schedules the scope's domain re-check when it's due.
+ * Undefined when there's no such package.
+ */
+export async function packageRevision(env: Env, name: string, ctx?: Ctx): Promise<string | undefined> {
+  const row = await env.DB.prepare(
+    `SELECT p.revision, s.id, s.verified_domain, s.verified_at FROM packages p JOIN scopes s ON s.id = p.scope_id WHERE p.name = ?`,
+  )
+    .bind(name)
+    .first<{ revision: number; id: number; verified_domain: string | null; verified_at: string | null }>();
+  if (!row) return undefined;
+  if (ctx) recheckDomainLater(env, ctx, row);
+  return `${row.revision}.${row.verified_domain ?? ""}`;
+}
+
+export async function getDoc(env: Env, name: string, ctx?: Ctx): Promise<Response> {
+  const revision = await packageRevision(env, name, ctx);
+  if (revision === undefined) return fail(404, "not_found", `No package ${name}`);
+  return cached(
+    env,
+    `v1/packages/${name}.json`,
+    async () => {
+      const view = await loadPackage(env, name);
+      if (!view) return fail(404, "not_found", `No package ${name}`);
+      return json(view.doc);
+    },
+    { revision },
+  );
 }
 
 interface SummaryRow {
@@ -295,12 +319,29 @@ async function countDownload(env: Env, name: string, version: string): Promise<v
   }
 }
 
-// ── Cache purges ──
+// ── After a write ──
 
+/**
+ * Call after every write that changes what a package's doc or pages show. Bumps its revision,
+ * so its docs and pages get new cache keys in every colo, then purges this colo's cache: the
+ * index, the home page, and the package's entries under the revision it just left. The bump
+ * comes after the write (never before), so nothing older than the write is ever cached under
+ * the new revision.
+ */
 export async function purgePackage(env: Env, name: string): Promise<void> {
-  const pkg = await env.DB.prepare(`SELECT id FROM packages WHERE name = ?`).bind(name).first<{ id: number }>();
-  const versions = pkg ? (await env.DB.prepare(`SELECT version FROM versions WHERE package_id = ?`).bind(pkg.id).all<{ version: string }>()).results : [];
-  await purge(env, ["", "v1/index.json", `v1/packages/${name}.json`, name, ...versions.map((v) => `${name}/v/${v.version}`)]);
+  const pkg = await env.DB.prepare(
+    `UPDATE packages SET revision = revision + 1 WHERE name = ?
+     RETURNING id, revision - 1 AS previous, (SELECT verified_domain FROM scopes s WHERE s.id = packages.scope_id) AS verified_domain`,
+  )
+    .bind(name)
+    .first<{ id: number; previous: number; verified_domain: string | null }>();
+  const paths = [`v1/packages/${name}.json`, name];
+  if (pkg) {
+    const { results } = await env.DB.prepare(`SELECT version FROM versions WHERE package_id = ?`).bind(pkg.id).all<{ version: string }>();
+    paths.push(...results.map((v) => `${name}/v/${v.version}`));
+  }
+  const previous = pkg ? `${pkg.previous}.${pkg.verified_domain ?? ""}` : undefined;
+  await Promise.all([purge(env, ["", "v1/index.json"]), purge(env, paths), ...(previous !== undefined ? [purge(env, paths, previous)] : [])]);
 }
 
 // ── Publishing ──
@@ -376,6 +417,10 @@ export async function publish(req: Request, env: Env, caller: Caller, name: stri
   const hosted = manifest.hosted;
   const check = checkPackageFiles(text, manifest, { hosted: pkg.hosted, analyze });
   if (check.problems.length) return fail(400, "invalid_package", "The package has problems", check.problems);
+  // The shared check allows http://localhost for local development; the public registry wants
+  // a public https host (src/endpoints.ts), unless this is a local registry.
+  const endpointProblem = hosted && !allowLocalHostedEndpoints(env) ? hostedEndpointProblem(hosted.endpoint) : undefined;
+  if (endpointProblem) return fail(400, "invalid_package", "The package has problems", [endpointProblem]);
 
   // The version must be new, and every dependency must exist here.
   const pkgRow = await env.DB.prepare(`SELECT id FROM packages WHERE name = ?`).bind(name).first<{ id: number }>();

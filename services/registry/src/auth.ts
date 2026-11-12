@@ -56,6 +56,16 @@ export async function authenticate(req: Request, env: Env): Promise<Caller> {
   };
 }
 
+/**
+ * Fails unless the token has the account's full reach: not read-only and not limited to some
+ * scopes. Managing the account itself (making tokens, revoking other tokens, creating scopes)
+ * needs one, so a token handed to CI for one scope can't mint, revoke or claim anything else.
+ */
+export function requireFullToken(caller: Caller, action: string): void {
+  if (caller.readOnly) fail(403, "read_only_token", `This token is read-only; ${action} needs a full token (run \`halo login\`)`);
+  if (caller.scopes) fail(403, "token_scope", `This token is limited to ${caller.scopes.join(", ")}; ${action} needs a token for the whole account (run \`halo login\`)`);
+}
+
 /** Fails unless the token may write to `scope` (not read-only, and not limited to other scopes). */
 export function requireWrite(caller: Caller, scope?: string): void {
   if (caller.readOnly) fail(403, "read_only_token", "This token is read-only");
@@ -67,10 +77,11 @@ export interface ScopeRow {
   name: string;
   kind: "user" | "org";
   verified_domain: string | null;
+  verified_at: string | null;
 }
 
 export async function getScope(env: Env, scope: string): Promise<ScopeRow | null> {
-  return env.DB.prepare(`SELECT id, name, kind, verified_domain FROM scopes WHERE name = ?`).bind(scope).first<ScopeRow>();
+  return env.DB.prepare(`SELECT id, name, kind, verified_domain, verified_at FROM scopes WHERE name = ?`).bind(scope).first<ScopeRow>();
 }
 
 export async function roleIn(env: Env, scopeId: number, userId: number): Promise<ScopeRole | undefined> {
@@ -254,7 +265,8 @@ export async function listTokens(caller: Caller, env: Env): Promise<Response> {
 }
 
 export async function createToken(req: Request, caller: Caller, env: Env): Promise<Response> {
-  requireWrite(caller);
+  // Only a full token makes tokens, so no token can mint one with more reach than itself.
+  requireFullToken(caller, "creating tokens");
   await rateLimit(env, "token", String(caller.userId));
   const body = await readJson(req);
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 100) : "token";
@@ -265,12 +277,6 @@ export async function createToken(req: Request, caller: Caller, env: Env): Promi
       return fail(400, "bad_request", 'scopes must be a non-empty list of scope names like "@acme"');
     scopes = [...new Set(body.scopes as string[])];
   }
-  // A token can't create a token with more reach than itself.
-  if (caller.scopes) {
-    if (!scopes) scopes = caller.scopes;
-    const outside = scopes.filter((s) => !caller.scopes!.includes(s));
-    if (outside.length) return fail(403, "token_scope", `This token is limited to ${caller.scopes.join(", ")}; it can't create one for ${outside.join(", ")}`);
-  }
   const readOnly = body.readOnly === true;
   const t = await mintToken(env, caller.userId, { name, readOnly, scopes });
   const created: CreatedToken = { id: t.id, name, token: t.secret, readOnly, ...(scopes ? { scopes } : {}), createdAt: t.createdAt };
@@ -278,7 +284,8 @@ export async function createToken(req: Request, caller: Caller, env: Env): Promi
 }
 
 export async function deleteToken(id: string, caller: Caller, env: Env): Promise<Response> {
-  requireWrite(caller);
+  // Any token may revoke itself (logging out); revoking another one needs a full token.
+  if (id !== caller.tokenId) requireFullToken(caller, "revoking other tokens");
   const res = await env.DB.prepare(`DELETE FROM tokens WHERE id = ? AND user_id = ?`).bind(id, caller.userId).run();
   if (!res.meta.changes) return fail(404, "not_found", `No token ${id}`);
   return json({ deleted: id });

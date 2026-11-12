@@ -29,6 +29,32 @@ export function errorResponse(e: HttpError): Response {
   return json(body, e.status, e.headers);
 }
 
+/**
+ * The pages' Content-Security-Policy. They have no scripts, no external assets and one inline
+ * <style>; READMEs render images as links, so nothing loads but the page itself (`img-src
+ * 'self'` only covers the browser's favicon request). The search form submits to `/`.
+ */
+export const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+/** On every response. */
+export const SECURITY_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+};
+
+/** On every HTML response (pages, their 404s), cached or not. */
+export const PAGE_HEADERS: Record<string, string> = {
+  ...SECURITY_HEADERS,
+  "content-security-policy": PAGE_CSP,
+  "x-frame-options": "DENY",
+};
+
+/** Adds the security headers on the way out, whatever built the response (a handler or the edge cache). */
+export function secured(res: Response): Response {
+  const isHtml = (res.headers.get("content-type") ?? "").toLowerCase().startsWith("text/html");
+  return withHeaders(res, isHtml ? PAGE_HEADERS : SECURITY_HEADERS);
+}
+
 export const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, HEAD, OPTIONS",
@@ -114,19 +140,27 @@ export const now = () => new Date().toISOString();
 
 // ── Edge cache ──
 //
-// Cached responses are keyed by their URL under PUBLIC_URL, whatever host served them, so a
-// write can purge exactly the keys it affects.
+// Cached responses are keyed by their URL under PUBLIC_URL, whatever host served them. The
+// Cache API is per data center, so a purge only reaches the colo that ran the write. Package
+// docs and pages therefore also carry a revision in their key (packages.revision and the
+// scope's verified domain, read from D1 per request): a write anywhere changes the key
+// everywhere. The index and the home page carry no revision and rely on the purge and the TTL.
 
 export const DOC_TTL = 60;
 
-export function cacheKey(env: Env, path: string): string {
-  return `${env.PUBLIC_URL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+export function cacheKey(env: Env, path: string, revision?: string): string {
+  const url = `${env.PUBLIC_URL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+  return revision === undefined ? url : `${url}?rev=${encodeURIComponent(revision)}`;
 }
 
-/** Serve `path` from the edge cache, or build it, cache it (on 200) and return it. */
-export async function cached(env: Env, path: string, build: () => Promise<Response>, ttl = DOC_TTL): Promise<Response> {
+/**
+ * Serve `path` from the edge cache, or build it, cache it (on 200) and return it. With a
+ * `revision`, the entry is only found again while the revision is the same.
+ */
+export async function cached(env: Env, path: string, build: () => Promise<Response>, opts: { ttl?: number; revision?: string } = {}): Promise<Response> {
+  const ttl = opts.ttl ?? DOC_TTL;
   const cache = edgeCache();
-  const key = cacheKey(env, path);
+  const key = cacheKey(env, path, opts.revision);
   if (cache) {
     const hit = await cache.match(key);
     if (hit) return hit;
@@ -138,10 +172,11 @@ export async function cached(env: Env, path: string, build: () => Promise<Respon
   return res;
 }
 
-export async function purge(env: Env, paths: string[]): Promise<void> {
+/** Delete `paths` (under `revision`, if given) from this colo's cache. */
+export async function purge(env: Env, paths: string[], revision?: string): Promise<void> {
   const cache = edgeCache();
   if (!cache) return;
-  await Promise.all(paths.map((p) => cache.delete(cacheKey(env, p))));
+  await Promise.all(paths.map((p) => cache.delete(cacheKey(env, p, revision))));
 }
 
 /** Apply the Rate Limiting binding; skipped when it isn't bound (local tests). */

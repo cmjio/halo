@@ -11,7 +11,7 @@
 import { parsePackageName } from "../../../src/registry/contract.ts";
 import { authenticate, createToken, deleteToken, listTokens, pollDevice, startDevice, whoami, type Caller } from "./auth.ts";
 import type { Ctx, Env } from "./env.ts";
-import { CORS_HEADERS, errorResponse, fail, HttpError, json, now, withHeaders } from "./http.ts";
+import { CORS_HEADERS, errorResponse, fail, HttpError, json, now, secured, withHeaders } from "./http.ts";
 import { deleteDistTag, deprecate, getDoc, getFile, getIndex, publish, putDistTag, search, yank } from "./packages.ts";
 import { homePage, packagePage } from "./pages.ts";
 import { createScope, deleteMember, getScopeDoc, putMember, verifyScope } from "./scopes.ts";
@@ -77,8 +77,8 @@ async function route(req: Request, env: Env, ctx: Ctx): Promise<Response> {
 
   if (method !== "GET") return fail(405, "method_not_allowed", `${req.method} is not allowed here`);
   if (path === "" || path === "index.html") return homePage(url, env);
-  if ((r = m(`${PKG}/v/${SEG}`))) return packagePage(env, packageName(r[1]!), r[2]!);
-  if ((r = m(PKG))) return packagePage(env, packageName(r[1]!));
+  if ((r = m(`${PKG}/v/${SEG}`))) return packagePage(env, ctx, packageName(r[1]!), r[2]!);
+  if ((r = m(PKG))) return packagePage(env, ctx, packageName(r[1]!));
   if (path === "robots.txt") return new Response("User-agent: *\nDisallow: /v1/\n", { headers: { "content-type": "text/plain" } });
   return new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
 }
@@ -88,12 +88,12 @@ async function getApi(path: string, url: URL, req: Request, env: Env, ctx: Ctx, 
   const m = (re: string) => new RegExp(`^${re}$`).exec(path);
   if (path === "v1/index.json") return getIndex(env);
   if (path === "v1/search") return search(url, env);
-  if ((r = m(`v1/packages/${PKG}\\.json`))) return getDoc(env, packageName(r[1]!));
-  if ((r = m(`v1/packages/${PKG}`))) return getDoc(env, packageName(r[1]!));
+  if ((r = m(`v1/packages/${PKG}\\.json`))) return getDoc(env, packageName(r[1]!), ctx);
+  if ((r = m(`v1/packages/${PKG}`))) return getDoc(env, packageName(r[1]!), ctx);
   if ((r = m(`v1/files/${PKG}/${SEG}\\.halotool`))) return getFile(req, env, ctx, packageName(r[1]!), r[2]!);
   if (path === "v1/whoami") return whoami(await caller(), env);
   if (path === "v1/tokens") return listTokens(await caller(), env);
-  if ((r = m(`v1/scopes/(@[^/]+)`))) return getScopeDoc(env, r[1]!);
+  if ((r = m(`v1/scopes/(@[^/]+)`))) return getScopeDoc(env, r[1]!, ctx);
   return fail(404, "not_found", `GET /${path} is not a registry API route`);
 }
 
@@ -103,12 +103,16 @@ function isKnownPath(path: string): boolean {
 
 export default {
   async fetch(req: Request, env: Env, ctx: Ctx): Promise<Response> {
+    let res: Response;
     try {
-      return await route(req, env, ctx);
+      res = await route(req, env, ctx);
     } catch (e) {
-      if (e instanceof HttpError) return errorResponse(e);
-      console.error(JSON.stringify({ message: "unhandled error", url: req.url, method: req.method, error: e instanceof Error ? (e.stack ?? e.message) : String(e) }));
-      return json({ error: "Internal error", code: "internal" }, 500);
+      if (e instanceof HttpError) res = errorResponse(e);
+      else {
+        console.error(JSON.stringify({ message: "unhandled error", url: req.url, method: req.method, error: e instanceof Error ? (e.stack ?? e.message) : String(e) }));
+        res = json({ error: "Internal error", code: "internal" }, 500);
+      }
     }
+    return secured(res);
   },
 };

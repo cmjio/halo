@@ -12,10 +12,16 @@ import { join } from "node:path";
 import { MAX_PACKAGE_BYTES, MAX_PACKAGE_WIRE_BYTES, PACKAGE_FORMAT_V2, PACKAGE_MEDIA_TYPE, type PackageDoc, type PackageSummary, type SearchResponse } from "../src/registry/contract";
 import worker from "../services/registry/src/index";
 import type { D1Database, D1PreparedStatement, D1Result, EdgeCache, Env, R2Bucket, R2ObjectBody } from "../services/registry/src/env";
+import { PAGE_CSP } from "../services/registry/src/http";
 import { renderMarkdown } from "../services/registry/src/markdown";
 
 const ROOT = join(import.meta.dir, "..");
-const MIGRATION = readFileSync(join(ROOT, "services/registry/migrations/0001_init.sql"), "utf8");
+const MIGRATIONS_DIR = join(ROOT, "services/registry/migrations");
+const MIGRATION = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith(".sql"))
+  .sort()
+  .map((f) => readFileSync(join(MIGRATIONS_DIR, f), "utf8"))
+  .join("\n");
 const FIXTURES = join(import.meta.dir, "fixtures/packages");
 
 // ── Fakes ──
@@ -125,6 +131,9 @@ const github = {
 };
 /** TXT records the fake DNS-over-HTTPS server answers with. */
 const dns = new Map<string, string[]>();
+/** Every name the fake DNS-over-HTTPS server was asked about; and whether it fails. */
+const dnsQueries: string[] = [];
+let dnsFail = false;
 
 let server: ReturnType<typeof Bun.serve>;
 const tokensByAccess = new Map<string, { id: number; login: string }>();
@@ -153,6 +162,8 @@ beforeAll(() => {
       if (url.pathname === "/dns-query") {
         expect(req.headers.get("accept")).toBe("application/dns-json");
         const name = url.searchParams.get("name")!;
+        dnsQueries.push(name);
+        if (dnsFail) return new Response("SERVFAIL", { status: 502 });
         return Response.json({ Status: 0, Answer: (dns.get(name) ?? []).map((v) => ({ name, type: 16, TTL: 60, data: `"${v}"` })) });
       }
       return new Response("not found", { status: 404 });
@@ -905,9 +916,10 @@ describe("edge cache", () => {
     await h.call("GET", "@acme/zendesk");
     await h.call("GET", "@acme/zendesk/v/1.0.0");
     await h.call("GET", "");
-    const key = "https://registry.halolang.com/v1/packages/@acme/zendesk.json";
+    // Docs and pages are keyed by the package's revision (bumped by the publish) and verified domain.
+    const key = "https://registry.halolang.com/v1/packages/@acme/zendesk.json?rev=1.";
     expect([...h.cache.entries.keys()].sort()).toEqual(
-      ["https://registry.halolang.com/", "https://registry.halolang.com/@acme/zendesk", "https://registry.halolang.com/@acme/zendesk/v/1.0.0", key, "https://registry.halolang.com/v1/index.json"].sort(),
+      ["https://registry.halolang.com/", "https://registry.halolang.com/@acme/zendesk?rev=1.", "https://registry.halolang.com/@acme/zendesk/v/1.0.0?rev=1.", key, "https://registry.halolang.com/v1/index.json"].sort(),
     );
     expect(h.cache.entries.get(key)!.headers.get("cache-control")).toBe("public, max-age=60");
     // Served from the cache: a change behind the Worker's back isn't seen...
@@ -920,10 +932,13 @@ describe("edge cache", () => {
     expect(Object.keys(after.versions)).toEqual(["1.0.1", "1.0.0"]);
     expect(await (await h.call("GET", "@acme/zendesk")).text()).toContain("1.0.1");
 
-    // Yank purges too.
+    // Yank purges too, and moves the revision.
     await h.call("GET", "v1/packages/@acme/zendesk.json");
+    expect(h.cache.entries.has(key.replace("rev=1.", "rev=2."))).toBe(true);
     await h.call("POST", "v1/packages/@acme/zendesk/versions/1.0.0/yank", { token, json: { reason: "x" } });
-    expect(h.cache.entries.has(key)).toBe(false);
+    expect(h.cache.entries.size).toBe(0);
+    await h.call("GET", "v1/packages/@acme/zendesk.json");
+    expect([...h.cache.entries.keys()]).toEqual([key.replace("rev=1.", "rev=3.")]);
   });
 });
 
@@ -944,5 +959,459 @@ describe("routing", () => {
     const token = await h.login("acme", 1);
     await h.publish(token, buildPackage("acme-zendesk"));
     expect((await h.call("GET", "v1/packages/%40acme%2Fzendesk.json")).status).toBe(200);
+  });
+});
+
+// ── Security regressions ──
+
+/** Elements and attributes a rendered README may contain; anything else is a finding. */
+const README_ELEMENTS: Record<string, Record<string, (v: string) => boolean>> = {
+  ...Object.fromEntries(["h1", "h2", "h3", "h4", "h5", "h6"].map((t) => [t, { id: (v: string) => /^[\p{L}\p{N}_-]*$/u.test(v) }])),
+  ...Object.fromEntries(["p", "pre", "blockquote", "ul", "li", "hr", "table", "thead", "tbody", "tr", "th", "td", "strong", "em", "del"].map((t) => [t, {}])),
+  code: { class: (v) => /^language-[\w+#.-]+$/.test(v) },
+  ol: { start: (v) => /^\d+$/.test(v) },
+  a: { href: (v) => safeHref(v), rel: (v) => v === "nofollow noopener ugc" },
+};
+
+function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);?/gi, (m, e: string) => {
+    if (e[0] === "#") return String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+    return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", colon: ":", tab: "\t", newline: "\n" } as Record<string, string>)[e.toLowerCase()] ?? m;
+  });
+}
+
+/** What a browser would follow: http(s), mailto, or a relative URL (not protocol-relative). */
+function safeHref(raw: string): boolean {
+  const v = decodeEntities(raw).replace(/[\u0000- \u007f]/g, "").toLowerCase();
+  if (/^(https?:|mailto:)/.test(v)) return true;
+  if (/^[^/?#]*:/.test(v)) return false;
+  return !v.startsWith("//") && !v.includes("\\");
+}
+
+/** Parse rendered HTML with a real HTML parser (HTMLRewriter) and with a strict tokenizer; list what's not allowed. */
+async function auditHtml(html: string): Promise<string[]> {
+  const problems: string[] = [];
+  let anchors = 0;
+  const rw = new HTMLRewriter()
+    .on("*", {
+      element(el) {
+        const allowed = README_ELEMENTS[el.tagName];
+        if (!allowed) return void problems.push(`element <${el.tagName}>`);
+        for (const [name, value] of el.attributes) {
+          if (/^on/i.test(name)) problems.push(`event handler ${name}=${value} on <${el.tagName}>`);
+          else if (!allowed[name]) problems.push(`attribute ${name} on <${el.tagName}>`);
+          else if (!allowed[name]!(value)) problems.push(`bad ${name}="${value}" on <${el.tagName}>`);
+        }
+        if (el.tagName === "a") {
+          if (anchors) problems.push("<a> inside <a>");
+          anchors++;
+          el.onEndTag(() => void anchors--);
+        }
+      },
+      comments(c) {
+        problems.push(`comment ${c.text}`);
+      },
+    })
+    .onDocument({ doctype: () => void problems.push("doctype") });
+  await rw.transform(new Response(html)).text();
+  // Strict tokenizer: every "<" starts an allowed tag whose attributes are all name="value" with
+  // no quotes or angle brackets in the value; text between tags has no raw < > " ' at all.
+  const tag = /<(\/?)([a-z][a-z0-9]*)((?:\s+[a-z]+="[^"<>]*")*)\s*>/y;
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    const text = html.slice(i, lt < 0 ? html.length : lt);
+    if (/[<>"']/.test(text)) problems.push(`raw markup character in text: ${JSON.stringify(text.slice(0, 80))}`);
+    if (lt < 0) break;
+    tag.lastIndex = lt;
+    const m = tag.exec(html);
+    if (!m || !README_ELEMENTS[m[2]!]) {
+      problems.push(`unexpected markup at ${lt}: ${JSON.stringify(html.slice(lt, lt + 80))}`);
+      i = lt + 1;
+      continue;
+    }
+    i = tag.lastIndex;
+  }
+  return problems;
+}
+
+/** A small seeded PRNG, so a failing fuzz case is reproducible. */
+function prng(seed: number) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const NASTY_READMES = [
+  "[x](<https://a.com/x/onmouseover=alert(document.domain)//>)",
+  "[x](<https://a.com/x/autofocus/onfocus=alert(document.domain)//>)",
+  '[x](`"onmouseover=1`)',
+  "[`a`](https://a.com)",
+  '[<https://a.com/"onx=1>](https://b.com)',
+  "[x](https://a.com/<https://b.com/>)",
+  "<https://a.com/[x](https://b.com)>",
+  "[[x](https://a.com)](https://b.com)",
+  "[![i](https://a.com/i.png)](https://b.com)",
+  '![<https://a.com/x" onerror=alert(1) x=">](https://b.com)',
+  "[x](javascript:alert(1))",
+  "[x](JAVASCRIPT:alert(1))",
+  "[x]( javascript:alert(1))",
+  "[x](java\tscript:alert(1))",
+  "[x](<java script:alert(1)>)",
+  "[x](javascript&colon;alert(1))",
+  "[x](&#106;avascript:alert(1))",
+  "[x](&#x6A;avascript:alert(1))",
+  "[x](\u0000javascript:alert(1))",
+  "[x](\u0001javascript:alert(1))",
+  "[x](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
+  "[x](DaTa:text/html,<script>alert(1)</script>)",
+  "[x](vbscript:msgbox(1))",
+  "[x](//evil.com)",
+  "[x](/\\evil.com)",
+  "[x](\\\\evil.com)",
+  '[x](https://a.com "title" onmouseover="alert(1)")',
+  "[x](https://a.com 'ti\"tle')",
+  "[x](https://a.com (title))",
+  '[x](https://a.com/"onmouseover=alert(1)//)',
+  "[x](https://a.com/'onmouseover=alert(1)//)",
+  "[x](https://a.com/`onmouseover=alert(1)//)",
+  '[x](https://a.com/>"<script>alert(1)</script>)',
+  '<https://a.com/"onmouseover=alert(1)>',
+  "<https://a.com/'x>",
+  "<javascript:alert(1)>",
+  "<script>alert(1)</script>",
+  '<img src=x onerror="alert(1)">',
+  '<a href="javascript:alert(1)">x</a>',
+  "<!-- comment --><svg onload=alert(1)>",
+  "`<script>alert(1)</script>`",
+  "``<img src=x onerror=alert(1)>``",
+  "```\n<script>alert(1)</script>\n```",
+  '```"><script>alert(1)</script>\n```',
+  "```js onload=alert(1)\nx\n```",
+  "    <iframe src=javascript:alert(1)>",
+  "# <script>x</script> heading `code` [l](https://a.com)",
+  '# "onmouseover=alert(1) x="',
+  "> <img src=x onerror=alert(1)>\n> [x](javascript:alert(1))",
+  "- [x](javascript:alert(1))\n- <b>b</b>\n- **[y](https://a.com/_x_)**",
+  "1. a\n2. <i>b</i>",
+  '| <script> | [x](javascript:1) |\n|---|---|\n| `<b>` | <https://a.com/"> |',
+  "**[x](https://a.com/**y**)**",
+  "*[x](https://a.com/*y*)*",
+  "_[x](https://a.com/_y_)_",
+  "~~[x](https://a.com/~~y~~)~~",
+  "[x](https://a.com/\u0000)",
+  "\u00000\u0000",
+  "[x](\u00000\u0000)",
+  "0 [x](0)",
+  "[unclosed(https://a.com",
+  "[x](https://a.com",
+  "[x](<https://a.com)",
+  "<https://a.com",
+  "`unclosed code [x](javascript:1)",
+  "**unclosed *em _x ~~y",
+  "[x](https://a.com/(a(b)c))",
+  "[x](mailto:a@b.com) [y](#frag) [z](./rel/path?q=1&r=2)",
+  "&lt;script&gt; &amp;amp; &#x3c;b&#x3e;",
+];
+
+const FRAGMENTS = [
+  "[", "]", "(", ")", "<", ">", "`", "``", "!", "*", "**", "_", "~~", '"', "'", "&", "#", ";", ":", "\\", "\n", "\n\n", " ", "\t",
+  "\u0000", "", "", "0", "1",
+  "https://a.com/", "http://b.org", "javascript:", "JaVa\tScRiPt:", "data:", "vbscript:", "mailto:", "//evil", "&colon;", "&#106;",
+  "onmouseover=alert(1)", "onerror=", "<script>", "</script>", "<img src=x>", "<a href=", "<svg/onload=1>",
+  "[x](", "](https://a.com)", "(<", ">)", "![", "# ", "> ", "- ", "1. ", "```", "    ", "| a | b |\n|---|---|\n",
+];
+
+describe("security", () => {
+  test("README renderer: a link destination never puts markup inside an attribute (reviewer repro)", async () => {
+    const repro = renderMarkdown("[x](<https://a.com/x/onmouseover=alert(document.domain)//>)");
+    expect(await auditHtml(repro)).toEqual([]);
+    expect(repro).toBe('<p><a href="https://a.com/x/onmouseover=alert(document.domain)//" rel="nofollow noopener ugc">x</a></p>');
+    expect(await auditHtml(renderMarkdown('[x](`"onmouseover=1`)'))).toEqual([]);
+    expect(renderMarkdown("[`a`](https://a.com)")).toBe('<p><a href="https://a.com" rel="nofollow noopener ugc"><code>a</code></a></p>');
+    // No sentinel, quote or bracket ever reaches an href.
+    for (const md of NASTY_READMES) for (const m of renderMarkdown(md).matchAll(/href="([^"]*)"/g)) expect(m[1]).not.toMatch(/[\u0000<>"'`\\]/);
+  });
+
+  test("README renderer fuzz: only allowlisted elements and attributes, no handlers, only http(s)/mailto/relative URLs", async () => {
+    const corpus = [...NASTY_READMES];
+    const rand = prng(20261111);
+    const pick = <T,>(xs: T[]) => xs[Math.floor(rand() * xs.length)]!;
+    for (let n = 0; n < 3000; n++) {
+      const parts: string[] = [];
+      const len = 1 + Math.floor(rand() * 12);
+      for (let k = 0; k < len; k++) parts.push(rand() < 0.2 ? pick(NASTY_READMES) : pick(FRAGMENTS));
+      corpus.push(parts.join(""));
+    }
+    const findings: string[] = [];
+    for (const md of corpus) {
+      const html = renderMarkdown(md);
+      const problems = await auditHtml(html);
+      if (problems.length) findings.push(`${JSON.stringify(md)}\n  → ${html}\n  ${problems.join("\n  ")}`);
+    }
+    expect(findings.slice(0, 5)).toEqual([]);
+    // Hostile input stays cheap (no quadratic scans or catastrophic backtracking).
+    const t0 = performance.now();
+    renderMarkdown("[".repeat(20_000) + "`".repeat(5_000) + "<".repeat(20_000) + "*".repeat(5_000) + "](".repeat(5_000));
+    renderMarkdown(Array.from({ length: 4000 }, (_, k) => "`".repeat(k % 50 + 1)).join("x"));
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  test("HTML responses carry CSP, nosniff, Referrer-Policy and frame denial, including cache hits and 404s", async () => {
+    const h = harness();
+    await setupAcme(h);
+    // A page cached by an older deploy, without the headers.
+    await h.call("GET", "@acme/zendesk/v/1.0.0");
+    for (const key of h.cache.entries.keys()) await h.cache.put(key, new Response("<p>old</p>", { headers: { "content-type": "text/html; charset=utf-8" } }));
+    for (const path of ["", "", "?q=triage", "@acme/support-kit", "@acme/support-kit", "@acme/zendesk/v/1.0.0", "@acme/nope", "nothing/here", "robots.txt"]) {
+      const res = await h.call("GET", path);
+      expect({ path, nosniff: res.headers.get("x-content-type-options") }).toEqual({ path, nosniff: "nosniff" });
+      expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+      if ((res.headers.get("content-type") ?? "").startsWith("text/html")) {
+        expect({ path, csp: res.headers.get("content-security-policy") }).toEqual({ path, csp: PAGE_CSP });
+        expect(res.headers.get("x-frame-options")).toBe("DENY");
+      }
+    }
+    // API responses are nosniff too.
+    expect((await h.call("GET", "v1/packages/@acme/zendesk.json")).headers.get("x-content-type-options")).toBe("nosniff");
+    expect((await h.call("GET", "v1/nope")).headers.get("x-content-type-options")).toBe("nosniff");
+    // The page needs nothing the CSP forbids: no scripts or external styles, and the form submits to itself.
+    const page = await (await h.call("GET", "@acme/support-kit")).text();
+    expect(page).not.toMatch(/<script|<link|<img|<iframe|\son[a-z]+=/i);
+    expect(page).toContain('<form class="search" action="/" method="get"');
+  });
+
+  test("hosted endpoints must be public https hosts unless ALLOW_LOCAL_HOSTED_ENDPOINTS is set", async () => {
+    const h = harness();
+    const token = await h.login("acme", 1);
+    await h.publish(token, buildPackage("acme-zendesk"));
+    const iface = { DraftReply: { params: [{ name: "ticket", type: "String" }], returns: "String", effects: [] } };
+    let n = 0;
+    const tryEndpoint = async (endpoint: string) => {
+      const pkg = buildPackage("acme-support-kit", {
+        manifest: (m) => {
+          m.version = `1.3.${n++}`;
+          m.hosted = { endpoint, auth: { type: "bearer", env: "ACME_HALO_KEY" }, exports: ["DraftReply"] };
+        },
+        hosted: iface,
+      });
+      return h.publish(token, pkg);
+    };
+    for (const endpoint of [
+      "http://localhost:4573",
+      "https://localhost",
+      "https://api.localhost",
+      "https://LOCALHOST.",
+      "https://127.0.0.1",
+      "https://127.1.2.3:8443",
+      "https://2130706433",
+      "https://0x7f.0.0.1",
+      "https://0.0.0.0",
+      "https://10.0.0.5",
+      "https://172.16.3.4",
+      "https://172.31.255.255",
+      "https://192.168.1.1",
+      "https://169.254.169.254",
+      "https://100.64.0.1",
+      "https://[::1]",
+      "https://[::]",
+      "https://[fe80::1]",
+      "https://[fc00::1]",
+      "https://[fd12:3456::1]",
+      "https://[::ffff:127.0.0.1]",
+      "https://[::ffff:10.0.0.1]",
+      "https://[64:ff9b::a00:1]",
+      "https://printer.local",
+      "https://db.internal",
+      "https://router.home.arpa",
+      "https://intranet",
+    ]) {
+      const res = await tryEndpoint(endpoint);
+      expect({ endpoint, status: res.status }).toEqual({ endpoint, status: 400 });
+      expect(((await res.json()) as { problems?: string[]; error: string }).problems?.join() ?? "").toContain("hosted.endpoint");
+    }
+    for (const endpoint of ["https://halo.acme.com", "https://8.8.8.8", "https://172.32.0.1", "https://[2606:4700::1111]"]) {
+      expect({ endpoint, status: (await tryEndpoint(endpoint)).status }).toEqual({ endpoint, status: 201 });
+    }
+    h.env.ALLOW_LOCAL_HOSTED_ENDPOINTS = "true";
+    expect((await tryEndpoint("http://localhost:4573")).status).toBe(201);
+  });
+
+  test("scope-limited and read-only tokens can't create tokens, revoke other tokens or create scopes", async () => {
+    const h = harness();
+    const token = await h.login("acme", 1);
+    const make = async (body: unknown) => (await (await h.call("POST", "v1/tokens", { token, json: body })).json()) as { id: string; token: string };
+    const limited = await make({ name: "acme only", scopes: ["@acme"] });
+    const ro = await make({ name: "read", readOnly: true });
+    const other = await make({ name: "other" });
+
+    for (const [i, t] of [limited, ro].entries()) {
+      // No new tokens, not even narrower or read-only ones.
+      for (const body of [{ name: "x" }, { name: "x", scopes: ["@acme"] }, { name: "x", readOnly: true }]) {
+        expect((await h.call("POST", "v1/tokens", { token: t.token, json: body })).status).toBe(403);
+      }
+      // No revoking other tokens.
+      expect((await h.call("DELETE", `v1/tokens/${other.id}`, { token: t.token })).status).toBe(403);
+      // No new scopes.
+      expect((await h.call("POST", "v1/scopes", { token: t.token, json: { scope: `@new-${i}` } })).status).toBe(403);
+    }
+    expect((await h.call("GET", "v1/whoami", { token: other.token })).status).toBe(200);
+    expect(h.d1.db.query("SELECT COUNT(*) AS n FROM tokens").get()).toEqual({ n: 4 });
+    expect(h.d1.db.query("SELECT COUNT(*) AS n FROM scopes").get()).toEqual({ n: 1 });
+    // A token may still revoke itself (logging out).
+    expect((await h.call("DELETE", `v1/tokens/${limited.id}`, { token: limited.token })).status).toBe(200);
+    expect((await h.call("DELETE", `v1/tokens/${ro.id}`, { token: ro.token })).status).toBe(200);
+    // The full token does all three.
+    expect((await h.call("POST", "v1/scopes", { token, json: { scope: "@acme-labs" } })).status).toBe(201);
+    expect((await h.call("DELETE", `v1/tokens/${other.id}`, { token })).status).toBe(200);
+    expect((await h.call("POST", "v1/tokens", { token, json: { name: "y" } })).status).toBe(201);
+  });
+
+  test("last owner: the guard is in the write itself, so a concurrent demotion or removal can't orphan the scope", async () => {
+    for (const op of ["demote", "remove"] as const) {
+      const h = harness();
+      const a = await h.login("acme", 1);
+      await h.login("pat", 2);
+      expect((await h.call("PUT", "v1/scopes/@acme/members/pat", { token: a, json: { role: "owner" } })).status).toBe(200);
+      const pat = (h.d1.db.query("SELECT id FROM users WHERE login = 'pat'").get() as { id: number }).id;
+      // Just before the Worker's write to scope_members, another request demotes pat (the
+      // other owner): any check that ran before this point saw two owners.
+      const prepare = h.d1.prepare.bind(h.d1);
+      let raced = false;
+      h.d1.prepare = (sql: string) => {
+        if (!raced && /^\s*(INSERT|UPDATE|DELETE)\b[\s\S]*scope_members/i.test(sql)) {
+          raced = true;
+          h.d1.db.query("UPDATE scope_members SET role = 'publisher' WHERE user_id = ? AND scope_id = (SELECT id FROM scopes WHERE name = '@acme')").run(pat);
+        }
+        return prepare(sql);
+      };
+      const res =
+        op === "demote"
+          ? await h.call("PUT", "v1/scopes/@acme/members/acme", { token: a, json: { role: "publisher" } })
+          : await h.call("DELETE", "v1/scopes/@acme/members/acme", { token: a });
+      expect(raced).toBe(true);
+      expect({ op, status: res.status }).toEqual({ op, status: 409 });
+      expect(((await res.json()) as { code: string }).code).toBe("last_owner");
+      expect(h.d1.db.query("SELECT COUNT(*) AS n FROM scope_members m JOIN scopes s ON s.id = m.scope_id WHERE s.name = '@acme' AND m.role = 'owner'").get()).toEqual({ n: 1 });
+    }
+    // And two real concurrent demotions of each other leave one owner.
+    const h = harness();
+    const a = await h.login("acme", 1);
+    const p = await h.login("pat", 2);
+    await h.call("PUT", "v1/scopes/@acme/members/pat", { token: a, json: { role: "owner" } });
+    const both = await Promise.all([
+      h.call("PUT", "v1/scopes/@acme/members/pat", { token: a, json: { role: "publisher" } }),
+      h.call("PUT", "v1/scopes/@acme/members/acme", { token: p, json: { role: "publisher" } }),
+    ]);
+    // One wins; the other is refused (409 by the guard, or 403 if it runs after the winner
+    // already demoted its caller).
+    expect(both.filter((r) => r.status === 200).length).toBe(1);
+    expect(both.map((r) => r.status).filter((s) => s !== 200)[0]).toBeOneOf([403, 409]);
+    expect(h.d1.db.query("SELECT COUNT(*) AS n FROM scope_members m JOIN scopes s ON s.id = m.scope_id WHERE s.name = '@acme' AND m.role = 'owner'").get()).toEqual({ n: 1 });
+  });
+
+  test("a yank, deprecation or dist-tag change is visible at once in another colo's cache (docs and pages are keyed by revision)", async () => {
+    const h = harness();
+    const token = await h.login("acme", 1);
+    await h.publish(token, buildPackage("acme-zendesk"));
+    await h.publish(token, buildPackage("acme-zendesk", { manifest: version("1.1.0") }));
+    const thisColo = h.cache;
+    const otherColo = new FakeCache();
+    const inColo = async <T,>(cache: FakeCache, f: () => Promise<T>) => {
+      (globalThis as { caches?: unknown }).caches = { default: cache };
+      try {
+        return await f();
+      } finally {
+        (globalThis as { caches?: unknown }).caches = { default: thisColo };
+      }
+    };
+    const getDocNow = async () => (await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc;
+    // Warm this colo's cache.
+    expect((await getDocNow()).versions["1.1.0"]!.yanked).toBeUndefined();
+    expect(await (await h.call("GET", "@acme/zendesk")).text()).not.toContain("yanked");
+    expect(await (await h.call("GET", "@acme/zendesk/v/1.1.0")).text()).not.toContain("yanked");
+    expect(thisColo.entries.size).toBeGreaterThan(0);
+
+    // The writes land in another colo, whose purge can't reach this one.
+    await inColo(otherColo, async () => {
+      expect((await h.call("POST", "v1/packages/@acme/zendesk/versions/1.1.0/yank", { token, json: { reason: "broken auth" } })).status).toBe(200);
+    });
+    const doc = await getDocNow();
+    expect(doc.versions["1.1.0"]!.yanked).toBe("broken auth");
+    expect(doc.distTags.latest).toBe("1.0.0");
+    expect(await (await h.call("GET", "@acme/zendesk/v/1.1.0")).text()).toContain("yanked: broken auth");
+    expect(await (await h.call("GET", "@acme/zendesk")).text()).toContain("v1.0.0 · latest");
+
+    await inColo(otherColo, async () => {
+      expect((await h.call("POST", "v1/packages/@acme/zendesk/deprecate", { token, json: { range: "<1.1.0", message: "Use 1.1" } })).status).toBe(200);
+    });
+    expect((await getDocNow()).versions["1.0.0"]!.deprecated).toBe("Use 1.1");
+    expect(await (await h.call("GET", "@acme/zendesk/v/1.0.0")).text()).toContain("deprecated: Use 1.1");
+
+    await inColo(otherColo, async () => {
+      expect((await h.call("PUT", "v1/packages/@acme/zendesk/dist-tags/beta", { token, json: { version: "1.0.0" } })).status).toBe(200);
+    });
+    expect((await getDocNow()).distTags.beta).toBe("1.0.0");
+    await inColo(otherColo, async () => {
+      expect((await h.call("DELETE", "v1/packages/@acme/zendesk/dist-tags/beta", { token })).status).toBe(200);
+    });
+    expect((await getDocNow()).distTags.beta).toBeUndefined();
+
+    // An unchanged package is still served from the cache.
+    h.d1.db.exec("UPDATE packages SET description = 'changed behind the cache'");
+    expect((await getDocNow()).description).not.toBe("changed behind the cache");
+  });
+
+  test("a verified domain is re-checked after 30 days; a removed TXT record clears the badge", async () => {
+    const h = harness();
+    const token = await h.login("acme", 1);
+    await h.publish(token, buildPackage("acme-zendesk"));
+    const first = (await (await h.call("POST", "v1/scopes/@acme/verify", { token, json: { domain: "acme.dev" } })).json()) as { value: string };
+    dns.set("_halo.acme.dev", [first.value]);
+    expect(((await (await h.call("POST", "v1/scopes/@acme/verify", { token, json: { domain: "acme.dev" } })).json()) as { verified: boolean }).verified).toBe(true);
+    const queries = () => dnsQueries.filter((q) => q === "_halo.acme.dev").length;
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const verifiedAt = () => (h.d1.db.query("SELECT verified_at FROM scopes WHERE name = '@acme'").get() as { verified_at: string | null }).verified_at;
+
+    // Fresh: renders don't touch DNS.
+    let before = queries();
+    expect(((await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc).verified).toBe("acme.dev");
+    await h.call("GET", "@acme/zendesk");
+    await h.call("GET", "v1/scopes/@acme");
+    expect(queries()).toBe(before);
+
+    // 31 days old, record still there: re-checked once, and the date moves.
+    h.d1.db.query("UPDATE scopes SET verified_at = ? WHERE name = '@acme'").run(ago(31));
+    before = queries();
+    await h.call("GET", "@acme/zendesk");
+    expect(queries()).toBe(before + 1);
+    expect(Date.parse(verifiedAt()!)).toBeGreaterThan(Date.now() - 60_000);
+    await h.call("GET", "@acme/zendesk");
+    expect(queries()).toBe(before + 1);
+
+    // A DNS failure keeps the badge and retries later, not on every request.
+    h.d1.db.query("UPDATE scopes SET verified_at = ? WHERE name = '@acme'").run(ago(31));
+    dnsFail = true;
+    try {
+      before = queries();
+      await h.call("GET", "v1/packages/@acme/zendesk.json");
+      await h.call("GET", "v1/packages/@acme/zendesk.json");
+      expect(queries()).toBe(before + 1);
+      expect(((await (await h.call("GET", "v1/scopes/@acme")).json()) as { verified?: string }).verified).toBe("acme.dev");
+    } finally {
+      dnsFail = false;
+    }
+
+    // 31 days old and the record is gone: the badge goes, from the scope, the doc and the page.
+    h.d1.db.query("UPDATE scopes SET verified_at = ? WHERE name = '@acme'").run(ago(31));
+    dns.delete("_halo.acme.dev");
+    await h.call("GET", "v1/scopes/@acme");
+    expect(verifiedAt()).toBeNull();
+    expect(((await (await h.call("GET", "v1/scopes/@acme")).json()) as { verified?: string }).verified).toBeUndefined();
+    expect(((await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc).verified).toBeUndefined();
+    expect(await (await h.call("GET", "@acme/zendesk")).text()).not.toContain("verified: acme.dev");
   });
 });
