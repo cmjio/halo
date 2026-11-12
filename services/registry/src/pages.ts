@@ -4,11 +4,12 @@
  * from a package is escaped; READMEs go through the safe renderer in markdown.ts.
  */
 
-import type { PackageSummary, VersionDoc } from "../../../src/registry/contract.ts";
+import type { PackageStats, PackageSummary, VersionDoc } from "../../../src/registry/contract.ts";
 import type { Ctx, Env } from "./env.ts";
 import { cached, PAGE_HEADERS } from "./http.ts";
 import { escapeHtml as e, renderMarkdown } from "./markdown.ts";
 import { loadPackage, packageRevision, recentPackages, searchPackages, type PackageView } from "./packages.ts";
+import { packageStats } from "./stats.ts";
 
 const CSS = `
 :root { color-scheme: light dark; --bg: #fff; --fg: #1c1c1f; --muted: #5f6068; --line: #e2e2e6; --code: #f4f4f6; --accent: #4b3fd8; --warn: #9a5b00; --bad: #b3261e; --ok: #1d7a3a; }
@@ -55,6 +56,7 @@ table.versions td, table.versions th { text-align: left; padding: .3rem .5rem; b
 .results li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
 .results .name { font-weight: 600; font-size: 1.05rem; }
 .muted { color: var(--muted); }
+svg.spark { display: block; width: 100%; height: 2.2rem; margin-top: .3rem; color: var(--accent); }
 footer { color: var(--muted); font-size: .85rem; padding-bottom: 2rem; }
 `;
 
@@ -128,12 +130,12 @@ export async function packagePage(env: Env, ctx: Ctx | undefined, name: string, 
     env,
     version ? `${name}/v/${version}` : name,
     async () => {
-      const view = await loadPackage(env, name);
-      if (!view) return notFound(`No package ${name}`);
+      const [view, stats] = await Promise.all([loadPackage(env, name), packageStats(env, name, 30)]);
+      if (!view || !stats) return notFound(`No package ${name}`);
       const v = version ?? view.doc.distTags.latest;
       const doc = v ? view.doc.versions[v] : undefined;
       if (!doc) return notFound(`${name} has no version ${version}`);
-      return html(layout(`${name}${version ? `@${version}` : ""} · Halo packages`, renderPackage(view, doc, !!version)));
+      return html(layout(`${name}${version ? `@${version}` : ""} · Halo packages`, renderPackage(view, doc, !!version, stats)));
     },
     { revision },
   );
@@ -155,7 +157,7 @@ function list(items: string[], empty = "none"): string {
   return items.length ? items.map((i) => `<code>${e(i)}</code>`).join(", ") : `<span class="muted">${empty}</span>`;
 }
 
-function renderPackage(view: PackageView, v: VersionDoc, pinned: boolean): string {
+function renderPackage(view: PackageView, v: VersionDoc, pinned: boolean, stats: PackageStats): string {
   const d = view.doc;
   const latest = d.distTags.latest;
   const hostedHost = v.hosted ? new URL(v.hosted.endpoint).host : undefined;
@@ -231,17 +233,46 @@ ${Object.values(d.versions)
       deps.length ? `<ul class="plain">${deps.map(([n, r]) => `<li><a href="/${e(n)}">${e(n)}</a> <code>${e(r)}</code></li>`).join("")}</ul>` : `<p class="muted">None.</p>`
     }`,
   );
+  parts.push(renderDependents(stats));
   parts.push(`<h2 id="details">Details</h2><dl>
   ${d.license ? `<dt>License</dt><dd>${e(d.license)}</dd>` : ""}
   ${d.repository ? `<dt>Repository</dt><dd>${link(d.repository)}</dd>` : ""}
   ${d.homepage ? `<dt>Homepage</dt><dd>${link(d.homepage)}</dd>` : ""}
   ${v.halo ? `<dt>Halo</dt><dd><code>${e(v.halo)}</code></dd>` : ""}
-  <dt>Downloads</dt><dd>${view.downloads}</dd>
+  <dt>Downloads</dt><dd>${renderDownloads(stats)}</dd>
   <dt>sha256</dt><dd><code>${e(v.sha256)}</code></dd>
   <dt>Size</dt><dd>${(v.size / 1024).toFixed(1)} KB</dd>
 </dl>`);
   parts.push(`</aside></div>`);
   return parts.join("\n");
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+
+function renderDownloads(stats: PackageStats): string {
+  const d = stats.downloads;
+  const max = Math.max(1, ...d.daily.map((x) => x.count));
+  const w = 100 / d.daily.length;
+  const bars = d.daily
+    .map((x, i) => {
+      const h = x.count ? Math.max(2, (x.count / max) * 30) : 0;
+      return `<rect x="${(i * w).toFixed(2)}" y="${(30 - h).toFixed(2)}" width="${(w * 0.8).toFixed(2)}" height="${h.toFixed(2)}"><title>${e(x.day)}: ${x.count}</title></rect>`;
+    })
+    .join("");
+  return `${plural(d.last30, "download")} in the last 30 days<br><span class="muted">${d.last7.toLocaleString("en-US")} this week · ${d.total.toLocaleString("en-US")} all time</span>
+<svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" role="img" aria-label="Downloads per day, last 30 days" fill="currentColor">${bars}</svg>`;
+}
+
+function renderDependents(stats: PackageStats): string {
+  const t = stats.dependents;
+  if (!t.transitive) return `<h2 id="dependents">Dependents</h2><p class="muted">No packages depend on this one yet.</p>`;
+  const direct = t.packages.filter((p) => p.depth === 1);
+  const shown = direct.slice(0, 20);
+  const indirect = t.transitive - t.direct;
+  return `<h2 id="dependents">Dependents</h2>
+<p>${plural(t.direct, "package")} directly${indirect ? `, ${plural(indirect, "more")} through them` : ""}.</p>
+${shown.length ? `<ul class="plain">${shown.map((p) => `<li><a href="/${e(p.name)}">${e(p.name)}</a> <code>${e(p.range ?? "")}</code>${p.onLatest === false ? ` <span class="badge warn" title="Its range doesn't include this package's latest version">not on latest</span>` : ""}</li>`).join("")}</ul>` : ""}
+${direct.length > shown.length ? `<p class="muted">and ${direct.length - shown.length} more</p>` : ""}`;
 }
 
 function link(url: string): string {

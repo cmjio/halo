@@ -162,6 +162,14 @@
   border: 0;
   font: 600 14px var(--vp-font-family-mono);
 }
+.vp-doc .ledger h3 a {
+  color: inherit;
+  text-decoration: none;
+}
+.vp-doc .ledger h3 a:hover {
+  color: var(--vp-c-brand-1);
+  text-decoration: underline;
+}
 .ledger .ver {
   display: block;
   margin-top: 2px;

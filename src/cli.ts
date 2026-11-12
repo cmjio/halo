@@ -1260,7 +1260,7 @@ async function cmdUpgrade(): Promise<number> {
   console.log(`Upgrading halo ${pkg.version} → ${latest.version}`);
   // The installer replaces this binary where it is, and leaves PATH alone.
   const installDir = resolve(process.execPath, "..", "..");
-  const env = { ...process.env, HALO_INSTALL: installDir, HALO_NO_MODIFY_PATH: "1", HALO_VERSION: latest.version };
+  const env = { ...process.env, HALO_INSTALL: installDir, HALO_NO_MODIFY_PATH: "1", HALO_VERSION: latest.version, HALO_INSTALLED_VIA: "upgrade" };
   const cmd = process.platform === "win32" ? ["powershell", "-NoProfile", "-Command", "irm https://halolang.com/install.ps1 | iex"] : ["sh", "-c", "curl -fsSL https://halolang.com/install.sh | sh"];
   const proc = Bun.spawn(cmd, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
   return await proc.exited;

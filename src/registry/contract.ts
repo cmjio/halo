@@ -350,6 +350,7 @@ export interface PackagePermissions extends Permissions {
 //   GET    v1/search?q=&limit=&offset=                    SearchResponse (service only)
 //   GET    v1/packages/@scope/name.json                   PackageDoc
 //   GET    v1/files/@scope/name/<version>.halotool        the package file (immutable)
+//   GET    v1/packages/@scope/name/stats?days=30          PackageStats: downloads and dependents (service only)
 //   PUT    v1/packages/@scope/name                        publish: body = package file bytes, Content-Type PACKAGE_MEDIA_TYPE → 201 PublishResponse
 //   POST   v1/packages/@scope/name/versions/<v>/yank      { reason } → 200
 //   DELETE v1/packages/@scope/name/versions/<v>/yank      unyank → 200
@@ -440,6 +441,53 @@ export interface PackageSummary {
   verified?: string;
   downloads?: number;
   updatedAt: string;
+}
+
+/** GET v1/packages/@scope/name/stats?days=: who installs a package, and who builds on it. */
+export interface PackageStats {
+  name: string;
+  latest: string;
+  /** How many days `daily` and each version's `period` cover, ending today (UTC). 1–365, default 30. */
+  days: number;
+  downloads: {
+    /** Every download of a package file, all time. A 304 (already cached) isn't counted. */
+    total: number;
+    last7: number;
+    last30: number;
+    /** Over the `days` window. */
+    period: number;
+    /** One entry per day of the window, oldest first, days without downloads included as 0. */
+    daily: { day: string; count: number }[];
+    /** Newest version first; versions never downloaded are listed with 0. */
+    versions: { version: string; total: number; period: number }[];
+  };
+  dependents: {
+    /** Packages whose latest version depends on this one. */
+    direct: number;
+    /** Packages whose latest version depends on this one at any depth (direct included). */
+    transitive: number;
+    /** Nearest first, then by name; at most STATS_MAX_DEPENDENTS (the counts are complete). */
+    packages: Dependent[];
+  };
+}
+
+export interface Dependent {
+  name: string;
+  /** Its latest version, whose dependencies are the ones counted. */
+  version: string;
+  /** 1 for a direct dependent. */
+  depth: number;
+  /** A shortest dependency chain, from the dependent down to the package: [dependent, …, package]. */
+  chain: string[];
+  /** A direct dependent's range for this package, and whether this package's latest satisfies it. */
+  range?: string;
+  onLatest?: boolean;
+}
+
+export const STATS_MAX_DEPENDENTS = 500;
+
+export function packageStatsPath(name: string, days?: number): string {
+  return `${packageApiPath(name)}/stats${days !== undefined ? `?days=${days}` : ""}`;
 }
 
 export interface SearchResponse {

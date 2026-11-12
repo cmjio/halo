@@ -1,6 +1,7 @@
 /**
  * halolang.com: static files, plus
- *   - /dl/<version>/<file> and /dl/latest.json: release binaries, from R2
+ *   - /dl/<version>/<file> and /dl/latest.json: release binaries, from R2; each binary served
+ *     is counted in Workers Analytics Engine (see countDownload)
  *   - a 301 from www (and the old workers.dev address) to halolang.com, keeping the path
  *   - a 301 from /docs/<page> (where the docs used to be) to /<page>
  *   - a 301 from an example's old URL (/examples/74-software-team, /examples/casebook/021-…)
@@ -16,9 +17,15 @@ interface R2Object {
   writeHttpMetadata(headers: Headers): void;
 }
 
-interface Env {
+export interface AnalyticsDataset {
+  writeDataPoint(point: { blobs?: string[]; doubles?: number[]; indexes?: string[] }): void;
+}
+
+export interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
   RELEASES: { get(key: string): Promise<R2Object | null>; head(key: string): Promise<Omit<R2Object, "body"> | null> };
+  /** Binary downloads (dataset halo_downloads). Unbound in local dev, and then skipped. */
+  DOWNLOADS?: AnalyticsDataset;
 }
 
 const CANONICAL = "halolang.com";
@@ -78,12 +85,42 @@ async function byteRange(req: Request, env: Env): Promise<Response> {
   return new Response(body.slice(start, end + 1), { status: 206, headers: out });
 }
 
+/**
+ * How a download was asked for: install.sh and install.ps1 add ?via= (script, ci, action or
+ * upgrade, from HALO_INSTALLED_VIA or $CI); anything else (a browser, a hand-written curl) is
+ * "direct". Unknown values are "other", so the column stays a short, known list.
+ */
+export const VIAS = ["script", "ci", "action", "upgrade"] as const;
+export function viaOf(url: URL): string {
+  const via = url.searchParams.get("via");
+  if (via === null || via === "") return "direct";
+  return (VIAS as readonly string[]).includes(via) ? via : "other";
+}
+
+/**
+ * One data point per binary served (not SHA256SUMS, latest.json, HEAD or a miss):
+ *   blob1 version, blob2 asset (halo-darwin-arm64, …), blob3 via, blob4 country; double1 = 1.
+ * Analytics Engine samples at high volume, so totals are SUM(_sample_interval), not COUNT().
+ * scripts/install-stats.ts reads it back over the SQL API.
+ */
+export function countDownload(env: Env, req: Request, url: URL, key: string): void {
+  const [version, asset] = key.split("/") as [string, string];
+  if (!asset || asset === "SHA256SUMS" || asset.endsWith(".json")) return;
+  const country = (req as Request & { cf?: { country?: string } }).cf?.country ?? "";
+  try {
+    env.DOWNLOADS?.writeDataPoint({ blobs: [version.replace(/^v/, ""), asset, viaOf(url), country], doubles: [1], indexes: [asset] });
+  } catch {
+    // Counting must never break a download.
+  }
+}
+
 async function download(req: Request, url: URL, env: Env): Promise<Response> {
   if (req.method !== "GET" && req.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
   const key = decodeURIComponent(url.pathname.slice("/dl/".length));
   if (!/^(latest\.json|v?\d+\.\d+\.\d+[\w.-]*\/[\w.-]+)$/.test(key)) return new Response("Not found", { status: 404 });
   const object = req.method === "HEAD" ? await env.RELEASES.head(key) : await env.RELEASES.get(key);
   if (!object) return new Response("Not found", { status: 404 });
+  if (req.method === "GET") countDownload(env, req, url, key);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);

@@ -118,7 +118,7 @@ export function packagesHtml(data: SiteData): string {
         )
         .join("");
       return `<div class="row">
-      <div><h3>${p.name}</h3><span class="ver">${p.version} · ${p.providers.map((pr) => `${pr.name}()`).join(", ")}</span></div>
+      <div><h3><a href="https://registry.halolang.com/${escapeHtml(p.name)}">${escapeHtml(p.name)}</a></h3><span class="ver">${p.version} · ${p.providers.map((pr) => `${pr.name}()`).join(", ")}</span></div>
       <div class="kind ${p.providers[0]!.kind}">${[...new Set(p.providers.map((pr) => pr.kind))].join(" · ")}</div>
       <div><p>${escapeHtml(p.description)}</p>${methods}</div>
       <div class="perms">${p.permissionLines.map((l) => (l.includes("YES") ? `<span class="code-yes">${escapeHtml(l)}</span>` : escapeHtml(l))).join("<br>")}</div>
