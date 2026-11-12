@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { isPackageName, normalizePackageName, parsePackageName, PROJECT_FILE, README_FILE, type PackageDoc, type ScopeRole } from "./contract.js";
+import { isPackageName, normalizePackageName, parsePackageName, PROJECT_FILE, README_FILE, type PackageDoc, type PackageStats, type ScopeRole } from "./contract.js";
 import { defaultRangeFor, isValidRange, isValidVersion } from "./semver.js";
 import { BUNDLED_REGISTRY, HOSTED_REGISTRY, readProjectConfig, registryFor, registrySettings, removeCredential, saveCredential, tokenFor, type RegistrySettings } from "./config.js";
 import { RegistryClient, RegistryError, versionsOf } from "./client.js";
@@ -20,7 +20,7 @@ import { publish as publishV1, uninstall as uninstallV1 } from "./packages.js";
 import { hostOf, ManifestError } from "./manifest.js";
 
 /** Commands this module handles (`init` only with --package). */
-export const PACKAGE_COMMANDS = ["add", "install", "remove", "uninstall", "outdated", "update", "search", "info", "pack", "publish", "yank", "unyank", "deprecate", "dist-tag", "owner", "scope", "login", "logout", "whoami", "token"] as const;
+export const PACKAGE_COMMANDS = ["add", "install", "remove", "uninstall", "outdated", "update", "search", "info", "stats", "pack", "publish", "yank", "unyank", "deprecate", "dist-tag", "owner", "scope", "login", "logout", "whoami", "token"] as const;
 
 export const PACKAGE_HELP = `PACKAGES:
   halo add <name[@range]> ...           Add packages to halo.json and install them (bare names are
@@ -33,6 +33,8 @@ export const PACKAGE_HELP = `PACKAGES:
                                         also beyond them, rewriting the ranges)
   halo search [query]                   Find packages in the registry
   halo info <name>                      Versions, exports, model slots, permissions and README
+  halo stats <name|@scope> [--days n]   Downloads (by day and version) and the packages that depend
+                                        on yours, with the chain through which they do
   halo tools [--json]                   List every tool provider and its methods
   halo agents [--json]                  List the built-in agent presets (agent X [model, preset: Name])
   halo skills [name] [--dir skills]     List skills (yours and built-in), or print one
@@ -158,6 +160,8 @@ export async function runPackageCommand(command: string, argv: string[], options
         return await cmdSearch(ctx);
       case "info":
         return await cmdInfo(ctx);
+      case "stats":
+        return await cmdStats(ctx);
       case "init":
         return cmdInitPackage(ctx);
       case "pack":
@@ -455,6 +459,94 @@ function printInfo(ctx: Ctx, doc: PackageDoc, wantVersion?: string) {
     for (const line of lines.slice(0, 16)) ctx.log(dim(`  ${line}`));
     if (lines.length > 16) ctx.log(dim(`  … (${lines.length - 16} more lines)`));
   }
+}
+
+// ── Stats ──
+
+const num = (n: number) => n.toLocaleString("en-US");
+const SPARK = "▁▂▃▄▅▆▇█";
+
+/** One bar per day, scaled to the busiest day; days with no downloads are a dim ▁. */
+export function sparkline(counts: number[]): string {
+  const max = Math.max(0, ...counts);
+  return counts.map((c) => (c && max ? SPARK[Math.min(SPARK.length - 1, Math.ceil((c / max) * SPARK.length) - 1)]! : dim(SPARK[0]!))).join("");
+}
+
+async function cmdStats(ctx: Ctx): Promise<number> {
+  const target = ctx.flags.positional[0];
+  if (!target) fail("Usage: halo stats <name|@scope> [--days n] [--json]");
+  const daysFlag = last(ctx.flags, "days");
+  const days = daysFlag === undefined ? undefined : Number(daysFlag);
+  if (days !== undefined && !(Number.isInteger(days) && days >= 1 && days <= 365)) fail("--days is a whole number from 1 to 365");
+  const json = ctx.flags.bools.has("json");
+
+  if (!target!.includes("/")) {
+    // A whole scope: one line per package, busiest first.
+    const scope = scopeOf(target!);
+    const client = ctx.serviceClient();
+    const doc = await client.scope(scope);
+    const all = await Promise.all(doc.packages.map((n) => client.stats(n, days)));
+    if (json) {
+      ctx.log(JSON.stringify(all, null, 2));
+      return 0;
+    }
+    if (!all.length) {
+      ctx.log(`${scope} has no packages yet.`);
+      return 0;
+    }
+    all.sort((a, b) => b.downloads.period - a.downloads.period || a.name.localeCompare(b.name));
+    const window = all[0]!.days;
+    const width = Math.max(...all.map((s) => s.name.length));
+    ctx.log(dim(`${"package".padEnd(width)}  ${`${window}d`.padStart(8)}  ${"total".padStart(9)}  dependents (direct/all)`));
+    for (const s of all) {
+      ctx.log(`${bold(s.name.padEnd(width))}  ${num(s.downloads.period).padStart(8)}  ${num(s.downloads.total).padStart(9)}  ${s.dependents.direct}/${s.dependents.transitive}  ${sparkline(s.downloads.daily.map((d) => d.count))}`);
+    }
+    const sum = (f: (s: PackageStats) => number) => num(all.reduce((n, s) => n + f(s), 0));
+    ctx.log(dim(`${"all".padEnd(width)}  ${sum((s) => s.downloads.period).padStart(8)}  ${sum((s) => s.downloads.total).padStart(9)}`));
+    return 0;
+  }
+
+  const { name } = splitSpec(target!);
+  mustName(name);
+  const s = await ctx.clientFor(name).stats(name, days);
+  if (json) {
+    ctx.log(JSON.stringify(s, null, 2));
+    return 0;
+  }
+  printStats(ctx, s);
+  return 0;
+}
+
+function printStats(ctx: Ctx, s: PackageStats) {
+  const d = s.downloads;
+  ctx.log(`${bold(s.name)}${s.latest ? `@${s.latest}` : ""}`);
+  ctx.log(`\n${bold("downloads")} ${num(d.last7)} last 7 days · ${num(d.last30)} last 30 days · ${num(d.total)} all time`);
+  const first = d.daily[0]?.day ?? "";
+  const lastDay = d.daily.at(-1)?.day ?? "";
+  ctx.log(`  ${sparkline(d.daily.map((x) => x.count))}  ${dim(`${first} → ${lastDay}, ${num(d.period)} in ${s.days} day${s.days === 1 ? "" : "s"}`)}`);
+  if (d.versions.length) {
+    const width = Math.max(7, ...d.versions.map((v) => v.version.length));
+    ctx.log(`\n${bold("by version")}`);
+    ctx.log(dim(`  ${"version".padEnd(width)}  ${`${s.days}d`.padStart(8)}  ${"total".padStart(9)}`));
+    for (const v of d.versions.slice(0, 15)) ctx.log(`  ${(v.version === s.latest ? green(v.version.padEnd(width)) : v.version.padEnd(width))}  ${num(v.period).padStart(8)}  ${num(v.total).padStart(9)}`);
+    if (d.versions.length > 15) ctx.log(dim(`  … ${d.versions.length - 15} older versions`));
+  }
+
+  const t = s.dependents;
+  ctx.log(`\n${bold("dependents")} ${t.direct} direct · ${t.transitive} in all ${dim("(counting each package's latest version)")}`);
+  if (!t.transitive) {
+    ctx.log(dim("  No packages depend on this one yet."));
+    return;
+  }
+  for (const p of t.packages) {
+    if (p.depth === 1) {
+      const stale = p.onLatest === false ? yellow(` (${p.range} excludes ${s.latest})`) : "";
+      ctx.log(`  ${p.name}@${p.version}  ${dim(p.range ?? "")}${stale}`);
+    } else {
+      ctx.log(`  ${p.name}@${p.version}  ${dim(`via ${p.chain.slice(1, -1).join(" → ")}`)}`);
+    }
+  }
+  if (t.transitive > t.packages.length) ctx.log(dim(`  … ${t.transitive - t.packages.length} more`));
 }
 
 // ── Making packages ──

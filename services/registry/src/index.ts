@@ -14,6 +14,7 @@ import type { Ctx, Env } from "./env.ts";
 import { CORS_HEADERS, errorResponse, fail, HttpError, json, now, secured, withHeaders } from "./http.ts";
 import { deleteDistTag, deprecate, getDoc, getFile, getIndex, publish, putDistTag, search, yank } from "./packages.ts";
 import { homePage, packagePage } from "./pages.ts";
+import { getStats } from "./stats.ts";
 import { createScope, deleteMember, getScopeDoc, putMember, verifyScope } from "./scopes.ts";
 
 export type { Env } from "./env.ts";
@@ -90,6 +91,7 @@ async function getApi(path: string, url: URL, req: Request, env: Env, ctx: Ctx, 
   if (path === "v1/search") return search(url, env);
   if ((r = m(`v1/packages/${PKG}\\.json`))) return getDoc(env, packageName(r[1]!), ctx);
   if ((r = m(`v1/packages/${PKG}`))) return getDoc(env, packageName(r[1]!), ctx);
+  if ((r = m(`v1/packages/${PKG}/stats`))) return getStats(env, packageName(r[1]!), url);
   if ((r = m(`v1/files/${PKG}/${SEG}\\.halotool`))) return getFile(req, env, ctx, packageName(r[1]!), r[2]!);
   if (path === "v1/whoami") return whoami(await caller(), env);
   if (path === "v1/tokens") return listTokens(await caller(), env);

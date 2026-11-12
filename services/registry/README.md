@@ -25,6 +25,7 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `src/packages.ts` | Docs, index, search, file downloads, publishing, yank, deprecate, dist-tags, cache purges. |
 | `../../src/registry/check.ts` | Not in this folder: `checkPackageFiles`, shared with the CLI. Runs the linker's `analyzePackage` on the package's `.halo` files and returns the exports, the permissions and the problems that refuse a publish (syntax errors, hard-coded models in a package that isn't hosted, undeclared model slots, names declared twice in exported files, `use` outside the package or its dependencies, no README, hosted pipelines without interfaces). `halo publish` runs the same function, so the client refuses what the server refuses. |
 | `src/markdown.ts` | A small Markdown renderer that escapes all raw HTML and drops unsafe links. Inline syntax is one left-to-right scan of the raw text: only `anchor()` writes an attribute, from a URL taken from the source and checked by `safeUrl` (http(s), mailto or relative; no quotes, angle brackets, backticks, backslashes, whitespace or controls). Finished HTML is never fed back into a URL. |
+| `src/stats.ts` | Stats: downloads from `downloads_daily`, and dependents. Dependents follow each package's latest version only; one recursive CTE (over `json_each` of the dependencies) finds the edges that lead to the package, and a breadth-first search over them gives depths and shortest chains, so cycles end. |
 | `src/pages.ts` | The HTML pages. No scripts, no external assets; dark-mode aware. |
 | `src/endpoints.ts` | Hosted endpoints must be https on a public host (no localhost, loopback, private, link-local, `.local`/`.internal` names, or bare IPs in those ranges, IPv4 or IPv6). The shared `hostedEndpointConcern` runs first, then a stricter pass. `ALLOW_LOCAL_HOSTED_ENDPOINTS=true` turns it off for local registries; the e2e test sets it with `wrangler dev --var`. |
 | `src/env.ts` | The bindings, typed structurally, so the code also type-checks and runs under `bun test`. |
@@ -37,6 +38,7 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `GET v1/search?q=&limit=&offset=` | `SearchResponse` (FTS5, bm25 with name > keywords > description > README; exact name first) |
 | `GET v1/packages/@s/n.json` (or without `.json`) | `PackageDoc` |
 | `GET v1/files/@s/n/<v>.halotool` | the package file; counts a download |
+| `GET v1/packages/@s/n/stats?days=30` | `PackageStats`: downloads (total, last 7/30 days, per day over `days` (1–365), per version) and dependents with shortest chains (`src/stats.ts`), cached 5 minutes |
 | `PUT v1/packages/@s/n` | publish (`Content-Type: application/vnd.halo.package+json`, at most `MAX_PACKAGE_WIRE_BYTES`, 8MB; the files inside at most `MAX_PACKAGE_BYTES`, 5MB) → 201 `PublishResponse`, whose `url` is the version's page |
 | `POST`/`DELETE v1/packages/@s/n/versions/<v>/yank` | yank `{ reason }` / unyank |
 | `POST v1/packages/@s/n/deprecate` | `{ range, message }`; empty message clears |
@@ -76,7 +78,9 @@ nothing older than a write is ever cached under its new revision.
 The trade-off: one small D1 read per doc or page request, even on a cache hit, in exchange for
 yanks, deprecations, dist-tags and badges showing at once. The alternative, a few seconds of TTL
 with `stale-while-revalidate`, needs no read but still serves stale docs for that window and
-rebuilds much more often. `v1/index.json` and the home page carry no revision: they're listings,
+rebuilds much more often. Stats (`…/stats`) carry no revision either: they move with every
+download and every dependent's publish, so they're cached for 5 minutes and never purged.
+`v1/index.json` and the home page carry no revision: they're listings,
 installs resolve through the docs, and they stay on purge plus the 60s TTL.
 
 ## Pages and headers

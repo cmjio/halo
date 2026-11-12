@@ -21,6 +21,7 @@ Every `halo run` keeps a recording in `.halo/recordings` for [`halo replay`](/gu
 | `halo remove <name> ...` | Removes packages, and dependencies nothing else needs |
 | `halo outdated` / `halo update [name] [--latest]` | Newer versions within and beyond your ranges / move to them |
 | `halo search [query]`, `halo info <name>` | Find packages; show versions, exports, model slots, permissions and the README |
+| `halo stats <name\|@scope> [--days n] [--json]` | Downloads (by day and by version) and dependents, direct and through other packages, with the chain for each. A scope lists every package in it |
 | `halo init --package [dir] [--name @scope/name]` | Scaffold `halo.json`, `README.md` and `lib/main.halo` |
 | `halo pack [dir]`, `halo publish [dir\|file] [--dry-run]` | Bundle a package; check and publish it |
 | `halo yank`, `unyank`, `deprecate`, `dist-tag` | Manage published versions |

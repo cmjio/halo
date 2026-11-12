@@ -24,6 +24,8 @@ import {
   type DeviceStart,
   type DistTagsResponse,
   type PackageDoc,
+  type PackageStats,
+  packageStatsPath,
   type PackageSummary,
   type PublishResponse,
   type ScopeDoc,
@@ -265,6 +267,11 @@ export class RegistryClient {
       return Object.entries(reg.packages).map(([name, p]) => ({ name, description: p.description, latest: p.latest, updatedAt: "" }));
     }
     return (await this.getJson<PackageSummary[]>(INDEX_PATH)) ?? [];
+  }
+
+  /** Downloads and dependents (registry services only). */
+  stats(name: string, days?: number): Promise<PackageStats> {
+    return this.call<PackageStats>("GET", packageStatsPath(name, days), undefined, `Reading stats for ${name}`, false);
   }
 
   async search(query = "", options: { limit?: number; offset?: number } = {}): Promise<SearchResponse> {

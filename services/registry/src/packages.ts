@@ -102,14 +102,13 @@ export interface PackageView {
   hosted: Record<string, HostedRow | undefined>;
   /** Each version's README (the doc carries only the latest's). */
   readmes: Record<string, string>;
-  downloads: number;
   scopeKind: "user" | "org";
 }
 
 export async function loadPackage(env: Env, name: string): Promise<PackageView | undefined> {
   const pkg = await packageRow(env, name);
   if (!pkg) return undefined;
-  const [versions, tags, downloads, scope] = await Promise.all([
+  const [versions, tags, scope] = await Promise.all([
     env.DB.prepare(
       `SELECT v.version, v.manifest, v.readme, v.exports, v.permissions, v.models, v.dependencies, v.halo, v.sha256, v.size,
               u.login AS published_by, v.published_at, v.yanked, v.deprecated, v.hosted
@@ -118,7 +117,6 @@ export async function loadPackage(env: Env, name: string): Promise<PackageView |
       .bind(pkg.id)
       .all<VersionRow>(),
     env.DB.prepare(`SELECT tag, version FROM dist_tags WHERE package_id = ?`).bind(pkg.id).all<{ tag: string; version: string }>(),
-    env.DB.prepare(`SELECT COALESCE(SUM(count), 0) AS n FROM downloads_daily WHERE package_id = ?`).bind(pkg.id).first<{ n: number }>(),
     env.DB.prepare(`SELECT s.kind FROM scopes s JOIN packages p ON p.scope_id = s.id WHERE p.id = ?`).bind(pkg.id).first<{ kind: "user" | "org" }>(),
   ]);
   const distTags = Object.fromEntries(tags.results.map((t) => [t.tag, t.version])) as PackageDoc["distTags"];
@@ -161,7 +159,7 @@ export async function loadPackage(env: Env, name: string): Promise<PackageView |
     updatedAt: pkg.updated_at,
   };
   const readmes = Object.fromEntries(versions.results.map((r) => [r.version, r.readme]));
-  return { doc, hosted, readmes, downloads: downloads?.n ?? 0, scopeKind: scope?.kind ?? "user" };
+  return { doc, hosted, readmes, scopeKind: scope?.kind ?? "user" };
 }
 
 /**

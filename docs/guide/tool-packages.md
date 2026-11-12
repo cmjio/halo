@@ -322,7 +322,11 @@ halo owner add @acme someone --role publisher                # who can publish i
 halo scope create @acme
 halo scope verify @acme acme.com                             # a DNS TXT record proves the domain
 halo token create --name ci --scope @acme                    # tokens for CI; also: token list, token revoke <id>
+halo stats @acme/support-kit                                 # downloads by day and version, and who depends on it
+halo stats @acme --days 90                                   # every package in a scope, busiest first
 ```
+
+`halo stats` shows a package's downloads (last 7 and 30 days, all time, a bar per day, and per version) and its dependents: the packages whose latest version depends on it, directly or through other packages, each with a shortest chain (`@x/app via @acme/support-kit`). A direct dependent whose range leaves out your latest version is flagged, which is who to nudge after a major release. `--json` prints the API's `PackageStats`; the package page shows the same. Downloads count each package file served (a cached `304` isn't counted), so they're installs, not unique users. Stats come from a registry service, not a folder registry, and can be up to five minutes behind.
 
 ### Hosting a registry
 

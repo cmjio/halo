@@ -9,7 +9,10 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { MAX_PACKAGE_BYTES, MAX_PACKAGE_WIRE_BYTES, PACKAGE_FORMAT_V2, PACKAGE_MEDIA_TYPE, type PackageDoc, type PackageSummary, type SearchResponse } from "../src/registry/contract";
+import { MAX_PACKAGE_BYTES, MAX_PACKAGE_WIRE_BYTES, PACKAGE_FORMAT_V2, PACKAGE_MEDIA_TYPE, type PackageDoc, type PackageStats, type PackageSummary, type SearchResponse } from "../src/registry/contract";
+import { runPackageCommand } from "../src/registry/cli";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import worker from "../services/registry/src/index";
 import type { D1Database, D1PreparedStatement, D1Result, EdgeCache, Env, R2Bucket, R2ObjectBody } from "../services/registry/src/env";
 import { PAGE_CSP } from "../services/registry/src/http";
@@ -939,6 +942,176 @@ describe("edge cache", () => {
     expect(h.cache.entries.size).toBe(0);
     await h.call("GET", "v1/packages/@acme/zendesk.json");
     expect([...h.cache.entries.keys()]).toEqual([key.replace("rev=1.", "rev=3.")]);
+  });
+});
+
+describe("stats", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+  // Stats are cached for five minutes and carry no revision; each read here wants a fresh one.
+  const stats = async (h: Harness, path: string) => {
+    h.cache.entries.clear();
+    const res = await h.call("GET", path);
+    expect(res.status).toBe(200);
+    return (await res.json()) as PackageStats;
+  };
+  /** A package that depends on `deps` and exports one provider: the zendesk fixture, renamed. */
+  const dependent = (name: string, deps: Record<string, string>, v = "1.0.0") =>
+    buildPackage("acme-zendesk", {
+      manifest: (m) => Object.assign(m, { name, version: v, description: `${name} for tests`, dependencies: deps }),
+      files: (f) => void (f["README.md"] = `# ${name}\n`),
+    });
+
+  test("downloads: by day (zero-filled), by version, last 7 and 30 days, and the window", async () => {
+    const h = harness();
+    const token = await setupAcme(h);
+    expect((await h.publish(token, buildPackage("acme-zendesk", { manifest: version("1.1.0") }))).status).toBe(201);
+    await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool");
+    await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool");
+    await h.call("GET", "v1/files/@acme/zendesk/1.1.0.halotool");
+    const id = (h.d1.db.query("SELECT id FROM packages WHERE name = '@acme/zendesk'").get() as { id: number }).id;
+    const insert = h.d1.db.prepare("INSERT INTO downloads_daily (package_id, version, day, count) VALUES (?, ?, ?, ?)");
+    insert.run(id, "1.0.0", daysAgo(10), 5);
+    insert.run(id, "1.0.0", daysAgo(100), 7);
+
+    const s = await stats(h, "v1/packages/@acme/zendesk/stats");
+    expect(s.name).toBe("@acme/zendesk");
+    expect(s.latest).toBe("1.1.0");
+    expect(s.days).toBe(30);
+    expect(s.downloads.daily).toHaveLength(30);
+    expect(s.downloads.daily[0]!.day).toBe(daysAgo(29));
+    expect(s.downloads.daily.at(-1)).toEqual({ day: today, count: 3 });
+    expect(s.downloads.daily.filter((d) => d.count).map((d) => d.day)).toEqual([daysAgo(10), today]);
+    expect(s.downloads).toMatchObject({ total: 15, last7: 3, last30: 8, period: 8 });
+    expect(s.downloads.versions).toEqual([
+      { version: "1.1.0", total: 1, period: 1 },
+      { version: "1.0.0", total: 14, period: 7 },
+    ]);
+
+    // Another window: last7 and last30 stay put; the period and the per-version period follow it.
+    const year = await stats(h, "v1/packages/@acme/zendesk/stats?days=365");
+    expect(year.downloads).toMatchObject({ total: 15, last7: 3, last30: 8, period: 15 });
+    expect(year.downloads.daily).toHaveLength(365);
+    const week = await stats(h, "v1/packages/@acme/zendesk/stats?days=7");
+    expect(week.downloads.versions.find((v) => v.version === "1.0.0")).toEqual({ version: "1.0.0", total: 14, period: 2 });
+    // Odd values clamp or fall back.
+    expect((await stats(h, "v1/packages/@acme/zendesk/stats?days=0")).days).toBe(1);
+    expect((await stats(h, "v1/packages/@acme/zendesk/stats?days=9999")).days).toBe(365);
+    expect((await stats(h, "v1/packages/@acme/zendesk/stats?days=abc")).days).toBe(30);
+
+    // A package nobody downloaded lists its versions with zeros.
+    const kit = await stats(h, "v1/packages/@acme/support-kit/stats");
+    expect(kit.downloads).toMatchObject({ total: 0, period: 0, versions: [{ version: "1.2.0", total: 0, period: 0 }] });
+
+    const res = await h.call("GET", "v1/packages/@acme/zendesk/stats");
+    expect(res.headers.get("cache-control")).toBe("public, max-age=300");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    const missing = await h.call("GET", "v1/packages/@acme/nope/stats");
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { code: string }).code).toBe("not_found");
+  });
+
+  test("dependents: direct and through other packages, with shortest chains; ranges that miss latest; cycles end", async () => {
+    const h = harness();
+    const token = await setupAcme(h); // support-kit -> zendesk
+    expect((await h.publish(token, dependent("@acme/inbox", { "@acme/support-kit": "^1.2.0" }))).status).toBe(201);
+    expect((await h.publish(token, dependent("@acme/desk", { "@acme/inbox": "^1.0.0" }))).status).toBe(201);
+    // Depends on zendesk directly and through support-kit: it's direct.
+    expect((await h.publish(token, dependent("@acme/both", { "@acme/zendesk": "1.0.0", "@acme/support-kit": "^1.0.0" }))).status).toBe(201);
+
+    const z = await stats(h, "v1/packages/@acme/zendesk/stats");
+    expect(z.dependents.direct).toBe(2);
+    expect(z.dependents.transitive).toBe(4);
+    expect(z.dependents.packages).toEqual([
+      { name: "@acme/both", version: "1.0.0", depth: 1, chain: ["@acme/both", "@acme/zendesk"], range: "1.0.0", onLatest: true },
+      { name: "@acme/support-kit", version: "1.2.0", depth: 1, chain: ["@acme/support-kit", "@acme/zendesk"], range: "^1.0.0", onLatest: true },
+      { name: "@acme/inbox", version: "1.0.0", depth: 2, chain: ["@acme/inbox", "@acme/support-kit", "@acme/zendesk"] },
+      { name: "@acme/desk", version: "1.0.0", depth: 3, chain: ["@acme/desk", "@acme/inbox", "@acme/support-kit", "@acme/zendesk"] },
+    ]);
+    const leaf = await stats(h, "v1/packages/@acme/desk/stats");
+    expect(leaf.dependents).toEqual({ direct: 0, transitive: 0, packages: [] });
+
+    // A new major: the dependents' ranges no longer include latest.
+    expect((await h.publish(token, buildPackage("acme-zendesk", { manifest: version("2.0.0") }))).status).toBe(201);
+    const z2 = await stats(h, "v1/packages/@acme/zendesk/stats");
+    expect(z2.dependents.packages.filter((d) => d.depth === 1).map((d) => [d.name, d.onLatest])).toEqual([
+      ["@acme/both", false],
+      ["@acme/support-kit", false],
+    ]);
+
+    // Only latest versions count: support-kit 1.3.0 drops zendesk, and its chain goes with it.
+    expect((await h.publish(token, dependent("@acme/support-kit", {}, "1.3.0"))).status).toBe(201);
+    const z3 = await stats(h, "v1/packages/@acme/zendesk/stats");
+    expect(z3.dependents.packages.map((d) => d.name)).toEqual(["@acme/both"]);
+
+    // A cycle (zendesk 2.1.0 -> desk -> inbox -> support-kit 1.4.0 -> zendesk) ends, and a package
+    // never lists itself.
+    expect((await h.publish(token, dependent("@acme/support-kit", { "@acme/zendesk": "^2.0.0" }, "1.4.0"))).status).toBe(201);
+    expect((await h.publish(token, dependent("@acme/zendesk", { "@acme/desk": "^1.0.0" }, "2.1.0"))).status).toBe(201);
+    const cyc = await stats(h, "v1/packages/@acme/inbox/stats");
+    expect(cyc.dependents.packages.map((d) => [d.name, d.depth])).toEqual([
+      ["@acme/desk", 1],
+      ["@acme/zendesk", 2],
+      ["@acme/both", 3],
+      ["@acme/support-kit", 3],
+    ]);
+    expect(cyc.dependents.packages.find((d) => d.name === "@acme/support-kit")!.chain).toEqual(["@acme/support-kit", "@acme/zendesk", "@acme/desk", "@acme/inbox"]);
+  });
+
+  test("the package page shows recent downloads and dependents", async () => {
+    const h = harness();
+    const token = await setupAcme(h);
+    await h.publish(token, dependent("@acme/inbox", { "@acme/support-kit": "^1.2.0" }));
+    await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool");
+    const page = await (await h.call("GET", "@acme/zendesk")).text();
+    expect(page).toContain("1 download in the last 30 days");
+    expect(page).toContain('<svg class="spark"');
+    expect(page).toContain(`<title>${today}: 1</title>`);
+    expect(page).toContain('id="dependents"');
+    expect(page).toContain("1 package directly, 1 more through them.");
+    expect(page).toContain('<a href="/@acme/support-kit">@acme/support-kit</a> <code>^1.0.0</code>');
+    expect(page).not.toMatch(/<(script|link|img)\b/i);
+    expect(await (await h.call("GET", "@acme/inbox")).text()).toContain("No packages depend on this one yet.");
+  });
+
+  test("halo stats: one package, and a whole scope", async () => {
+    const h = harness();
+    const token = await setupAcme(h);
+    await h.call("GET", "v1/files/@acme/zendesk/1.0.0.halotool");
+    await h.publish(token, dependent("@acme/inbox", { "@acme/support-kit": "^1.2.0" }));
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const pending: Promise<unknown>[] = [];
+      const res = await worker.fetch(new Request(input, init), h.env, { waitUntil: (p) => void pending.push(p) });
+      await Promise.all(pending);
+      return res;
+    }) as typeof fetch;
+    const cwd = mkdtempSync(join(tmpdir(), "halo-stats-"));
+    try {
+      const run = async (...args: string[]) => {
+        const lines: string[] = [];
+        const code = await runPackageCommand("stats", [...args, "--registry", "https://registry.halolang.com"], { cwd, fetch: fetchFn, log: (l) => lines.push(l) });
+        return { code, text: lines.join("\n") };
+      };
+      const one = await run("@acme/zendesk");
+      expect(one.code).toBe(0);
+      expect(one.text).toContain("1 last 7 days · 1 last 30 days · 1 all time");
+      expect(one.text).toContain("1 direct · 2 in all");
+      expect(one.text).toContain("@acme/support-kit@1.2.0  ^1.0.0");
+      expect(one.text).toContain("@acme/inbox@1.0.0  via @acme/support-kit");
+
+      const json = await run("@acme/zendesk", "--days", "7", "--json");
+      expect((JSON.parse(json.text) as PackageStats).downloads.daily).toHaveLength(7);
+
+      const scope = await run("@acme");
+      expect(scope.code).toBe(0);
+      const rows = scope.text.split("\n");
+      expect(rows[1]).toMatch(/^@acme\/zendesk\s+1\s+1\s+1\/2/);
+      expect(rows.at(-1)).toMatch(/^all\s+1\s+1$/);
+
+      expect((await run("@acme", "--days", "0")).code).toBe(1);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 
