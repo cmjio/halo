@@ -20,6 +20,8 @@ import {
   DIRECTIVES,
   ENFORCED_RULES,
   HOST_PATTERN,
+  SECRET_NAME,
+  scopePath,
   REDACT_CATEGORIES,
   REQUIRE_CHECKS,
   SCHEMA_TYPES,
@@ -166,6 +168,12 @@ class Validator {
       } else if (rule.name === "AllowHosts") {
         if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowHosts(...) needs at least one host, e.g. AllowHosts("pypi.org", "*.pythonhosted.org")`, g.loc);
         for (const h of rule.args) if (!HOST_PATTERN.test(h)) this.add("error", `Policy "${g.name}": AllowHosts(${h}) is not a host name like "pypi.org" or "*.pythonhosted.org"`, g.loc);
+      } else if (rule.name === "AllowFiles") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowFiles(...) needs at least one folder or file, e.g. AllowFiles("src/billing", "test/billing")`, g.loc);
+        for (const f of rule.args) if (scopePath(f) === undefined) this.add("error", `Policy "${g.name}": AllowFiles(${f}) should be a path inside the project, like "src/billing" (no leading /, no ..)`, g.loc);
+      } else if (rule.name === "AllowSecrets") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowSecrets(...) needs at least one name, e.g. AllowSecrets("STRIPE_TEST_KEY")`, g.loc);
+        for (const n of rule.args) if (!SECRET_NAME.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}) should be an environment variable name, like STRIPE_TEST_KEY`, g.loc);
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {

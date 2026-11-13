@@ -26,6 +26,13 @@
  * (and, being --rm, removes itself) after `ttl_minutes` (default 30).
  *
  * Local paths (upload's `from`, download's `to`) stay inside `root:` (default ".").
+ *
+ * A sandbox can be narrowed further:
+ *   files: ["src/billing"]       with from:, only those paths are copied in, shown by diff, and
+ *                                written back by apply, upload and download
+ *   secrets: ["STRIPE_TEST_KEY"] those environment variables (read from Halo's environment) are
+ *                                set for each command, never stored in the container or its
+ *                                snapshots, and their values are masked in what comes back (Docker only)
  */
 
 import { mkdirSync, readFileSync, statSync } from "node:fs";
@@ -36,6 +43,7 @@ import { shellQuote as q } from "../shell.js";
 import { intArg, need, unknownMethod } from "./common.js";
 import { confine, workspaceRoot } from "./workspace.js";
 import { unifiedDiff } from "../../diff.js";
+import { inFiles, scopePath, SECRET_NAME } from "../../parser/builtins.js";
 import { compareTrees, hashCommand, HOST_PATTERN, parseHashes, projectFiles, PROXY_SCRIPT, sha256Hex, tarball, type FileChange } from "./sandbox-kit.js";
 
 const METHODS = ["run", "read", "write", "list", "upload", "download", "info", "diff", "apply", "keep"];
@@ -175,9 +183,9 @@ function collect(stream: ReadableStream<Uint8Array>) {
 }
 
 /** Run a program, feeding it `stdin`, killed after `timeoutMs` or when `signal` aborts. */
-async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal }) {
+async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal; env?: Record<string, string> }) {
   // env: process.env so `docker`/`ssh` are looked up on the PATH as it is now, not as it was at startup.
-  const proc = Bun.spawn(argv, { stdin: opts.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe", env: process.env });
+  const proc = Bun.spawn(argv, { stdin: opts.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe", env: opts.env ? { ...process.env, ...opts.env } : process.env });
   let timedOut = false;
   const kill = () => proc.kill();
   const timer = setTimeout(() => {
@@ -624,6 +632,61 @@ function hostList(call: ToolCall): string[] | undefined {
   return [...new Set(list as string[])].map((h) => h.toLowerCase());
 }
 
+/** `files:` on a declaration: the paths (inside `from:`) the sandbox gets and may write back, or undefined for all. */
+function fileList(call: ToolCall): string[] | undefined {
+  const raw = call.config("files");
+  if (raw === undefined || raw === null) return undefined;
+  if (call.config("from") === undefined) throw configError(call, `files: picks paths from the project that from: copies in; add from: "." (or the folder they're in)`);
+  const list = Array.isArray(raw) ? raw : [raw];
+  const out: string[] = [];
+  for (const f of list) {
+    const p = typeof f === "string" ? scopePath(f) : undefined;
+    if (p === undefined) throw configError(call, `files: ${JSON.stringify(f)} should be a path inside from:, like "src/billing" (no leading /, no ..)`);
+    out.push(p);
+  }
+  return [...new Set(out)];
+}
+
+/** `secrets:` on a declaration: the environment variables to set for each command, with their values. */
+function secretValues(call: ToolCall, services: ToolServices): Map<string, string> | undefined {
+  const raw = call.config("secrets");
+  if (raw === undefined || raw === null) return undefined;
+  const env = services.env ?? process.env;
+  const out = new Map<string, string>();
+  for (const n of Array.isArray(raw) ? raw : [raw]) {
+    if (typeof n !== "string" || !SECRET_NAME.test(n)) throw configError(call, `secrets: ${JSON.stringify(n)} should be an environment variable name, like STRIPE_TEST_KEY`);
+    const value = env[n];
+    if (value === undefined || value === "") throw configError(call, `secrets: ${n} is not set in Halo's environment`);
+    out.set(n, value);
+  }
+  return out;
+}
+
+/** Secret values masked in text a sandbox sends back. Values under 4 characters are left alone. */
+function mask(text: string, secrets: Map<string, string> | undefined): string {
+  if (!secrets) return text;
+  let out = text;
+  for (const [name, value] of secrets) if (value.length >= 4) out = out.split(value).join(`[secret ${name}]`);
+  return out;
+}
+
+/** A local path (relative to root) as a path inside `from:`, if it is inside it. */
+function insideFrom(rel: string, from: string): string | undefined {
+  if (from === "." || from === "") return rel;
+  return rel === from ? "." : rel.startsWith(from + "/") ? rel.slice(from.length + 1) : undefined;
+}
+
+/** Refuse a local path outside the sandbox's `files:` (when it has them). */
+function checkFiles(call: ToolCall, rel: string, what: string): void {
+  const files = fileList(call);
+  if (!files) return;
+  const from = confine(call, workspaceRoot(call, call.config("root"), false), call.config("from")).rel;
+  const inner = insideFrom(rel, from);
+  if (inner === undefined || !inFiles(inner, files)) {
+    throw new HaloError(`${call.tool.name}: ${what} ${rel} is outside the sandbox's files: ${files.map((f) => (from === "." ? f : `${from}/${f}`)).join(", ")}`, { code: "TOOL_ARGUMENT" });
+  }
+}
+
 let snapshots = 0;
 /** Snapshots this process made, and the run each belongs to: removed when the run ends, unless pinned. */
 const made = new Map<string, { docker: string; runId: string }>();
@@ -641,7 +704,7 @@ async function dropSnapshots(runId?: string): Promise<void> {
   for (const [docker, refs] of byDocker) await spawnProgram([docker, "rmi", ...refs], { timeoutMs: 60_000, signal: quiet() }).catch(() => {});
 }
 
-async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string): Promise<Machine> {
+async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string, secrets?: Map<string, string>): Promise<Machine> {
   const docker = (call.config("docker") as string | undefined) ?? "docker";
   const image = from ?? (call.config("image") as string | undefined) ?? "python:3.12-slim";
   if (typeof image !== "string" || !IMAGE_RE.test(image)) throw configError(call, `"${image}" is not a Docker image name`);
@@ -704,7 +767,14 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string)
       const seconds = Math.max(1, Math.ceil(opts.timeoutMs / 1000));
       const began = Date.now();
       // The in-container `timeout` stops the command; the client-side limit is a backstop.
-      const r = await spawnProgram([docker, "exec", id, ...dockerShell(prelude(opts.cwd, opts.env) + command, seconds)], { timeoutMs: opts.timeoutMs + 5_000, signal: opts.signal });
+      // Secrets go in by name (--env NAME), their values only in docker's own environment: not in
+      // any command line, and not in the container's config, so docker commit never saves them.
+      const names = [...(secrets?.keys() ?? [])].flatMap((n) => ["--env", n]);
+      const r = await spawnProgram([docker, "exec", ...names, id, ...dockerShell(prelude(opts.cwd, opts.env) + command, seconds)], {
+        timeoutMs: opts.timeoutMs + 5_000,
+        signal: opts.signal,
+        env: secrets ? Object.fromEntries(secrets) : undefined,
+      });
       const e = daemonError(r);
       if (e && !r.timedOut) throw e;
       // `timeout -s KILL` exits 137 (124 for some builds); either way it ran out the clock.
@@ -766,6 +836,8 @@ interface Session {
   image?: string;
   saving?: Promise<string | undefined>;
   baseline?: Baseline;
+  /** secrets: values, masked in what comes back. */
+  secrets?: Map<string, string>;
 }
 
 /** Where a new sandbox starts from, instead of its declared image. */
@@ -925,7 +997,10 @@ async function resolveBackend(call: ToolCall, services: ToolServices): Promise<"
 
 async function session(call: ToolCall, services: ToolServices): Promise<Session> {
   const backend = await resolveBackend(call, services);
-  if (backend === "ssh") return { tool: call.tool.name, runId: "", branch: "", machine: Promise.resolve(sshMachine(call, call.config(0) as string)), dirty: false };
+  if (backend === "ssh") {
+    for (const k of ["files", "secrets"]) if (call.config(k) !== undefined) throw configError(call, `${k}: is for sandboxes, not a machine over SSH`);
+    return { tool: call.tool.name, runId: "", branch: "", machine: Promise.resolve(sshMachine(call, call.config(0) as string)), dirty: false };
+  }
   const runId = call.runId ?? "";
   // Only Docker sandboxes fork; a fan-out's branches share one E2B or Daytona sandbox, as they always have.
   const branch = backend === "docker" ? (call.branch ?? "") : "";
@@ -953,8 +1028,12 @@ async function session(call: ToolCall, services: ToolServices): Promise<Session>
         if (b === "") break;
       }
     }
-    if (backend !== "docker" && call.config("hosts") !== undefined) throw configError(call, `hosts: is enforced by Docker sandboxes, and this one is ${backend}; use Remote("docker"), or drop hosts:`);
-    const m = backend === "e2b" ? await e2bMachine(call, services, create) : backend === "daytona" ? await daytonaMachine(call, services, create) : await dockerMachine(call, create, seed?.image);
+    for (const k of ["hosts", "secrets"]) {
+      if (backend !== "docker" && call.config(k) !== undefined) throw configError(call, `${k}: is enforced by Docker sandboxes, and this one is ${backend}; use Remote("docker"), or drop ${k}:`);
+    }
+    fileList(call); // check files: before starting anything
+    s.secrets = secretValues(call, services);
+    const m = backend === "e2b" ? await e2bMachine(call, services, create) : backend === "daytona" ? await daytonaMachine(call, services, create) : await dockerMachine(call, create, seed?.image, s.secrets);
     s.image = seed?.image;
     try {
       const from = call.config("from");
@@ -982,7 +1061,8 @@ function localBaseline(call: ToolCall, from: unknown): Baseline {
   if (typeof from !== "string" || !from) throw configError(call, `from: is a local folder to copy into the sandbox, e.g. from: "."`);
   const root = workspaceRoot(call, call.config("root"), false);
   const dir = confine(call, root, from);
-  const files = projectFiles(dir.abs);
+  const only = fileList(call);
+  const files = only ? projectFiles(dir.abs).filter((p) => inFiles(p, only)) : projectFiles(dir.abs);
   if (files.length > MAX_PROJECT_FILES) throw configError(call, `from: "${from}" has ${files.length} files; a sandbox takes at most ${MAX_PROJECT_FILES}`);
   const hashes = new Map<string, string>();
   const content = new Map<string, Uint8Array>();
@@ -1013,13 +1093,19 @@ async function copyIn(call: ToolCall, m: Machine, base: Baseline, signal: AbortS
   if (r.exitCode !== 0) throw sandboxFail(call, `couldn't unpack ${base.from} in the sandbox: ${(r.stderr || r.stdout).trim()}`);
 }
 
-/** What the sandbox changed, compared with what it started with (nothing, without `from:`). */
-async function changes(call: ToolCall, s: Session, m: Machine, under?: string): Promise<FileChange[]> {
+/**
+ * What the sandbox changed, compared with what it started with (nothing, without `from:`). With
+ * files:, changes elsewhere (build output, caches, stray edits) are listed apart as `outside`.
+ */
+async function changes(call: ToolCall, s: Session, m: Machine, under?: string): Promise<{ files: FileChange[]; outside: string[] }> {
   const r = await m.exec(hashCommand(), { env: {}, timeoutMs: 300_000, signal: call.signal });
   if (r.exitCode !== 0 && !r.stdout) throw sandboxFail(call, `couldn't list the sandbox's files: ${r.stderr.trim()}`);
-  const all = compareTrees(s.baseline?.hashes ?? new Map(), parseHashes(r.stdout));
+  let all = compareTrees(s.baseline?.hashes ?? new Map(), parseHashes(r.stdout));
   const prefix = under ? under.replace(/^\.\/|\/+$/g, "") + "/" : undefined;
-  return prefix && prefix !== "./" ? all.filter((c) => c.path.startsWith(prefix)) : all;
+  if (prefix && prefix !== "./") all = all.filter((c) => c.path.startsWith(prefix));
+  const only = fileList(call);
+  if (!only) return { files: all, outside: [] };
+  return { files: all.filter((c) => inFiles(c.path, only)), outside: all.filter((c) => !inFiles(c.path, only)).map((c) => c.path) };
 }
 
 const MAX_PATCH_FILES = 200;
@@ -1079,7 +1165,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
       const timeoutMs = intArg(call, "timeout_ms", named.timeout_ms ?? call.config("timeout_ms"), DEFAULT_TIMEOUT_MS, 1_000, 3_600_000);
       const cwd = named.cwd ?? call.config("cwd");
       const r = await m.exec(command, { cwd: typeof cwd === "string" && cwd ? cwd : undefined, env: envRecord(call, named.env), timeoutMs, signal: call.signal });
-      const stdout = clip(r.stdout.trimEnd());
+      const stdout = clip(mask(r.stdout, s.secrets).trimEnd());
       let json: unknown;
       if (/^\s*[[{]/.test(stdout)) {
         try {
@@ -1089,7 +1175,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
       return {
         command,
         stdout,
-        stderr: clip(r.stderr.trimEnd()),
+        stderr: clip(mask(r.stderr, s.secrets).trimEnd()),
         exitCode: r.exitCode,
         timedOut: r.timedOut,
         ...(json !== undefined ? { json } : {}),
@@ -1102,7 +1188,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
       const bytes = await m.read(path, call.signal);
       if (bytes.length > MAX_FILE) throw fail(call, `${path} is ${bytes.length} bytes; download it instead`);
       if (looksBinary(bytes)) return { path, content: Buffer.from(bytes).toString("base64"), bytes: bytes.length, encoding: "base64" };
-      return { path, content: clip(new TextDecoder().decode(bytes)), bytes: bytes.length, encoding: "utf8" };
+      return { path, content: clip(mask(new TextDecoder().decode(bytes), s.secrets)), bytes: bytes.length, encoding: "utf8" };
     }
 
     case "write": {
@@ -1125,6 +1211,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
     case "upload": {
       const root = workspaceRoot(call, call.config("root"), false);
       const from = confine(call, root, named.from);
+      checkFiles(call, from.rel, "upload from");
       const to = remotePath(call, named.to ?? named.from, "to");
       const file = Bun.file(from.abs);
       if (!(await file.exists())) throw fail(call, `${from.rel} doesn't exist`, "TOOL_ARGUMENT");
@@ -1138,6 +1225,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
       const from = remotePath(call, named.from, "from");
       const root = workspaceRoot(call, call.config("root"), true);
       const to = confine(call, root, named.to ?? posix.basename(from));
+      checkFiles(call, to.rel, "download to");
       const bytes = await m.read(from, call.signal);
       if (bytes.length > MAX_FILE) throw fail(call, `${from} is over ${MAX_FILE} bytes`);
       mkdirSync(dirname(to.abs), { recursive: true });
@@ -1147,7 +1235,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
 
     case "diff": {
       if (m.backend === "ssh") throw fail(call, "diff works on sandboxes, not on a machine over SSH", "TOOL_ARGUMENT");
-      const files = await changes(call, s, m, typeof named.path === "string" ? named.path : undefined);
+      const { files, outside } = await changes(call, s, m, typeof named.path === "string" ? named.path : undefined);
       const parts: string[] = [];
       for (const c of files.slice(0, MAX_PATCH_FILES)) {
         const before = s.baseline?.content.get(c.path) ?? new Uint8Array();
@@ -1155,14 +1243,23 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
         if (looksBinary(before) || looksBinary(after)) parts.push(`Binary file ${c.path} ${c.status}\n`);
         else parts.push(unifiedDiff(decode(before), decode(after), { a: c.status === "added" ? "/dev/null" : `a/${c.path}`, b: c.status === "deleted" ? "/dev/null" : `b/${c.path}` }));
       }
-      return { files, patch: clip(parts.join("")), ...(files.length > MAX_PATCH_FILES ? { truncated: true } : {}) };
+      return {
+        files,
+        patch: clip(mask(parts.join(""), s.secrets)),
+        ...(files.length > MAX_PATCH_FILES ? { truncated: true } : {}),
+        ...(outside.length ? { outside: outside.slice(0, MAX_PATCH_FILES) } : {}),
+      };
     }
 
     case "apply": {
       if (m.backend === "ssh") throw fail(call, "apply works on sandboxes, not on a machine over SSH", "TOOL_ARGUMENT");
       const root = workspaceRoot(call, call.config("root"), true);
-      const base = typeof named.to === "string" && named.to ? named.to : (s.baseline?.from ?? ".");
-      const files = await changes(call, s, m, typeof named.path === "string" ? named.path : undefined);
+      const own = s.baseline?.from ?? ".";
+      const base = typeof named.to === "string" && named.to ? named.to : own;
+      if (fileList(call) && posix.normalize(base) !== posix.normalize(own)) {
+        throw fail(call, `apply(to:) can't move changes elsewhere when the sandbox has files:; they go back where they came from (${own})`, "TOOL_ARGUMENT");
+      }
+      const { files, outside } = await changes(call, s, m, typeof named.path === "string" ? named.path : undefined);
       const written: string[] = [];
       const deleted: string[] = [];
       for (const c of files) {
@@ -1177,7 +1274,8 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
           written.push(target.rel);
         }
       }
-      return { to: base, written, deleted };
+      // With files:, changes outside them stay in the sandbox: listed, never written.
+      return { to: base, written, deleted, ...(outside.length ? { outside: outside.slice(0, MAX_PATCH_FILES) } : {}) };
     }
 
   }

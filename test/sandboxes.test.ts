@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { parse } from "../src/parser/index";
 import { validate } from "../src/parser/validate";
 import { HaloRuntime, verifyTrace } from "../src/runtime/runtime";
-import { withSandbox } from "../src/runtime/sandbox-agents";
+import { intersectFiles, intersectHosts, sandboxLimits, withSandbox } from "../src/runtime/sandbox-agents";
 import { chooseSandbox, closeRemoteSessions, dockerRunArgs, pickVmRuntime, remote } from "../src/runtime/providers/remote";
 import { compareTrees, hostAllowed, parseHashes, tarball } from "../src/runtime/providers/sandbox-kit";
 import type { ToolCall, ToolServices } from "../src/runtime/tools";
@@ -45,7 +45,7 @@ case "$cmd" in
     case "$image" in halo-sandbox:*) cp -R "$D/s/$(echo "$image" | tr ':/' '__')/." "$D/c/$id/" ;; esac
     echo "$id" ;;
   exec)
-    [ "$1" = "--interactive" ] && shift
+    while :; do case "$1" in --interactive) shift ;; --env) shift 2 ;; *) break ;; esac; done
     id=$1; shift
     [ -d "$D/c/$id" ] || { echo "Error response from daemon: No such container: $id" >&2; exit 1; }
     cd "$D/c/$id" && exec "$@" ;;
@@ -294,6 +294,108 @@ describe("A project in, its changes out", () => {
       { path: "b.py", status: "added" },
     ]);
     expect(parseHashes(`${"a".repeat(64)}  ./src/x.py\n${"b".repeat(64)} *./y\n`)).toEqual(new Map([["src/x.py", "a".repeat(64)], ["y", "b".repeat(64)]]));
+  });
+});
+
+describe("Limits: files, secrets, and hosts by pattern", () => {
+  test("several AllowHosts narrow by pattern, not by exact name", () => {
+    expect(intersectHosts(["*.stripe.com", "pypi.org"], ["api.stripe.com", "registry.npmjs.org"])).toEqual(["api.stripe.com"]);
+    expect(intersectHosts(["*.stripe.com"], ["*.api.stripe.com"])).toEqual(["*.api.stripe.com"]);
+    expect(intersectHosts(["stripe.com"], ["*.stripe.com"])).toEqual(["stripe.com"]);
+    expect(intersectHosts(["evilstripe.com"], ["*.stripe.com"])).toEqual([]);
+    expect(intersectHosts(["*.stripe.com"], ["*.com"])).toEqual(["*.stripe.com"]);
+    expect(intersectFiles(["src"], ["src/billing", "docs"])).toEqual(["src/billing"]);
+    expect(intersectFiles(["."], ["test"])).toEqual(["test"]);
+    expect(intersectFiles(["src/billing"], ["src/bill"])).toEqual([]);
+    const policies = new Map(
+      Object.entries({
+        Role: { name: "Role", rules: [{ name: "AllowHosts", args: ["*.stripe.com", "pypi.org"] }, { name: "AllowFiles", args: ["src", "./test/"] }, { name: "AllowSecrets", args: ["STRIPE_KEY", "NPM_TOKEN"] }] },
+        Task: { name: "Task", rules: [{ name: "AllowHosts", args: ["api.stripe.com"] }, { name: "AllowFiles", args: ["src/billing"] }, { name: "AllowSecrets", args: ["STRIPE_KEY"] }] },
+      }),
+    );
+    const agent = { name: "Dev", modelId: "m", params: { sandbox: "docker" }, requires: ["Role", "Task"] };
+    expect(sandboxLimits(agent, policies as any)).toEqual({ hosts: ["api.stripe.com"], files: ["src/billing"], secrets: ["STRIPE_KEY"] });
+    const named = Object.fromEntries(withSandbox(agent, new Map(), policies as any).tool!.argList.slice(1).map((a) => [a.name, a.value]));
+    expect(named).toEqual({
+      hosts: { kind: "list", items: [{ kind: "string", value: "api.stripe.com" }] },
+      from: { kind: "string", value: "." },
+      files: { kind: "list", items: [{ kind: "string", value: "src/billing" }] },
+      secrets: { kind: "list", items: [{ kind: "string", value: "STRIPE_KEY" }] },
+    });
+  });
+
+  test("AllowFiles and AllowSecrets are checked, and need a sandbox that can enforce them", () => {
+    const src = `
+policy Files : AllowFiles("src/billing")
+policy Keys : AllowSecrets("STRIPE_KEY")
+policy BadFiles : AllowFiles("../etc", "/abs")
+policy BadKeys : AllowSecrets("not-a-name")
+tool Lab : Remote("docker")
+agent A [m/x, sandbox: "e2b"]
+  requires Files
+agent B [m/x, sandbox: "daytona"]
+  requires Keys
+agent C [m/x, sandbox: Lab]
+  requires Files, Keys
+agent D [m/x, sandbox: "docker"]
+  requires Files, Keys
+`;
+    const errors = validate(parse(src)).filter((x) => x.severity === "error").map((x) => x.message);
+    expect(errors).toEqual([
+      expect.stringContaining("AllowFiles(../etc) should be a path inside the project"),
+      expect.stringContaining("AllowFiles(/abs) should be a path inside the project"),
+      expect.stringContaining("AllowSecrets(not-a-name) should be an environment variable name"),
+      expect.stringContaining('Agent "B": AllowSecrets is enforced by Docker sandboxes'),
+      expect.stringContaining('Agent "C": AllowFiles, AllowSecrets limit a sandbox the agent owns'),
+    ]);
+  });
+
+  test("files: copies in only those paths; diff and apply leave the rest in the sandbox", async () => {
+    const root = join(tmp, "scoped");
+    for (const [path, text] of Object.entries({ "src/billing/pay.ts": "pay\n", "src/auth/login.ts": "login\n", "README.md": "readme\n" })) {
+      mkdirSync(join(root, "repo", path, ".."), { recursive: true });
+      writeFileSync(join(root, "repo", path), text);
+    }
+    const decl = { 0: "docker", docker, from: "repo", root, files: ["src/billing/"] };
+    const call = (method: string, named: Record<string, unknown> = {}) => remote(makeCall(method, named, decl, "files1"), services()) as Promise<any>;
+    expect((await call("run", { command: "find . -type f -not -path './.*' | sort" })).stdout).toBe("./src/billing/pay.ts");
+    await call("run", { command: "echo paid > src/billing/pay.ts && mkdir -p src/auth lib && echo hacked > src/auth/login.ts && echo out > lib/app.js" });
+
+    const d = await call("diff");
+    expect(d.files).toEqual([{ path: "src/billing/pay.ts", status: "modified" }]);
+    expect(d.outside).toEqual(["lib/app.js", "src/auth/login.ts"]);
+    expect(d.patch).not.toContain("hacked");
+
+    expect(await call("apply")).toEqual({ to: "repo", written: ["repo/src/billing/pay.ts"], deleted: [], outside: ["lib/app.js", "src/auth/login.ts"] });
+    expect(readFileSync(join(root, "repo/src/billing/pay.ts"), "utf8")).toBe("paid\n");
+    expect(readFileSync(join(root, "repo/src/auth/login.ts"), "utf8")).toBe("login\n");
+    expect(existsSync(join(root, "repo/lib"))).toBe(false);
+
+    await expect(call("apply", { to: "elsewhere" })).rejects.toThrow(/can't move changes elsewhere when the sandbox has files:/);
+    await expect(call("download", { from: "src/auth/login.ts", to: "repo/src/auth/login.ts" })).rejects.toThrow(/download to repo\/src\/auth\/login.ts is outside the sandbox's files: repo\/src\/billing/);
+    await expect(call("upload", { from: "repo/README.md" })).rejects.toThrow(/upload from repo\/README.md is outside/);
+    expect((await call("download", { from: "src/billing/pay.ts", to: "repo/src/billing/copy.ts" })).to).toBe("repo/src/billing/copy.ts");
+
+    await expect(remote(makeCall("info", {}, { 0: "docker", docker, files: ["src"] }, "files2"), services())).rejects.toThrow(/files: picks paths from the project that from: copies in/);
+    await expect(remote(makeCall("info", {}, { 0: "docker", docker, from: "repo", root, files: ["../x"] }, "files3"), services())).rejects.toThrow(/files: "..\/x" should be a path inside from:/);
+  });
+
+  test("secrets: are set by name for each command and masked in what comes back", async () => {
+    const value = "sk_test_51abcDEF";
+    const decl = { 0: "docker", docker, secrets: ["STRIPE_KEY"] };
+    const call = (method: string, named: Record<string, unknown> = {}) => remote(makeCall(method, named, decl, "sec1"), services({ STRIPE_KEY: value })) as Promise<any>;
+    const r = await call("run", { command: 'echo "key=$STRIPE_KEY"; echo "$STRIPE_KEY" >&2; echo "$STRIPE_KEY" > k.txt' });
+    expect(r.stdout).toBe("key=[secret STRIPE_KEY]");
+    expect(r.stderr).toBe("[secret STRIPE_KEY]");
+    expect((await call("read", { path: "k.txt" })).content).toBe("[secret STRIPE_KEY]\n");
+    // By name only: the value is in no command line, and docker run (which commit would save) never sees it.
+    const lines = log().filter((l) => l.includes("STRIPE_KEY") || l.includes(value));
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((l) => l.startsWith("exec --env STRIPE_KEY ") && !l.includes(value))).toBe(true);
+
+    await expect(remote(makeCall("info", {}, decl, "sec2"), services())).rejects.toThrow(/secrets: STRIPE_KEY is not set in Halo's environment/);
+    await expect(remote(makeCall("info", {}, { ...decl, secrets: ["bad-name"] }, "sec3"), services({ STRIPE_KEY: value }))).rejects.toThrow(/should be an environment variable name/);
+    await expect(remote(makeCall("info", {}, { 0: "e2b", secrets: ["STRIPE_KEY"] }, "sec4"), services({ STRIPE_KEY: value, E2B_API_KEY: "k" }))).rejects.toThrow(/secrets: is enforced by Docker sandboxes, and this one is e2b/);
   });
 });
 

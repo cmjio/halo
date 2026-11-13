@@ -118,6 +118,21 @@ pipeline Fix(issue: String) -> Result:
 - `apply` writes added and changed files, and deletes deleted ones, under `to:` (default: the `from:` folder). Like `download`, it can't leave `root:`. It is a `write`, so `ApproveEffects(write)` or a `|! yield` before it puts a person in charge of what lands.
 - `from:` works with every sandbox kind; it is copied in as one archive, at most 20,000 files and 50 MB.
 
+### Only some of the project
+
+`files:` narrows `from:` to some of its folders and files, for a task that should see and change only those:
+
+```halo
+tool Billing : Remote("docker", from: ".", files: ["src/billing", "test/billing"], image: "node:22")
+```
+
+- Only those paths are copied in. The rest of the project isn't in the sandbox at all.
+- `diff` shows changes inside them. Changes elsewhere (build output, caches, an edit the agent shouldn't have made) are listed apart, as `outside`, and not shown.
+- `apply` writes back only changes inside them, to where they came from (`to:` can't move them), and returns the rest as `outside`. Nothing outside `files:` is ever written.
+- `upload` and `download` refuse a local path outside them.
+
+Paths are relative to the `from:` folder, with no leading `/` and no `..`. For a sandbox agent, an `AllowFiles` policy does the same (see [Sandbox agents' limits](#sandbox-agents-limits)).
+
 ## Forks
 
 In a Docker sandbox, each branch of a fan-out (`|* { ... }` or `|* each`) gets its own copy of the sandbox as it was when the fan-out started. Three attempts at a fix don't trip over each other, and each starts from the same files. After the fan-out, `keep(fork: n)` carries on with branch `n`'s sandbox:
@@ -166,7 +181,39 @@ agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "docker"]
   requires Deps
 ```
 
-Several `AllowHosts` policies narrow: a host must be in each. `AllowHosts` needs a sandbox the agent owns (`sandbox: "docker"` or `"auto"`); for a `Remote` tool shared with the pipeline, put `hosts:` on its declaration. E2B and Daytona can't enforce it, so `hosts:` with them is an error rather than a promise Halo can't keep; `network: false` is the way to cut a Docker sandbox off entirely.
+Several `AllowHosts` policies narrow, by pattern: `AllowHosts("*.stripe.com")` and `AllowHosts("api.stripe.com", "pypi.org")` together allow only `api.stripe.com`. `AllowHosts` needs a sandbox the agent owns (`sandbox: "docker"` or `"auto"`); for a `Remote` tool shared with the pipeline, put `hosts:` on its declaration. E2B and Daytona can't enforce it, so `hosts:` with them is an error rather than a promise Halo can't keep; `network: false` is the way to cut a Docker sandbox off entirely.
+
+## Secrets
+
+`secrets:` gives a Docker sandbox's commands environment variables from Halo's own environment, such as a test API key:
+
+```halo
+tool Pay : Remote("docker", from: ".", files: ["src/billing"], secrets: ["STRIPE_TEST_KEY"], hosts: ["api.stripe.com"])
+```
+
+- Each command (`run`) gets them, by name. The values are passed to `docker exec` in its environment, never on a command line, and never in the container's settings. So `docker commit` doesn't save them: forks, rewinds and pauses never write them into a snapshot, and a resumed or rewound sandbox gets them from Halo's environment again.
+- Their values are masked in what comes back to the run: `run`'s `stdout` and `stderr`, `read`, and `diff`'s patch show `[secret STRIPE_TEST_KEY]` instead. (Values shorter than 4 characters aren't masked, and neither is a `read` of a binary file, returned as base64.)
+- A secret that isn't set is an error when the sandbox starts.
+- Only Docker sandboxes take `secrets:`, as with `hosts:`. Give a secret to a sandbox with `hosts:` so the code that holds it can reach only the service it's for.
+
+## Sandbox agents' limits
+
+For an agent with its own sandbox (`sandbox: "docker"` or `"auto"`), policies set these limits, so they sit with the agent's other rules:
+
+| Policy | Sets | |
+|---|---|---|
+| `AllowHosts("pypi.org", ...)` | `hosts:` | [Allowed hosts](#allowed-hosts) |
+| `AllowFiles("src/billing", ...)` | `from: "."` and `files:` | [Only some of the project](#only-some-of-the-project) |
+| `AllowSecrets("STRIPE_TEST_KEY", ...)` | `secrets:` | [Secrets](#secrets) |
+
+```halo
+policy Billing : AllowFiles("src/billing", "test/billing") & AllowHosts("api.stripe.com") & AllowSecrets("STRIPE_TEST_KEY")
+
+agent Payments [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "docker"]
+  requires Billing
+```
+
+Several policies narrow: each path, host and secret must be allowed by every rule of its kind. So a broad policy for a role and a narrow one for a task combine into the narrow one. For a `Remote` tool shared with the pipeline, put `hosts:`, `files:` and `secrets:` on its declaration instead; the policies are an error there. `AllowHosts` and `AllowSecrets` need Docker; `AllowFiles` works with every sandbox kind.
 
 ## Isolation
 

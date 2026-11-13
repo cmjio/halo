@@ -12,26 +12,75 @@
  * Either way the agent may call it without `tools:` on each call (`tools: auto`, unless the
  * agent says otherwise), and its system prompt says the sandbox is there.
  *
- * `sandbox: "auto"` uses Docker when it's running, else E2B, else Daytona. A policy with
- * `AllowHosts("pypi.org", ...)` that the agent requires becomes its sandbox's egress allowlist
- * (`hosts:`), which Docker sandboxes enforce.
+ * `sandbox: "auto"` uses Docker when it's running, else E2B, else Daytona. Policies the agent
+ * requires limit its own sandbox:
+ *   AllowHosts("pypi.org", ...)    the hosts it may reach (hosts:; Docker only)
+ *   AllowFiles("src/billing", ...) the project files it starts with and may write back (from: ".", files:)
+ *   AllowSecrets("STRIPE_KEY", ...) the environment variables its commands get (secrets:; Docker only)
  */
 
-import type { Agent, PolicyDeclaration, ToolDeclaration } from "../parser/types.js";
+import type { Agent, PolicyDeclaration, ToolDeclaration, Value } from "../parser/types.js";
+import { scopePath } from "../parser/builtins.js";
 
 export const SANDBOX_SERVICES = ["e2b", "daytona", "docker", "auto"];
 
-/** The hosts an agent's policies allow its sandbox to reach (AllowHosts), or undefined when none say. */
-export function allowedHosts(agent: Agent, policies?: Map<string, PolicyDeclaration>): string[] | undefined {
-  if (!policies) return undefined;
-  let hosts: string[] | undefined;
+/** Whether every host `inner` matches is also matched by `outer` ("api.stripe.com" is within "*.stripe.com"). */
+export function hostWithin(inner: string, outer: string): boolean {
+  const a = inner.toLowerCase();
+  const b = outer.toLowerCase();
+  if (!b.startsWith("*.")) return a === b;
+  const base = b.slice(2);
+  const name = a.startsWith("*.") ? a.slice(2) : a;
+  return name === base || name.endsWith("." + base);
+}
+
+/** The hosts both lists allow, by pattern: ["*.stripe.com"] and ["api.stripe.com", "pypi.org"] give ["api.stripe.com"]. */
+export function intersectHosts(a: string[], b: string[]): string[] {
+  const both = [...a.filter((x) => b.some((y) => hostWithin(x, y))), ...b.filter((y) => a.some((x) => hostWithin(y, x)))];
+  // Drop any that another kept pattern already covers.
+  return [...new Set(both.map((h) => h.toLowerCase()))].filter((h, _, all) => !all.some((o) => o !== h && hostWithin(h, o)));
+}
+
+/** The paths both lists allow: ["src"] and ["src/billing", "docs"] give ["src/billing"]. */
+export function intersectFiles(a: string[], b: string[]): string[] {
+  const within = (x: string, y: string) => y === "." || x === y || x.startsWith(y + "/");
+  const both = [...a.filter((x) => b.some((y) => within(x, y))), ...b.filter((y) => a.some((x) => within(y, x)))];
+  return [...new Set(both)].filter((p, _, all) => !all.some((o) => o !== p && within(p, o)));
+}
+
+/** What an agent's policies limit its own sandbox to; each is undefined when no policy says. */
+export interface SandboxLimits {
+  /** AllowHosts: the hosts it may reach. */
+  hosts?: string[];
+  /** AllowFiles: the project's folders and files it starts with, and may write back. */
+  files?: string[];
+  /** AllowSecrets: the environment variables put into its commands. */
+  secrets?: string[];
+}
+
+/**
+ * The limits an agent's policies put on its sandbox. Several policies narrow: a host, a path or a
+ * secret must be allowed by each rule that names that kind.
+ */
+export function sandboxLimits(agent: Agent, policies?: Map<string, PolicyDeclaration>): SandboxLimits {
+  const out: SandboxLimits = {};
+  if (!policies) return out;
   for (const name of agent.requires ?? []) {
     for (const rule of policies.get(name)?.rules ?? []) {
-      // Several AllowHosts narrow: a host must be allowed by each of them.
-      if (rule.name === "AllowHosts") hosts = hosts ? hosts.filter((h) => rule.args.includes(h)) : [...rule.args];
+      if (rule.name === "AllowHosts") out.hosts = out.hosts ? intersectHosts(out.hosts, rule.args) : [...new Set(rule.args.map((h) => h.toLowerCase()))];
+      if (rule.name === "AllowFiles") {
+        const paths = rule.args.map((p) => scopePath(p)).filter((p): p is string => p !== undefined);
+        out.files = out.files ? intersectFiles(out.files, paths) : intersectFiles(paths, paths);
+      }
+      if (rule.name === "AllowSecrets") out.secrets = out.secrets ? out.secrets.filter((n) => rule.args.includes(n)) : [...new Set(rule.args)];
     }
   }
-  return hosts;
+  return out;
+}
+
+/** The hosts an agent's policies allow its sandbox to reach (AllowHosts), or undefined when none say. */
+export function allowedHosts(agent: Agent, policies?: Map<string, PolicyDeclaration>): string[] | undefined {
+  return sandboxLimits(agent, policies).hosts;
 }
 
 /** What `sandbox:` on an agent names. */
@@ -48,13 +97,20 @@ export function sandboxChoice(agent: Agent): SandboxChoice {
 /** The reason `sandbox:` can't be used, or undefined when it can. */
 export function sandboxProblem(agent: Agent, tools: Map<string, ToolDeclaration>, policies?: Map<string, PolicyDeclaration>): string | undefined {
   const choice = sandboxChoice(agent);
-  const hosts = allowedHosts(agent, policies);
+  const limits = sandboxLimits(agent, policies);
+  const named = (["hosts", "files", "secrets"] as const).filter((k) => limits[k] !== undefined);
+  const rule = (k: string) => `Allow${k[0]!.toUpperCase()}${k.slice(1)}`;
   if (choice.kind === "service") {
     if (tools.has(choice.tool)) return `Agent "${agent.name}": sandbox: "${choice.service}" makes a tool named "${choice.tool}", but a tool of that name is already declared`;
-    if (hosts && (choice.service === "e2b" || choice.service === "daytona")) return `Agent "${agent.name}": AllowHosts is enforced by Docker sandboxes; use sandbox: "docker" (or "auto"), or drop AllowHosts`;
+    const dockerOnly = named.filter((k) => k !== "files");
+    if (dockerOnly.length && (choice.service === "e2b" || choice.service === "daytona")) {
+      return `Agent "${agent.name}": ${dockerOnly.map(rule).join(" and ")} ${dockerOnly.length > 1 ? "are" : "is"} enforced by Docker sandboxes; use sandbox: "docker" (or "auto"), or drop ${dockerOnly.length > 1 ? "them" : "it"}`;
+    }
     return undefined;
   }
-  if (hosts && choice.kind === "tool") return `Agent "${agent.name}": AllowHosts limits a sandbox the agent owns (sandbox: "docker" or "auto"); for the shared tool ${choice.tool}, put hosts: [...] on its declaration`;
+  if (named.length && choice.kind === "tool") {
+    return `Agent "${agent.name}": ${named.map(rule).join(", ")} limit${named.length > 1 ? "" : "s"} a sandbox the agent owns (sandbox: "docker" or "auto"); for the shared tool ${choice.tool}, put ${named.map((k) => `${k}: [...]`).join(", ")} on its declaration`;
+  }
   if (choice.kind === "tool") {
     const tool = tools.get(choice.tool);
     if (!tool) return `Agent "${agent.name}": sandbox: ${choice.tool} is not "e2b", "daytona", "docker", "auto" or a declared Remote tool`;
@@ -78,15 +134,21 @@ export function withSandbox(agent: Agent, tools: Map<string, ToolDeclaration>, p
   const problem = sandboxProblem(agent, tools, policies);
   if (problem) throw new Error(problem);
 
-  const hosts = allowedHosts(agent, policies);
+  const limits = sandboxLimits(agent, policies);
+  const list = (items: string[]): Value => ({ kind: "list", items: items.map((v) => ({ kind: "string", value: v })) });
+  const extra: [string, Value][] = [];
+  if (limits.hosts) extra.push(["hosts", list(limits.hosts)]);
+  // AllowFiles: the sandbox starts with those files from the project, and only they come back.
+  if (limits.files) extra.push(["from", { kind: "string", value: "." }], ["files", list(limits.files)]);
+  if (limits.secrets) extra.push(["secrets", list(limits.secrets)]);
   const declared: ToolDeclaration | undefined =
     choice.kind === "service"
       ? {
           name: choice.tool,
           provider: "Remote",
           args: [`"${choice.service}"`],
-          namedArgs: hosts ? { hosts: `[${hosts.join(", ")}]` } : {},
-          argList: [{ value: { kind: "string", value: choice.service } }, ...(hosts ? [{ name: "hosts", value: { kind: "list" as const, items: hosts.map((h) => ({ kind: "string" as const, value: h })) } }] : [])],
+          namedArgs: Object.fromEntries(extra.map(([k, v]) => [k, v.kind === "list" ? `[${v.items.map((i) => (i as { value: string }).value).join(", ")}]` : `"${(v as { value: string }).value}"`])),
+          argList: [{ value: { kind: "string", value: choice.service } }, ...extra.map(([name, value]) => ({ name, value }))],
           loc: agent.loc,
         }
       : undefined;
