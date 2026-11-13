@@ -187,7 +187,7 @@ export async function resolveGraph(input: ResolveInput): Promise<Resolution> {
           : `No version of ${name} matches ${reqs[0]!.range}${yanked}\n  required by: ${lines[0]}\nVersions: ${all.join(", ") || "none"}`,
       );
     }
-    const compatible = live.filter((v) => !doc.versions[v]!.halo || satisfies(haloVersion, doc.versions[v]!.halo!));
+    const compatible = live.filter((v) => !doc.versions[v]!.halo || satisfies(haloVersion, doc.versions[v]!.halo!, { includePrerelease: true }));
     if (!compatible.length) checkHalo(name, live[0]!, doc.versions[live[0]!]!.halo, haloVersion);
     const version = lockedVersion && compatible.includes(lockedVersion) ? lockedVersion : compatible[0]!;
     const versionDoc = doc.versions[version]!;
@@ -247,7 +247,9 @@ export async function resolveGraph(input: ResolveInput): Promise<Resolution> {
 }
 
 function checkHalo(name: string, version: string, range: string | undefined, haloVersion: string) {
-  if (range && !satisfies(haloVersion, range)) {
+  // A next or nightly Halo (1.2.0-next.1, 1.1.1-nightly.…) counts by its order, as npm checks engines:
+  // without this, no prerelease Halo could install a package that names a Halo range.
+  if (range && !satisfies(haloVersion, range, { includePrerelease: true })) {
     throw new ResolveError(`${name}@${version} needs Halo ${range}, and this is Halo ${haloVersion}. Run \`halo upgrade\`, or depend on an older ${name}.`);
   }
 }

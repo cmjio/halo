@@ -8,7 +8,8 @@
  *
  * A prerelease (`2.0.0-beta.1`) satisfies a range only when one of the range's
  * comparators names a prerelease of the same major.minor.patch, as on npm, so
- * `^1.2.0` never picks up `1.3.0-beta`.
+ * `^1.2.0` never picks up `1.3.0-beta`. Pass `{ includePrerelease: true }` to drop that rule
+ * and compare a prerelease by its order alone, as npm does when it checks `engines`.
  */
 
 export interface SemVer {
@@ -205,13 +206,13 @@ function test(c: Comparator, v: SemVer): boolean {
   }
 }
 
-export function satisfies(version: string, range: string | Range): boolean {
+export function satisfies(version: string, range: string | Range, opts: { includePrerelease?: boolean } = {}): boolean {
   const v = parseVersion(version);
   if (!v) return false;
   const r = typeof range === "string" ? parseRange(range) : range;
   return r.some((set) => {
     if (!set.every((c) => test(c, v))) return false;
-    if (!v.prerelease.length) return true;
+    if (!v.prerelease.length || opts.includePrerelease) return true;
     // A prerelease only matches when the range itself names a prerelease of the same version.
     return set.some((c) => !c.internal && c.v.prerelease.length > 0 && c.v.major === v.major && c.v.minor === v.minor && c.v.patch === v.patch);
   });

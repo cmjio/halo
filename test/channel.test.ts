@@ -58,3 +58,15 @@ describe("halolang.com/dl serves", () => {
     expect(isDownloadKey("../secrets")).toBe(false);
   });
 });
+
+describe("next and nightly builds of Halo install packages", () => {
+  test("a package's Halo range counts a prerelease Halo by its order", async () => {
+    const { satisfies } = await import("../src/registry/semver");
+    const nightly = nightlyVersion("1.1.0", new Date("2026-11-13"), "252c944");
+    expect(satisfies(nightly, ">=0.8.0", { includePrerelease: true })).toBe(true);
+    expect(satisfies("1.3.0-next.1", "^1.0.0", { includePrerelease: true })).toBe(true);
+    expect(satisfies(nightly, ">=1.2.0", { includePrerelease: true })).toBe(false);
+    // Choosing a package's own version keeps npm's rule: ranges skip prereleases.
+    expect(satisfies("1.3.0-beta.1", "^1.0.0")).toBe(false);
+  });
+});
