@@ -2,7 +2,8 @@
 #
 #   irm https://halolang.com/install.ps1 | iex
 #
-# Options: $env:HALO_VERSION = "0.1.0", $env:HALO_INSTALL = "$HOME\.halo",
+# Options: $env:HALO_VERSION = "0.1.0" (or a channel: "latest", the default, "next" or
+# "nightly"), $env:HALO_INSTALL = "$HOME\.halo",
 # $env:HALO_NO_MODIFY_PATH = "1". It downloads halo-windows-x64.exe from halolang.com/dl,
 # checks it against the release's SHA256SUMS, puts it in ~\.halo\bin, and adds that
 # folder to your user PATH. ARM64 Windows runs the x64 build.
@@ -17,8 +18,12 @@ $asset = 'halo-windows-x64.exe'
 
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Halo needs 64-bit Windows.' }
 
-$version = $env:HALO_VERSION
-if (-not $version) { $version = (Invoke-RestMethod "$base/latest.json").version }
+$version = if ($env:HALO_VERSION) { $env:HALO_VERSION } else { 'latest' }
+if ($version -in 'latest', 'next', 'nightly') {
+  $channel = $version
+  $version = (Invoke-RestMethod "$base/$channel.json").version
+  if (-not $version) { throw "Couldn't read the $channel version from $base/$channel.json" }
+}
 $version = $version.TrimStart('v')
 Write-Host "Installing halo $version ($asset)"
 

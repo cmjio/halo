@@ -1,7 +1,8 @@
 /**
  * halolang.com: static files, plus
- *   - /dl/<version>/<file> and /dl/latest.json: release binaries, from R2; each binary served
- *     is counted in Workers Analytics Engine (see countDownload)
+ *   - /dl/<version>/<file> and /dl/<channel>.json (latest, next, nightly): release binaries and
+ *     which version each channel is on, from R2; each binary served is counted in Workers
+ *     Analytics Engine (see countDownload)
  *   - a 301 from www (and the old workers.dev address) to halolang.com, keeping the path
  *   - a 301 from /docs/<page> (where the docs used to be) to /<page>
  *   - a 301 from an example's old URL (/examples/74-software-team, /examples/casebook/021-…)
@@ -114,10 +115,15 @@ export function countDownload(env: Env, req: Request, url: URL, key: string): vo
   }
 }
 
+/** A key under /dl/ that may be served: a channel pointer, or a file of one version. */
+export function isDownloadKey(key: string): boolean {
+  return /^((latest|next|nightly)\.json|v?\d+\.\d+\.\d+[\w.-]*\/[\w.-]+)$/.test(key);
+}
+
 async function download(req: Request, url: URL, env: Env): Promise<Response> {
   if (req.method !== "GET" && req.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
   const key = decodeURIComponent(url.pathname.slice("/dl/".length));
-  if (!/^(latest\.json|v?\d+\.\d+\.\d+[\w.-]*\/[\w.-]+)$/.test(key)) return new Response("Not found", { status: 404 });
+  if (!isDownloadKey(key)) return new Response("Not found", { status: 404 });
   const object = req.method === "HEAD" ? await env.RELEASES.head(key) : await env.RELEASES.get(key);
   if (!object) return new Response("Not found", { status: 404 });
   if (req.method === "GET") countDownload(env, req, url, key);
@@ -125,8 +131,8 @@ async function download(req: Request, url: URL, env: Env): Promise<Response> {
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
   headers.set("content-length", String(object.size));
-  // A version's files never change; which version is latest does.
-  headers.set("cache-control", key === "latest.json" ? "public, max-age=60" : "public, max-age=31536000, immutable");
+  // A version's files never change; which version a channel is on does.
+  headers.set("cache-control", key.endsWith(".json") ? "public, max-age=60" : "public, max-age=31536000, immutable");
   if (!headers.has("content-type")) headers.set("content-type", key.endsWith(".json") ? "application/json" : "application/octet-stream");
   if (!key.endsWith(".json")) headers.set("content-disposition", `attachment; filename="${key.split("/").pop()}"`);
   return new Response(req.method === "HEAD" ? null : (object as R2Object).body, { headers });

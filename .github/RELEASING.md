@@ -1,12 +1,37 @@
 # Releasing Halo
 
-A release is a version tag. CI does the rest.
+Halo ships on three channels. Each has a pointer at `halolang.com/dl/<channel>.json`, an npm
+dist-tag and a container image tag of the same name, and `src/channel.ts` decides a version's
+channel from its version string:
+
+| Channel | How it ships | Version | Install |
+|---|---|---|---|
+| `latest` | push a tag | `1.2.0` | `curl -fsSL https://halolang.com/install.sh \| sh`, `@halolang/halo`, `:latest` |
+| `next` | push a prerelease tag | `1.3.0-next.1`, `1.3.0-rc.1` | `… \| HALO_VERSION=next sh`, `@halolang/halo@next`, `:next` |
+| `nightly` | every night from `main` (04:23 UTC) | `1.2.1-nightly.20261113.g9172379` | `… \| HALO_VERSION=nightly sh`, `@halolang/halo@nightly`, `:nightly` |
+
+`halo upgrade` stays on the channel the installed build came from; `halo upgrade --channel
+<name>` moves to another. The GitHub Action takes `version: next` or `version: nightly` too.
+
+A release or prerelease is a version tag. CI does the rest.
 
 ```bash
-# 1. bump "version" in package.json (e.g. 0.2.0), commit, push
+# 1. bump "version" in package.json (e.g. 0.2.0, or 0.3.0-next.1), commit, push
 # 2. tag that commit and push the tag
 git tag v0.2.0 && git push origin v0.2.0
 ```
+
+A prerelease gets a GitHub release marked as a prerelease and doesn't redeploy the site. When
+a stable release is newer than what `next.json` points at, it moves `next.json` up to it too, so
+`next` never trails `latest` at halolang.com/dl. (npm's `next` dist-tag can't be moved by
+trusted publishing; it moves with the next prerelease.)
+
+Nightlies need nothing: the workflow's schedule builds `main` when it has changed since the last
+nightly, with a version made up from package.json's (the next patch after a release, or the
+release a prerelease is heading for) and never committed or tagged. They get no GitHub release
+and no site deploy. Only the newest 14 stay at halolang.com/dl; older ones are deleted from R2.
+Run one by hand from Actions → Release → Run workflow (tick *force* to rebuild an unchanged
+`main`).
 
 The [Release workflow](workflows/release.yml) then:
 

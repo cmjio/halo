@@ -29,6 +29,7 @@ import { initProject } from "./init.js";
 import { argsFromBody, listenAddress, loadServeConfig, startServer, ServeError, type ServeConfig } from "./serve/server.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
+import { CHANNELS, channelOf, isChannel, type Channel } from "./channel.js";
 import { TOOL_PROVIDERS } from "./parser/builtins.js";
 import { AGENT_PRESETS } from "./runtime/presets.js";
 import { findSkill, skillCatalog, skillFiles } from "./runtime/skills.js";
@@ -72,7 +73,8 @@ USAGE:
   halo parse <file.halo>                Print the AST as JSON
   halo init [name] [--template <name>]  Create a new Halo project, or a deployable app from a
                                         blueprint (support-inbox, fix-issue)
-  halo upgrade                          Update an installed halo to the latest release
+  halo upgrade [--channel <name>]       Update an installed halo on its channel (latest, next or
+                                        nightly), or move it to another with --channel
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
   halo plan <file.halo>                 Show what a run could do: model calls and worst-case
@@ -1240,7 +1242,12 @@ async function cmdMcp(flags: Flags): Promise<number> {
 /** Running as the standalone binary from halolang.com/install.sh (not `bun index.ts` in a checkout)? */
 const compiled = () => Bun.main.startsWith("/$bunfs/") || /[\\/]~BUN[\\/]/.test(Bun.main);
 
-async function cmdUpgrade(): Promise<number> {
+async function cmdUpgrade(flags: Flags): Promise<number> {
+  // Stay on the channel this build came from (a nightly upgrades to the newest nightly), unless --channel says otherwise.
+  const named = last(flags, "channel") ?? flags.positional[0];
+  if (named !== undefined && !isChannel(named)) fail(`Unknown channel ${named}: use ${CHANNELS.join(", ")}`);
+  const asked: Channel | undefined = named;
+  const channel: Channel = asked ?? channelOf(pkg.version);
   if (!compiled()) {
     console.log(`This halo runs from a checkout of the source (${process.execPath} ${Bun.main}); update it with git pull.`);
     return 0;
@@ -1248,19 +1255,26 @@ async function cmdUpgrade(): Promise<number> {
   // The npm package and the container image set this, because replacing the binary in place would fight them.
   const by = process.env.HALO_INSTALLED_BY;
   if (by === "npm") {
-    console.log(`This halo was installed with npm. Update it there: npm install @halolang/halo@latest (or bun add, pnpm add, yarn add).`);
+    console.log(`This halo was installed with npm. Update it there: npm install @halolang/halo@${channel} (or bun add, pnpm add, yarn add).`);
     return 0;
   }
   if (by === "docker") {
-    console.log(`This halo is in the ghcr.io/cmjio/halo image. Use a newer image tag instead (docker pull ghcr.io/cmjio/halo:latest).`);
+    console.log(`This halo is in the ghcr.io/cmjio/halo image. Use a newer image tag instead (docker pull ghcr.io/cmjio/halo:${channel}).`);
     return 0;
   }
-  const latest = (await (await fetch("https://halolang.com/dl/latest.json")).json()) as { version: string };
+  const res = await fetch(`https://halolang.com/dl/${channel}.json`);
+  if (!res.ok) fail(`Couldn't read the ${channel} version from halolang.com (${res.status})`);
+  const latest = (await res.json()) as { version: string };
   if (latest.version === pkg.version) {
-    console.log(`${green("✓")} halo ${pkg.version} is the latest release.`);
+    console.log(`${green("✓")} halo ${pkg.version} is the newest on ${channel}.`);
     return 0;
   }
-  console.log(`Upgrading halo ${pkg.version} → ${latest.version}`);
+  // Moving down (nightly → latest, say) is allowed when asked for; on its own channel, never.
+  if (!asked && Bun.semver.order(latest.version, pkg.version) < 0) {
+    console.log(`${green("✓")} halo ${pkg.version} is newer than ${channel} (${latest.version}).`);
+    return 0;
+  }
+  console.log(`Upgrading halo ${pkg.version} → ${latest.version} (${channel})`);
   // The installer replaces this binary where it is, and leaves PATH alone.
   const installDir = resolve(process.execPath, "..", "..");
   const env = { ...process.env, HALO_INSTALL: installDir, HALO_NO_MODIFY_PATH: "1", HALO_VERSION: latest.version, HALO_INSTALLED_VIA: "upgrade" };
@@ -1405,7 +1419,7 @@ export async function main(argv: string[]): Promise<number> {
         const template = last(flags, "template");
         return await initProject(flags.positional[0] ?? template ?? "my-halo-project", console, template);
       case "upgrade":
-        return await cmdUpgrade();
+        return await cmdUpgrade(flags);
       case "serve":
         return await cmdServe(flags);
       case "validate":

@@ -4,7 +4,9 @@
 #   curl -fsSL https://halolang.com/install.sh | sh
 #
 # Options, as environment variables:
-#   HALO_VERSION=0.1.0       a version instead of the latest
+#   HALO_VERSION=0.1.0       a version instead of the latest; or a channel: latest (the
+#                            default), next (the newest prerelease) or nightly (built from
+#                            main every night):  curl -fsSL …/install.sh | HALO_VERSION=next sh
 #   HALO_INSTALL=~/.halo     where to install (the binary goes in $HALO_INSTALL/bin)
 #   HALO_NO_MODIFY_PATH=1    don't add it to your shell's PATH
 #   HALO_INSTALLED_VIA=…     how this install came about, sent as ?via= for halolang.com's
@@ -74,11 +76,14 @@ if [ "$os" = linux ]; then
 fi
 
 # ── Which version ──
-version="${HALO_VERSION:-}"
-if [ -z "$version" ]; then
-  version=$(fetch_text "$BASE/latest.json" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
-  [ -n "$version" ] || fail "Couldn't read the latest version from $BASE/latest.json"
-fi
+version="${HALO_VERSION:-latest}"
+case "$version" in
+  latest | next | nightly)
+    channel="$version"
+    version=$(fetch_text "$BASE/$channel.json" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+    [ -n "$version" ] || fail "Couldn't read the $channel version from $BASE/$channel.json"
+    ;;
+esac
 version="${version#v}"
 
 say "${bold}Installing halo $version${reset} ${dim}($asset)${reset}"
