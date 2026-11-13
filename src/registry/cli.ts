@@ -558,13 +558,15 @@ function cmdInitPackage(ctx: Ctx): number {
   for (const f of [PROJECT_FILE, README_FILE, "lib/main.halo"]) if (existsSync(join(dir, f))) fail(`${join(ctx.flags.positional[0] ?? ".", f)} already exists`);
   mkdirSync(join(dir, "lib"), { recursive: true });
   const [major, minor] = HALO_VERSION.split(".");
+  // On a next or nightly Halo (1.2.0-next.1), ">=1.2.0" would shut out the very Halo writing it; "-0" lets 1.2.0's prereleases in.
+  const floor = `${major}.${minor}.0${HALO_VERSION.includes("-") ? "-0" : ""}`;
   const manifest = {
     name,
     version: "0.1.0",
     description: "What this package does, in one line",
     license: "MIT",
     keywords: [],
-    halo: `>=${major}.${minor}.0`,
+    halo: `>=${floor}`,
     exports: ["lib/main.halo"],
     models: { main: { description: "Answers questions. Any chat model works.", suggested: "anthropic/claude-haiku-4-5" } },
     dependencies: {},
