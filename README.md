@@ -65,11 +65,16 @@ ANTHROPIC_API_KEY=... halo debug examples/engineering/github-triage.halo --arg r
 
 ### Start from a blueprint
 
-A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it.
+A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it. [`fix-issue`](blueprints/fix-issue) fixes GitHub issues: a coding agent works on a copy of your repository in a sandbox and runs the tests there, and the change becomes a pull request only after a person approves the diff.
 
 ```bash
 halo init my-inbox --template support-inbox && cd my-inbox
 halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+```
+
+```bash
+halo init my-fixer --template fix-issue && cd my-fixer
+halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks.json
 ```
 
 ## The language
@@ -97,8 +102,8 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 
 ### Built in: tools, agents, and skills
 
-- **Tools** that need no account: `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a cloud sandbox from E2B or Daytona that lasts one run), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
-- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
+- **Tools** that need no account: `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a sandbox that lasts one run: E2B, Daytona, or a local Docker container that forks, rewinds, and reaches only the hosts you allow), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
+- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` (or `"docker"`, a container on this machine) gives an agent its own sandbox for the run, to run what it writes.
 - **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
 
 See [`examples/patterns/builtin-kit.halo`](examples/patterns/builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
@@ -112,7 +117,7 @@ See [`examples/patterns/builtin-kit.halo`](examples/patterns/builtin-kit.halo), 
 - An agent's prompt is built from the method name (as the task), its string arguments, the input, any `tool:` result, its named arguments, and context from what it `equips`: the closest entries of an equipped `VectorStore` and the recent conversation in an equipped `File` store. JSON answers are parsed, so gates can read `context.data.review.approved`.
 - A pipeline whose return type is a declared `schema` must produce matching output, or the run fails with a `SchemaValidationError`.
 - `|! yield` and `~> listen` ask your handler. With no handler, the run **pauses** (status `paused`) and `runtime.signal(runId, ...)` or `halo resume` continues it later.
-- `context.meta` records cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain over every stage.
+- `context.meta` records cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain over every stage and what its tool calls did.
 - In a `@thread(user_id)` pipeline, `context.thread` is state kept between runs for that user. `Thread.set`, `Thread.append` and `Thread.clear` change it, and the changes are saved when the run ends. See [Thread State](docs/guide/thread-state.md).
 
 ## CLI
@@ -124,7 +129,7 @@ halo test <file.halo> ...             # offline: --mock --auto-approve (--mocks 
 halo resume <file.halo> <runId> --payload approve   # continue a paused run
 halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
-halo init [name] [--template support-inbox]   # a new project, or a deployable blueprint
+halo init [name] [--template support-inbox|fix-issue]   # a new project, or a deployable blueprint
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-changed, --live-tools)

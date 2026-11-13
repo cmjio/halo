@@ -61,6 +61,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   // A preset's settings (max_steps, tools: auto) count; an unknown preset is validate's to report.
   const tools = new Map([...ast.tools, ...ast.stores].map((t) => [t.name, t]));
   const declared = new Map(tools);
+  const policies = new Map(ast.policies.map((p) => [p.name, p]));
   const agents = new Map(ast.agents.map((a) => {
     let agent = a;
     try {
@@ -68,13 +69,12 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     } catch {}
     // A sandbox: is a tool the agent may call; a bad one is validate's to report.
     try {
-      const sandboxed = withSandbox(agent, declared);
+      const sandboxed = withSandbox(agent, declared, policies);
       if (sandboxed.tool) tools.set(sandboxed.tool.name, sandboxed.tool);
       agent = sandboxed.agent;
     } catch {}
     return [a.name, agent];
   }));
-  const policies = new Map(ast.policies.map((p) => [p.name, p]));
   const steps: PlanStep[] = [];
   let unbounded = false;
 

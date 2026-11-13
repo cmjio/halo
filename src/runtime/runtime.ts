@@ -50,7 +50,7 @@ import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
 import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
 import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
-import { closeRemoteSessions } from "./providers/remote.js";
+import { closeRemoteSessions, endRemoteBranches, seedRemoteSessions, snapshotRemoteSessions, suspendRemoteSessions } from "./providers/remote.js";
 import { closeKvDatabases, closeSqliteDatabases } from "./providers/index.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "../parser/sql.js";
 import { LocalVectorStore } from "./vectors.js";
@@ -219,6 +219,8 @@ export interface TraceEntry {
   at: string;
   /** SHA-256 of the stage's output value. */
   outputHash: string;
+  /** SHA-256 over what the stage's tool calls did (each call's target, arguments and result), when it made any. */
+  effectsHash?: string;
   /** SHA-256 over (prev, index, stage, label, at, outputHash). */
   hash: string;
   prev: string;
@@ -251,6 +253,8 @@ export interface RunSnapshot {
   sessions?: Record<number, AgentSession>;
   /** A `@thread` run's thread: what it loaded and the changes it hasn't saved yet. */
   thread?: ThreadContext;
+  /** Snapshots of the run's Docker sandboxes (tool → image), so rewind and resume start from the same files. */
+  sandboxes?: Record<string, string>;
 }
 
 /** Where an agent's tool conversation stopped to wait for approval: its turns so far and the calls still to run (the first is the one waiting). */
@@ -448,6 +452,10 @@ interface ExecutionContext {
   deadline?: number;
   /** A `@thread` run's thread (shared by the pipelines it calls). */
   thread?: ThreadContext;
+  /** Inside a fan-out: which branch ("3.0", "3.0/5.2"…), so each can fork its own sandbox. */
+  branch?: string;
+  /** Hashes of what the current stage's tool calls did, for its trace entry. */
+  effects?: string[];
 }
 
 /** Thrown inside a run to pause it at a yield/listen with no handler. */
@@ -624,7 +632,7 @@ function findDirective(list: Directive[] | undefined, name: string): Directive |
 export function verifyTrace(trace: TraceEntry[]): boolean {
   let prev = GENESIS;
   for (const t of trace) {
-    if (t.prev !== prev || t.hash !== sha256(t.prev, String(t.index), t.stage, t.label, t.at, t.outputHash)) return false;
+    if (t.prev !== prev || t.hash !== sha256(t.prev, String(t.index), t.stage, t.label, t.at, t.outputHash, ...(t.effectsHash ? [t.effectsHash] : []))) return false;
     prev = t.hash;
   }
   return true;
@@ -714,7 +722,7 @@ export class HaloRuntime {
         throw new HaloError((err as Error).message, { code: "UNKNOWN_PRESET" });
       }
       try {
-        const sandboxed = withSandbox(agent, declared);
+        const sandboxed = withSandbox(agent, declared, this.policies);
         agent = sandboxed.agent;
         if (sandboxed.tool) this.tools.set(sandboxed.tool.name, sandboxed.tool);
       } catch (err) {
@@ -942,6 +950,8 @@ export class HaloRuntime {
       snap.thread = { ...cp.thread, ops, state: applyOps(cp.thread.base, ops), saved };
     }
     const ctx = this.restore(snap);
+    // Its sandboxes start from the files they had after that step.
+    seedRemoteSessions(runId, at.sandboxes);
     // The new run's history begins with the steps it shares with the old one.
     const path = this.checkpointPath(ctx);
     if (path) {
@@ -1018,6 +1028,7 @@ export class HaloRuntime {
     const ctx = this.newContext(pipeline, snap.input, 0);
     Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback, sessions: snap.sessions, thread: snap.thread });
     ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
+    seedRemoteSessions(ctx.meta.runId, snap.sandboxes);
     return ctx;
   }
 
@@ -1168,7 +1179,11 @@ export class HaloRuntime {
       const i = ctx.stageIndex;
       ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message, id: crypto.randomUUID() };
       ctx.meta.pauses = (ctx.meta.pauses ?? 0) + 1;
-      await this.runStore.save(ctx.meta.runId, this.toSnapshot(ctx, i, err.waitingFor));
+      const snap = this.toSnapshot(ctx, i, err.waitingFor);
+      // A pause can last days: its Docker sandboxes are saved and stopped, and started again on resume.
+      const sandboxes = await suspendRemoteSessions(ctx.meta.runId);
+      if (Object.keys(sandboxes).length) snap.sandboxes = sandboxes;
+      await this.runStore.save(ctx.meta.runId, snap);
       this.emit({ type: "paused", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index: i, waitingFor: err.waitingFor });
       return "paused";
     }
@@ -1206,6 +1221,8 @@ export class HaloRuntime {
       const label = stageLabel(stage);
       const t0 = performance.now();
       ctx.stageIndex = i;
+      // One list per stage, made before any branch copies the context, so every branch adds to it.
+      ctx.effects = [];
       this.emit({ type: "stage", pipeline: name, runId: ctx.meta.runId, index: i, kind: stage.kind, label, status: "start" });
 
       switch (stage.kind) {
@@ -1262,7 +1279,11 @@ export class HaloRuntime {
     const prev = ctx.trace.at(-1)?.hash ?? GENESIS;
     const at = new Date().toISOString();
     const outputHash = sha256(safeJson(ctx.current));
-    ctx.trace.push({ index, stage: stage.kind, label, at, outputHash, prev, hash: sha256(prev, String(index), stage.kind, label, at, outputHash) });
+    // What the stage's tool calls did is in the chain too, so a trace vouches for actions, not just answers.
+    const effects = ctx.effects?.length ? sha256(...[...ctx.effects].sort()) : undefined;
+    ctx.effects = [];
+    const hash = sha256(prev, String(index), stage.kind, label, at, outputHash, ...(effects ? [effects] : []));
+    ctx.trace.push({ index, stage: stage.kind, label, at, outputHash, ...(effects ? { effectsHash: effects } : {}), prev, hash });
   }
 
   /** Where a run's @checkpoint goes; undefined when it doesn't keep one. */
@@ -1277,6 +1298,9 @@ export class HaloRuntime {
     ctx.meta.checkpoint = path;
     // Appends to the checkpoint's log, so checkpointing every stage of a long run stays cheap.
     const snap = this.toSnapshot(ctx, nextStage);
+    // Sandboxes that changed are saved too, so `halo rewind` to this step gets their files back.
+    const sandboxes = await snapshotRemoteSessions(ctx.meta.runId);
+    if (Object.keys(sandboxes).length) snap.sandboxes = sandboxes;
     await writeSnapshot(path, snap);
     // And keeps every step, for halo history.
     await appendStep(path, snap);
@@ -2269,8 +2293,18 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current, fingerprint }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId, pauses: this.topMeta(ctx).pauses ?? 0 }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId, branch: ctx.branch, pauses: this.topMeta(ctx).pauses ?? 0 }, this.toolServices()), mocked: false },
     );
+    (ctx.effects ??= []).push(sha256(target, fingerprint, safeJson(result.value)));
+    // A sandbox's egress allowlist refused hosts: a policy violation, like a refused tool call.
+    const blocked = tool.provider === "Remote" && isPlainObject(result.value) ? (result.value as { blocked?: unknown }).blocked : undefined;
+    if (Array.isArray(blocked)) {
+      for (const host of blocked) {
+        const v: Violation = { policy: tool.name, rule: "AllowHosts", message: `${tool.name} tried to reach ${String(host)}, which is not an allowed host`, phase: "tool" };
+        ctx.meta.violations.push(v);
+        this.emit({ type: "violation", runId: ctx.meta.runId, ...v });
+      }
+    }
 
     const latencyMs = Math.round(performance.now() - t0);
     this.record({ kind: "tool", target, value: result.value, fingerprint });
@@ -2359,6 +2393,7 @@ export class HaloRuntime {
     const child = this.newContext(target, args, ctx.depth + 1, ctx.signal);
     child.meta.runId = ctx.meta.runId;
     child.parent = ctx;
+    child.branch = ctx.branch;
     const result = await this.runFrom(child, 0);
     ctx.meta.cost += child.meta.cost;
     if (!ctx.parent) this.unsettle(ctx, -child.meta.cost);
@@ -2370,9 +2405,19 @@ export class HaloRuntime {
   }
 
   private async fanout(stage: FanOutStage, ctx: ExecutionContext): Promise<unknown[]> {
-    const results = await branches(ctx.signal, (signal) => stage.stages.map((sub) => this.callStage(sub, { ...ctx, signal })));
-    if (stage.bind) ctx.data[stage.bind] = results;
-    return results;
+    const keys = stage.stages.map((_, i) => this.branchKey(ctx, i));
+    try {
+      const results = await branches(ctx.signal, (signal) => stage.stages.map((sub, i) => this.callStage(sub, { ...ctx, signal, branch: keys[i] })));
+      if (stage.bind) ctx.data[stage.bind] = results;
+      return results;
+    } finally {
+      await endRemoteBranches(this.topMeta(ctx).runId, keys);
+    }
+  }
+
+  /** Branch `i` of the fan-out at the current stage: unique within the run, nested under the branch it's in. */
+  private branchKey(ctx: ExecutionContext, i: number): string {
+    return `${ctx.branch ? `${ctx.branch}/` : ""}${ctx.depth ? `${ctx.pipeline.name}:` : ""}${ctx.stageIndex}.${i}`;
   }
 
   private async branch(stage: BranchStage, ctx: ExecutionContext): Promise<unknown> {
@@ -2410,14 +2455,18 @@ export class HaloRuntime {
         const data: Record<string, unknown> = { ...ctx.data, [stage.item]: list[i], index: i };
         if (isPlainObject(data[callee])) data[callee] = { ...(data[callee] as object) };
         try {
-          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i], signal });
+          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i], signal, branch: this.branchKey(ctx, i) });
         } catch (err) {
           failed = true;
           throw err;
         }
       }
     };
-    await branches(ctx.signal, (signal) => Array.from({ length: Math.min(concurrency, list.length) }, () => worker(signal)));
+    try {
+      await branches(ctx.signal, (signal) => Array.from({ length: Math.min(concurrency, list.length) }, () => worker(signal)));
+    } finally {
+      await endRemoteBranches(this.topMeta(ctx).runId, list.map((_, i) => this.branchKey(ctx, i)));
+    }
 
     if (callee !== "System" && !this.isThreadCall(callee)) this.store(ctx, callee, method, results);
     if (stage.bind) ctx.data[stage.bind] = results;

@@ -20,6 +20,17 @@ import siEmail from "../../blueprints/support-inbox/samples/email.json" with { t
 import siInjection from "../../blueprints/support-inbox/samples/email-injection.json" with { type: "text" };
 import siMocks from "../../blueprints/support-inbox/samples/mocks.json" with { type: "text" };
 
+import fiReadme from "../../blueprints/fix-issue/README.md" with { type: "text" };
+import fiHaloJson from "../../blueprints/fix-issue/halo.json" with { type: "text" };
+import fiEnv from "../../blueprints/fix-issue/.env.example" with { type: "text" };
+import fiGitignore from "../../blueprints/fix-issue/.gitignore" with { type: "text" };
+import fiDockerfile from "../../blueprints/fix-issue/Dockerfile" with { type: "text" };
+import fiFly from "../../blueprints/fix-issue/fly.toml" with { type: "text" };
+import fiPipeline from "../../blueprints/fix-issue/pipelines/fix.halo" with { type: "text" };
+import fiIssue from "../../blueprints/fix-issue/samples/issue-labeled.json" with { type: "text" };
+import fiMocks from "../../blueprints/fix-issue/samples/mocks.json" with { type: "text" };
+import fiMocksReject from "../../blueprints/fix-issue/samples/mocks-reject.json" with { type: "text" };
+
 export interface Blueprint {
   name: string;
   description: string;
@@ -54,6 +65,26 @@ export const BLUEPRINTS: Record<string, Blueprint> = {
       "samples/email.json": text(siEmail),
       "samples/email-injection.json": text(siInjection),
       "samples/mocks.json": text(siMocks),
+    },
+  },
+  "fix-issue": {
+    name: "fix-issue",
+    description: "A GitHub issue → a coding agent fixes it in a sandbox and runs the tests → a person approves the diff → a pull request",
+    next: [
+      "halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks.json",
+      "halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks-reject.json",
+    ],
+    files: {
+      "README.md": text(fiReadme),
+      "halo.json": text(fiHaloJson),
+      ".env.example": text(fiEnv),
+      ".gitignore": text(fiGitignore),
+      Dockerfile: text(fiDockerfile),
+      "fly.toml": text(fiFly),
+      "pipelines/fix.halo": text(fiPipeline),
+      "samples/issue-labeled.json": text(fiIssue),
+      "samples/mocks.json": text(fiMocks),
+      "samples/mocks-reject.json": text(fiMocksReject),
     },
   },
 };

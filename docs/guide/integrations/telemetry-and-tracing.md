@@ -7,6 +7,12 @@ Every run returns its own record in `result.context`:
 - `meta.violations` and `meta.shadows`
 - `trace`: one hash-chained entry per stage. Check it with `verifyTrace(trace)`.
 
+## What the trace vouches for
+
+Each trace entry hashes the stage's output (`outputHash`) and links to the entry before it. A stage that called tools (directly, or an agent choosing its own calls) also has `effectsHash`: a SHA-256 over every call it made, each call's target, arguments and result. It's part of the entry's hash, so the chain covers what the run *did* (the commands it ran in a sandbox, the files it wrote, the requests it sent) as well as what its agents said. Change any recorded effect and `verifyTrace` fails from that entry on.
+
+The hash proves the trace wasn't edited after the fact; it doesn't hold the effects themselves. Keep a [recording](../plan-and-replay.md#recordings) (`halo run` does by default) to see the calls, and compare their hashes against the trace.
+
 `halo run --json` prints all of it.
 
 ## Runtime events

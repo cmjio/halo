@@ -397,7 +397,7 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
   Skills: SKILLS_INFO,
 
   Remote: {
-    description: "A remote computer: a machine reached over SSH, or a fresh cloud sandbox (E2B, Daytona) kept for the run and deleted after. Commands run in a shell there; paths there are relative to the home folder.",
+    description: "A remote computer: a machine reached over SSH, or a fresh sandbox (E2B, Daytona, or a local Docker container) kept for the run and deleted after. Commands run in a shell there; paths there are relative to the home folder.",
     methods: [
       {
         name: "run",
@@ -416,6 +416,9 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
       { name: "upload", description: "Copy a local file (inside the tool's root) to the remote computer.", params: object({ from: { type: "string", description: "Local path." }, to: { type: "string", description: "Remote path (default: the same path)." } }, ["from"]), effect: "external" },
       { name: "download", description: "Copy a file from the remote computer to a local path inside the tool's root.", params: object({ from: { type: "string", description: "Remote path." }, to: { type: "string", description: "Local path (default: the file's name)." } }, ["from"]), effect: "write" },
       { name: "info", description: "Which computer this is: { backend, host } or { backend, id }.", params: object({}), effect: "read" },
+      { name: "diff", description: "What changed in the sandbox since it started (from the files it was given with from:, or from empty): { files: [{ path, status }], patch } as a unified diff.", params: object({ path: { type: "string", description: "Only changes under this folder." } }), effect: "read" },
+      { name: "apply", description: "Copy the sandbox's changes (diff) back to the local folder it was given (from:), or to: another folder inside the tool's root. Deleted files are deleted there too.", params: object({ to: { type: "string" }, path: { type: "string", description: "Only changes under this folder." } }), effect: "write" },
+      { name: "keep", description: "After a fan-out whose branches each forked the Docker sandbox: carry on from branch fork's sandbox.", params: object({ fork: { type: "integer", minimum: 0 } }, ["fork"]), effect: "external" },
     ],
   },
 };

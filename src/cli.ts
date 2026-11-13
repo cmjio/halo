@@ -65,10 +65,13 @@ USAGE:
                                         (--reset --yes deletes its state; --json)
   halo history <runId|steps file>       List every step of a @checkpoint run (--step N: the
                                         state after step N; --json for the raw steps)
+  halo sandboxes [prune]                List the Docker sandboxes, snapshots and networks Halo made;
+                                        prune removes the snapshots and networks (--all: stops
+                                        running sandboxes too; --json)
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name] [--template <name>]  Create a new Halo project, or a deployable app from a
-                                        blueprint (support-inbox)
+                                        blueprint (support-inbox, fix-issue)
   halo upgrade                          Update an installed halo to the latest release
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
@@ -1268,6 +1271,29 @@ async function cmdUpgrade(): Promise<number> {
 
 // ── Tool packages ──
 
+async function cmdSandboxes(flags: Flags): Promise<number> {
+  const { listDockerSandboxes, pruneDockerSandboxes } = await import("./runtime/providers/remote.js");
+  if (flags.positional[0] === "prune") {
+    const n = await pruneDockerSandboxes({ containers: flags.bools.has("all") });
+    if (flags.bools.has("json")) console.log(JSON.stringify(n));
+    else console.log(`Removed ${n.snapshots} snapshot(s), ${n.networks} network(s)${flags.bools.has("all") ? `, ${n.containers} sandbox(es)` : ""}.`);
+    return 0;
+  }
+  if (flags.positional[0]) fail("Usage: halo sandboxes [prune] [--all] [--json]");
+  const list = await listDockerSandboxes();
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(list, null, 2));
+    return 0;
+  }
+  console.log(`Sandboxes (${list.containers.length})`);
+  for (const c of list.containers) console.log(`  ${c.id}  ${c.image}  ${c.status}${c.run ? `  run ${c.run}` : ""}`);
+  console.log(`Snapshots (${list.snapshots.length})  kept for halo rewind and resume`);
+  for (const sn of list.snapshots) console.log(`  ${sn.ref}  ${sn.size}  ${sn.created}`);
+  if (list.networks.length) console.log(`Networks (${list.networks.length})`);
+  for (const n of list.networks) console.log(`  ${n.name}${n.run ? `  run ${n.run}` : ""}`);
+  return 0;
+}
+
 async function cmdTools(flags: Flags): Promise<number> {
   const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
   const providers = await installed();
@@ -1372,6 +1398,8 @@ export async function main(argv: string[]): Promise<number> {
         return cmdThread(flags);
       case "history":
         return await cmdHistory(flags);
+      case "sandboxes":
+        return await cmdSandboxes(flags);
       case "init":
         if (rest.includes("--package")) return await runPackageCommand("init", rest);
         const template = last(flags, "template");

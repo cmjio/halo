@@ -1,0 +1,4 @@
+.env
+.halo/
+node_modules/
+repo/

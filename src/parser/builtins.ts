@@ -47,7 +47,30 @@ export const TOOL_RULES = ["AllowTools", "DenyTools", "AllowEffects", "ApproveTo
 export const TOOL_EFFECTS = ["read", "write", "external"] as const;
 
 /** Policy rules the runtime enforces deterministically. */
-export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", ...TOOL_RULES] as const;
+export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", ...TOOL_RULES] as const;
+
+/** A host for AllowHosts or a sandbox's hosts: ("pypi.org", or "*.pythonhosted.org" for it and its subdomains). */
+export const HOST_PATTERN = /^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
+
+/** A secret's name for AllowSecrets or a sandbox's secrets: (an environment variable name). */
+export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * A folder or file for AllowFiles or a sandbox's files:, relative to the project it's copied from:
+ * normalized ("src/billing"), or undefined when it isn't one (absolute, "..", empty, a NUL).
+ * "." means the whole project.
+ */
+export function scopePath(path: string): string | undefined {
+  if (!path || path.includes("\0") || path.includes("\\") || path.startsWith("/")) return undefined;
+  const parts = path.split("/").filter((p) => p && p !== ".");
+  if (parts.some((p) => p === "..")) return undefined;
+  return parts.length ? parts.join("/") : ".";
+}
+
+/** Whether `path` (relative, with forward slashes) is one of `files` or inside one of them. */
+export function inFiles(path: string, files: string[]): boolean {
+  return files.some((f) => f === "." || path === f || path.startsWith(f + "/"));
+}
 
 /** What `Require(...)` can check. Anything else (e.g. Require(Approver)) needs a judge and is not enforced. */
 export const REQUIRE_CHECKS = ["JSON", "XML", "Citation"] as const;

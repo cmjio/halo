@@ -1,0 +1,23 @@
+{
+  "Hub.get_issue": {
+    "number": 42,
+    "title": "paginate() drops the last item on every page",
+    "body": "With 10 items and a page size of 5, page 1 shows items 1-4 and page 2 shows 6-9. Items 5 and 10 never show up.\n\nSteps: call paginate(items, 1, 5).\nExpected: 5 items. Got: 4.",
+    "html_url": "https://github.com/acme/shop/issues/42",
+    "state": "open"
+  },
+  "Shell.sync": { "exitCode": 0, "stdout": "{\"sha\":\"4f2c1aa\",\"base\":\"main\"}", "stderr": "", "json": { "sha": "4f2c1aa", "base": "main" } },
+  "Dev.work": "paginate() sliced to `end - 1`, so each page lost its last item. I added a failing test for a 10-item list with a page size of 5, changed the slice to `items.slice(start, start + size)`, and ran `npm test`: 12 passed.",
+  "Repo.run": { "command": "npm test", "exitCode": 0, "stdout": "✓ paginate returns a full page\n✓ paginate returns the last page\n\n12 pass\n0 fail", "stderr": "", "timedOut": false },
+  "Repo.diff": {
+    "files": [{ "path": "src/paginate.js", "status": "modified" }, { "path": "test/paginate.test.js", "status": "modified" }],
+    "patch": "--- a/src/paginate.js\n+++ b/src/paginate.js\n@@ -1,4 +1,4 @@\n export function paginate(items, page, size) {\n   const start = (page - 1) * size;\n-  return items.slice(start, start + size - 1);\n+  return items.slice(start, start + size);\n }\n"
+  },
+  "yield": { "approved": true },
+  "Shell.branch": { "exitCode": 0, "stdout": "", "stderr": "" },
+  "Repo.apply": { "to": "repo", "written": ["repo/src/paginate.js", "repo/test/paginate.test.js"], "deleted": [] },
+  "Git.commit": { "committed": true, "hash": "9b1e7d0", "files": ["src/paginate.js", "test/paginate.test.js"] },
+  "Shell.push": { "exitCode": 0, "stdout": "", "stderr": "" },
+  "Hub.create_pr": { "number": 43, "url": "https://github.com/acme/shop/pull/43" },
+  "Hub.comment": { "id": 1, "url": "https://github.com/acme/shop/issues/42#issuecomment-1" }
+}

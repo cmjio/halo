@@ -65,6 +65,9 @@ policy FixerTools : AllowTools("Code.*", "Tests.run")
 | `ApproveEffects(effect, ...)` | A call to a method with these effects waits for a person's approval |
 | `DenyArgs(pattern, regex)` | A call is refused if any argument value, checked one at a time, matches `regex` |
 | `DenyArgs(pattern, "arg", regex)` | A call is refused if that one argument matches `regex`. A missing argument counts as `""` |
+| `AllowHosts(host, ...)` | The agent's Docker sandbox (`sandbox: "docker"` or `"auto"`) can reach only these hosts (`"pypi.org"`, `"*.pythonhosted.org"`). See [Allowed hosts](./remote.md#allowed-hosts) |
+| `AllowFiles(path, ...)` | The agent's own sandbox starts with only these folders and files of the project (`"src/billing"`), and only changes to them are written back. See [Only some of the project](./remote.md#only-some-of-the-project) |
+| `AllowSecrets(name, ...)` | The agent's Docker sandbox gets these environment variables for its commands, masked in what comes back. See [Secrets](./remote.md#secrets) |
 
 **Patterns** match `"Tool.method"`: `Repo` (any method of `Repo`), `Repo.create_pr`, `Repo.*`, `*.delete`, or `*`. A `*` doesn't cross the dot.
 

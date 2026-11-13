@@ -26,6 +26,10 @@ pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
 
 The fixer runs the tests, reads files, edits them, and runs the tests again, choosing each step itself. The policy keeps it inside the project's files, away from the tests, and limits the shell to `bun test`. Both `DenyArgs` rules here use the three-argument form, which checks one named argument (`path`, `command`); `DenyArgs(tool, regex)` checks every argument value, each on its own. The pipeline then runs the tests itself and sends the fixer back if they still fail. This is `FixUntilGreen` in the repository's `examples/engineering/software-team.halo`.
 
+## Giving an agent a computer
+
+The fixer above runs commands on your machine, fenced by policies. To have an agent run code somewhere it can't reach your files at all, give it a sandbox instead: `sandbox: "auto"` in its brackets gives it a fresh Docker container or cloud sandbox for each run, with its own `Remote` tool. See [Coding Agents That Run Their Code](./coding-agents.md).
+
 ## Choosing the tools
 
 | Written | Offers |

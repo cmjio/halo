@@ -62,6 +62,8 @@ export function getCompletions(sourceText: string, position: Position, path?: st
     return [
       { label: '"e2b"', kind: CompletionItemKind.EnumMember, detail: "Its own E2B sandbox for each run (E2B_API_KEY)" },
       { label: '"daytona"', kind: CompletionItemKind.EnumMember, detail: "Its own Daytona sandbox for each run (DAYTONA_API_KEY)" },
+      { label: '"docker"', kind: CompletionItemKind.EnumMember, detail: "Its own Docker container on this machine for each run" },
+      { label: '"auto"', kind: CompletionItemKind.EnumMember, detail: "Docker when it's running, else E2B, else Daytona" },
       ...remotes,
     ];
   }

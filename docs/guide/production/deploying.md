@@ -66,6 +66,12 @@ The package is a small launcher. npm installs the standalone binary for your mac
 
 The npm package is the CLI only. To use Halo as a library in a Bun app, see [Option 2](#option-2-embed-the-runtime-in-a-bun-server).
 
+### Sandboxes in production
+
+`Remote("docker")` and `sandbox: "docker"` start containers with the `docker` on the machine Halo runs on. Halo's own image, and hosts like Fly, Render, Railway, Heroku and Cloud Run, have no Docker inside, so a Docker sandbox can't start there. (Mounting the host's Docker socket into Halo's container would make it work, and would give every agent with a sandbox control of the host: don't.)
+
+Use `sandbox: "auto"` (or `Remote("auto")`) and set `E2B_API_KEY` or `DAYTONA_API_KEY` where you deploy: the same file uses Docker on your laptop and in CI, and a cloud sandbox in production. Allowed hosts (`hosts:`, `AllowHosts`), forks and saved sandboxes need Docker, so a pipeline that relies on them should run where Docker is: a VM or a CI runner. See [Coding Agents That Run Their Code](../coding-agents.md#which-sandbox).
+
 ## Running pipelines yourself
 
 The options below run pipelines from your own process instead of `halo serve`.

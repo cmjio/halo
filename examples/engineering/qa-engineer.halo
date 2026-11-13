@@ -12,6 +12,9 @@ tool GitHub         : POST("api.github.com/repos", apiKey: Env.GH_TOKEN)
 tool TestRunner     : POST("api.playwright.dev/run", apiKey: Env.PW_KEY)
 tool SlackQA        : POST("hooks.slack.com/services/qa-team")
 tool JiraAPI        : POST("api.atlassian.com/jira", apiKey: Env.JIRA_KEY)
+// A throwaway machine with Playwright, to check generated tests against the PR's
+// code before they cost a staging run. It reaches GitHub and npm, nothing else.
+tool Sandbox        : Remote("docker", image: "mcr.microsoft.com/playwright:v1.48.2-jammy", hosts: ["github.com", "codeload.github.com", "registry.npmjs.org"])
 
 // --- Store ---
 tool TestHistory    : VectorStore(Env.PINECONE_KEY, namespace: "test-results")
@@ -49,6 +52,13 @@ pipeline AutoTest(pr: GitHub.PullRequest) -> Report:
         diff: context.data.pr.diff,
         framework: "playwright"
       )
+
+    // Step 1b: Do the generated tests even load? Check them against the PR's
+    // head in the sandbox (--list compiles them without running anything)
+    |> Sandbox.run(command: "git clone --quiet https://github.com/{{pr.repo}}.git app && cd app && git checkout --quiet {{pr.head_sha}} && npm ci --ignore-scripts --silent", timeout_ms: 600000) as checkout
+    |> Sandbox.write(path: "app/tests/generated.spec.ts", content: context.data.TestArchitect.generate_tests) as saved
+    |> Sandbox.run(command: "cd app && npx playwright test tests/generated.spec.ts --list") as compiled
+    |? (context.data.compiled.exitCode == 0)
 
     // Step 2: Run tests in CI
     |> TestRunner.execute(
