@@ -23,7 +23,7 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `Git` | Read a local git repository; commit with `write: true` (see [Utility Tools](./utility-tools.md)) |
 | `WebSearch` | Web search through Brave, Tavily, Serper or Exa (see [Utility Tools](./utility-tools.md)) |
 | `Skills` | A library of instructions an agent loads when it needs them (see [Skills](./skills.md)) |
-| `Remote` | A remote computer: a server over SSH, or a cloud sandbox (E2B, Daytona) for the run (see [Remote Computers](./remote.md)) |
+| `Remote` | A remote computer: a server over SSH, or a sandbox (E2B, Daytona, or a local Docker container) for the run (see [Remote Computers](./remote.md)) |
 | `MCP` | Any Model Context Protocol server's tools (see [MCP](../guide/integrations/mcp.md)) |
 | `Slack`, `Email`, `GitHub`, `Linear`, `Figma` | API clients for those services |
 

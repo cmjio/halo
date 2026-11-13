@@ -65,6 +65,7 @@ policy FixerTools : AllowTools("Code.*", "Tests.run")
 | `ApproveEffects(effect, ...)` | A call to a method with these effects waits for a person's approval |
 | `DenyArgs(pattern, regex)` | A call is refused if any argument value, checked one at a time, matches `regex` |
 | `DenyArgs(pattern, "arg", regex)` | A call is refused if that one argument matches `regex`. A missing argument counts as `""` |
+| `AllowHosts(host, ...)` | The agent's Docker sandbox (`sandbox: "docker"` or `"auto"`) can reach only these hosts (`"pypi.org"`, `"*.pythonhosted.org"`). See [Allowed hosts](./remote.md#allowed-hosts) |
 
 **Patterns** match `"Tool.method"`: `Repo` (any method of `Repo`), `Repo.create_pr`, `Repo.*`, `*.delete`, or `*`. A `*` doesn't cross the dot.
 

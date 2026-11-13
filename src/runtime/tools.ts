@@ -30,6 +30,8 @@ export interface ToolCall {
   signal: AbortSignal;
   /** The run making the call (for providers that keep per-run state, or link back to a run). */
   runId?: string;
+  /** Which branch of a fan-out (`|*`, `each`) makes the call: "" outside one, "3.0", "3.0/5.2"… inside (so sandboxes can fork). */
+  branch?: string;
   /** How many times that run has paused so far (so a link back can answer only its next pause). */
   pauses?: number;
 }

@@ -26,6 +26,33 @@ Every violation is added to `context.meta.violations` and emitted as a `violatio
 
 The full rule and category list is in [Policies](../../stdlib/policies.md). The detectors are pattern-based, so treat them as one layer of defense, not a guarantee.
 
+## Where agents run code
+
+Policies decide what an agent may ask for. Where its commands run decides how much a mistake, or a successful injection, can reach. From least to most separated:
+
+| Where | Reaches | Use for |
+|---|---|---|
+| `Bash`, `Workspace` | This machine, as you | Your own scripts, under tight `DenyArgs` |
+| `Remote("user@host")` | That machine, as that login | A server the agent should operate |
+| `Remote("docker")` | A container: none of your files, environment or secrets; a shared kernel | Model-written code, on a laptop or in CI |
+| `Remote("docker", isolation: "vm")` | A container with its own kernel (gVisor or Kata) | Code you trust less, on your own hardware |
+| `Remote("e2b")`, `Remote("daytona")` | A VM on someone else's machine | Code from strangers |
+
+Two rules close the gaps around a sandbox:
+
+```halo
+policy Deps       : AllowHosts("pypi.org", "*.pythonhosted.org")
+policy StayInside : DenyTools("DevSandbox.apply", "DevSandbox.download")
+
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "docker"]
+  requires Deps, StayInside
+```
+
+- **`AllowHosts`** is the network guardrail: the sandbox can reach those hosts and nothing else, so it can install packages but can't send your code or secrets anywhere. Every refused connection is a violation, like a refused tool call.
+- **`DenyTools` on `apply` and `download`** keeps the sandbox's work inside it until the pipeline, after a person has looked at the diff, writes it back.
+
+See [Coding Agents That Run Their Code](../coding-agents.md) and [Remote Computers](../../stdlib/remote.md).
+
 ## What is not enforced
 
 `Tone(...)`, `Anonymize(...)`, `MaxDensity(...)`, `Require(Approver)`-style checks, and topic blocks like `Block(Competitors)` would each need a model to judge the content. The runtime **ignores** them, and `halo validate` warns about every one. Run `halo validate --strict` in CI to make those warnings fail the build.
@@ -36,7 +63,7 @@ The full rule and category list is in [Policies](../../stdlib/policies.md). The 
 - **Shell quoting.** Values inserted into `Bash` commands are shell-quoted.
 - **Read-only SQL.** `PostgreSQL` refuses writes unless the tool is declared with `readOnly: false`. A [`SQLite`](../../stdlib/sqlite.md) tool opens its file read-only unless it's declared with `write: true`. Its reads run with SQLite's `query_only` setting on, and SQL with `{{placeholders}}` in it is refused, so values have to go in `params:`.
 - **Gates and approvals.** `|? (cond)` stops a run, and `|! yield` waits for a human (see [Human-in-the-Loop](./human-in-the-loop.md)).
-- **Audit trail.** `context.trace` is a SHA-256 hash chain of every stage. `verifyTrace(trace)` checks the chain, which catches an edited entry unless every later hash was recomputed too.
+- **Audit trail.** `context.trace` is a SHA-256 hash chain of every stage, and of what each stage's tool calls did (their targets, arguments and results). `verifyTrace(trace)` checks the chain, which catches an edited entry unless every later hash was recomputed too.
 
 ## Custom checks
 

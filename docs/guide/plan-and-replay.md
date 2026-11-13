@@ -134,6 +134,7 @@ Limits:
 - Recordings made before `|! yield` answers were recorded have none: a replay of one approves every yield, as `halo test` does.
 - `@shadow` calls aren't recorded.
 - Replay follows the recorded order per target. If parallel stages (`|*`, `each`) call the same target, they can get each other's answers.
+- A sandbox's commands are tool calls, so their results replay too: no sandbox starts, and a changed prompt meets the same `stdout` and exit codes the recorded run saw.
 
 ## `halo compare`
 
@@ -342,6 +343,8 @@ halo rewind tidy.halo 6f9696ef-1c2b-4c47-9a1e-3f0c2d1b9a77 --step 2
 The run continues as a new run, with a new run ID. It starts with the state the old run had after step 2: `context.data`, `context.current`, the trace, the calls and the cost so far. Then it runs every stage after that step against the current file, so you can change a prompt or a model and see what the run does from that point. If step 2 was a gate that closed, the gate is checked again. The old run's checkpoint and history aren't changed. The new run records where it came from in `context.meta.rewoundFrom` (`{ runId, step }`), and its history begins with the steps it shares with the old run.
 
 **Stages after the step run again for real:** models are called, tools run, and people are asked again. If any of those stages calls a tool that writes, calls out, or doesn't say what it does (see [`halo plan`](#halo-plan)), `halo rewind` lists those stages and stops unless you pass `--yes`. If a loop comes after the step, it can jump back before it, so every stage counts. With `--mock`, nothing runs for real and no `--yes` is needed.
+
+**Sandboxes come back too.** In a `@checkpoint` run, a Docker sandbox is saved at each step where it changed. The rewound run's sandbox starts from the files it had after step 2, so the stages that run again see what the old run's saw then. Without that, a rewind would start them in an empty sandbox. E2B and Daytona sandboxes aren't saved: after a rewind they start fresh. The snapshots are Docker images that outlive the run; `halo sandboxes` lists them and `halo sandboxes prune` removes them.
 
 Limits:
 

@@ -1,0 +1,39 @@
+// ============================================================
+// STEP 20: Sandboxes
+// ============================================================
+// LEARN: How to run code somewhere it can't touch your machine
+// WHY:   Agents that write code need to run it to know it works.
+//        A sandbox is a fresh Linux machine for one run: none of
+//        your files, secrets or network unless you hand them over,
+//        and it's deleted when the run ends.
+//
+// RUN:   halo run examples/learn/20-sandboxes.halo --arg code='print(sum(range(10)))'
+//        (no model, no API key: just Docker running. The first run
+//        downloads the Python image, which takes a minute or two.)
+// ============================================================
+
+// A container on this machine, cut off from the network.
+// "auto" instead of "docker" would use E2B or Daytona when Docker isn't running.
+tool Box : Remote("docker", image: "python:3.12-slim", network: false)
+
+// The same, as an agent's own computer: it can write code, run it, and fix it.
+// (Needs a model key; see docs/guide/coding-agents.md.)
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "docker"]
+
+// No model at all: put a file in the sandbox, run it, read what it wrote.
+pipeline RunIt(code: String) -> Result:
+  code
+    |> Box.write(path: "main.py", content: code) as saved
+    |> Box.run(command: "python3 main.py > out.txt; echo exit=$?") as ran
+    |> Box.read(path: "out.txt")
+
+// Every call in one run uses the same sandbox, so files persist between stages.
+// Two runs never share one.
+pipeline Persist() -> Result:
+  "x"
+    |> Box.run(command: "echo first > notes.txt") as one
+    |> Box.run(command: "echo second >> notes.txt && cat notes.txt")
+
+// An agent with a sandbox decides for itself what to write and run.
+pipeline Build(task: String) -> Result:
+  task |> Dev.work("Write it, run it, and check the output before you answer.")

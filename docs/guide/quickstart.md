@@ -104,6 +104,21 @@ halo run examples/engineering/github-triage.halo --arg repo=oven-sh/bun --arg li
 
 ## Next steps
 
+Have Docker? Let an agent write code and run it, in a container that's gone when the run ends. No extra account or key:
+
+```halo
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "auto"]
+
+pipeline Build(task: String) -> Result:
+  task |> Dev.work("Write it, run it, and check the output before you answer.")
+```
+
+```bash
+halo run build.halo --arg task="a script that prints the first 20 primes"
+```
+
+See [Coding Agents That Run Their Code](./coding-agents.md).
+
 - [Core Concepts](./concepts.md)
 - [Language Reference](./reference.md)
 - [Using Halo as a library](./sdk.md)

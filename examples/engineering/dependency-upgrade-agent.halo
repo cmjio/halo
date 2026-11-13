@@ -2,15 +2,16 @@
 // Dependency upgrade agent
 // ============================================================
 // Upgrades outdated and vulnerable dependencies weekly in a disposable
-// sandbox, fixes what breaks, and opens PRs for human review. The work
-// is sandboxed, what the diff may contain is restricted in code, and a
+// Docker sandbox, fixes what breaks, and opens PRs for human review. The
+// agent works on a copy of the checkout that can reach only the npm
+// registry; what the diff may contain is restricted in code; and a
 // failure becomes a draft PR with evidence rather than a forced green build.
 //
 // RUN:  halo plan examples/engineering/dependency-upgrade-agent.halo
 // ============================================================
 // Users:     service-owning teams who review and merge the PRs; the
 //            platform team that owns the agent
-// Surface:   weekly batch job in a sandboxed CI container; GitHub PRs
+// Surface:   weekly batch job on a CI runner with Docker; GitHub PRs
 //            with markdown descriptions
 // Autonomy:  autonomous        Risk: medium
 //
@@ -28,10 +29,13 @@
 //   - DenyArgs refuses edits under .github/workflows/ and .buildkite/
 //   - DenyArgs refuses adding .skip, xit, xdescribe or t.Skip
 //   - the shell runs only a fixed list of npm commands, all with
-//     --ignore-scripts for installs; deleting files is hidden
+//     --ignore-scripts for installs
+//   - the agent edits a copy in the sandbox; only the pipeline writes the
+//     checkout (apply), and only after its own test run
 //   - the pipeline runs the tests itself; red means a draft PR
 //   - there is no method to merge or push to main
-//   - sandbox egress limited to the registry mirror (server side)
+//   - sandbox egress is limited to registry.npmjs.org (hosts:); any other
+//     connection is refused and recorded as a violation
 //   - open_pr fails if the lockfile adds packages outside the scanner
 //     list (server side)
 //
@@ -48,24 +52,21 @@
 
 policy Safe   : Block(PromptInjection, DestructiveOps) & Block(APIKey) & MaxSpend(3.00)
 policy Report : Require(JSON)
-// What the upgrader may do with its tools: edit sources, run npm. Nothing else.
-policy SandboxTools : AllowTools("Repo.*", "Sandbox.run")
-  & DenyTools("Repo.delete")
-  & DenyArgs("Repo.write", "path", "^\\.(github/workflows|buildkite)/")
-  & DenyArgs("Repo.edit", "path", "^\\.(github/workflows|buildkite)/")
-  & DenyArgs("Repo.write", "content", "(\\.skip\\(|\\bxit\\(|\\bxdescribe\\(|t\\.Skip\\()")
-  & DenyArgs("Repo.edit", "new", "(\\.skip\\(|\\bxit\\(|\\bxdescribe\\(|t\\.Skip\\()")
+// What the upgrader may do in the sandbox: read and edit files, run npm. Nothing else:
+// apply, download and keep (which reach the checkout) aren't offered to it.
+policy SandboxTools : AllowTools("Sandbox.read", "Sandbox.write", "Sandbox.list", "Sandbox.diff", "Sandbox.run")
+  & DenyArgs("Sandbox.write", "path", "^\\.(github/workflows|buildkite)/")
+  & DenyArgs("Sandbox.write", "content", "(\\.skip\\(|\\bxit\\(|\\bxdescribe\\(|t\\.Skip\\()")
   & DenyArgs("Sandbox.run", "command", "^(?!(npm ci --ignore-scripts|npm install --ignore-scripts|npm test|npm run (build|lint|typecheck))$)")
 
-// The checkout and shell live in the disposable container.
-tool Repo     : Workspace("{{workdir}}", write: true)
-tool Sandbox  : Bash(cwd: "{{workdir}}", timeout_ms: 600000)
+// A copy of the checkout in a Node container that can reach the npm registry and nothing else.
+tool Sandbox  : Remote("docker", image: "node:22", from: "{{workdir}}", hosts: ["registry.npmjs.org"], ttl_minutes: 90)
 tool Registry : MCP(url: "https://mcp.northwind.example/registry-mirror")
 tool Changes  : MCP(url: "https://mcp.northwind.example/pull-requests", apiKey: Env.PR_MCP_KEY)
 
 agent Upgrader [anthropic/claude-sonnet-4-5, temp: 0.0, max_steps: 40]
   system """
-    You're the dependency upgrade agent for Northwind's services (npm, Go modules, Python/uv). Each week you get one repository and a list of outdated packages from the scanner. You work in a disposable sandbox with the repo checked out, can run the test suite, and open PRs. You can't merge, and you have no network access beyond the package registry mirror.
+    You're the dependency upgrade agent for Northwind's services (npm, Go modules, Python/uv). Each week you get one repository and a list of outdated packages from the scanner. You work in a disposable sandbox with a copy of the repo, can run the test suite there, and the pipeline opens the PRs. You can't merge, and the sandbox can reach only the npm registry.
 
     Group patch and minor upgrades into one PR per repo. Give each major upgrade its own PR, because majors break things and reviewers need to bisect. Read the changelog or migration guide before a major, and apply the documented code changes; if tests still fail after two attempts, open a draft PR describing exactly what broke rather than forcing it.
 
@@ -75,7 +76,7 @@ agent Upgrader [anthropic/claude-sonnet-4-5, temp: 0.0, max_steps: 40]
 
     Answer with JSON: {"branch": "...", "title": "...", "body": "...", "flagged": ["..."]}
   """
-  equips Repo, Sandbox
+  equips Sandbox
   requires Safe, Report, SandboxTools
 
 // The scheduler calls this once per PR group: all patch/minor upgrades
@@ -88,10 +89,14 @@ pipeline UpgradeGroup(repo: String, workdir: String, packages: List) -> Result:
     |> Registry.fetch_changelog(packages: packages) as changelogs
 
     // 2. The upgrader edits and tests in the sandbox, inside its fences
-    |> Upgrader.upgrade("Upgrade these packages in {{repo}}:", packages, context.data.changelogs, tools: [Repo, Sandbox]) as report
+    |> Upgrader.upgrade("Upgrade these packages in {{repo}}:", packages, context.data.changelogs, tools: [Sandbox]) as report
 
-    // 3. The pipeline checks for itself; red tests mean a draft PR
-    |> Sandbox.run(command: "npm test 2>&1 | tail -60") as tests
+    // 3. The pipeline checks for itself, then writes the change into the checkout for the PR
+    |> Sandbox.run(command: "set -o pipefail; npm test 2>&1 | tail -60", timeout_ms: 600000) as tests
+    |> Sandbox.diff() as changes
+    |> Sandbox.apply() as applied
+
+    // 4. Red tests mean a draft PR
     |? {
          (context.data.tests.exitCode == 0) => Changes.open_pr(repo: repo, branch: context.data.report.branch, title: context.data.report.title, body: context.data.report.body, draft: false),
          else => Changes.open_pr(repo: repo, branch: context.data.report.branch, title: "[draft] {{report.title}}", body: "{{report.body}}\n\nFailing tests:\n{{tests.stdout}}", draft: true),

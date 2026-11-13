@@ -9,12 +9,13 @@ import { plan } from "../src/plan";
 import { getCompletions } from "../src/lsp/completions";
 import { withSandbox } from "../src/runtime/sandbox-agents";
 import { LOCAL_PROVIDER_INFO } from "../src/runtime/providers/index";
-import { backendOf, closeRemoteSessions, connectFrame, connectFrames, parseSshTarget, prelude, remote, sshArgs } from "../src/runtime/providers/remote";
+import { backendOf, closeRemoteSessions, connectFrame, connectFrames, dockerRunArgs, dockerShell, parseSshTarget, prelude, remote, sshArgs } from "../src/runtime/providers/remote";
 import type { ToolCall, ToolServices } from "../src/runtime/tools";
 
 let tmp: string;
 let home: string;
 let fakeSsh: string;
+let fakeDocker: string;
 let local: string;
 
 beforeAll(() => {
@@ -36,6 +37,33 @@ cd "${home}" && exec sh -c "$last"
 `,
   );
   chmodSync(fakeSsh, 0o755);
+  // A stand-in for docker: `run` makes a folder for the container and prints its id, `exec`
+  // runs the command in that folder, `rm` deletes it. Every call is logged.
+  fakeDocker = join(tmp, "fake-docker");
+  writeFileSync(
+    fakeDocker,
+    `#!/bin/sh
+echo "$*" >> "${tmp}/docker-log"
+cmd=$1; shift
+case "$cmd" in
+  run)
+    for a; do if [ "$a" = "missing:image" ]; then echo "Unable to find image 'missing:image' locally" >&2; exit 125; fi; done
+    n=$(ls "${tmp}/containers" 2>/dev/null | wc -l | tr -d ' ')
+    id=$(printf 'c%011d%052d' "$n" 0 | tr c a)
+    mkdir -p "${tmp}/containers/$id"
+    echo "$id" ;;
+  exec)
+    [ "$1" = "--interactive" ] && shift
+    id=$1; shift
+    [ -d "${tmp}/containers/$id" ] || { echo "Error response from daemon: No such container: $id" >&2; exit 1; }
+    cd "${tmp}/containers/$id" && exec "$@" ;;
+  rm)
+    for id; do :; done
+    rm -rf "${tmp}/containers/$id" ;;
+esac
+`,
+  );
+  chmodSync(fakeDocker, 0o755);
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -80,6 +108,7 @@ describe("Remote: parsing", () => {
   test("backends", () => {
     expect(backendOf("e2b")).toBe("e2b");
     expect(backendOf("Daytona")).toBe("daytona");
+    expect(backendOf("docker")).toBe("docker");
     expect(backendOf("ssh://e2b")).toBe("ssh");
     expect(backendOf("")).toBeUndefined();
   });
@@ -339,6 +368,87 @@ describe("Remote sandboxes: Daytona", () => {
   });
 });
 
+describe("Remote sandboxes: Docker", () => {
+  const log = () => (existsSync(join(tmp, "docker-log")) ? readFileSync(join(tmp, "docker-log"), "utf8").trim().split("\n") : []);
+  const live = () => (existsSync(join(tmp, "containers")) ? require("node:fs").readdirSync(join(tmp, "containers")).length : 0);
+
+  test("docker run starts a locked-down container that removes itself", () => {
+    const args = dockerRunArgs({ image: "node:22", ttlSeconds: 600, network: false, memory: "1g", cpus: 1.5, pids: 256, runId: "r9" });
+    const text = args.join(" ");
+    expect(args[0]).toBe("run");
+    for (const part of ["--detach", "--rm", "--init", "--network none", "--memory 1g", "--cpus 1.5", "--pids-limit 256", "no-new-privileges", "halo.run=r9", "HOME=/home/user"]) expect(text).toContain(part);
+    expect(text).not.toContain("--volume");
+    expect(args.slice(-3)).toEqual(["node:22", "sleep", "600"]);
+    expect(dockerRunArgs({ image: "x", ttlSeconds: 60, network: true, memory: "2g", cpus: 2, pids: 512 }).join(" ")).not.toContain("--network");
+  });
+
+  test("commands run under bash when there is one, with a timeout", async () => {
+    const argv = dockerShell("echo $0-$BASH_VERSION | cut -c1-5", 5);
+    const p = Bun.spawn(argv, { stdout: "pipe" });
+    expect((await new Response(p.stdout).text()).trim()).toMatch(/^bash-/);
+    expect(argv[2]).toContain("timeout -s KILL 5");
+  });
+
+  test("one container per run, kept between calls, removed at the end", async () => {
+    const decl = { 0: "docker", docker: fakeDocker, image: "python:3.12-slim", root: local };
+    const call = (method: string, named: Record<string, unknown>, run = "d-a") => remote(makeCall(method, named, decl, run), services()) as Promise<any>;
+    const r = await call("run", { command: 'echo "$GREETING from $(basename $PWD)"; mkdir -p sub', env: { GREETING: "hi; rm -rf ~" } });
+    expect(r).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(r.stdout).toMatch(/^hi; rm -rf ~ from a/);
+    await call("write", { path: "src/main.py", content: "print(1)" });
+    expect(await call("read", { path: "src/main.py" })).toMatchObject({ content: "print(1)", encoding: "utf8" });
+    expect((await call("list", { path: "." })).entries).toEqual(expect.arrayContaining([{ name: "src", type: "dir" }, { name: "sub", type: "dir" }]));
+    expect((await call("run", { command: "pwd", cwd: "src" })).stdout).toEndWith("/src");
+    expect((await call("run", { command: "echo oops >&2; exit 3" }))).toMatchObject({ stderr: "oops", exitCode: 3 });
+    const info = await call("info", {});
+    expect(info).toMatchObject({ backend: "docker" });
+    expect(info.id).toHaveLength(12);
+
+    writeFileSync(join(local, "data.csv"), "a,b\n1,2\n");
+    await call("upload", { from: "data.csv", to: "in/data.csv" });
+    expect((await call("run", { command: "cat in/data.csv" })).stdout).toBe("a,b\n1,2");
+    await call("download", { from: "in/data.csv", to: "back.csv" });
+    expect(readFileSync(join(local, "back.csv"), "utf8")).toBe("a,b\n1,2\n");
+
+    expect((await call("info", {}, "d-b")).id).not.toBe(info.id);
+    expect(log().filter((l) => l.startsWith("run ")).length).toBe(2);
+    expect(live()).toBe(2);
+    await closeRemoteSessions("d-a");
+    expect(live()).toBe(1);
+    await closeRemoteSessions();
+    expect(live()).toBe(0);
+    expect(log().filter((l) => l.startsWith("rm --force")).length).toBe(2);
+  });
+
+  test("a gone container, a missing image and a bad image name are errors", async () => {
+    const decl = { 0: "docker", docker: fakeDocker };
+    await remote(makeCall("info", {}, decl, "d-gone"), services());
+    rmSync(join(tmp, "containers"), { recursive: true, force: true });
+    // Errors name the tool, not the method of the call that happened to create the container.
+    const missing: any = await remote(makeCall("read", { path: "nope.txt" }, decl, "d-gone"), services()).catch((e: Error) => e);
+    expect(missing.message).toStartWith("Box: ");
+    expect(missing.message).not.toContain("Box.info");
+    await expect(remote(makeCall("run", { command: "true" }, decl, "d-gone"), services())).rejects.toThrow(/unavailable.*No such container.*ttl_minutes/);
+    await closeRemoteSessions("d-gone");
+    await expect(remote(makeCall("info", {}, { ...decl, image: "missing:image" }, "d-miss"), services())).rejects.toThrow(/couldn't start a Docker sandbox from missing:image/);
+    await expect(remote(makeCall("info", {}, { ...decl, image: "--privileged" }, "d-bad"), services())).rejects.toMatchObject({ code: "TOOL_CONFIG" });
+    await expect(remote(makeCall("info", {}, { ...decl, memory: "lots" }, "d-bad2"), services())).rejects.toMatchObject({ code: "TOOL_CONFIG" });
+  });
+
+  test("timeouts are reported", async () => {
+    const decl = { 0: "docker", docker: fakeDocker };
+    const r = (await remote(makeCall("run", { command: "sleep 5", timeout_ms: 1000 }, decl, "d-slow"), services())) as any;
+    expect(r.timedOut).toBe(true);
+    await closeRemoteSessions("d-slow");
+  }, 15_000);
+
+  test("sandbox: \"docker\" gives an agent its own container", () => {
+    const d = withSandbox({ name: "Dev", modelId: "m", params: { sandbox: "docker" } }, new Map());
+    expect(d.tool).toMatchObject({ name: "DevSandbox", provider: "Remote", argList: [{ value: { kind: "string", value: "docker" } }] });
+    expect(d.agent.system).toContain("(docker)");
+  });
+});
+
 describe("Remote: declaration", () => {
   test("validates, and lists its methods with effects", () => {
     const doc = parse(`
@@ -350,7 +460,7 @@ agent Ops [anthropic/claude-sonnet-4-5, tools: auto]
     expect(validate(doc).filter((d) => d.severity === "error")).toEqual([]);
     const info = LOCAL_PROVIDER_INFO.Remote!;
     const effects = Object.fromEntries((info.methods as { name: string; effect: string }[]).map((m) => [m.name, m.effect]));
-    expect(effects).toEqual({ run: "external", read: "read", write: "external", list: "read", upload: "external", download: "write", info: "read" });
+    expect(effects).toEqual({ run: "external", read: "read", write: "external", list: "read", upload: "external", download: "write", info: "read", diff: "read", apply: "write", keep: "external" });
   });
 });
 
@@ -377,7 +487,7 @@ pipeline Build(task: String) -> Result:
     const r = await rt.run("Build", { task: "print 2" });
     expect(r.status).toBe("completed");
     expect(r.output).toBe("checked");
-    expect(asked[0]!.tools).toEqual(["DevSandbox.run", "DevSandbox.read", "DevSandbox.write", "DevSandbox.list", "DevSandbox.upload", "DevSandbox.download", "DevSandbox.info"]);
+    expect(asked[0]!.tools).toEqual(["DevSandbox.run", "DevSandbox.read", "DevSandbox.write", "DevSandbox.list", "DevSandbox.upload", "DevSandbox.download", "DevSandbox.info", "DevSandbox.diff", "DevSandbox.apply", "DevSandbox.keep"]);
     expect(asked[0]!.system).toContain("Use Python.");
     expect(asked[0]!.system).toContain("a fresh Linux sandbox (e2b)");
     expect(JSON.stringify(asked[2]!.messages)).toContain("ran python3 app.py");
@@ -447,6 +557,6 @@ pipeline Go(t: String) -> Result:
   test("the editor completes sandbox:", () => {
     const src = `tool Lab : Remote("e2b")\nagent A [m/x, sandbox: `;
     const labels = getCompletions(src, { line: 1, character: 24 }).map((c) => c.label);
-    expect(labels).toEqual(['"e2b"', '"daytona"', "Lab"]);
+    expect(labels).toEqual(['"e2b"', '"daytona"', '"docker"', '"auto"', "Lab"]);
   });
 });

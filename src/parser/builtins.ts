@@ -47,7 +47,10 @@ export const TOOL_RULES = ["AllowTools", "DenyTools", "AllowEffects", "ApproveTo
 export const TOOL_EFFECTS = ["read", "write", "external"] as const;
 
 /** Policy rules the runtime enforces deterministically. */
-export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", ...TOOL_RULES] as const;
+export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", ...TOOL_RULES] as const;
+
+/** A host for AllowHosts or a sandbox's hosts: ("pypi.org", or "*.pythonhosted.org" for it and its subdomains). */
+export const HOST_PATTERN = /^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
 
 /** What `Require(...)` can check. Anything else (e.g. Require(Approver)) needs a judge and is not enforced. */
 export const REQUIRE_CHECKS = ["JSON", "XML", "Citation"] as const;

@@ -68,6 +68,27 @@ Under `halo serve` with `slack.signingSecret`, pause announcements get Approve /
 
 In your own server, `Slack.post(..., buttons: [...])` posts buttons whose value is `{"runId": "...", "after": <pauses so far>, "answer": "<label>"}` (JSON, during a run; `context.meta.pauses` counts a run's pauses). Have your Slack app's interaction endpoint verify Slack's signature, read that value, and call `runtime.signal(runId, ...)` with the event the run is waiting for.
 
+## Approving a diff
+
+The most useful thing to approve is often a change a coding agent made in a sandbox. `Remote.diff()` returns the changed files and a unified diff; attach it to the `yield`, and write the change back only on a yes:
+
+```halo
+policy StayInside : DenyTools("Repo.apply", "Repo.download")
+tool Repo : Remote("auto", from: ".")
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: Repo]
+  requires StayInside
+
+pipeline Fix(task: String) -> Result:
+  task
+    |> Dev.work("{{task}}. Run the tests.") as report
+    |> Repo.diff() as changes
+    |! yield(msg: "Apply this change?", [context.data.report, context.data.changes.patch]) as review
+    |? (context.data.review.approved == true)
+    |> Repo.apply()
+```
+
+While the run waits, a Docker sandbox is saved and stopped, and started from the same files when the answer comes, so an approval that takes a day holds no containers. See [Coding Agents That Run Their Code](../coding-agents.md#getting-the-work-back).
+
 ## Approving tool calls
 
 An agent that chooses its own tool calls can be made to ask first, with `ApproveTools(...)` or `ApproveEffects(...)`. Those requests come to the same `onInterrupt` handler (with `channel: "approval"`), or pause the run waiting for `"approval"`. See [Agents with Tools](../agents-with-tools.md#approvals).

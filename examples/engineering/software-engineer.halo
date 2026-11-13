@@ -1,18 +1,24 @@
 // ============================================================
 // Software Engineer
 // PURPOSE: Auto-remediate production incidents with policies,
-//          parallel diagnosis, and human sign-off for deploys
+//          parallel diagnosis, a fix written and tested in a sandbox,
+//          and human sign-off for deploys
 // ============================================================
 
 // --- Policies ---
 policy ChangeSafety    : Block(DestructiveOps) & Require(Approver)
 policy CostControl     : MaxSpend(5.00)
+// The fixer works only inside its sandbox; nothing it does reaches a real repo.
+policy SandboxOnly     : AllowTools("Checkout.run", "Checkout.read", "Checkout.write", "Checkout.list")
 
 // --- Tools ---
 tool GitHub         : POST("api.github.com/repos", apiKey: Env.GH_TOKEN)
 tool PagerDuty      : POST("api.pagerduty.com/incidents")
 tool SlackDev       : POST("hooks.slack.com/services/eng-oncall")
 tool RunbookDB      : PostgreSQL(Env.DB_URI, schema: "runbooks")
+// A throwaway machine to clone the service into, fix it, and run its tests.
+// It can reach GitHub (to clone) and the package registries, nothing else.
+tool Checkout       : Remote("docker", image: "node:22", hosts: ["github.com", "codeload.github.com", "registry.npmjs.org", "pypi.org", "*.pythonhosted.org"])
 
 // --- Store ---
 tool PastIncidents  : VectorStore(Env.PINECONE_KEY, namespace: "incident-history")
@@ -39,6 +45,16 @@ agent Diagnoser [anthropic/claude-sonnet-4, temp: 0.05]
   """
   equips GitHub, CodebaseIndex, PastIncidents
   requires CostControl
+
+// Fixer — writes the fix in the sandbox and proves it with the tests
+agent Fixer [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: Checkout]
+  system """
+    The service is checked out in ./app. Write the smallest fix for the
+    diagnosed root cause, add a regression test for it, and run the
+    service's tests until they pass. Don't commit.
+    Answer with JSON: {"title": "...", "description": "...", "summary": "...", "tests": "the command you ran and its result"}
+  """
+  requires ChangeSafety, CostControl, SandboxOnly
 
 // Code reviewer — validates any generated fix
 agent CodeReviewer [anthropic/claude-sonnet-4, temp: 0.0]
@@ -82,16 +98,18 @@ pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
     // Step 3: Gate — only auto-fix if confidence > 85%
     |? (context.data.diagnosis.confidence > 85)
 
-    // Step 4: Generate the fix
-    |> Diagnoser.generate_fix(
+    // Step 4: Write the fix in a sandbox, and run the tests there
+    |> Checkout.run(command: "git clone --depth 1 https://github.com/{{incident.repo}}.git app") as cloned
+    |> Fixer.fix(
          context.data.diagnosis,
          context.data.codebase.matches,
          context.data.incident.service_language
        ) as fix
 
-    // Step 5: Code review gate — must pass automated review
+    // Step 5: The diff as it is on disk (not as the fixer describes it) must pass review
+    |> Checkout.run(command: "cd app && git diff") as patch
     |> CodeReviewer.review(
-         context.data.fix.diff,
+         context.data.patch.stdout,
          context.data.incident.service_name
        ) as review
 
@@ -109,7 +127,7 @@ pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
     |! yield(
          SlackDev,
          context.data.fix.summary,
-         [context.data.github.pr_url, context.data.fix.diff],
+         [context.data.github.pr_url, context.data.patch.stdout],
          1h
        )
 

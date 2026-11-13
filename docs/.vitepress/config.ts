@@ -110,6 +110,8 @@ export default defineConfig({
         text: 'Agents & Tools',
         items: [
           { text: 'Agents with Tools', link: '/guide/agents-with-tools' },
+          { text: 'Coding Agents', link: '/guide/coding-agents' },
+          { text: 'Best of N', link: '/guide/best-of-n' },
           { text: 'Packages', link: '/guide/tool-packages' },
           { text: 'Hosted Packages', link: '/guide/hosted-packages' },
           { text: 'Package Registry', link: '/packages' },

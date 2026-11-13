@@ -1,5 +1,5 @@
 import { test, expect, describe, afterAll } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, validate } from "../src/parser/index";
@@ -249,7 +249,8 @@ describe("examples run to completion with realistic data", () => {
       "Diagnoser.analyze_logs": { confidence: 93, root_cause: "pool exhausted" },
       "Diagnoser.search_codebase": { matches: ["db/pool.ts"] },
       "Diagnoser.search_history": [],
-      "Diagnoser.generate_fix": { diff: "+ max: 50", title: "Raise pool size", description: "...", summary: "Raise pool size to 50" },
+      Checkout: { stdout: "+ max: 50", stderr: "", exitCode: 0 },
+      "Fixer.fix": { title: "Raise pool size", description: "...", summary: "Raise pool size to 50", tests: "npm test: 120 passed" },
       "Diagnoser.classify": { category: "timeout" }, // shadow of Triage
       "CodeReviewer.review": { approved: true },
       GitHub: { pr_url: "https://github.com/acme/api/pull/7" },
@@ -296,6 +297,7 @@ describe("examples run to completion with realistic data", () => {
   test("24: QA flow detects flaky tests and logs them to store", async () => {
     const { rt } = await load("qa-engineer.halo", {}, {
       "TestArchitect.generate_tests": ["login works"],
+      Sandbox: { stdout: "", stderr: "", exitCode: 0 },
       TestRunner: { passed: 9, failed: 1 },
       "TestArchitect.analyze_results": { failure_count: 1 },
       "FlakyDetector.detect": { summary: "1 flaky test: login works" },
@@ -303,7 +305,7 @@ describe("examples run to completion with realistic data", () => {
     });
     const print = console.log;
     console.log = () => {};
-    const result = await rt.run("AutoTest", { pr: { diff: "...", repo: "acme/web" } }).finally(() => (console.log = print));
+    const result = await rt.run("AutoTest", { pr: { diff: "...", repo: "acme/web", head_sha: "abc123" } }).finally(() => (console.log = print));
     expect(result.status).toBe("completed");
     expect(result.context.data.TestHistory).toMatchObject({ log: { stored: true, tags: ["flaky", "acme/web"] } });
     await rt.close();
@@ -856,6 +858,33 @@ describe("public-data examples", () => {
 });
 
 test("73 code writer: failing test output goes back to the coder until the real tests pass", async () => {
+  // The example runs its code in a Docker sandbox. A stand-in docker runs each "container" in a
+  // folder here, so the real tests still run, without a Docker daemon.
+  const bin = join(tmp, "bin");
+  await Bun.write(
+    join(bin, "docker"),
+    `#!/bin/sh
+cmd=$1; shift
+case "$cmd" in
+  run) id=0$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n'); mkdir -p "${tmp}/containers/$id"; echo "$id" ;;
+  exec) [ "$1" = "--interactive" ] && shift; id=$1; shift; cd "${tmp}/containers/$id" && exec "$@" ;;
+  rm) for id; do :; done; rm -rf "${tmp}/containers/$id" ;;
+esac
+`,
+  );
+  chmodSync(join(bin, "docker"), 0o755);
+  const saved = { path: process.env.PATH, cwd: process.cwd() };
+  process.env.PATH = `${bin}:${saved.path}`;
+  process.chdir(tmp); // from: and download stay inside the current folder
+  try {
+    await writeCode();
+  } finally {
+    process.env.PATH = saved.path;
+    process.chdir(saved.cwd);
+  }
+}, 30_000);
+
+async function writeCode() {
   const work = join(tmp, "coder");
   await Bun.write(join(work, "package.json"), '{"name":"t","type":"module"}');
   await Bun.write(join(work, "add.test.ts"), `import { test, expect } from "bun:test";\nimport { add } from "./add";\ntest("adds", () => expect(add(2, 3)).toBe(5));\n`);
@@ -867,7 +896,7 @@ test("73 code writer: failing test output goes back to the coder until the real 
       return prompts.length === 1 ? "export const add = (a: number, b: number) => a - b;" : "```ts\nexport const add = (a: number, b: number) => a + b;\n```";
     },
   });
-  const result = await rt.run("WriteCode", { task: "Add numbers", workdir: work, test_file: "add.test.ts", target_file: "add.ts" });
+  const result = await rt.run("WriteCode", { task: "Add numbers", workdir: "coder", test_file: "add.test.ts", target_file: "add.ts" });
   expect(result.status).toBe("completed");
   expect(result.context.data.fixes).toBe(1);
   expect(prompts[0]).toContain('test("adds"');
@@ -875,7 +904,7 @@ test("73 code writer: failing test output goes back to the coder until the real 
   expect(prompts[1]).toContain("Received: -1");
   expect(String(result.output)).toContain("1 pass");
   expect(await Bun.file(join(work, "add.ts")).text()).toBe("export const add = (a: number, b: number) => a + b;\n");
-}, 30_000);
+}
 
 test("74 software team: modules are checked for their exports, and the fixer uses its tools until the acceptance tests pass", async () => {
   const work = join(tmp, "team");

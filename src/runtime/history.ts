@@ -39,6 +39,8 @@ export interface Step {
   thread?: number;
   loops?: RunSnapshot["loops"];
   loopFeedback?: RunSnapshot["loopFeedback"];
+  /** Snapshots of the run's sandboxes as of this step (tool → image), when any changed. */
+  sandboxes?: Record<string, string>;
 }
 
 /** The run as it was after one step. */
@@ -46,6 +48,8 @@ export interface StepState {
   step: Step;
   data: Record<string, unknown>;
   current: unknown;
+  /** Each sandbox's latest snapshot up to this step. */
+  sandboxes?: Record<string, string>;
 }
 
 export const stepsPathFor = (corePath: string) => corePath.replace(/\.json$/, "") + ".steps.jsonl";
@@ -100,6 +104,7 @@ export async function appendStep(corePath: string, snap: RunSnapshot): Promise<v
     ...(snap.thread ? { thread: snap.thread.ops.length } : {}),
     ...(snap.loops && Object.keys(snap.loops).length ? { loops: snap.loops } : {}),
     ...(snap.loopFeedback ? { loopFeedback: snap.loopFeedback } : {}),
+    ...(snap.sandboxes ? { sandboxes: snap.sandboxes } : {}),
   };
   await appendFile(path, JSON.stringify(step) + "\n");
 }
@@ -117,11 +122,13 @@ export function stateAt(steps: Step[], step = steps.at(-1)?.step ?? 0): StepStat
   const at = steps.findIndex((s) => s.step === step);
   if (at < 0) throw new HaloError(`No step ${step} in this history (it has steps ${steps[0]?.step ?? 0}–${steps.at(-1)?.step ?? 0})`);
   const data: Record<string, unknown> = {};
+  let sandboxes: Record<string, string> | undefined;
   for (const s of steps.slice(0, at + 1)) {
     Object.assign(data, s.set);
     for (const k of s.unset ?? []) delete data[k];
+    if (s.sandboxes) sandboxes = { ...sandboxes, ...s.sandboxes };
   }
-  return { step: steps[at]!, data, current: steps[at]!.current };
+  return { step: steps[at]!, data, current: steps[at]!.current, ...(sandboxes ? { sandboxes } : {}) };
 }
 
 /** Find a run's history in a checkpoint folder by its run id. */

@@ -19,6 +19,7 @@ import {
   CONTEXT_NAMESPACES,
   DIRECTIVES,
   ENFORCED_RULES,
+  HOST_PATTERN,
   REDACT_CATEGORIES,
   REQUIRE_CHECKS,
   SCHEMA_TYPES,
@@ -33,7 +34,7 @@ import {
   parseDuration,
 } from "./builtins.js";
 import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
-import { sandboxProblem } from "../runtime/sandbox-agents.js";
+import { sandboxChoice, sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
 import { splitToolPath } from "../linker/names.js";
@@ -76,7 +77,14 @@ class Validator {
     this.policies = new Map(ast.policies.map((g) => [g.name, g]));
     this.pipelines = new Map(ast.pipelines.map((s) => [s.name, s]));
     this.schemas = new Map(ast.schemas.map((sc) => [sc.name, sc]));
+    // `sandbox: "docker"` (etc.) makes a tool named <Agent>Sandbox, which policies may name.
+    for (const a of ast.agents) {
+      const choice = sandboxChoice(a);
+      if (choice.kind === "service") this.sandboxTools.add(choice.tool);
+    }
   }
+
+  private sandboxTools = new Set<string>();
 
   private isDeclaredName(name: string): boolean {
     return this.agents.has(name) || this.tools.has(name) || this.policies.has(name) || this.pipelines.has(name);
@@ -155,6 +163,9 @@ class Validator {
         this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
       } else if (rule.name === "MatchRegex" && !validRegex(rule.args[0] ?? "")) {
         this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
+      } else if (rule.name === "AllowHosts") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowHosts(...) needs at least one host, e.g. AllowHosts("pypi.org", "*.pythonhosted.org")`, g.loc);
+        for (const h of rule.args) if (!HOST_PATTERN.test(h)) this.add("error", `Policy "${g.name}": AllowHosts(${h}) is not a host name like "pypi.org" or "*.pythonhosted.org"`, g.loc);
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
@@ -178,7 +189,7 @@ class Validator {
     const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
     for (const pattern of patterns) {
       const tool = splitToolPath(pattern).tool;
-      if (tool !== "*" && !this.tools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
+      if (tool !== "*" && !this.tools.has(tool) && !this.sandboxTools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
     }
   }
 
@@ -189,7 +200,7 @@ class Validator {
     for (const e of m.equips ?? []) {
       if (!this.tools.has(e)) this.add("error", `Agent "${m.name}" equips undefined tool "${e}"`, m.loc);
     }
-    const sandbox = sandboxProblem(m, this.tools);
+    const sandbox = sandboxProblem(m, this.tools, this.policies);
     if (sandbox) this.add("error", sandbox, m.loc);
     if (m.params.preset !== undefined && !findPreset(m.params.preset)) {
       this.add("error", `Agent "${m.name}": unknown preset "${m.params.preset}" (use ${PRESET_NAMES.join(", ")})`, m.loc);
