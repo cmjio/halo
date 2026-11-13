@@ -20,6 +20,7 @@ import {
   DIRECTIVES,
   ENFORCED_RULES,
   HOST_PATTERN,
+  RESERVED_SECRET,
   SECRET_NAME,
   scopePath,
   REDACT_CATEGORIES,
@@ -103,6 +104,7 @@ class Validator {
       const known = includes(TOOL_PROVIDERS, t.provider) || this.options.toolProviders?.includes(t.provider);
       if (!known) this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
       if (t.provider === "SQLite") this.checkSqliteTool(t);
+      if (t.provider === "Remote") this.checkRemoteSecrets(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
     for (const sc of this.ast.schemas) this.checkSchema(sc);
@@ -173,12 +175,27 @@ class Validator {
         for (const f of rule.args) if (scopePath(f) === undefined) this.add("error", `Policy "${g.name}": AllowFiles(${f}) should be a path inside the project, like "src/billing" (no leading /, no ..)`, g.loc);
       } else if (rule.name === "AllowSecrets") {
         if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowSecrets(...) needs at least one name, e.g. AllowSecrets("STRIPE_TEST_KEY")`, g.loc);
-        for (const n of rule.args) if (!SECRET_NAME.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}) should be an environment variable name, like STRIPE_TEST_KEY`, g.loc);
+        for (const n of rule.args) {
+          if (!SECRET_NAME.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}) should be an environment variable name, like STRIPE_TEST_KEY`, g.loc);
+          else if (RESERVED_SECRET.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}): ${n} can't be a secret; it changes how the sandbox or Docker itself runs`, g.loc);
+        }
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
         this.add("error", `Policy "${g.name}": ${rule.name} needs a numeric limit`, g.loc);
       }
+    }
+  }
+
+  /** A Remote's secrets: names environment variables; Env.X there would hand over the value itself. */
+  private checkRemoteSecrets(t: ParseResult["tools"][number]) {
+    const arg = t.argList.find((a) => a.name === "secrets");
+    if (!arg) return;
+    const items = arg.value.kind === "list" ? arg.value.items : [arg.value];
+    for (const v of items) {
+      if (v.kind !== "string") this.add("error", `Tool "${t.name}": secrets: lists names in quotes, like secrets: ["STRIPE_TEST_KEY"]; ${v.kind === "ref" && v.path[0] === "Env" ? `Env.${v.path.slice(1).join(".")} is the value, not the name` : "each entry is a string"}`, t.loc);
+      else if (!SECRET_NAME.test(v.value)) this.add("error", `Tool "${t.name}": secrets: "${v.value}" should be an environment variable name, like STRIPE_TEST_KEY`, t.loc);
+      else if (RESERVED_SECRET.test(v.value)) this.add("error", `Tool "${t.name}": secrets: ${v.value} can't be a secret; it changes how the sandbox or Docker itself runs`, t.loc);
     }
   }
 
