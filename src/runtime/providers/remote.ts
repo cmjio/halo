@@ -43,8 +43,8 @@ import { shellQuote as q } from "../shell.js";
 import { intArg, need, unknownMethod } from "./common.js";
 import { confine, workspaceRoot } from "./workspace.js";
 import { unifiedDiff } from "../../diff.js";
-import { inFiles, scopePath, SECRET_NAME } from "../../parser/builtins.js";
-import { compareTrees, hashCommand, HOST_PATTERN, parseHashes, projectFiles, PROXY_SCRIPT, sha256Hex, tarball, type FileChange } from "./sandbox-kit.js";
+import { inFiles, RESERVED_SECRET, scopePath, SECRET_NAME } from "../../parser/builtins.js";
+import { compareTrees, credentialFile, hashCommand, HOST_PATTERN, parseHashes, projectFiles, PROXY_SCRIPT, sha256Hex, tarball, type FileChange } from "./sandbox-kit.js";
 
 const METHODS = ["run", "read", "write", "list", "upload", "download", "info", "diff", "apply", "keep"];
 const MAX_OUTPUT = 100_000;
@@ -497,7 +497,7 @@ const PROXY_URL = "http://halo-proxy:3128";
 export interface DockerRunOptions {
   image: string;
   ttlSeconds: number;
-  /** true: Docker's default network; false: none; a string: that network. */
+  /** false: none; a string: that network (Halo's own, see sandboxNetwork). */
   network: boolean | string;
   memory: string;
   cpus: number;
@@ -517,7 +517,8 @@ export function dockerRunArgs(opts: DockerRunOptions): string[] {
   if (opts.network === false) args.push("--network", "none");
   else if (typeof opts.network === "string") args.push("--network", opts.network);
   if (opts.runtime) args.push("--runtime", opts.runtime);
-  args.push("--memory", opts.memory, "--cpus", String(opts.cpus), "--pids-limit", String(opts.pids), "--security-opt", "no-new-privileges");
+  // No raw sockets (ARP spoofing a neighbour, hand-made packets), no swap beyond the memory limit.
+  args.push("--memory", opts.memory, "--memory-swap", opts.memory, "--cpus", String(opts.cpus), "--pids-limit", String(opts.pids), "--ulimit", "nofile=65536:65536", "--security-opt", "no-new-privileges", "--cap-drop", "NET_RAW");
   // The container's only job is to stay up for `ttlSeconds`; commands run beside it with `docker exec`.
   args.push(opts.image, "sleep", String(opts.ttlSeconds));
   return args;
@@ -577,11 +578,16 @@ async function startProxy(call: ToolCall, docker: string, hosts: string[], ttlSe
     if (r.exitCode !== 0 || r.timedOut) throw new HaloError(`${call.tool.name}: couldn't set up the sandbox's allowed hosts (${what}): ${r.err.trim() || "failed"}`, { code: "TOOL_FAILED" });
   };
   try {
-    must(await run(["network", "create", "--internal", "--label", "created-by=halo", ...(call.runId ? ["--label", `halo.run=${call.runId}`] : []), network]), "network");
+    // --internal leaves no route out, but the bridge's gateway is still the host: isolate it, or a
+    // sandbox could reach services listening on the host. (Docker before 28 doesn't know the
+    // option; there the network is only internal.)
+    const create = ["network", "create", "--internal", "--label", "created-by=halo", ...(call.runId ? ["--label", `halo.run=${call.runId}`] : [])];
+    const isolated = await run([...create, "-o", "com.docker.network.bridge.gateway_mode_ipv4=isolated", "-o", "com.docker.network.bridge.gateway_mode_ipv6=isolated", network]);
+    if (isolated.exitCode !== 0) must(await run([...create, network]), "network");
     const script = `${PROXY_SCRIPT}\nsetTimeout(() => process.exit(0), ${ttlSeconds * 1000});`;
     must(
       await run(
-        ["run", "--detach", "--rm", "--name", name, "--label", "created-by=halo", ...(call.runId ? ["--label", `halo.run=${call.runId}`] : []), "--env", `HALO_HOSTS=${JSON.stringify(hosts)}`, "--memory", "256m", "--pids-limit", "128", "--security-opt", "no-new-privileges", PROXY_IMAGE, "bun", "-e", script],
+        ["run", "--detach", "--rm", "--name", name, "--label", "created-by=halo", ...(call.runId ? ["--label", `halo.run=${call.runId}`] : []), "--env", `HALO_HOSTS=${JSON.stringify(hosts)}`, "--memory", "256m", "--memory-swap", "256m", "--cpus", "0.5", "--pids-limit", "128", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--read-only", "--tmpfs", "/tmp", "--user", "65534:65534", PROXY_IMAGE, "bun", "-e", script],
         300_000,
       ),
       `starting the proxy from ${PROXY_IMAGE}`,
@@ -623,6 +629,19 @@ async function startProxy(call: ToolCall, docker: string, hosts: string[], ttlSe
   };
 }
 
+/**
+ * The network sandboxes without hosts: share: like Docker's default, with a way out, except that
+ * containers on it can't reach one another (best-of-N branches, other runs, your own containers).
+ */
+const SANDBOX_NETWORK = "halo-sandboxes";
+
+async function sandboxNetwork(call: ToolCall, docker: string, signal: AbortSignal): Promise<void> {
+  const has = await spawnProgram([docker, "network", "inspect", "--format", "{{.Name}}", SANDBOX_NETWORK], { timeoutMs: 15_000, signal });
+  if (has.exitCode === 0) return;
+  const r = await spawnProgram([docker, "network", "create", "--label", "created-by=halo", "-o", "com.docker.network.bridge.enable_icc=false", SANDBOX_NETWORK], { timeoutMs: 60_000, signal });
+  if (r.exitCode !== 0 && !/already exists/i.test(r.err)) throw new HaloError(`${call.tool.name}: couldn't set up the sandboxes' network: ${r.err.trim() || "docker network create failed"}`, { code: "TOOL_FAILED" });
+}
+
 /** `hosts:` on a declaration: the hosts a sandbox may reach, or undefined for no allowlist. */
 function hostList(call: ToolCall): string[] | undefined {
   const raw = call.config("hosts");
@@ -654,20 +673,65 @@ function secretValues(call: ToolCall, services: ToolServices): Map<string, strin
   const env = services.env ?? process.env;
   const out = new Map<string, string>();
   for (const n of Array.isArray(raw) ? raw : [raw]) {
-    if (typeof n !== "string" || !SECRET_NAME.test(n)) throw configError(call, `secrets: ${JSON.stringify(n)} should be an environment variable name, like STRIPE_TEST_KEY`);
+    // Never echo the entry: secrets: [Env.KEY] puts the value itself here.
+    if (typeof n !== "string" || !SECRET_NAME.test(n)) throw configError(call, `secrets: each entry should be the name of an environment variable, like "STRIPE_TEST_KEY" (not Env.STRIPE_TEST_KEY, which is its value)`);
+    if (RESERVED_SECRET.test(n)) throw configError(call, `secrets: ${n} can't be a secret: it changes how the sandbox or Docker itself runs`);
     const value = env[n];
-    if (value === undefined || value === "") throw configError(call, `secrets: ${n} is not set in Halo's environment`);
+    if (value === undefined || value === "") {
+      // A key can look like a name (sk_test_51abc…): don't echo one that's really a value.
+      if (Object.values(env).includes(n)) throw configError(call, `secrets: an entry is the value of an environment variable, not its name; write secrets: ["NAME"], not secrets: [Env.NAME]`);
+      throw configError(call, `secrets: ${n} is not set in Halo's environment`);
+    }
     out.set(n, value);
   }
   return out;
 }
 
-/** Secret values masked in text a sandbox sends back. Values under 4 characters are left alone. */
-function mask(text: string, secrets: Map<string, string> | undefined): string {
-  if (!secrets) return text;
-  let out = text;
-  for (const [name, value] of secrets) if (value.length >= 4) out = out.split(value).join(`[secret ${name}]`);
-  return out;
+const maskers = new WeakMap<Map<string, string>, ((text: string) => string) | null>();
+
+/**
+ * Secret values masked in text a sandbox sends back: ignoring case (a host name comes back
+ * lowercased), longest value first (so one secret that starts another can't leave its tail).
+ * Values under 4 characters are left alone. This catches accidents, not a determined agent:
+ * pair secrets: with hosts:.
+ */
+export function mask(text: string, secrets: Map<string, string> | undefined): string {
+  if (!secrets || !text) return text;
+  let m = maskers.get(secrets);
+  if (m === undefined) {
+    const byValue = new Map<string, string>();
+    for (const [name, value] of secrets) {
+      const v = value.trim().toLowerCase();
+      if (v.length >= 4 && !byValue.has(v)) byValue.set(v, name);
+    }
+    const values = [...byValue.keys()].sort((a, b) => b.length - a.length);
+    const re = values.length ? new RegExp(values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "gi") : undefined;
+    m = re ? (t: string) => t.replace(re, (hit) => `[secret ${byValue.get(hit.toLowerCase())}]`) : null;
+    maskers.set(secrets, m);
+  }
+  return m ? m(text) : text;
+}
+
+/** mask() over every string in a result: names, paths, hosts, not just output. */
+function maskDeep<T>(value: T, secrets: Map<string, string> | undefined): T {
+  if (!secrets) return value;
+  if (typeof value === "string") return mask(value, secrets) as T;
+  if (Array.isArray(value)) return value.map((v) => maskDeep(v, secrets)) as T;
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [mask(k, secrets), maskDeep(v, secrets)])) as T;
+  }
+  return value;
+}
+
+/** The name of a secret whose value is in `bytes`, if any (checked as text, ignoring case). */
+function secretIn(bytes: Uint8Array, secrets: Map<string, string> | undefined): string | undefined {
+  if (!secrets) return undefined;
+  const text = Buffer.from(bytes).toString("latin1").toLowerCase();
+  for (const [name, value] of secrets) {
+    const v = value.trim().toLowerCase();
+    if (v.length >= 4 && text.includes(Buffer.from(v, "utf8").toString("latin1"))) return name;
+  }
+  return undefined;
 }
 
 /** A local path (relative to root) as a path inside `from:`, if it is inside it. */
@@ -715,7 +779,9 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
   if (!Number.isFinite(cpus) || cpus <= 0) throw configError(call, `cpus: must be a positive number`);
   const ttl = intArg(call, "ttl_minutes", call.config("ttl_minutes"), 30, 1, 24 * 60);
   const pids = intArg(call, "pids", call.config("pids"), 512, 16, 65_536);
-  const network = call.config("network") !== false && call.config("network") !== "none";
+  const netRaw = call.config("network") ?? true;
+  if (netRaw !== true && netRaw !== false && netRaw !== "none") throw configError(call, `network: is true or false, not ${JSON.stringify(netRaw)}`);
+  const network = netRaw === true;
   const startMs = intArg(call, "start_timeout_ms", call.config("start_timeout_ms"), 300_000, 1_000, 1_800_000);
   const hosts = hostList(call);
   if (hosts && !network) throw configError(call, `hosts: lets the sandbox reach those hosts, and network: false cuts it off from all of them; use one or the other`);
@@ -736,10 +802,11 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
   }
 
   const proxy = hosts ? await startProxy(call, docker, hosts, ttl * 60, signal) : undefined;
+  if (!proxy && network) await sandboxNetwork(call, docker, signal);
   const proxyEnv = proxy ? Object.fromEntries(["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].map((k) => [k, PROXY_URL]).concat([["NO_PROXY", "localhost,127.0.0.1"], ["no_proxy", "localhost,127.0.0.1"]])) : undefined;
   let started;
   try {
-    started = await spawnProgram([docker, ...dockerRunArgs({ image, ttlSeconds: ttl * 60, network: proxy ? proxy.network : network, memory, cpus, pids, runId: call.runId, runtime, env: proxyEnv })], { timeoutMs: startMs, signal });
+    started = await spawnProgram([docker, ...dockerRunArgs({ image, ttlSeconds: ttl * 60, network: proxy ? proxy.network : network ? SANDBOX_NETWORK : false, memory, cpus, pids, runId: call.runId, runtime, env: proxyEnv })], { timeoutMs: startMs, signal });
   } catch (e) {
     await proxy?.cleanup();
     throw e;
@@ -753,11 +820,15 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
     throw new HaloError(`${call.tool.name}: couldn't start a Docker sandbox from ${image}: ${why}${hint}`, { code: "TOOL_FAILED" });
   }
 
-  const gone = (err: string) => /No such container|is not running/i.test(err);
-  const daemonError = (r: { exitCode: number; err: string }) =>
-    gone(r.err) || /^Error response from daemon|Cannot connect to the Docker daemon/m.test(r.err)
-      ? new HaloError(`${call.tool.name}: the Docker sandbox ${id.slice(0, 12)} is unavailable: ${r.err.trim()}${gone(r.err) ? ` (it stops after ttl_minutes: ${ttl})` : ""}`, { code: "TOOL_FAILED" })
-      : undefined;
+  // A command's stderr is the sandbox's to write, so text that looks like Docker's own error isn't
+  // proof: ask Docker whether the container is still running before calling it gone.
+  const daemonError = async (r: { exitCode: number; err: string }) => {
+    if (r.exitCode === 0 || !/No such container|is not running|Error response from daemon|Cannot connect to the Docker daemon/i.test(r.err)) return undefined;
+    const state = await spawnProgram([docker, "inspect", "--format", "{{.State.Running}}", id], { timeoutMs: 15_000, signal: quiet() }).catch(() => undefined);
+    if (state && state.exitCode === 0 && decode(state.out).trim() === "true") return undefined;
+    const why = !state || state.timedOut ? "Docker didn't answer" : state.exitCode === 0 || /No such/i.test(state.err) ? `No such container, or it has stopped (it stops after ttl_minutes: ${ttl})` : state.err.trim() || "Docker didn't answer";
+    return new HaloError(`${call.tool.name}: the Docker sandbox ${id.slice(0, 12)} is unavailable: ${why}`, { code: "TOOL_FAILED" });
+  };
   const tool = call.tool.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40) || "sandbox";
 
   return {
@@ -775,7 +846,7 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
         signal: opts.signal,
         env: secrets ? Object.fromEntries(secrets) : undefined,
       });
-      const e = daemonError(r);
+      const e = await daemonError(r);
       if (e && !r.timedOut) throw e;
       // `timeout -s KILL` exits 137 (124 for some builds); either way it ran out the clock.
       const killed = (r.exitCode === 124 || r.exitCode >= 128 || r.exitCode < 0) && Date.now() - began >= opts.timeoutMs - 250;
@@ -784,7 +855,7 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
     },
     async read(path, sig) {
       const r = await spawnProgram([docker, "exec", id, "cat", "--", path], { timeoutMs: DEFAULT_TIMEOUT_MS, signal: sig });
-      const e = daemonError(r);
+      const e = await daemonError(r);
       if (e) throw e;
       if (r.exitCode !== 0) throw sandboxFail(call, r.err.trim() || `can't read ${path}`);
       return r.out;
@@ -793,7 +864,7 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
       const dir = posix.dirname(path);
       const script = `${dir === "." ? "" : `mkdir -p -- ${q(dir)} && `}cat > ${q(path)}`;
       const r = await spawnProgram([docker, "exec", "--interactive", id, "sh", "-c", script], { stdin: bytes, timeoutMs: DEFAULT_TIMEOUT_MS, signal: sig });
-      const e = daemonError(r);
+      const e = await daemonError(r);
       if (e) throw e;
       if (r.exitCode !== 0) throw sandboxFail(call, r.err.trim() || `can't write ${path}`);
     },
@@ -801,7 +872,7 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
       const ref = `halo-sandbox:${(call.runId ?? "run").slice(0, 8)}-${tool}-${Date.now().toString(36)}${(snapshots++).toString(36)}`;
       const labels = ["--change", "LABEL created-by=halo", ...(call.runId ? ["--change", `LABEL halo.run=${call.runId}`] : [])];
       const r = await spawnProgram([docker, "commit", ...labels, id, ref], { timeoutMs: 300_000, signal: quiet() });
-      const e = daemonError(r);
+      const e = await daemonError(r);
       if (e) throw e;
       if (r.exitCode !== 0) throw sandboxFail(call, `couldn't snapshot the sandbox: ${r.err.trim() || "docker commit failed"}`);
       made.set(ref, { docker, runId: call.runId ?? "" });
@@ -1062,7 +1133,9 @@ function localBaseline(call: ToolCall, from: unknown): Baseline {
   const root = workspaceRoot(call, call.config("root"), false);
   const dir = confine(call, root, from);
   const only = fileList(call);
-  const files = only ? projectFiles(dir.abs).filter((p) => inFiles(p, only)) : projectFiles(dir.abs);
+  // Credential files stay behind unless files: names them exactly: a secret goes in through
+  // secrets:, where AllowSecrets limits it and output masks it.
+  const files = projectFiles(dir.abs).filter((p) => (only ? inFiles(p, only) : true) && (!credentialFile(p) || !!only?.includes(p)));
   if (files.length > MAX_PROJECT_FILES) throw configError(call, `from: "${from}" has ${files.length} files; a sandbox takes at most ${MAX_PROJECT_FILES}`);
   const hashes = new Map<string, string>();
   const content = new Map<string, Uint8Array>();
@@ -1104,8 +1177,10 @@ async function changes(call: ToolCall, s: Session, m: Machine, under?: string): 
   const prefix = under ? under.replace(/^\.\/|\/+$/g, "") + "/" : undefined;
   if (prefix && prefix !== "./") all = all.filter((c) => c.path.startsWith(prefix));
   const only = fileList(call);
-  if (!only) return { files: all, outside: [] };
-  return { files: all.filter((c) => inFiles(c.path, only)), outside: all.filter((c) => !inFiles(c.path, only)).map((c) => c.path) };
+  // A credential file the project kept back (a .env the sandbox wrote, say) is never written over
+  // the real one: it counts as outside, like changes beyond files:.
+  const ours = (p: string) => (only ? inFiles(p, only) : true) && (!credentialFile(p) || !!only?.includes(p));
+  return { files: all.filter((c) => ours(c.path)), outside: all.filter((c) => !ours(c.path)).map((c) => c.path) };
 }
 
 const MAX_PATCH_FILES = 200;
@@ -1147,10 +1222,34 @@ async function keep(call: ToolCall): Promise<unknown> {
 /** Methods that change the sandbox, so it needs saving again before a snapshot. */
 const CHANGES = new Set(["run", "write", "upload", "keep"]);
 
+/**
+ * A Remote call. Everything it returns or throws passes through mask(): file names, hosts and
+ * error messages carry text the sandbox chose, so any of them could carry a secret.
+ */
 export async function remote(call: ToolCall, services: ToolServices): Promise<unknown> {
+  const hold: { secrets?: Map<string, string> } = {};
+  try {
+    return maskDeep(await dispatch(call, services, hold), hold.secrets);
+  } catch (e) {
+    if (hold.secrets && e instanceof Error) {
+      e.message = mask(e.message, hold.secrets);
+      if (e.stack) e.stack = mask(e.stack, hold.secrets);
+    }
+    throw e;
+  }
+}
+
+/** Refuse to hand over file content holding a secret's value: not to the model, not to disk. */
+function refuseSecret(call: ToolCall, bytes: Uint8Array, secrets: Map<string, string> | undefined, path: string, what: string): void {
+  const name = secretIn(bytes, secrets);
+  if (name) throw fail(call, `${path} holds the value of secret ${name}, so it isn't ${what}`);
+}
+
+async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?: Map<string, string> }): Promise<unknown> {
   if (!METHODS.includes(call.method)) unknownMethod(call, METHODS);
   if (call.method === "keep") return keep(call);
   const s = await session(call, services);
+  hold.secrets = s.secrets;
   const m = await s.machine;
   const named = call.named;
   if (CHANGES.has(call.method)) s.dirty = true;
@@ -1187,7 +1286,10 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
       const path = remotePath(call, named.path ?? (call.implicitInput ? undefined : call.positional[0]));
       const bytes = await m.read(path, call.signal);
       if (bytes.length > MAX_FILE) throw fail(call, `${path} is ${bytes.length} bytes; download it instead`);
-      if (looksBinary(bytes)) return { path, content: Buffer.from(bytes).toString("base64"), bytes: bytes.length, encoding: "base64" };
+      if (looksBinary(bytes)) {
+        refuseSecret(call, bytes, s.secrets, path, "returned"); // base64 would hide it from mask()
+        return { path, content: Buffer.from(bytes).toString("base64"), bytes: bytes.length, encoding: "base64" };
+      }
       return { path, content: clip(mask(new TextDecoder().decode(bytes), s.secrets)), bytes: bytes.length, encoding: "utf8" };
     }
 
@@ -1228,6 +1330,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
       checkFiles(call, to.rel, "download to");
       const bytes = await m.read(from, call.signal);
       if (bytes.length > MAX_FILE) throw fail(call, `${from} is over ${MAX_FILE} bytes`);
+      refuseSecret(call, bytes, s.secrets, from, "downloaded");
       mkdirSync(dirname(to.abs), { recursive: true });
       await Bun.write(to.abs, bytes);
       return { from, to: to.rel, bytes: bytes.length };
@@ -1260,15 +1363,24 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
         throw fail(call, `apply(to:) can't move changes elsewhere when the sandbox has files:; they go back where they came from (${own})`, "TOOL_ARGUMENT");
       }
       const { files, outside } = await changes(call, s, m, typeof named.path === "string" ? named.path : undefined);
-      const written: string[] = [];
-      const deleted: string[] = [];
+      // Read and check everything first, so a refusal leaves the project untouched.
+      const plan: { target: { abs: string; rel: string }; bytes?: Uint8Array }[] = [];
       for (const c of files) {
         const target = confine(call, root, posix.join(base, c.path));
-        if (c.status === "deleted") {
+        if (c.status === "deleted") plan.push({ target });
+        else {
+          const bytes = await m.read(c.path, call.signal);
+          refuseSecret(call, bytes, s.secrets, c.path, "applied; nothing was");
+          plan.push({ target, bytes });
+        }
+      }
+      const written: string[] = [];
+      const deleted: string[] = [];
+      for (const { target, bytes } of plan) {
+        if (!bytes) {
           await Bun.file(target.abs).delete().catch(() => {});
           deleted.push(target.rel);
         } else {
-          const bytes = await m.read(c.path, call.signal);
           mkdirSync(dirname(target.abs), { recursive: true });
           await Bun.write(target.abs, bytes);
           written.push(target.rel);

@@ -57,6 +57,9 @@ case "$cmd" in
     id=$1; shift
     [ -d "${tmp}/containers/$id" ] || { echo "Error response from daemon: No such container: $id" >&2; exit 1; }
     cd "${tmp}/containers/$id" && exec "$@" ;;
+  inspect)
+    for id; do :; done
+    [ -d "${tmp}/containers/$id" ] && echo true || { echo "Error: No such object: $id" >&2; exit 1; } ;;
   rm)
     for id; do :; done
     rm -rf "${tmp}/containers/$id" ;;
@@ -379,7 +382,8 @@ describe("Remote sandboxes: Docker", () => {
     for (const part of ["--detach", "--rm", "--init", "--network none", "--memory 1g", "--cpus 1.5", "--pids-limit 256", "no-new-privileges", "halo.run=r9", "HOME=/home/user"]) expect(text).toContain(part);
     expect(text).not.toContain("--volume");
     expect(args.slice(-3)).toEqual(["node:22", "sleep", "600"]);
-    expect(dockerRunArgs({ image: "x", ttlSeconds: 60, network: true, memory: "2g", cpus: 2, pids: 512 }).join(" ")).not.toContain("--network");
+    for (const part of ["--cap-drop NET_RAW", "--memory-swap 1g"]) expect(text).toContain(part);
+    expect(dockerRunArgs({ image: "x", ttlSeconds: 60, network: "halo-sandboxes", memory: "2g", cpus: 2, pids: 512 }).join(" ")).toContain("--network halo-sandboxes");
   });
 
   test("commands run under bash when there is one, with a timeout", async () => {

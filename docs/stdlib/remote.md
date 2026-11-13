@@ -88,7 +88,8 @@ agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "docker"]
 ```
 
 - The container gets none of your files, environment or Docker socket: nothing is mounted. Move files in and out with `write`, `upload` and `download`.
-- It runs with `--memory`, `--cpus` and `--pids-limit` set, and `no-new-privileges`. `network: false` cuts it off from the network (so `pip install` won't work either).
+- It runs with `--memory` (and no swap beyond it), `--cpus` and `--pids-limit` set, `no-new-privileges`, and without raw sockets (`NET_RAW`). `network: false` cuts it off from the network (so `pip install` won't work either).
+- With the network on, it sits on `halo-sandboxes`, a Docker network where containers can't reach one another: not other runs' sandboxes, not a best-of-N's other branches, not your own containers. It can still reach the internet and this machine (on Docker Desktop, `host.docker.internal` includes services bound to `127.0.0.1`). Use `hosts:` to choose where it can go.
 - Commands run with `bash` when the image has it, else `sh`, in `/home/user`.
 - The container is started with `--rm` and only lives `ttl_minutes`, so if Halo dies before deleting it, it removes itself. Containers Halo made carry the label `created-by=halo` (`docker ps --filter label=created-by=halo`).
 - The first run pulls the image if it isn't here yet; `start_timeout_ms:` is how long that may take.
@@ -117,6 +118,7 @@ pipeline Fix(issue: String) -> Result:
 - `diff` compares the sandbox's files with the ones it was given (with no `from:`, with nothing, so it lists everything the agent made). It skips the same folders, and dot-folders at the top (`.cache`, `.local`…) the project didn't have. `patch` is a unified diff; binary files are named, not shown.
 - `apply` writes added and changed files, and deletes deleted ones, under `to:` (default: the `from:` folder). Like `download`, it can't leave `root:`. It is a `write`, so `ApproveEffects(write)` or a `|! yield` before it puts a person in charge of what lands.
 - `from:` works with every sandbox kind; it is copied in as one archive, at most 20,000 files and 50 MB.
+- Credential files stay behind: `.env` and `.env.*` (but not `.env.example` and other templates), private keys (`*.pem`, `*.key`, `id_rsa`…), and logins such as `.npmrc`, `.pypirc`, `.netrc` and `.git-credentials`. A secret goes in through [`secrets:`](#secrets) instead, where policies limit it and output masks it. To copy one in anyway, name it exactly in `files:`. A credential file the sandbox writes is listed as `outside` and never applied over yours.
 
 ### Only some of the project
 
@@ -170,7 +172,15 @@ Snapshots are images named `halo-sandbox:...`, labelled `created-by=halo`. `halo
 tool Lab : Remote("docker", hosts: ["pypi.org", "*.pythonhosted.org", "registry.npmjs.org"])
 ```
 
-The sandbox sits on an internal Docker network with no route out. Its only way out is a proxy (a small container from `oven/bun:1-alpine`) that lets through connections to those hosts, and `HTTP_PROXY` and `HTTPS_PROXY` point at it, so `pip`, `npm`, `curl` and `git` over HTTPS work as usual. A connection to any other host is refused: the run's result for that command says so (`blocked: ["evil.example"]`), and it is recorded in `context.meta.violations` (rule `AllowHosts`, phase `tool`). A program that ignores the proxy settings can't get out at all; it doesn't get a name lookup either.
+The sandbox sits on an internal Docker network with no route out, not even to this machine. Its only way out is a proxy (a small, locked-down container from `oven/bun:1-alpine`) that lets through connections to those hosts, and `HTTP_PROXY` and `HTTPS_PROXY` point at it, so `pip`, `npm`, `curl` and `git` over HTTPS work as usual. A connection to any other host is refused: the run's result for that command says so (`blocked: ["evil.example"]`), and it is recorded in `context.meta.violations` (rule `AllowHosts`, phase `tool`). A program that ignores the proxy settings can't get out at all; it doesn't get a name lookup either.
+
+What the proxy checks:
+
+- **Ports:** HTTPS on 443 and plain HTTP on 80, nothing else.
+- **Addresses:** an allowed name that resolves to a private, loopback or link-local address (a cloud's metadata service at `169.254.169.254`, say) is refused, and the proxy connects to the address it checked. `hosts:` takes names only: no IP addresses, no `localhost`.
+- **The site, not just the server:** over HTTPS, the TLS server name must be the host the connection was opened to; over plain HTTP, the proxy sets the `Host` header itself. So allowing `pypi.org` doesn't let a request reach another site on the same CDN by naming it.
+
+One gap remains: inside an encrypted connection, a CDN may route a request by its `Host` header, which the proxy can't see without decrypting. Allowing a host on a shared CDN (Fastly, Cloudflare) is a narrow way out rather than a sealed one, so keep `hosts:` short, and keep secrets out of a sandbox whose hosts aren't ones you'd hand them to anyway.
 
 For a sandbox agent, an `AllowHosts` policy does the same, so the rule sits with the agent's other policies:
 
@@ -191,9 +201,11 @@ Several `AllowHosts` policies narrow, by pattern: `AllowHosts("*.stripe.com")` a
 tool Pay : Remote("docker", from: ".", files: ["src/billing"], secrets: ["STRIPE_TEST_KEY"], hosts: ["api.stripe.com"])
 ```
 
-- Each command (`run`) gets them, by name. The values are passed to `docker exec` in its environment, never on a command line, and never in the container's settings. So `docker commit` doesn't save them: forks, rewinds and pauses never write them into a snapshot, and a resumed or rewound sandbox gets them from Halo's environment again.
-- Their values are masked in what comes back to the run: `run`'s `stdout` and `stderr`, `read`, and `diff`'s patch show `[secret STRIPE_TEST_KEY]` instead. (Values shorter than 4 characters aren't masked, and neither is a `read` of a binary file, returned as base64.)
-- A secret that isn't set is an error when the sandbox starts.
+- Each command (`run`) gets them, by name. The values are passed to `docker exec` in its environment, never on a command line, and never in the container's settings, so `docker commit` doesn't save them there, and a resumed or rewound sandbox gets them from Halo's environment again. A file a command writes them into is another matter: it is saved in snapshots like any file.
+- Their values are masked in everything that comes back to the run: output, file contents, file names, blocked hosts and error messages show `[secret STRIPE_TEST_KEY]` instead, ignoring case. (Values shorter than 4 characters aren't masked.)
+- File content that holds a secret's value doesn't leave the sandbox: a `read` that would come back as base64, a `download`, and an `apply` that includes such a file are refused (`apply` then writes nothing).
+- Masking catches accidents, not an agent set on getting a secret out: it can encode the value first. What stops that is `hosts:`, so the code holding the secret can reach only the service it's for.
+- A secret that isn't set is an error when the sandbox starts. Write names (`secrets: ["STRIPE_TEST_KEY"]`), not values (`Env.STRIPE_TEST_KEY`); the validator says so. Names that change how the shell or Docker runs (`PATH`, `HOME`, `LD_*`, `DOCKER_*`, `*_PROXY`…) can't be secrets.
 - Only Docker sandboxes take `secrets:`, as with `hosts:`. Give a secret to a sandbox with `hosts:` so the code that holds it can reach only the service it's for.
 
 ## Sandbox agents' limits
