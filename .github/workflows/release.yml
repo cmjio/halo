@@ -282,6 +282,13 @@ jobs:
           bash npm/smoke-test.sh dist/npm-check
       - name: Publish to npm
         run: bun scripts/npm.ts --publish
+      - name: Keep npm's logs when publishing fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-logs
+          path: ~/.npm/_logs/
+          if-no-files-found: ignore
 
   publish:
     needs: [plan, build, macos, windows]
