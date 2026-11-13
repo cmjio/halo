@@ -30,6 +30,12 @@ Nightlies need nothing: the workflow's schedule builds `main` when it has change
 nightly, with a version made up from package.json's (the next patch after a release, or the
 release a prerelease is heading for) and never committed or tagged. They get no GitHub release
 and no site deploy. Only the newest 14 stay at halolang.com/dl; older ones are deleted from R2.
+
+The site's pages only change with a stable release. But a prerelease or nightly does check that
+halolang.com serves its `next.json` or `nightly.json`. If it doesn't (the live worker is older
+than channels), the workflow redeploys the latest release's pages with that commit's
+`site/worker.ts`, so `HALO_VERSION=next` and `HALO_VERSION=nightly` work.
+
 Run one by hand from Actions → Release → Run workflow (tick *force* to rebuild an unchanged
 `main`).
 

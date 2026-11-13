@@ -7,7 +7,10 @@
 #   nightly  every night from main, when main has changed since the last nightly (or by hand:
 #            Actions → Release → Run workflow). The version is made up from package.json's
 #            (1.2.0 → 1.2.1-nightly.20261113.g9172379) and never committed or tagged; no GitHub
-#            release and no site deploy, just halolang.com/dl, npm @nightly and the :nightly image.
+#            release, just halolang.com/dl, npm @nightly and the :nightly image.
+#
+# Only latest deploys the site's pages. Next and nightly redeploy the worker (with the latest
+# release's pages) only if the live worker can't serve their pointer yet.
 #
 # Each run:
 #
@@ -322,7 +325,10 @@ jobs:
             pre=$([ "$CHANNEL" = next ] && echo --prerelease || true)
             gh release create "v$VERSION" dist/release/$VERSION/* --title "Halo $VERSION" --generate-notes --verify-tag $pre
           fi
-      # The site shows the stable version, so only a stable release redeploys it.
+      # The site's pages show the stable version, so a stable release redeploys them. Next and
+      # nightly only need the worker to serve their pointer (next.json, nightly.json): when the
+      # live one doesn't (it predates channels), the latest release's pages are redeployed with
+      # this commit's worker, so `HALO_VERSION=next|nightly` works without showing unreleased docs.
       - name: halolang.com/dl, and the site
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
@@ -333,4 +339,14 @@ jobs:
           if [ "$CHANNEL" = latest ]; then
             bun site/build.ts --no-tests
             bunx wrangler deploy --config site/wrangler.jsonc
+          elif ! curl -fsS -o /dev/null -H "cache-control: no-cache" "https://halolang.com/dl/$CHANNEL.json"; then
+            stable="v$(curl -fsSL --retry 3 https://halolang.com/dl/latest.json | jq -r .version)"
+            echo "halolang.com/dl/$CHANNEL.json isn't served; redeploying the $stable site with this commit's worker"
+            git fetch --depth=1 origin "refs/tags/$stable:refs/tags/$stable"
+            dir="$RUNNER_TEMP/site-$stable"
+            git worktree add --detach "$dir" "$stable"
+            cp site/worker.ts "$dir/site/worker.ts"
+            (cd "$dir" && bun install --frozen-lockfile && bun site/build.ts --no-tests && bunx wrangler deploy --config site/wrangler.jsonc)
+            curl -fsS -o /dev/null --retry 5 --retry-all-errors --retry-delay 5 "https://halolang.com/dl/$CHANNEL.json" \
+              || { echo "::error::halolang.com/dl/$CHANNEL.json still isn't served after redeploying the worker"; exit 1; }
           fi
