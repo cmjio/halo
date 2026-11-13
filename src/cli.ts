@@ -71,7 +71,7 @@ USAGE:
   halo validate <file.halo|dir ...>     Check syntax and semantics
   halo parse <file.halo>                Print the AST as JSON
   halo init [name] [--template <name>]  Create a new Halo project, or a deployable app from a
-                                        blueprint (support-inbox)
+                                        blueprint (support-inbox, fix-issue)
   halo upgrade                          Update an installed halo to the latest release
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /

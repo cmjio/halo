@@ -65,11 +65,16 @@ ANTHROPIC_API_KEY=... halo debug examples/engineering/github-triage.halo --arg r
 
 ### Start from a blueprint
 
-A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it.
+A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it. [`fix-issue`](blueprints/fix-issue) fixes GitHub issues: a coding agent works on a copy of your repository in a sandbox and runs the tests there, and the change becomes a pull request only after a person approves the diff.
 
 ```bash
 halo init my-inbox --template support-inbox && cd my-inbox
 halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+```
+
+```bash
+halo init my-fixer --template fix-issue && cd my-fixer
+halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks.json
 ```
 
 ## The language
@@ -124,7 +129,7 @@ halo test <file.halo> ...             # offline: --mock --auto-approve (--mocks 
 halo resume <file.halo> <runId> --payload approve   # continue a paused run
 halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
-halo init [name] [--template support-inbox]   # a new project, or a deployable blueprint
+halo init [name] [--template support-inbox|fix-issue]   # a new project, or a deployable blueprint
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-changed, --live-tools)

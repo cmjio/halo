@@ -1,0 +1,7 @@
+{
+  "files": ["pipelines/"],
+  "webhooks": [
+    { "path": "github", "pipeline": "OnIssueEvent", "secret": "Env.GITHUB_WEBHOOK_SECRET" }
+  ],
+  "notify": { "slack": "Env.SLACK_WEBHOOK_URL" }
+}

@@ -33,3 +33,24 @@ It shows:
 - **Deployment:** a container with a volume for `.halo/` (paused runs survive a redeploy), `HALO_SERVE_TOKEN` for the API, `HALO_PUBLIC_URL` for approval links, and `GET /healthz` for health checks.
 
 The blueprint's source is [`blueprints/support-inbox`](https://github.com/cmjio/halo/tree/main/blueprints/support-inbox), and `test/blueprints.test.ts` runs it in CI: approval, edited replies, rejection, retries, spam, and an injection attempt.
+
+## Fix an issue
+
+`--template fix-issue`. Someone labels a GitHub issue `halo-fix` (a GitHub `issues` webhook, `POST /hooks/github`), or you run `FixIssue` by hand with an issue number. A `Coder` agent fixes it on a copy of the repository in a sandbox and runs the tests there; the pipeline runs the tests again itself and sends a red run back to the agent. A person reads the diff, and only on a yes does Halo write it back, commit it on a `halo/issue-<n>` branch, push it, and open a pull request. On a no, it comments on the issue.
+
+```bash
+halo init my-fixer --template fix-issue
+cd my-fixer
+halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks.json
+halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks-reject.json
+```
+
+It shows:
+
+- **A sandbox with your project in it:** `Remote("auto", from: "repo")` copies a clone of the repository into a Docker, E2B or Daytona sandbox, and `sandbox: Repo` gives it to the agent. See [Coding Agents That Run Their Code](../coding-agents.md).
+- **Changes out only on a yes:** `DenyTools("Repo.apply", "Repo.download", "Repo.keep")` keeps the agent from writing back itself. The pipeline measures the change with `Repo.diff()`, waits at `|! yield` with the patch, and calls `Repo.apply()` after the approval.
+- **The tests decide:** `Repo.run` runs the test command in the same sandbox, and `|<> loop(Dev, ...)` sends failures back to the agent, twice at most.
+- **Untrusted input:** `Block(PromptInjection)` on the issue text, a label gate so only people who can label issues start a run, a per-issue `MaxSpend`, and a GitHub token that stays on the server and never reaches the sandbox.
+- **Deployment:** Fly with E2B sandboxes, since Fly has no Docker. Allowed hosts (`hosts:`) work only with Docker sandboxes, and a sandbox with `hosts:` that lands on E2B or Daytona fails rather than run without them, so the deployed pipeline leaves them out. The README explains running it on a VM or CI runner with Docker instead, with an allowlist.
+
+The blueprint's source is [`blueprints/fix-issue`](https://github.com/cmjio/halo/tree/main/blueprints/fix-issue), and `test/blueprints.test.ts` runs it in CI: approval to a pull request, rejection to a comment, the webhook's label gate, failing tests sent back to the agent, the agent's denied methods, and an injection attempt in an issue.
