@@ -12,8 +12,9 @@ import { parse } from "../src/parser/index";
 import { validate } from "../src/parser/validate";
 import { HaloRuntime, verifyTrace } from "../src/runtime/runtime";
 import { intersectFiles, intersectHosts, sandboxLimits, withSandbox } from "../src/runtime/sandbox-agents";
-import { chooseSandbox, closeRemoteSessions, dockerRunArgs, pickVmRuntime, remote } from "../src/runtime/providers/remote";
-import { compareTrees, hostAllowed, parseHashes, tarball } from "../src/runtime/providers/sandbox-kit";
+import { chooseSandbox, closeRemoteSessions, dockerRunArgs, mask, pickVmRuntime, remote } from "../src/runtime/providers/remote";
+import { compareTrees, credentialFile, hostAllowed, parseHashes, privateAddress, tarball, tlsServerName } from "../src/runtime/providers/sandbox-kit";
+import { HOST_PATTERN, RESERVED_SECRET } from "../src/parser/builtins";
 import type { ToolCall, ToolServices } from "../src/runtime/tools";
 
 let tmp: string;
@@ -35,7 +36,7 @@ cmd=$1; shift
 case "$cmd" in
   version) [ -e "$D/down" ] && { echo "Cannot connect to the Docker daemon" >&2; exit 1; }; echo 28.0.0 ;;
   info) if [ -e "$D/vm" ]; then echo '{"runc":{},"runsc":{}}'; else echo '{"runc":{}}'; fi ;;
-  network) exit 0 ;;
+  network) [ "$1" = inspect ] && exit 1; exit 0 ;;
   logs) echo '{"ready":true}'; cat "$D/proxy-log" 2>/dev/null ;;
   run)
     image=""; prev=""
@@ -54,6 +55,9 @@ case "$cmd" in
     for b; do case "$b" in 0*) id=$b ;; esac; done
     mkdir -p "$D/s/$(echo "$ref" | tr ':/' '__')" && cp -R "$D/c/$id/." "$D/s/$(echo "$ref" | tr ':/' '__')/" ;;
   rmi) for ref; do rm -rf "$D/s/$(echo "$ref" | tr ':/' '__')"; done ;;
+  inspect)
+    for id; do :; done
+    [ -d "$D/c/$id" ] && echo true || { echo "Error: No such object: $id" >&2; exit 1; } ;;
   rm) for id; do :; done; rm -rf "$D/c/$id" ;;
 esac
 `,
@@ -394,8 +398,130 @@ agent D [m/x, sandbox: "docker"]
     expect(lines.every((l) => l.startsWith("exec --env STRIPE_KEY ") && !l.includes(value))).toBe(true);
 
     await expect(remote(makeCall("info", {}, decl, "sec2"), services())).rejects.toThrow(/secrets: STRIPE_KEY is not set in Halo's environment/);
-    await expect(remote(makeCall("info", {}, { ...decl, secrets: ["bad-name"] }, "sec3"), services({ STRIPE_KEY: value }))).rejects.toThrow(/should be an environment variable name/);
+    await expect(remote(makeCall("info", {}, { ...decl, secrets: ["bad-name"] }, "sec3"), services({ STRIPE_KEY: value }))).rejects.toThrow(/should be the name of an environment variable/);
     await expect(remote(makeCall("info", {}, { 0: "e2b", secrets: ["STRIPE_KEY"] }, "sec4"), services({ STRIPE_KEY: value, E2B_API_KEY: "k" }))).rejects.toThrow(/secrets: is enforced by Docker sandboxes, and this one is e2b/);
+  });
+});
+
+describe("Red team: what a hostile sandbox can't get out", () => {
+  const value = "sk_test_51abcDEF";
+  const env = { STRIPE_KEY: value };
+
+  test("mask() ignores case and masks the longest secret first", () => {
+    const secrets = new Map([["SHORT", "canary"], ["LONG", "canary-Zq7x9K"]]);
+    expect(mask("a canary-Zq7x9K b CANARY c", secrets)).toBe("a [secret LONG] b [secret SHORT] c");
+    expect(mask("host canary-zq7x9k.example.com", secrets)).toBe("host [secret LONG].example.com");
+    expect(mask("a.b*c", new Map([["X", "a.b*c"]]))).toBe("[secret X]");
+    expect(mask("abc", new Map([["X", "abc"]]))).toBe("abc"); // under 4 characters: left alone
+  });
+
+  test("file names, hosts and errors are masked, not just output", async () => {
+    const decl = { 0: "docker", docker, secrets: ["STRIPE_KEY"] };
+    const call = (method: string, named: Record<string, unknown> = {}) => remote(makeCall(method, named, decl, "rt1"), services(env)) as Promise<any>;
+    await call("run", { command: 'mkdir -p d && touch "d/$STRIPE_KEY"' });
+    expect((await call("list", { path: "d" })).entries).toEqual([{ name: "[secret STRIPE_KEY]", type: "file" }]);
+    expect((await call("diff")).files).toEqual([{ path: "d/[secret STRIPE_KEY]", status: "added" }]);
+    // stderr that looks like Docker's own error is just a failed command while the container runs.
+    const spoof = await call("run", { command: 'echo "Error response from daemon: No such container $STRIPE_KEY" >&2; exit 1' });
+    expect(spoof).toMatchObject({ exitCode: 1, stderr: "Error response from daemon: No such container [secret STRIPE_KEY]" });
+    // A thrown error is masked too.
+    const err: Error = await call("list", { path: "d/$STRIPE_KEY-nope" }).then(() => new Error("no error"), (e: Error) => e);
+    expect(err.message).not.toContain(value);
+  });
+
+  test("file content holding a secret isn't returned as base64, downloaded or applied", async () => {
+    const root = join(tmp, "rt-content");
+    mkdirSync(join(root, "repo"), { recursive: true });
+    writeFileSync(join(root, "repo/app.txt"), "app\n");
+    const decl = { 0: "docker", docker, secrets: ["STRIPE_KEY"], from: "repo", root };
+    const call = (method: string, named: Record<string, unknown> = {}) => remote(makeCall(method, named, decl, "rt2"), services(env)) as Promise<any>;
+    await call("run", { command: 'printf "%s\\377\\000" "$STRIPE_KEY" > bin.dat; echo "$STRIPE_KEY" > app.txt' });
+    await expect(call("read", { path: "bin.dat" })).rejects.toThrow(/bin.dat holds the value of secret STRIPE_KEY/);
+    await expect(call("download", { from: "app.txt", to: "repo/copy.txt" })).rejects.toThrow(/holds the value of secret STRIPE_KEY/);
+    expect(existsSync(join(root, "repo/copy.txt"))).toBe(false);
+    await expect(call("apply")).rejects.toThrow(/holds the value of secret STRIPE_KEY, so it isn't applied/);
+    expect(readFileSync(join(root, "repo/app.txt"), "utf8")).toBe("app\n");
+  });
+
+  test("credential files stay behind, and a sandbox can't write over them", async () => {
+    expect([".env", ".env.local", "config/.env.production", "deploy/key.pem", "id_ed25519", ".npmrc", ".git-credentials"].every(credentialFile)).toBe(true);
+    expect([".env.example", "env.ts", "src/keyboard.ts", "README.md", ".envrc.md"].some(credentialFile)).toBe(false);
+    const root = join(tmp, "rt-creds");
+    mkdirSync(join(root, "repo"), { recursive: true });
+    writeFileSync(join(root, "repo/.env"), "OTHER_KEY=canary-dotenv-123\n");
+    writeFileSync(join(root, "repo/.env.example"), "OTHER_KEY=\n");
+    writeFileSync(join(root, "repo/app.py"), "print(1)\n");
+    mkdirSync(join(root, "repo/config"));
+    writeFileSync(join(root, "repo/config/.env"), "DB=canary-db\n");
+    writeFileSync(join(root, "repo/config/app.toml"), "x = 1\n");
+    const call = (method: string, named: Record<string, unknown> = {}) => remote(makeCall(method, named, { 0: "docker", docker, from: "repo", root }, "rt3"), services()) as Promise<any>;
+    expect((await call("run", { command: "find . -type f | sort" })).stdout).toBe("./.env.example\n./app.py\n./config/app.toml");
+    await call("run", { command: "echo OTHER_KEY=attacker > .env; echo DB=attacker > config/.env; echo 'print(2)' > app.py" });
+    expect(await call("apply")).toEqual({ to: "repo", written: ["repo/app.py"], deleted: [], outside: ["config/.env"] });
+    expect(readFileSync(join(root, "repo/.env"), "utf8")).toBe("OTHER_KEY=canary-dotenv-123\n");
+    expect(readFileSync(join(root, "repo/config/.env"), "utf8")).toBe("DB=canary-db\n");
+    // files: can still hand one over by naming it exactly.
+    const named = remote(makeCall("run", { command: "ls -A" }, { 0: "docker", docker, from: "repo", root, files: [".env", "app.py"] }, "rt4"), services()) as Promise<any>;
+    expect((await named).stdout.split("\n").sort()).toEqual([".env", "app.py"]);
+  });
+
+  test("secrets: and hosts: refuse values that aren't names", async () => {
+    expect(["PATH", "HOME", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DOCKER_HOST", "HTTPS_PROXY", "no_proxy", "HALO_X"].every((n) => RESERVED_SECRET.test(n))).toBe(true);
+    expect(RESERVED_SECRET.test("STRIPE_KEY")).toBe(false);
+    for (const h of ["127.0.0.1", "0", "169.254.169.254", "localhost", "*.localhost", "a.localhost", "[::1]", "2130706433"]) expect(HOST_PATTERN.test(h)).toBe(false);
+    for (const h of ["pypi.org", "*.pythonhosted.org", "registry.npmjs.org", "PyPI.org", "x1.example.io"]) expect(HOST_PATTERN.test(h)).toBe(true);
+
+    // The value itself (secrets: [Env.KEY]) is never echoed back.
+    const err: Error = await remote(makeCall("info", {}, { 0: "docker", docker, secrets: [value] }, "rt5"), services(env)).then(() => new Error("none"), (e: Error) => e);
+    expect(err.message).toContain("is the value of an environment variable, not its name");
+    expect(err.message).not.toContain(value);
+    await expect(remote(makeCall("info", {}, { 0: "docker", docker, secrets: ["PATH"] }, "rt6"), services({ PATH: "/bin" }))).rejects.toThrow(/PATH can't be a secret/);
+    await expect(remote(makeCall("info", {}, { 0: "docker", docker, network: "false" }, "rt7"), services())).rejects.toThrow(/network: is true or false, not "false"/);
+
+    const errors = validate(parse(`
+tool A : Remote("docker", secrets: [Env.STRIPE_KEY])
+tool B : Remote("docker", secrets: ["LD_PRELOAD"])
+policy P : AllowSecrets("DOCKER_HOST")
+policy H : AllowHosts("169.254.169.254")
+`)).filter((x) => x.severity === "error").map((x) => x.message);
+    expect(errors).toEqual([
+      expect.stringContaining('Tool "A": secrets: lists names in quotes'),
+      expect.stringContaining('Tool "B": secrets: LD_PRELOAD can\'t be a secret'),
+      expect.stringContaining('AllowSecrets(DOCKER_HOST): DOCKER_HOST can\'t be a secret'),
+      expect.stringContaining("AllowHosts(169.254.169.254) is not a host name"),
+    ]);
+  });
+
+  test("sandboxes get their own network, no raw sockets, and a proxy that runs locked down", async () => {
+    await remote(makeCall("run", { command: "true" }, { 0: "docker", docker }, "rt8"), services());
+    expect(log()).toContainEqual(expect.stringMatching(/^network create .*enable_icc=false halo-sandboxes$/));
+    const run = log().find((l) => l.startsWith("run ") && l.includes("halo.run=rt8"))!;
+    expect(run).toContain("--network halo-sandboxes");
+    expect(run).toContain("--cap-drop NET_RAW");
+    await closeRemoteSessions();
+    await remote(makeCall("run", { command: "true" }, { 0: "docker", docker, hosts: ["pypi.org"] }, "rt9"), services());
+    expect(log()).toContainEqual(expect.stringMatching(/^network create --internal .*gateway_mode_ipv4=isolated/));
+    const proxy = log().find((l) => l.startsWith("run ") && l.includes(" bun ") && l.includes("halo.run=rt9"))!;
+    for (const part of ["--cap-drop ALL", "--read-only", "--user 65534:65534"]) expect(proxy).toContain(part);
+  });
+
+  test("the proxy refuses private addresses and checks the TLS server name", async () => {
+    for (const ip of ["127.0.0.1", "10.1.2.3", "172.18.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "224.0.0.1"]) expect(privateAddress(ip)).toBe(true);
+    for (const ip of ["151.101.0.223", "104.16.0.1", "2a04:4e42::223", "172.32.0.1"]) expect(privateAddress(ip)).toBe(false);
+
+    // A real ClientHello, as a TLS client sends it.
+    const net = await import("node:net");
+    const tls = await import("node:tls");
+    const hello = await new Promise<Buffer>((resolve) => {
+      const server = net.createServer((sock) => sock.once("data", (d: Buffer) => (resolve(d), sock.destroy(), server.close())));
+      server.listen(0, "127.0.0.1", () => {
+        const c = tls.connect({ host: "127.0.0.1", port: (server.address() as any).port, servername: "pypi.org" });
+        c.on("error", () => {});
+      });
+    });
+    expect(tlsServerName(hello)).toBe("pypi.org");
+    expect(tlsServerName(hello.subarray(0, 40))).toBeUndefined(); // needs more bytes
+    expect(tlsServerName(Buffer.from("GET / HTTP/1.1\r\n"))).toBeNull();
   });
 });
 

@@ -49,11 +49,18 @@ export const TOOL_EFFECTS = ["read", "write", "external"] as const;
 /** Policy rules the runtime enforces deterministically. */
 export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", ...TOOL_RULES] as const;
 
-/** A host for AllowHosts or a sandbox's hosts: ("pypi.org", or "*.pythonhosted.org" for it and its subdomains). */
-export const HOST_PATTERN = /^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/;
+/**
+ * A host for AllowHosts or a sandbox's hosts: ("pypi.org", or "*.pythonhosted.org" for it and its
+ * subdomains). A name, not an address: no IP literals (the last label starts with a letter), and
+ * not localhost.
+ */
+export const HOST_PATTERN = /^(?!(.*\.)?localhost$)(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z]([a-z0-9-]*[a-z0-9])?$/i;
 
 /** A secret's name for AllowSecrets or a sandbox's secrets: (an environment variable name). */
 export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Names that can't be secrets: setting them changes how the sandbox's shell, its proxy, or Docker itself runs. */
+export const RESERVED_SECRET = /^(PATH|HOME|USER|SHELL|PWD|IFS|ENV|BASH_ENV|TMPDIR|LD_\w*|DYLD_\w*|DOCKER_\w*|HALO_\w*|(HTTPS?|ALL|NO|FTP)_PROXY)$/i;
 
 /**
  * A folder or file for AllowFiles or a sandbox's files:, relative to the project it's copied from:
