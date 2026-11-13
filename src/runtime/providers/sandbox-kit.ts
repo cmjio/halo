@@ -72,8 +72,13 @@ export const SKIP_DIRS = new Set([".git", "node_modules", "__pycache__", ".venv"
  * untracked-but-not-ignored files in a repo, else every file outside SKIP_DIRS.
  */
 export function projectFiles(dir: string): string[] {
-  const git = Bun.spawnSync(["git", "-C", dir, "ls-files", "-co", "--exclude-standard", "-z"], { stdout: "pipe", stderr: "ignore" });
-  if (git.exitCode === 0) {
+  let git: { exitCode: number | null; stdout: Uint8Array } | undefined;
+  try {
+    git = Bun.spawnSync(["git", "-C", dir, "ls-files", "-co", "--exclude-standard", "-z"], { stdout: "pipe", stderr: "ignore", env: process.env });
+  } catch {
+    git = undefined; // no git installed: walk the folder instead
+  }
+  if (git?.exitCode === 0) {
     return new TextDecoder()
       .decode(git.stdout)
       .split("\0")

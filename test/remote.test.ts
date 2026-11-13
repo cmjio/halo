@@ -437,8 +437,9 @@ describe("Remote sandboxes: Docker", () => {
 
   test("timeouts are reported", async () => {
     const decl = { 0: "docker", docker: fakeDocker };
-    const r = (await remote(makeCall("run", { command: "sleep 5", timeout_ms: 1000 }, decl, "d-slow"), services())) as any;
-    expect(r.timedOut).toBe(true);
+    // Where the host has no `timeout` (macOS runners), the client-side backstop (limit + 5s) stops it.
+    const r = (await remote(makeCall("run", { command: "sleep 10", timeout_ms: 1000 }, decl, "d-slow"), services())) as any;
+    expect(r).toMatchObject({ timedOut: true });
     await closeRemoteSessions("d-slow");
   }, 15_000);
 

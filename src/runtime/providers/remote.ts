@@ -176,7 +176,8 @@ function collect(stream: ReadableStream<Uint8Array>) {
 
 /** Run a program, feeding it `stdin`, killed after `timeoutMs` or when `signal` aborts. */
 async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal }) {
-  const proc = Bun.spawn(argv, { stdin: opts.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe" });
+  // env: process.env so `docker`/`ssh` are looked up on the PATH as it is now, not as it was at startup.
+  const proc = Bun.spawn(argv, { stdin: opts.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe", env: process.env });
   let timedOut = false;
   const kill = () => proc.kill();
   const timer = setTimeout(() => {
@@ -191,7 +192,8 @@ async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutM
     }
     const out = collect(proc.stdout);
     const err = collect(proc.stderr);
-    const exitCode = await proc.exited;
+    const code = await proc.exited;
+    const exitCode = typeof code === "number" ? code : -1;
     // A killed client can leave a child holding its pipes open; don't wait on them past a moment.
     const grace = timedOut || opts.signal.aborted ? 500 : 30_000;
     await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(grace)]);
@@ -705,7 +707,8 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string)
       const r = await spawnProgram([docker, "exec", id, ...dockerShell(prelude(opts.cwd, opts.env) + command, seconds)], { timeoutMs: opts.timeoutMs + 5_000, signal: opts.signal });
       const e = daemonError(r);
       if (e && !r.timedOut) throw e;
-      const killed = r.exitCode === 137 && Date.now() - began >= opts.timeoutMs - 250;
+      // `timeout -s KILL` exits 137 (124 for some builds); either way it ran out the clock.
+      const killed = (r.exitCode === 124 || r.exitCode >= 128 || r.exitCode < 0) && Date.now() - began >= opts.timeoutMs - 250;
       const blocked = proxy ? await proxy.blocked() : [];
       return { stdout: decode(r.out), stderr: r.err, exitCode: r.exitCode, timedOut: r.timedOut || killed, ...(blocked.length ? { blocked } : {}) };
     },
