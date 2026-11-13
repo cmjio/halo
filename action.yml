@@ -16,7 +16,7 @@ branding:
 
 inputs:
   version:
-    description: The Halo version to install, like 0.5.0. Default the version of the tag you used (cmjio/halo@v0.5.0), else the latest release.
+    description: The Halo version to install, like 0.5.0, or a channel (latest, next or nightly). Default the version of the tag you used (cmjio/halo@v0.5.0), else the latest release.
     required: false
     default: ""
   command:
@@ -44,16 +44,22 @@ runs:
         ACTION_REF: ${{ github.action_ref }}
       run: |
         version="${INPUT_VERSION#v}"
-        if [ -z "$version" ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        if [ -z "$version" ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
           version="${ACTION_REF#v}"
         fi
         if [ -z "$version" ]; then
-          version=$(curl -fsSL --retry 3 https://halolang.com/dl/latest.json | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+          version=latest
         fi
-        if [ -z "$version" ]; then
-          echo "::error::Couldn't find the latest Halo version at https://halolang.com/dl/latest.json. Set the version input."
-          exit 1
-        fi
+        case "$version" in
+          latest | next | nightly)
+            channel="$version"
+            version=$(curl -fsSL --retry 3 "https://halolang.com/dl/$channel.json" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+            if [ -z "$version" ]; then
+              echo "::error::Couldn't find the $channel Halo version at https://halolang.com/dl/$channel.json. Set the version input."
+              exit 1
+            fi
+            ;;
+        esac
         echo "version=$version" >> "$GITHUB_OUTPUT"
         echo "dir=$RUNNER_TOOL_CACHE/halo/$version" >> "$GITHUB_OUTPUT"
 

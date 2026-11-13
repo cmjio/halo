@@ -30,7 +30,7 @@ cp .env.example .env                           # add your API key
 halo run main.halo --arg topic="tide pools"    # for real
 ```
 
-The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it.
+The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it. For prereleases or nightly builds of `main`, install with `HALO_VERSION=next` or `HALO_VERSION=nightly` (or `@halolang/halo@next`, `ghcr.io/cmjio/halo:nightly`).
 
 From 0.5.0 it also fits whatever you already run:
 

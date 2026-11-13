@@ -10,6 +10,8 @@
  * package, @halolang/halo-<platform>, limited by os, cpu and libc, and listed as an optional
  * dependency, so npm installs only the one for the machine (the way esbuild ships).
  * Platform packages are published first, so the launcher never points at a missing version.
+ * Each version is published under its channel's dist-tag (src/channel.ts): latest, next or
+ * nightly, so `npm install @halolang/halo@next` gets the newest prerelease.
  */
 
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
@@ -17,6 +19,7 @@ import { join, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 // Plain CommonJS shared with the launcher, so both use one table.
 import { PLATFORMS, SCOPE } from "../npm/halo/lib/platform.js";
+import { channelOf } from "../src/channel";
 
 type Platform = { asset: string; os: string; cpu: string; libc?: string };
 const platforms = PLATFORMS as Record<string, Platform>;
@@ -97,14 +100,15 @@ console.log(`Built ${keys.length + 1} npm packages for ${version} in ${out}`);
 if (argv.includes("--publish")) {
   const published = (name: string) => Bun.spawnSync(["npm", "view", `${name}@${version}`, "version"], { stdout: "pipe", stderr: "pipe" }).stdout.toString().trim() === version;
   const provenance = process.env.GITHUB_ACTIONS ? ["--provenance"] : [];
+  const tag = channelOf(version);
   for (const dir of [...keys.map((k) => `halo-${k}`), "halo"]) {
     const name = `${SCOPE}/${dir}`;
     if (published(name)) {
       console.log(`  ${name}@${version} is already published`);
       continue;
     }
-    const p = Bun.spawnSync(["npm", "publish", "--access", "public", ...provenance], { cwd: join(out, dir), stdout: "inherit", stderr: "inherit" });
+    const p = Bun.spawnSync(["npm", "publish", "--access", "public", "--tag", tag, ...provenance], { cwd: join(out, dir), stdout: "inherit", stderr: "inherit" });
     if (p.exitCode !== 0) throw new Error(`npm publish ${name} failed (${p.exitCode})`);
-    console.log(`  published ${name}@${version}`);
+    console.log(`  published ${name}@${version} (${tag})`);
   }
 }
