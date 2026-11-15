@@ -295,6 +295,10 @@ bun test              # parser, validator, runtime, adapters over HTTP, tools, C
 bunx tsc --noEmit
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in Halo doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. For security problems, please use [private reporting](https://github.com/cmjio/halo/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead. Paste the error output.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The smallest `.halo` file that shows it, and the exact command you ran.
+      render: halo
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Halo version
+      description: Output of `halo --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed Halo
+      options:
+        - install.sh / install.ps1
+        - npm (@halolang/halo)
+        - Docker image
+        - GitHub Action
+        - From source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15, Ubuntu 24.04, Windows 11…
