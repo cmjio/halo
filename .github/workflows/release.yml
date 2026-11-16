@@ -113,7 +113,7 @@ jobs:
         run: jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
       - name: Test, then build every platform
         run: bun scripts/release.ts --no-upload
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - name: Run the Linux builds in containers
         run: |
           d="$PWD/dist/release/$VERSION"
@@ -222,7 +222,7 @@ jobs:
             nightly) tags="$image:nightly" ;;
           esac
           echo "TAGS=$tags" >> "$GITHUB_ENV"
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
       - name: The amd64 image runs
         run: |
