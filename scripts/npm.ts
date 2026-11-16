@@ -55,6 +55,7 @@ for (const key of keys) {
   mkdirSync(join(dir, "bin"), { recursive: true });
   cpSync(src, join(dir, "bin", exe));
   chmodSync(join(dir, "bin", exe), 0o755);
+  cpSync(join(root, "LICENSE"), join(dir, "LICENSE"));
   await Bun.write(
     join(dir, "package.json"),
     JSON.stringify(
@@ -78,6 +79,7 @@ for (const key of keys) {
 const main = join(out, "halo");
 cpSync(join(root, "npm/halo"), main, { recursive: true });
 chmodSync(join(main, "bin/halo.js"), 0o755);
+cpSync(join(root, "LICENSE"), join(main, "LICENSE"));
 await Bun.write(
   join(main, "package.json"),
   JSON.stringify(
