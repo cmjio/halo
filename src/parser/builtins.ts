@@ -35,7 +35,7 @@ export const TOOL_PROVIDERS = [
 ] as const;
 
 /** Content categories detectable by `Block(...)`. */
-export const BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection", "PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "Markdown"] as const;
+export const BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection", "PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress", "Markdown"] as const;
 
 /** Content categories removable by `Redact(...)`. */
 export const REDACT_CATEGORIES = ["PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress"] as const;

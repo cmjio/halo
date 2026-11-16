@@ -52,7 +52,7 @@ pipeline Extract(text: String) -> Result:
   text |> Extractor.extract()
 ```
 
-When an output policy rejects an answer, the agent is asked again, up to `n` times. The new prompt includes the rejected answer and the policy's message. Each correction emits a `correction` event, and the violation stays in `context.meta.violations` marked `corrected: true`, so the audit trail shows what was fixed. The CLI shows a corrected violation as `✎ … asked to fix it` rather than as a failure. Input-side violations, such as a blocked prompt, are not corrected.
+When an output policy rejects an answer, the agent is asked again, up to `n` times. The new prompt includes the rejected answer (with the agent's `Redact` rules applied, or withheld if a `Block` rule matches it) and the policy's message. Each correction emits a `correction` event, and the violation stays in `context.meta.violations` marked `corrected: true`, so the audit trail shows what was fixed. The CLI shows a corrected violation as `✎ … asked to fix it` rather than as a failure. Input-side violations, such as a blocked prompt, are not corrected.
 
 ## `@cascade`
 
@@ -63,7 +63,7 @@ policy Short : MaxWords(80)
 agent Triage [anthropic/claude-haiku-4-5]
   requires Short
 
-pipeline Label(issue: String) -> Labels:
+pipeline Label(issue: String) -> JSON:
   issue |> Triage.label()
 ```
 

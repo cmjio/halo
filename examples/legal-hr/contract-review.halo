@@ -2,11 +2,20 @@
 // Legal — Contract Review & Risk Assessment
 // PURPOSE: Ingest contracts, extract clauses, compare against
 //          standard terms, flag deviations, and produce redline
+//
+// ENFORCED IN CODE:
+//   - SSNs, card numbers, emails and phone numbers are redacted
+//     before any agent sees a contract; text in the contract that
+//     tries to instruct the model is blocked.
+//   - Nothing leaves as advice: an attorney signs off on every
+//     redline (Step 6) before it goes anywhere.
+//   - Client names and deal values are part of the contract the
+//     analyst must read; no rule can tell them apart, so they are
+//     not redacted. Use a model provider you can send them to.
 // ============================================================
 
 // --- Policies ---
-policy Confidential   : Redact(ClientName) & Redact(DealValue) & Redact(SSN)
-policy LegalDisclaimer : Require(NotLegalAdvice)
+policy Confidential   : Redact(PII) & Block(PromptInjection)
 policy CostGuard      : MaxSpend(3.00)
 
 // --- Tools ---
@@ -19,6 +28,11 @@ tool ClauseLibrary  : VectorStore(Env.PINECONE_KEY, namespace: "standard-clauses
 tool PrecedentDB    : VectorStore(Env.PINECONE_KEY, namespace: "past-negotiations")
 
 // --- Struct ---
+schema ContractUpload {
+  file_type : String
+  content   : String
+}
+
 schema ContractReview {
   risk_score       : Number
   flagged_clauses  : Array
@@ -29,11 +43,11 @@ schema ContractReview {
 // --- Agents ---
 agent Extractor [openai/gpt-4o-mini, temp: 0.0]
   equips DocParser
-  requires CostGuard
+  requires Confidential, CostGuard
 
 agent LegalAnalyst [anthropic/claude-sonnet-4, temp: 0.1]
   equips ClauseLibrary, PrecedentDB
-  requires Confidential, LegalDisclaimer, CostGuard
+  requires Confidential, CostGuard
 
 // --- The Pipeline ---
 @timeout(10m)

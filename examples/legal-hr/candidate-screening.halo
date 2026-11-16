@@ -4,11 +4,18 @@
 //          assessment, interview scheduling, and hiring manager
 //          notification. Replaces Lever/Greenhouse automation
 //          rules with a single declarative pipeline.
+//
+// ENFORCED IN CODE:
+//   - Contact details, SSNs and card numbers are redacted before
+//     any screening agent sees an application.
+//   - A separate reviewer checks each recommendation for reasoning
+//     based on a protected trait (age, gender, race, religion,
+//     disability, national origin, family status, location), and a
+//     gate stops the run if it finds any.
 // ============================================================
 
 // --- Policies ---
-policy BiasProtection : Block(DiscriminatoryLanguage) & Block(AgeDiscrimination)
-policy CandidatePII   : Redact(SSN) & Redact(CreditCard) & Redact(Location)
+policy CandidatePII   : Redact(PII) & Block(PromptInjection)
 policy CostGuard      : MaxSpend(1.00)
 
 // --- Tools ---
@@ -21,6 +28,21 @@ tool RoleRequirements : VectorStore(Env.PINECONE_KEY, namespace: "job-descriptio
 tool PastHires        : VectorStore(Env.PINECONE_KEY, namespace: "successful-hires")
 
 // --- Struct ---
+schema CandidateApplication {
+  candidate_id       : String
+  name               : String
+  email              : String
+  role_id            : String
+  role_title         : String
+  resume_text        : String
+  cover_letter       : String
+  values             : String
+  team_id            : String
+  job_skills         : Array<String>
+  min_experience     : Number
+  salary_expectation : Number
+}
+
 schema CandidateDecision {
   candidate_name   : String
   match_score      : Number
@@ -32,11 +54,21 @@ schema CandidateDecision {
 
 // --- Agents ---
 agent Screener [openai/gpt-4o-mini, temp: 0.0]
-  requires BiasProtection, CandidatePII, CostGuard
+  requires CandidatePII, CostGuard
 
 agent CultureAssessor [anthropic/claude-sonnet-4, temp: 0.2]
   equips PastHires
-  requires BiasProtection, CandidatePII, CostGuard
+  requires CandidatePII, CostGuard
+
+agent BiasReviewer [openai/gpt-4o-mini, temp: 0.0]
+  system """
+    You audit hiring recommendations. Reply with JSON only:
+    {"protected_trait_used": true|false, "reason": "..."}.
+    protected_trait_used is true if any part of the reasoning relies on age,
+    gender, race, religion, disability, national origin, family status,
+    or where the candidate lives.
+  """
+  requires CandidatePII, CostGuard
 
 agent HiringCoordinator [openai/gpt-4o-mini, temp: 0.3]
   equips RoleRequirements, CalendarAPI
@@ -63,8 +95,8 @@ pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision
          )
        }
 
-    // Step 2: Gate — reject if skills match is too low
-    |? (context.data.match_skills.score < 40)
+    // Step 2: Gate — stop here if skills match is too low
+    |? (context.data.match_skills.score >= 40)
 
     // Step 3: Synthesize recommendation
     |> HiringCoordinator.recommend(
@@ -74,20 +106,26 @@ pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision
          salary_band: context.data.application.salary_expectation
        )
 
-    // Step 4: Gate — auto-reject if recommendation is "no"
-    |? (context.data.recommend.decision == "reject")
+    // Step 4: Gate — a second agent checks the reasoning for bias
+    |> BiasReviewer.check(recommendation: context.data.recommend, culture: context.data.assess_fit) as bias
+    |? (context.data.bias.protected_trait_used == false)
 
-    // Step 5: Gate — auto-advance top candidates
-    |? (context.data.match_skills.score > 85)
-    |> HiringCoordinator.schedule_interview(
-         tool: CalendarAPI,
-         candidate_email: context.data.application.email,
-         interviewer_id: context.data.recommend.interviewer,
-         duration: "45m",
-         type: "technical"
-       )
+    // Step 5: Gate — stop here if the recommendation is "reject"
+    |? (context.data.recommend.decision != "reject")
 
-    // Step 6: Notify hiring manager for borderline candidates
+    // Step 6: Branch — auto-schedule top candidates
+    |? {
+         (context.data.match_skills.score > 85) => HiringCoordinator.schedule_interview(
+           tool: CalendarAPI,
+           candidate_email: context.data.application.email,
+           interviewer_id: context.data.recommend.interviewer,
+           duration: "45m",
+           type: "technical"
+         ),
+         else => System.Value(context.data.recommend),
+       }
+
+    // Step 7: Notify the hiring manager
     |> HRSlack.post(
          message: "New candidate screened",
          candidate: context.data.application.name,
@@ -97,7 +135,7 @@ pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision
          recommendation: context.data.recommend.decision
        )
 
-    // Step 7: Human decision for borderline candidates
+    // Step 8: Human decision
     |! yield(
          HRSlack,
          context.data.recommend,
@@ -106,7 +144,7 @@ pipeline ScreenCandidate(application: CandidateApplication) -> CandidateDecision
        )
     ~> listen(HRSlack.Reaction)
 
-    // Step 8: If approved, push to ATS
+    // Step 9: If approved, push to ATS
     |> ATSAPI.post(
          event: "CANDIDATE_ADVANCED",
          candidate_id: context.data.application.candidate_id,

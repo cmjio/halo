@@ -1716,10 +1716,13 @@ export class HaloRuntime {
       : [];
     const prompt = buildPrompt({ ...parts, context: [...feedback, ...memory.context] });
     if (!prompt.trim()) throw new HaloError(`${target} has an empty prompt (its arguments and the pipeline value are all empty)`);
-    const system = this.withSkills(agent, String(callOptions.system ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined, callOptions, ctx);
+    const hooks = this.guardHooks(ctx);
+    // A `system:` given on the call can carry pipeline data ("Reply to {{email}}"), so the input
+    // policies read it like the prompt. The agent's own `system` is the author's text and is sent as written.
+    const callSystem = callOptions.system === undefined ? undefined : this.guard.checkInput(agent, String(callOptions.system), hooks);
+    const system = this.withSkills(agent, String(callSystem ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined, callOptions, ctx);
     const options = llmOptions(agent.params, callOptions);
 
-    const hooks = this.guardHooks(ctx);
     this.guard.checkBudget(agent, hooks);
     const user = this.guard.checkInput(agent, prompt, hooks);
 
@@ -1763,7 +1766,9 @@ export class HaloRuntime {
             const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected);
             if (v) v.corrected = true;
             this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
-            ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
+            // The rejected answer goes back as input: redacted, and withheld if a Block rule would stop it.
+            const previous = formatValue(this.guard.forLog(agent, value));
+            ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${previous}`;
             // A conversation with tools continues: the agent keeps what its tools told it.
             conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
           }
@@ -1971,8 +1976,11 @@ export class HaloRuntime {
       return `Error: there is no tool named "${call.name}". You can call: ${kit.specs.map((spec) => spec.name).join(", ")}.`;
     }
     let check: ReturnType<PolicyEngine["checkToolCall"]>;
+    let args: unknown;
     try {
       check = this.guard.checkToolCall(agent, entry.target, entry.method.effect, call.args, hooks);
+      // The call is part of the agent's answer: its Redact rules mask the arguments and its Block rules refuse them.
+      args = this.guard.checkToolArgs(agent, entry.target, call.args, hooks);
     } catch (err) {
       if (!(err instanceof PolicyViolation)) throw err;
       report("refused", err.message);
@@ -1980,7 +1988,7 @@ export class HaloRuntime {
     }
     let decision: "allowed" | "approved" = "allowed";
     if (check !== "allow") {
-      const answer = await this.approval(agent, entry.target, call.args, check.approve, ctx);
+      const answer = await this.approval(agent, entry.target, args, check.approve, ctx);
       if (!isApproval(answer)) {
         const reason = declineReason(answer);
         report("declined", reason.slice(2) || undefined);
@@ -1990,7 +1998,7 @@ export class HaloRuntime {
     }
     let result: unknown;
     try {
-      result = await this.toolCall(entry.tool, entry.method.name, [], call.args, ctx, true, agent.name);
+      result = await this.toolCall(entry.tool, entry.method.name, [], args as Record<string, unknown>, ctx, true, agent.name);
     } catch (err) {
       if (ctx.signal.aborted || err instanceof Pause) throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -2170,7 +2178,9 @@ export class HaloRuntime {
     for (const run of runs) {
       const t0 = performance.now();
       const label = `${run.shadow}.${method}`;
-      const task = this.complete(run.agent, run.model, label, run.mockKeys, prompt, system, { ...llmOptions(run.agent.params, {}), ...options }, undefined, ctx, "shadow").then(
+      // A shadow agent also gets its own policies' redactions on top of the primary's.
+      const shadowPrompt = run.agent === primary ? prompt : this.guard.redactOnly(run.agent, prompt);
+      const task = this.complete(run.agent, run.model, label, run.mockKeys, shadowPrompt, system, { ...llmOptions(run.agent.params, {}), ...options }, undefined, ctx, "shadow").then(
         ({ value }) => ({ primary: primary.name, shadow: run.shadow, output: this.guard.forLog(primary, this.guard.forLog(run.agent, value)), latencyMs: Math.round(performance.now() - t0) }),
         (err: unknown) => ({ primary: primary.name, shadow: run.shadow, error: err instanceof Error ? err.message : String(err), latencyMs: Math.round(performance.now() - t0) }),
       );

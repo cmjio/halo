@@ -7,9 +7,12 @@
 // ============================================================
 
 // --- Policies ---
-policy ClaimsPrivacy   : Redact(SSN) & Redact(CreditCard) & Redact(HealthData)
-policy FraudPolicy     : Block(DestructiveOps)
-policy PayoutLimit     : Validate("amount", "<=", "context.data.verify_coverage.max_payout")
+// Medical details have no detector: keep medical records out of the claim
+// payload. Identifiers and contact details are masked before any model sees them.
+policy ClaimsPrivacy   : Redact(SSN, CreditCard, Email, Phone)
+policy FraudPolicy     : Block(DestructiveOps, PromptInjection)
+// The payout is a JSON record, and never more than the policy covers.
+policy PayoutLimit     : Require(JSON) & Validate("payout_amount", "<=", "context.data.verify_coverage.max_payout")
 policy CostGuard       : MaxSpend(1.50)
 
 // --- Tools ---
@@ -23,6 +26,18 @@ tool FraudPatterns : VectorStore(Env.PINECONE_KEY, namespace: "fraud-indicators"
 tool ClaimHistory  : VectorStore(Env.PINECONE_KEY, namespace: "historical-claims")
 
 // --- Struct ---
+schema ClaimFiling {
+  claim_id       : String
+  policy_number  : String
+  incident_date  : String
+  type           : String
+  claimant_name  : String
+  amount         : Number
+  description    : String
+  metadata       : Object
+  payment_method : String
+}
+
 schema ClaimDecision {
   claim_id        : String
   fraud_score     : Number
@@ -38,11 +53,17 @@ agent ClaimsBot [openai/gpt-4o-mini, temp: 0.0]
   requires ClaimsPrivacy, CostGuard
 
 agent FraudAnalyst [anthropic/claude-sonnet-4, temp: 0.0]
+  system "Score how likely the claim is fraudulent. Answer with JSON: {\"fraud_score\": 0-100, \"reasons\": [...]}"
   equips FraudPatterns, ClaimHistory
   requires ClaimsPrivacy, FraudPolicy, CostGuard
 
 @correct(3)
 agent AdjusterAssistant [openai/gpt-4o, temp: 0.2]
+  system """
+    Calculate the payout from the coverage limits and the damage.
+    Answer with JSON: {"claim_id": "...", "fraud_score": 0, "coverage_valid": true,
+    "payout_amount": 0, "decision": "approve" | "deny", "adjuster_notes": "..."}
+  """
   equips ClaimHistory
   requires ClaimsPrivacy, CostGuard, PayoutLimit
 
@@ -67,19 +88,19 @@ pipeline ProcessClaim(claim: ClaimFiling) -> ClaimDecision:
          )
        }
 
-    // Step 2: Gate — immediate flag if fraud score is high
-    |? (context.data.score_fraud.fraud_score > 80)
-    |> AdjusterSlack.post(
-         message: "HIGH FRAUD RISK — manual review required immediately",
-         claim_id: context.data.claim.claim_id,
-         fraud_score: context.data.score_fraud.fraud_score,
-         channel: "fraud-investigations"
-       )
-    |! yield(AdjusterSlack, context.data.score_fraud, [context.data.verify_coverage], 4h)
-    ~> listen(AdjusterSlack.Reaction)
+    // Step 2: A high fraud score goes to the investigators, and the claim stops here
+    |? {
+         (context.data.score_fraud.fraud_score > 80) => AdjusterSlack.post(
+           message: "HIGH FRAUD RISK — manual review required immediately",
+           claim_id: context.data.claim.claim_id,
+           fraud_score: context.data.score_fraud.fraud_score,
+           channel: "fraud-investigations"
+         ),
+       }
+    |? (context.data.score_fraud.fraud_score <= 80)
 
-    // Step 3: Gate — reject if policy doesn't cover this claim type
-    |? (context.data.verify_coverage.covered == false)
+    // Step 3: Gate — stop unless the policy covers this claim type
+    |? (context.data.verify_coverage.covered == true)
 
     // Step 4: Calculate payout based on coverage limits + damage assessment
     |> AdjusterAssistant.calculate_payout(
@@ -88,30 +109,36 @@ pipeline ProcessClaim(claim: ClaimFiling) -> ClaimDecision:
          fraud_assessment: context.data.score_fraud,
          comparable_claims: ClaimHistory
        )
+    |? (context.data.calculate_payout.decision == "approve")
 
-    // Step 5: Gate — auto-approve small, low-risk claims
-    |? (context.data.calculate_payout.amount > 5000)
-    |! yield(
-         AdjusterSlack,
-         context.data.calculate_payout,
-         [context.data.verify_coverage, context.data.score_fraud],
-         24h
-       )
-    ~> listen(AdjusterSlack.Reaction)
+    // Step 5: Small claims pay out automatically; an adjuster approves larger ones
+    |? {
+         (context.data.calculate_payout.payout_amount > 5000) => AdjusterReview(context.data.calculate_payout, context.data.verify_coverage, context.data.score_fraud),
+         else => System.Value(context.data.calculate_payout),
+       } as review
+    |? (context.data.calculate_payout.payout_amount <= 5000 || context.data.review.approved == true)
 
     // Step 6: Disburse payment
     |> ClaimsBot.disburse(
          tool: PaymentGW,
          claim_id: context.data.claim.claim_id,
-         amount: context.data.calculate_payout.amount,
+         amount: context.data.calculate_payout.payout_amount,
          method: context.data.claim.payment_method
        )
 
-    // Step 7: Log to claims system
+    // Step 7: Log to claims system, and return the decision
     |> ClaimsDB.post(
          event: "CLAIM_RESOLVED",
          claim_id: context.data.claim.claim_id,
-         payout: context.data.calculate_payout.amount,
+         payout: context.data.calculate_payout.payout_amount,
          fraud_score: context.data.score_fraud.fraud_score,
          decision: "approved"
        )
+    |> System.Value(context.data.calculate_payout)
+
+// An adjuster approves a payout over $5,000.
+pipeline AdjusterReview(payout: JSON, coverage: JSON, fraud: JSON) -> Result:
+  payout
+    |! yield(AdjusterSlack, payout, [coverage, fraud], 24h)
+    ~> listen(AdjusterSlack.Reaction) as adjuster
+    |> System.Value(context.data.adjuster)

@@ -1,6 +1,6 @@
 import { test, expect, describe, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -18,15 +18,23 @@ function cliIn(cwd: string, ...args: string[]) {
 const cli = (...args: string[]) => cliIn(work, ...args);
 
 describe("CLI", () => {
-  test("validate examples/ succeeds", () => {
+  test("validate examples/ succeeds, except for registry packages a checkout hasn't installed", () => {
     const r = cli("validate", "examples/");
-    expect(r.code).toBe(0);
-    const count = [...new Bun.Glob("**/*.halo").scanSync(join(root, "examples"))].length;
-    expect(r.out).toContain(`${count} file(s), 0 error(s)`);
+    const halo = [...new Bun.Glob("**/*.halo").scanSync(join(root, "examples"))];
+    // Installed packages live in .halo/, which git ignores, so a fresh checkout reports each
+    // `use "@halo/..."` as not installed (test/examples.test.ts checks those examples installed).
+    const uses = halo.flatMap((f) => [...readFileSync(join(root, "examples", f), "utf8").matchAll(/^use "(@halo\/[a-z0-9-]+)"/gm)].map((m) => `${f}: ${m[1]}`));
+    const errors = r.out.split("\n").filter((l) => / error /.test(l));
+    expect(errors.map((l) => l.replace(/^\s*.*?examples\/(.+?):\d+:\d+ error use "(@halo\/[a-z0-9-]+)": package .* is not installed \(run halo add .*\)$/, "$1: $2")).sort()).toEqual(uses.sort());
+    expect(r.out).toContain(`${halo.length} file(s), ${uses.length} error(s)`);
+    expect(r.code).toBe(uses.length === 0 ? 0 : 1);
   });
 
   test("validate --strict fails on warnings", () => {
-    expect(cli("validate", "examples/learn/14-env-vars.halo", "--strict").code).toBe(1);
+    const file = join(work, "warns.halo");
+    writeFileSync(file, `policy P : Redact(SalaryData)\nagent A [openai/gpt-4o]\n  requires P\npipeline S(x: String) -> Result:\n  x |> A.go()\n`);
+    expect(cli("validate", file, "--strict").code).toBe(1);
+    expect(cli("validate", file).code).toBe(0);
   });
 
   test("run --mock prints the output once", () => {

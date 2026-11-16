@@ -16,8 +16,8 @@ agent Refunder [openai/gpt-4o-mini]
 
 | Rule | Checked on | Effect |
 |---|---|---|
-| `Block(cat, ...)` | prompt and answer | Fails if any category is detected |
-| `Redact(cat, ...)` | prompt and answer | Replaces matches with `[REDACTED:<cat>]` |
+| `Block(cat, ...)` | prompt, answer, and tool calls | Fails if any category is detected |
+| `Redact(cat, ...)` | prompt, answer, and tool calls | Replaces matches with `[REDACTED:<cat>]` |
 | `MaxWords(n)`, `MaxChars(n)` | answer | Fails above the limit |
 | `MaxTokens(n)` | answer | Fails if the provider reports more than `n` completion tokens |
 | `MaxSpend(usd)` | before and after each call | Fails once the **run's** cost reaches the limit. Each call's reply is capped (`max_tokens`, sent even to providers with no default) so the call fits in what is left, and calls in flight count at their most, so parallel calls (`|*`, `each`) can't overshoot it: a call that doesn't fit waits for those in flight to finish, and near the limit replies get shorter. If a run fails, calls already sent still count in its cost |
@@ -28,19 +28,28 @@ agent Refunder [openai/gpt-4o-mini]
 | `Validate("field", "op", value)` | answer | Compares a field of the JSON answer with a literal or a `"context.…"` path. `op` is one of `== != < <= > >=`. Numbers compare as numbers (`"4"` counts as 4); `true`, `[]`, and `""` are not numbers, so `<` and `>` fail on them. |
 | `LogViolation()` | — | Also logs this policy's violations with `logger.warn` |
 
-Redaction runs before blocking, so `Redact(Email) & Block(Email)` never blocks. Both also check the text with look-alikes folded, so `１２３‑45‑6789` is still an SSN: fullwidth and other-script digits, accents, invisible characters (zero-width, bidi, tag characters, variation selectors), Cyrillic and Greek letters that look Latin, dash and space look-alikes, and HTML and `%` escapes. They read objects field by field (keys and numbers too), so a line break before a value doesn't hide it, and an output's redacted or blocked text is what telemetry and Studio keep. They don't decode base64, and can't see a value split across several fields.
+Redaction runs before blocking, so `Redact(Email) & Block(Email)` never blocks.
+
+Both apply everywhere text crosses the agent's boundary, so a model talked into moving something out of its answer can't route around them:
+
+- **In:** the prompt, a `system:` given on the call (it can carry pipeline data), the results of tools it calls, and its own rejected answer when `@correct` sends it back (redacted, or withheld if a `Block` rule would stop it). The agent's declared `system` and skills are your text and are sent as written.
+- **Out:** the answer, and the arguments of every tool call the agent chooses. A call whose arguments a `Block` rule matches is refused (a violation with `phase: "tool"`), and `Redact` masks the arguments before the tool sees them.
+
+They also read the text the ways a model can be asked to disguise it: look-alikes folded (fullwidth and other-script digits, accents, invisible characters, Cyrillic and Greek letters that look Latin, dash and space look-alikes, soft hyphens), HTML entities and `%` escapes decoded, digits spread out or split by `_`, `/`, `*` or HTML tags (`1 2 3 - 4 5 - 6 7 8 9`), emails spelled out (`bob [at] example [dot] com`, `bob at example dot com`), defanged IPs (`10[.]0[.]0[.]1`), and base64 or hex runs decoded. The word categories (`PromptInjection`, `DestructiveOps`, `Profanity`) also read the text with comments and tags removed (`DROP/**/TABLE`), spread-out letters joined (`I-g-n-o-r-e`), and digits for letters undone (`1gn0re`). Objects are read field by field (keys and numbers too), and an output's redacted or blocked text is what telemetry and Studio keep.
+
+The detectors are patterns, so they are one layer, not a guarantee: they can't see a value split across several fields, spelled out in words, or in a cipher. What `Redact` removes from the input never reaches the model, so the dependable way to keep a value out of an answer is to redact it on the way in, or not pass it at all (`System.Pick`).
 
 ### Categories
 
 | Category | `Block` | `Redact` | Detects |
 |---|---|---|---|
-| `PromptInjection` | ✓ | | "ignore previous instructions", "reveal the system prompt", "you are now DAN"… |
-| `DestructiveOps` | ✓ | | `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, `rm -rf`, `git push --force`, `mkfs` |
+| `PromptInjection` | ✓ | | "ignore previous instructions", "new instructions:", chat-template role markers, "reveal the system prompt", "you are now DAN", the same in Spanish, French, German, Portuguese and Italian… |
+| `DestructiveOps` | ✓ | | `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, `rm -r`/`-rf`/`--recursive`, `find -delete`, `dd of=/dev/…`, `git push --force`, `git reset --hard`, `git clean -f`, `mkfs`, `terraform destroy`, `kubectl delete`, `aws s3 rm --recursive`… |
 | `Profanity` | ✓ | | a short English word list |
 | `Markdown` | ✓ | | bold, headings, code fences |
 | `PII` | ✓ | ✓ | SSN, credit card, email, and phone |
-| `SSN`, `CreditCard`, `Email`, `Phone`, `APIKey` | ✓ | ✓ | each alone (credit cards are Luhn-checked; API keys are OpenAI, Anthropic, AWS, GitHub, Slack, and Google formats) |
-| `IPAddress` | | ✓ | IPv4 addresses |
+| `SSN`, `CreditCard`, `Email`, `Phone`, `APIKey` | ✓ | ✓ | each alone (credit cards are Luhn-checked; phones include `+` international numbers; API keys are OpenAI, Anthropic, AWS, GitHub, GitLab, Slack, Stripe and Google formats, JWTs, and PEM private keys) |
+| `IPAddress` | ✓ | ✓ | IPv4 addresses |
 
 The detectors are regular expressions. They catch common patterns, not every possible variant.
 

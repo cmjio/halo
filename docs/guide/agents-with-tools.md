@@ -48,7 +48,7 @@ The model sees each method as a function named `Tool__method` (for example `Code
 
 1. Halo sends the conversation (system prompt, the call's prompt, and every turn so far) with the offered tools.
 2. If the model answers without asking for tools, that answer is the call's result. Output policies, schemas and `@correct` apply to it as usual.
-3. Otherwise Halo runs the calls it asked for, in order. Each is checked against the agent's policies, may wait for a person's approval, and then runs. Its result becomes a tool message in the conversation.
+3. Otherwise Halo runs the calls it asked for, in order. Each is checked against the agent's policies (its tool rules, and its `Block` and `Redact` rules on the arguments, since a tool call is part of its answer), may wait for a person's approval, and then runs. Its result becomes a tool message in the conversation.
 4. Halo asks the model again. After `max_steps` requests that asked for tools, the next request tells the model it has used its steps and asks for an answer with tools turned off.
 
 | Setting | Where | Default |
