@@ -10,6 +10,8 @@
 //   halo add sentry jira
 //
 // installs @halo/sentry and @halo/jira, and pins them in halo.lock.
+// In this repository they are listed in examples/halo.json: run
+// `halo install` in examples/ once.
 // `halo tools` lists their methods and effects.
 //
 // RUN:  halo plan examples/engineering/sentry-to-jira.halo

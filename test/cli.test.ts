@@ -23,7 +23,9 @@ describe("CLI", () => {
     const halo = [...new Bun.Glob("**/*.halo").scanSync(join(root, "examples"))];
     // Installed packages live in .halo/, which git ignores, so a fresh checkout reports each
     // `use "@halo/..."` as not installed (test/examples.test.ts checks those examples installed).
-    const uses = halo.flatMap((f) => [...readFileSync(join(root, "examples", f), "utf8").matchAll(/^use "(@halo\/[a-z0-9-]+)"/gm)].map((m) => `${f}: ${m[1]}`));
+    // `halo install` in examples/ (as CI does before validating) installs them from examples/halo.json.
+    const installed = (name: string) => existsSync(join(root, "examples/.halo/packages", name));
+    const uses = halo.flatMap((f) => [...readFileSync(join(root, "examples", f), "utf8").matchAll(/^use "(@halo\/[a-z0-9-]+)"/gm)].filter((m) => !installed(m[1]!)).map((m) => `${f}: ${m[1]}`));
     const errors = r.out.split("\n").filter((l) => / error /.test(l));
     expect(errors.map((l) => l.replace(/^\s*.*?examples\/(.+?):\d+:\d+ error use "(@halo\/[a-z0-9-]+)": package .* is not installed \(run halo add .*\)$/, "$1: $2")).sort()).toEqual(uses.sort());
     expect(r.out).toContain(`${halo.length} file(s), ${uses.length} error(s)`);
