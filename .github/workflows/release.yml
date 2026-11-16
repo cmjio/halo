@@ -228,7 +228,7 @@ jobs:
         run: |
           docker buildx build --platform linux/amd64 --load -t halo:test -f docker/Dockerfile ctx
           bash docker/smoke-test.sh halo:test "$VERSION"
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
