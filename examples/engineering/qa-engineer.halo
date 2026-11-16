@@ -4,7 +4,9 @@
 //          test detection with CI/CD pipeline integration
 // ============================================================
 
-policy TestSafety : Block(ProductionWrite)
+// Generated tests only ever run against staging: the pipeline fixes env to
+// "staging", and the PR diff the architect reads can't steer it.
+policy TestSafety : Block(PromptInjection)
 policy QABudget   : MaxSpend(8.00)
 
 // --- Tools ---
@@ -21,6 +23,15 @@ tool TestHistory    : VectorStore(Env.PINECONE_KEY, namespace: "test-results")
 tool FlakyPatterns  : VectorStore(Env.PINECONE_KEY, namespace: "flaky-test-dna")
 
 // --- Agents ---
+// A candidate model for the architect role: it answers every TestArchitect
+// call alongside it, and its answers are recorded for comparison, never used.
+agent Architect_V2 [openai/gpt-4o, temp: 0.3]
+  system """
+    You are a test automation architect. Generate comprehensive
+    test cases from PR diffs. Output Playwright-compatible specs.
+  """
+  requires TestSafety, QABudget
+
 // The test architect generates test cases from requirements
 @shadow(Architect_V2)
 agent TestArchitect [anthropic/claude-sonnet-4, temp: 0.3]
@@ -45,7 +56,13 @@ agent FlakyDetector [openai/gpt-4o-mini, temp: 0.0]
   requires QABudget
 
 // --- The Pipeline ---
-pipeline AutoTest(pr: GitHub.PullRequest) -> Report:
+schema PullRequest {
+  diff     : String
+  repo     : String
+  head_sha : String
+}
+
+pipeline AutoTest(pr: PullRequest) -> Result:
   pr
     // Step 1: Generate test cases from PR diff
     |> TestArchitect.generate_tests(

@@ -109,6 +109,22 @@ describe("tool policies", () => {
     pipeline P(x: String) -> Result:
       x |> A.go(tools: [Files])`;
 
+  test("Block and Redact also cover the tool calls an agent chooses, not just its answer", async () => {
+    // A model talked into it can't move a blocked command into a tool call instead of its answer.
+    const dir = workspace();
+    const { mock, seen } = script([useTool("Files.write", { path: "x.sh", content: "rm --recursive --force /" })], "ok");
+    const result = await rt(src(`Block(DestructiveOps)`, dir), { "A.go": mock }).run("P", { x: "hi" });
+    expect(existsSync(join(dir, "x.sh"))).toBe(false);
+    expect(seen[1]!.messages!.at(-1)!.content).toMatch(/^Refused by policy "Guard".*Destructive operations/);
+    expect(result.context.meta.violations[0]).toMatchObject({ policy: "Guard", rule: "Block", phase: "tool" });
+
+    // Redact masks what it would write, so a secret can't leave through a tool either.
+    const dir2 = workspace();
+    const leak = script([useTool("Files.write", { path: "out.md", content: "ssn 123-45-6789, key c2stYW50LWFwaTAzLWFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1Njc4OQ==" })], "ok");
+    await rt(src(`Redact(SSN, APIKey)`, dir2), { "A.go": leak.mock }).run("P", { x: "hi" });
+    expect(readFileSync(join(dir2, "out.md"), "utf8")).toBe("ssn [REDACTED:SSN], key [REDACTED:APIKey]");
+  });
+
   test("AllowTools and AllowEffects hide everything else from the model", async () => {
     for (const policy of [`AllowTools("Files.read", "Files.list")`, `AllowEffects(read)`]) {
       const { mock, seen } = script("ok");

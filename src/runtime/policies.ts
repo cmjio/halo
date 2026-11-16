@@ -64,15 +64,43 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
+// What a model asked to "format it differently" puts between digits: spaces, dots, dashes,
+// slashes, underscores, backslashes, markdown emphasis, or an HTML tag.
+const SEP = String.raw`(?:[ \t._/\\*~|-]|<\/?[a-z]{1,10}>)`;
 // Digit runs are bounded by non-digits, not \b, so "SSN123-45-6789" and "card4111..." still match.
-const SSN = pattern(/(?<!\d)\d{3}[- .]\d{2}[- .]\d{4}(?!\d)/, "SSN");
-const CREDIT_CARD = pattern(/(?<!\d)(?:\d[ .-]?){12,18}\d(?!\d)/, "CreditCard", luhn);
+// Groups may be spread out ("1 2 3 - 4 5 - 6 7 8 9"), and nine bare digits count after "SSN".
+const SSN = combine(
+  pattern(new RegExp(String.raw`(?<!\d)\d(?: ?\d){2}${SEP}{1,3}\d ?\d${SEP}{1,3}\d(?: ?\d){3}(?!\d)`), "SSN"),
+  pattern(/(?<=\b(?:ssn|social\s+security(?:\s+(?:number|no\.?|#))?)\W{0,10})\d{9}(?!\d)/i, "SSN"),
+);
+const CREDIT_CARD = pattern(new RegExp(String.raw`(?<!\d)(?:\d${SEP}{0,2}){12,18}\d(?!\d)`), "CreditCard", luhn);
 // Starts only where a local part can start, and reads the domain label by label: a scan stays linear
 // on long runs like "a.a.a…@----…" (the old pattern took seconds on 100 KB).
-const EMAIL = pattern(/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9-])/, "Email");
-const PHONE = pattern(/(?<![\w-])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/, "Phone");
-const API_KEY = pattern(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})\b/, "APIKey");
-const IP_ADDRESS = pattern(/\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/, "IPAddress");
+// Also the spelled-out forms a model is asked for to dodge a filter: "bob [at] example [dot] com",
+// "bob @ example . com", "bob at example dot com".
+const EMAIL = combine(
+  pattern(/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9-])/, "Email"),
+  pattern(/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+(?: ?[[({] ?at ?[\])}] ?| +@ *| *@ +)(?:[A-Za-z0-9-]+(?: ?[[({] ?dot ?[\])}] ?| ?\. ?))+[A-Za-z]{2,}(?![A-Za-z0-9-])/i, "Email"),
+  pattern(/(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+ +at +(?:[A-Za-z0-9-]+ +dot +)+(?:com|net|org|edu|gov|io|co|uk|de|fr|ca|au|ai|dev|app|info|biz|me|us)\b/i, "Email"),
+);
+const PHONE = combine(
+  pattern(/(?<![\w-])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/, "Phone"),
+  // International (E.164) numbers: "+44 20 7946 0958", "+14155551234".
+  pattern(/(?<![\w+])\+(?:[ .()-]{0,2}\d){8,15}(?!\d)/, "Phone"),
+  // Ten bare digits after a word that says it's a phone number.
+  pattern(/(?<=\b(?:phone|tel|telephone|call|cell|mobile|text|sms|fax|whatsapp)\b[^\d\n]{0,15})(?:1[ .-]?)?\d{10}(?!\d)/i, "Phone"),
+);
+const API_KEY = combine(
+  pattern(
+    /\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/,
+    "APIKey",
+  ),
+  pattern(/-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----[\s\S]{0,10000}?-----END [A-Z ]{0,20}PRIVATE KEY-----/, "APIKey"),
+);
+// Dots may be "defanged" ("10[.]0[.]0[.]1") or spaced.
+const OCTET = String.raw`(?:25[0-5]|2[0-4]\d|1?\d?\d)`;
+const DOT = String.raw`(?: ?\. ?|\[\.\]|\(\.\)|\[dot\]|\(dot\))`;
+const IP_ADDRESS = pattern(new RegExp(String.raw`(?<![\d.])(?:${OCTET}${DOT}){3}${OCTET}(?![\d]|\.\d)`, "i"), "IPAddress");
 
 function combine(...ds: Detector[]): Detector {
   return {
@@ -83,19 +111,52 @@ function combine(...ds: Detector[]): Detector {
 
 const PII = combine(SSN, CREDIT_CARD, EMAIL, PHONE);
 
+const INSTRUCTIONS = String.raw`(?:instructions?|prompts?|rules|directions?|directives?|guidelines?|guardrails?|policies|polic(?:y|ies)|restrictions?|constraints?|programming)`;
+
+const INJECTION: RegExp[] = [
+  // "ignore all previous instructions", "disregard the rules above", "forget your guidelines"
+  new RegExp(String.raw`\b(?:ignore|disregard|forget)\b[\s\S]{0,40}\b(?:previous|prior|above|earlier|preceding|all|any|your|these|those|existing|original|initial|system|developer|safety)\b[\s\S]{0,25}\b${INSTRUCTIONS}`, "i"),
+  new RegExp(String.raw`\b(?:override|bypass|circumvent)\s+(?:all\s+|any\s+)?(?:of\s+)?(?:your|the\s+system|system|safety|previous|prior|developer)\s+(?:\w+\s+)?${INSTRUCTIONS}`, "i"),
+  new RegExp(String.raw`\b(?:ignore|disregard|forget)\s+(?:the|my|our)\s+(?:\w+\s+)?${INSTRUCTIONS}\s+(?:above|before|given\s+(?:above|earlier|before)|you\s+(?:were|have\s+been)\s+given)`, "i"),
+  /\b(?:ignore|disregard|forget)\s+(?:everything|anything|all)\s+(?:you\s+(?:were|have\s+been|'ve\s+been)\s+(?:told|given|instructed)|(?:said\s+)?(?:above|before|earlier|previously))/i,
+  // "new instructions:", "updated system prompt:"
+  /\b(?:new|updated|revised|real|actual|true|override)\s+(?:system\s+)?(?:instructions?|prompt|rules|directives?)\s*[:\-=]/i,
+  // Chat-template and role markers that try to start a new turn.
+  /<\|?\/?(?:im_start|im_end|system|assistant|developer|endoftext)\|?>|\[\/?(?:INST|SYS)\]|<<\/?SYS>>/i,
+  /(?:^|\n)\s*(?:#{1,6}\s*)?(?:system|developer)\s+(?:prompt|message|override|instructions?)\s*:/i,
+  // "reveal your system prompt", "print the hidden instructions"
+  new RegExp(String.raw`\b(?:reveal|print|show|repeat|output|display|tell\s+me|leak|dump|recite|echo)\b[\s\S]{0,30}\b(?:system|hidden|secret|initial|original|developer)\s+(?:prompt|message|${INSTRUCTIONS})`, "i"),
+  // "you are now DAN", "act as an unrestricted AI", "pretend you have no rules"
+  /\byou\s+are\s+(?:now|no\s+longer)\b[\s\S]{0,40}\b(?:DAN|jailbroken|developer\s+mode|unfiltered|unrestricted|uncensored|bound|restricted|limited)\b/i,
+  /\b(?:act\s+as|pretend\s+(?:to\s+be|you\s+are|you're)|roleplay\s+as)\b[\s\S]{0,40}\b(?:with(?:out)?\s+(?:no|any)\s+(?:restrictions|rules|limits|filters|guidelines)|unrestricted|unfiltered|uncensored|jailbroken)\b/i,
+  /\b(?:developer|god|admin|DAN|jailbreak)\s+mode\s+(?:enabled|activated|on)\b|\benable\s+(?:developer|god|admin|DAN|jailbreak)\s+mode\b/i,
+  // The same "ignore previous instructions" in a few other languages (accents are folded away before this runs).
+  /\b(?:ignora|olvida)\w*\s+(?:todas?\s+)?(?:las\s+)?instrucciones\s+(?:anteriores|previas)/i,
+  /\b(?:ignore|oublie)\w*\s+(?:toutes\s+)?(?:les\s+)?instructions\s+(?:precedentes|anterieures)/i,
+  /\b(?:ignorier|vergiss)\w*\s+(?:alle\s+)?(?:vorherigen|bisherigen|obigen)\s+(?:anweisungen|instruktionen|regeln)/i,
+  /\b(?:ignor[ea]|esque[cç]a)\w*\s+(?:todas\s+)?(?:as\s+|le\s+)?(?:instrucoes|istruzioni)\s+(?:anteriores|precedenti)/i,
+];
+
+const DESTRUCTIVE: RegExp[] = [
+  // SQL
+  /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX|VIEW|USER|ROLE|COLLECTION)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM|ALTER\s+TABLE\s+\S+\s+DROP)\b/i,
+  /\b(?:FLUSHALL|FLUSHDB)\b|\.(?:dropDatabase|drop)\(\s*\)|\.deleteMany\(\s*\{\s*\}\s*\)/i,
+  // Shell: rm -rf in any spelling, find -delete, dd onto a device, shred, mkfs, the fork bomb
+  /\brm\s+(?:-[a-z]*r[a-z]*|-[a-z]*R[a-z]*|--recursive)\b/i,
+  /\bfind\b[^\n|;&]*\s-delete\b|\bdd\b[^\n|;&]*\bof=\/dev\/|>\s*\/dev\/(?:sd|nvme|hd|disk)|\bshred\s+-|\bmkfs\b|\bwipefs\b|:\(\)\s*\{\s*:\|:&\s*\};:/i,
+  /\bchmod\s+-R\s+0?777\s+\/|\bchown\s+-R\b[^\n]*\s\/(?:\s|$)/i,
+  // Windows
+  /\b(?:format\s+[a-z]:|del\s+\/[sq]\b|rd\s+\/s\b|rmdir\s+\/s\b|Remove-Item\b[^\n]*-Recurse)/i,
+  // git
+  /\bgit\s+push\b[^\n;&|]*(?:\s-f\b|\s--force\b|\s--force-with-lease\b|\s\+\S)|\bgit\s+reset\s+--hard\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+branch\s+-D\b|\bgit\s+filter-branch\b/i,
+  // Cloud and infrastructure
+  /\bterraform\s+destroy\b|\bkubectl\s+delete\b|\bhelm\s+(?:uninstall|delete)\b|\baws\s+s3\s+(?:rm\b[^\n]*--recursive|rb\b)|\baws\s+\S+\s+delete-|\bgcloud\b[^\n]*\bdelete\b|\baz\b[^\n]*\bdelete\b|\bdocker\s+(?:system|volume)\s+prune\b/i,
+];
+
 const DETECTORS: Record<string, Detector> = {
   Profanity: { test: (t) => new RegExp(`\\b(?:${PROFANITY.join("|")})\\b`, "i").test(t) },
-  DestructiveOps: {
-    test: (t) =>
-      /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX)|TRUNCATE(?:\s+TABLE)?\s+\w|DELETE\s+FROM)\b/i.test(t) ||
-      /\brm\s+-[a-z]*r[a-z]*f?\b|\bgit\s+push\s+(?:-f|--force)\b|\bmkfs\b|:\(\)\s*\{\s*:\|:&\s*\};:/i.test(t),
-  },
-  PromptInjection: {
-    test: (t) =>
-      /\b(?:ignore|disregard|forget)\b[\s\S]{0,40}\b(?:previous|prior|above|earlier|all)\b[\s\S]{0,20}\b(?:instructions?|prompts?|rules)\b/i.test(t) ||
-      /\b(?:reveal|print|show|repeat)\b[\s\S]{0,30}\bsystem\s+prompt\b/i.test(t) ||
-      /\byou\s+are\s+now\b[\s\S]{0,30}\b(?:DAN|jailbroken|developer\s+mode|unfiltered)\b/i.test(t),
-  },
+  DestructiveOps: { test: (t) => DESTRUCTIVE.some((re) => re.test(t)) },
+  PromptInjection: { test: (t) => INJECTION.some((re) => re.test(t)) },
   PII,
   SSN,
   CreditCard: CREDIT_CARD,
@@ -116,6 +177,7 @@ const DESCRIPTIONS: Record<string, string> = {
   Email: "Email address detected",
   Phone: "Phone number detected",
   APIKey: "API key or secret detected",
+  IPAddress: "IP address detected",
   Markdown: "Markdown formatting not allowed",
 };
 
@@ -140,6 +202,8 @@ function asciiDigit(d: string): string {
  */
 export function normalizeForScan(text: string): string {
   return decodeEscapes(text)
+    // A soft hyphen between digits stands for a dash; anywhere else it is invisible.
+    .replace(/(?<=\d)\u00AD(?=\d)/g, "-")
     .normalize("NFKD")
     .replace(/[\p{M}\p{Cf}\u115F\u1160\u3164\uFFA0]/gu, "")
     .normalize("NFKC")
@@ -148,12 +212,15 @@ export function normalizeForScan(text: string): string {
     .replace(/[^\x00-\x7F]/g, (c) => LOOKALIKES[c] ?? (/\p{Nd}/u.test(c) ? asciiDigit(c) : c));
 }
 
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+const ENTITIES: Record<string, string> = {
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", commat: "@", period: ".", lowbar: "_", hyphen: "-", dash: "-",
+  colon: ":", sol: "/", bsol: "\\", num: "#", plus: "+", excl: "!", quest: "?", lpar: "(", rpar: ")", lsqb: "[", rsqb: "]",
+};
 
 /** HTML entities (&#49; &#x41; &amp;) and %-escapes of printable ASCII, decoded. */
 function decodeEscapes(text: string): string {
   return text
-    .replace(/&#(\d{1,7});|&#x([0-9a-f]{1,6});|&(amp|lt|gt|quot|apos|nbsp);/gi, (m, dec, hex, name) => {
+    .replace(/&#(\d{1,7});?|&#x([0-9a-f]{1,6});?|&([a-z]{2,8});/gi, (m, dec, hex, name) => {
       const cp = dec ? Number(dec) : hex ? parseInt(hex, 16) : undefined;
       if (cp === undefined) return ENTITIES[name.toLowerCase()] ?? m;
       return cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
@@ -168,6 +235,44 @@ function unescapeJson(text: string): string {
   return text.replace(new RegExp(JSON_ESCAPE.source, "g"), (e) =>
     e[1] === "u" ? String.fromCharCode(parseInt(e.slice(2), 16)) : ({ b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" } as Record<string, string>)[e[1]!] ?? e[1]!,
   );
+}
+
+/** Categories detected from words (not digits), which also read the text with letter tricks undone. */
+const WORD_CATEGORIES = new Set(["PromptInjection", "DestructiveOps", "Profanity"]);
+
+const LEET: Record<string, string> = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "@": "a", $: "s", "!": "i", "|": "l" };
+
+/**
+ * Normalized text with the tricks a model can be talked into undone, for the word categories:
+ * SQL and HTML comments and tags ("DROP/**\/TABLE"), letters spread out ("I-g-n-o-r-e",
+ * "i g n o r e"), and digits or symbols for letters ("1gn0re prev10us").
+ */
+function wordView(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, " ")
+    .replace(/<\/?[a-z][^<>]{0,100}>/gi, " ")
+    .replace(/\b(?:[A-Za-z0-9@$][-._*~ |+]){2,}[A-Za-z0-9@$](?![A-Za-z0-9])/g, (m) => m.replace(/[-._*~ |+]/g, ""))
+    .replace(/(?<=[A-Za-z])[0134578@$!|]|[0134578@$!|](?=[A-Za-z])/g, (c) => LEET[c] ?? c)
+    .replace(/\s+/g, " ");
+}
+
+/** Runs of base64 or hex long enough to hide a value, each with its text when it decodes to readable text. */
+function encodedRuns(text: string): Array<{ run: string; decoded: string }> {
+  const out: Array<{ run: string; decoded: string }> = [];
+  const readable = (s: string) => s.length >= 6 && /^[\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]+$/.test(s) && !s.includes("\uFFFD");
+  for (const m of text.matchAll(/(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/]{16,}={0,2}|[A-Za-z0-9_-]{16,}={0,2})(?![A-Za-z0-9+/_=-])/g)) {
+    const run = m[0];
+    if (/^[0-9a-f]+$/i.test(run) && run.length % 2 === 0) {
+      const decoded = Buffer.from(run, "hex").toString("utf8");
+      if (readable(decoded)) out.push({ run, decoded });
+      continue;
+    }
+    // A plain word or identifier is not base64: it needs a digit, or both cases.
+    if (!/\d/.test(run) && !(/[a-z]/.test(run) && /[A-Z]/.test(run))) continue;
+    const decoded = Buffer.from(run.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    if (readable(decoded)) out.push({ run, decoded });
+  }
+  return out;
 }
 
 /** All the text in a value, for Block: strings, numbers and keys, each on its own line. */
@@ -353,6 +458,31 @@ export class PolicyEngine {
     }
   }
 
+  /** `text` with the agent's Redact rules applied and nothing blocked: for text the agent already wrote, sent back to it. */
+  redactOnly(agent: Agent, text: string): string {
+    let out = text;
+    for (const b of this.rulesFor(agent)) if (b.rule.name === "Redact") out = redact(out, b.rule.args);
+    return out;
+  }
+
+  /**
+   * The arguments of a tool call an agent chose, as its policies let them out: a tool call is
+   * part of the agent's answer, so Redact masks its arguments and Block refuses it. Without
+   * this, a model talked into it could put what Block stops (`rm -rf`, an injection for the
+   * next agent) or Redact hides into a tool call instead of its answer.
+   */
+  checkToolArgs(agent: Agent, target: string, args: unknown, hooks: PolicyHooks): unknown {
+    const rules = this.rulesFor(agent);
+    let out = args;
+    for (const b of rules) if (b.rule.name === "Redact") out = mapStrings(out, (s) => redact(s, b.rule.args));
+    for (const b of rules) {
+      if (b.rule.name !== "Block") continue;
+      const category = this.blocks(b, scanText(out));
+      if (category) this.violate(b, `${target} was refused: its arguments were blocked (${DESCRIPTIONS[category] ?? category + " detected"})`, "tool", hooks);
+    }
+    return out;
+  }
+
   /**
    * What an agent's output may show in logs and telemetry: redacted like the output itself,
    * or withheld when a Block rule would stop it.
@@ -430,11 +560,7 @@ export class PolicyEngine {
   }
 
   private blocks(b: BoundRule, text: string): string | undefined {
-    const plain = unescapeJson(text);
-    return b.rule.args.find((category) => {
-      const detector = DETECTORS[category];
-      return detector && [text, normalizeForScan(text), plain, normalizeForScan(plain)].some((t) => detector.test(t));
-    });
+    return b.rule.args.find((category) => DETECTORS[category] && detects(category, text));
   }
 
   private block(b: BoundRule, text: string, phase: Violation["phase"], hooks: PolicyHooks) {
@@ -451,10 +577,27 @@ export function redact(text: string, categories: string[]): string {
 
 function redactText(text: string, categories: string[]): string {
   const pass = (t: string) => categories.reduce((acc, c) => DETECTORS[c]?.redact?.(acc) ?? acc, t);
-  const out = pass(text);
+  let out = pass(text);
   // Something hidden with look-alike characters: redact the normalized text instead.
   const plain = normalizeForScan(out);
-  return categories.some((c) => DETECTORS[c]?.redact && DETECTORS[c]!.test(plain)) ? pass(plain) : out;
+  if (categories.some((c) => DETECTORS[c]?.redact && DETECTORS[c]!.test(plain))) out = pass(plain);
+  // Something hidden in base64 or hex: redact the whole run.
+  for (const { run, decoded } of encodedRuns(out)) {
+    const hit = categories.find((c) => DETECTORS[c]?.redact && [decoded, normalizeForScan(decoded)].some((t) => DETECTORS[c]!.test(t)));
+    if (hit) out = out.split(run).join(`[REDACTED:${hit}]`);
+  }
+  return out;
+}
+
+/** Whether a category's detector finds something in any reading of the text. */
+function detects(category: string, text: string, depth = 0): boolean {
+  const detector = DETECTORS[category]!;
+  const plain = unescapeJson(text);
+  const views = [text, normalizeForScan(text), plain, normalizeForScan(plain)];
+  if (WORD_CATEGORIES.has(category)) views.push(wordView(views[3]!));
+  if (views.some((t) => detector.test(t))) return true;
+  // Decoded base64 or hex is read the same way, one level deep (base64 inside base64 too).
+  return depth < 2 && encodedRuns(views[3]!).some(({ decoded }) => detects(category, decoded, depth + 1));
 }
 
 function mapStrings(value: unknown, fn: (s: string) => string): unknown {

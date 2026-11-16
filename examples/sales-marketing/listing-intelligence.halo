@@ -2,11 +2,15 @@
 // Real Estate — Listing Intelligence & Lead Scoring
 // PURPOSE: Ingest new MLS listings, enrich with market data,
 //          score leads, auto-draft marketing copy, and route
-//          to the right agent based on expertise
+//          to the right agent based on expertise. A reviewer checks
+//          every draft against the Fair Housing Act, and a draft it
+//          flags stops the run before anything reaches the CRM.
 // ============================================================
 
 // --- Policies ---
-policy FairHousing   : Block(DiscriminatoryLanguage) & Block(SteeringLanguage)
+// Discriminatory or steering language takes judgment, not a pattern: FairHousingReviewer
+// rules on each draft, and the gate after it stops a flagged one.
+policy FairHousing   : Enforce(JSON)
 policy PII           : Redact(SSN) & Redact(CreditCard)
 policy CostGuard     : MaxSpend(1.50)
 
@@ -35,6 +39,16 @@ agent MarketAnalyst [openai/gpt-4o-mini, temp: 0.1]
   requires CostGuard
 
 agent Copywriter [anthropic/claude-sonnet-4, temp: 0.7]
+  requires CostGuard
+
+agent FairHousingReviewer [anthropic/claude-sonnet-4, temp: 0.0]
+  system """
+    You review real estate marketing copy for Fair Housing Act compliance.
+    Flag any language that states or implies a preference based on race,
+    color, religion, sex, disability, familial status, or national origin,
+    and any steering ("perfect for young professionals", "safe neighborhood",
+    "close to churches"). Answer JSON: {"compliant": true|false, "issues": [...]}.
+  """
   requires FairHousing, CostGuard
 
 agent LeadScorer [openai/gpt-4o-mini, temp: 0.0]
@@ -44,7 +58,7 @@ agent LeadScorer [openai/gpt-4o-mini, temp: 0.0]
 // --- The Pipeline ---
 @timeout(3m)
 @retry(2, 10s)
-pipeline ProcessListing(listing: MLSListing) -> ListingIntel:
+pipeline ProcessListing(listing: JSON) -> ListingIntel:
   listing
     // Step 1: Parallel enrichment — market data + comps
     |* {
@@ -75,6 +89,10 @@ pipeline ProcessListing(listing: MLSListing) -> ListingIntel:
          tone: "luxury",
          max_words: 150
        )
+
+    // Step 3b: Fair Housing review: a flagged draft stops here
+    |> FairHousingReviewer.check(copy: context.data.draft_listing) as fair_housing
+    |? (context.data.fair_housing.compliant == true)
 
     // Step 4: Score and route the lead
     |> LeadScorer.score_and_route(

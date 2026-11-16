@@ -2,13 +2,17 @@
 // Healthcare — Patient Intake Processing
 // PURPOSE: Automate insurance verification, triage, and clinical
 //          note generation while enforcing HIPAA compliance
+//
+// ENFORCED IN CODE:
+//   - Only the fields the agents need reach a model: System.Pick
+//     drops name, date of birth and MRN from the form first.
+//   - SSNs, card numbers, emails and phone numbers are redacted.
+//   - A separate reviewer checks each note for a diagnosis or a
+//     prescription, and a gate stops the run if it finds one.
 // ============================================================
 
 // --- Policies (HIPAA-grade) ---
-policy HIPAA          : Redact(SSN) & Redact(DateOfBirth) & Redact(MedicalRecordNumber)
-policy PHIProtection  : Redact(HealthData) & Redact(InsuranceID)
-policy ClinicalSafety : Block(DiagnosisClaim) & Block(PrescriptionAdvice)
-policy AuditTrail     : LogViolation("hipaa-audit.log")
+policy HIPAA          : Redact(PII) & Block(PromptInjection) & LogViolation()
 policy CostGuard      : MaxSpend(1.00)
 
 // --- Tools ---
@@ -21,6 +25,17 @@ tool PatientHistory : VectorStore(Env.PINECONE_KEY, namespace: "patient-notes")
 tool ProtocolDB     : VectorStore(Env.PINECONE_KEY, namespace: "clinical-protocols")
 
 // --- Struct ---
+schema PatientForm {
+  patient_id      : String
+  name            : String
+  date_of_birth   : String
+  mrn             : String
+  insurance_id    : String
+  provider_npi    : String
+  chief_complaint : String
+  vitals          : JSON
+}
+
 schema IntakeResult {
   patient_id     : String
   insurance_status : String
@@ -32,17 +47,29 @@ schema IntakeResult {
 // --- Agents ---
 agent IntakeBot [openai/gpt-4o-mini, temp: 0.0]
   equips InsuranceAPI, EHR
-  requires HIPAA, PHIProtection, ClinicalSafety, AuditTrail, CostGuard
+  requires HIPAA, CostGuard
 
 agent ClinicalScribe [anthropic/claude-sonnet-4, temp: 0.1]
   equips PatientHistory, ProtocolDB
-  requires HIPAA, PHIProtection, ClinicalSafety, AuditTrail
+  requires HIPAA, CostGuard
+
+agent SafetyReviewer [openai/gpt-4o-mini, temp: 0.0]
+  system """
+    You check a clinical intake note written for a clinician. Reply with JSON only:
+    {"diagnosis": true|false, "prescription": true|false, "reason": "..."}.
+    diagnosis is true if the note states a diagnosis as fact; prescription is
+    true if it recommends a drug or a dose.
+  """
+  requires HIPAA, CostGuard
 
 // --- The Pipeline ---
 @timeout(3m)
 @retry(2, 10s)
 pipeline ProcessIntake(form: PatientForm) -> IntakeResult:
   form
+    // Step 0: Keep only what the agents need: no name, date of birth or MRN
+    |> System.Pick(fields: ["patient_id", "chief_complaint", "vitals"]) as visit
+
     // Step 1: Fan-out — verify insurance and pull patient history simultaneously
     |* {
          IntakeBot.verify_insurance(
@@ -64,23 +91,29 @@ pipeline ProcessIntake(form: PatientForm) -> IntakeResult:
          history: context.data.pull_chart
        )
 
-    // Step 3: Gate — immediate escalation for critical triage
-    |? (context.data.triage.level == "critical")
-    |> ClinicSlack.post(
-         message: "CRITICAL INTAKE — immediate provider needed",
-         patient_id: context.data.form.patient_id,
-         triage: context.data.triage
-       )
+    // Step 3: Branch — immediate escalation for critical triage
+    |? {
+         (context.data.triage.level == "critical") => ClinicSlack.post(
+           message: "CRITICAL INTAKE — immediate provider needed",
+           patient_id: context.data.form.patient_id,
+           triage: context.data.triage
+         ),
+         else => System.Value(context.data.triage),
+       }
 
     // Step 4: Generate structured clinical note
     |> ClinicalScribe.draft_note(
-         intake_form: context.data.form,
+         visit: context.data.visit,
          insurance: context.data.verify_insurance,
          chart: context.data.pull_chart,
          triage: context.data.triage
        )
 
-    // Step 5: Human sign-off — clinician must review before it enters the chart
+    // Step 5: Gate — a second agent checks the note; no diagnosis or prescription gets through
+    |> SafetyReviewer.check(note: context.data.draft_note) as safety
+    |? (context.data.safety.diagnosis == false && context.data.safety.prescription == false)
+
+    // Step 6: Human sign-off — clinician must review before it enters the chart
     |! yield(
          ClinicSlack,
          context.data.draft_note,

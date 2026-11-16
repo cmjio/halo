@@ -5,8 +5,9 @@
 // ============================================================
 
 // --- Policies ---
-policy WCAG2x : Enforce("WCAG.JSON")
-policy BrandSystem : Enforce("DesignTokens.JSON")
+// Both answers are read field by field, so both must be JSON.
+policy WCAG2x : Enforce(JSON)
+policy BrandSystem : Enforce(JSON)
 
 // --- Tools ---
 tool FigmaAPI : POST("api.figma.com/v1", apiKey: Env.FIGMA_KEY)
@@ -33,6 +34,7 @@ agent TokenMaster [anthropic/claude-3-5-sonnet, temp: 0.5]
     valid JSON matching the team's token schema.
   """
   equips DesignTokens
+  requires BrandSystem
 
 agent MockArtist [openai/dall-e-3, temp: 0.8]
   system """
@@ -42,7 +44,7 @@ agent MockArtist [openai/dall-e-3, temp: 0.8]
   """
 
 // --- The Pipeline ---
-pipeline AuditScreen(screen: Figma.Screen) -> Report:
+pipeline AuditScreen(screen: JSON) -> Result:
   screen
     // Step 1: Automated accessibility audit
     |> Auditor.audit(

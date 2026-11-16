@@ -19,8 +19,8 @@ pipeline Answer(question: String) -> Result:
 On each `SupportBot` call:
 
 1. **Budget.** If the run has already spent $5.00, the call fails before anything is sent.
-2. **Input.** Emails, phone numbers, SSNs, cards, and API keys in the prompt are replaced with `[REDACTED:…]`. A prompt-injection pattern fails the call.
-3. **Output.** The answer is redacted the same way. It must parse as JSON, stay under 400 words, and contain no Markdown. If it doesn't, `@correct(2)` sends the model its rejected answer and the reason, up to two more times. After that, the run throws a `PolicyViolation`.
+2. **Input.** Emails, phone numbers, SSNs, cards, and API keys in the prompt (and in the results of tools it calls) are replaced with `[REDACTED:…]`. A prompt-injection pattern fails the call.
+3. **Output.** The answer, and the arguments of any tool call it makes, are redacted the same way. It must parse as JSON, stay under 400 words, and contain no Markdown. If it doesn't, `@correct(2)` sends the model its rejected answer and the reason, up to two more times. After that, the run throws a `PolicyViolation`.
 
 Every violation is added to `context.meta.violations` and emitted as a `violation` event. `halo run` prints each one.
 

@@ -7,7 +7,10 @@
 // ============================================================
 
 // --- SAFETY & COMPLIANCE ---
-policy FinancialCompliance : Redact(PFI) & Block(InsiderTrading)
+// Personal financial data is masked before any model sees it, and news
+// text can't steer the agents. Insider trading can't be pattern-matched:
+// the RiskAssessor's approve/reject gate and the human sign-off stop it.
+policy FinancialCompliance : Redact(PII, APIKey) & Block(PromptInjection)
 policy BudgetLimit         : MaxSpend(25.00)
 
 // --- TOOLS: External connections ---
@@ -21,6 +24,16 @@ tool MarketHistory  : VectorStore(Env.PINECONE_KEY, namespace: "market-data")
 tool Playbook       : VectorStore(Env.PINECONE_KEY, namespace: "response-playbooks")
 
 // --- MINDS: The agents ---
+// A second model answers every Researcher call alongside it; its answers are
+// recorded in context.meta.shadows for comparison, never used.
+agent Researcher_QA [openai/gpt-4o, temp: 0.1]
+  system """
+    You are a quantitative research analyst specializing in
+    market anomaly detection. Always include confidence
+    intervals and cite data sources.
+  """
+  requires FinancialCompliance, BudgetLimit
+
 // The researcher runs deep analysis with full tool access
 @shadow(Researcher_QA)
 agent Researcher [anthropic/claude-sonnet-4, temp: 0.1]
@@ -49,14 +62,20 @@ agent RiskAssessor [anthropic/claude-sonnet-4, temp: 0.0]
     You are a risk compliance officer. Make binary approve/reject
     decisions on analyst reports. Check for regulatory exposure,
     position-size risk, and compliance violations. Reject
-    anything with unresolved red flags.
+    anything with unresolved red flags, and anything that rests
+    on material non-public information.
+    Answer with JSON: {"decision": "approve" | "reject", "reason": "..."}
   """
   requires FinancialCompliance, BudgetLimit
 
 // --- THE STREAM ---
+schema MarketAnomaly {
+  symbol : String
+}
+
 @timeout(10m)
 @retry(3, 5s)
-pipeline AnomalyResponse(alert: Alert.MarketAnomaly) -> Report:
+pipeline AnomalyResponse(alert: MarketAnomaly) -> Result:
   alert
     // Step 1: Fan-out — run independent investigations in parallel
     // Both tasks merge automatically when the block closes

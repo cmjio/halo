@@ -33,6 +33,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
+      - name: Install the registry packages examples use (examples/halo.json)
+        working-directory: examples
+        run: bun ../index.ts install
       - name: Every example validates
         run: bun index.ts validate examples/
 

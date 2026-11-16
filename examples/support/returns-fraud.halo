@@ -1,13 +1,16 @@
 // ============================================================
 // E-commerce — Returns Fraud Detection & Processing
 // PURPOSE: Automate return requests — detect fraud patterns,
-//          verify purchase history, process legitimate returns,
-//          escalate suspicious ones to loss prevention
+//          verify purchase history, refund low-risk returns,
+//          and send everything else to loss prevention, who
+//          approve or decline it before any money moves
 // ============================================================
 
 // --- Policies ---
 policy PII           : Redact(CreditCard) & Redact(SSN)
-policy FraudPolicy   : Block(RefundAbuse) & Block(WardrobeReturn)
+// Refund abuse and wardrobing are judged by FraudDetector's score, which routes the return
+// below; the policy makes sure that score is a real number from 0 to 100.
+policy FraudPolicy   : Enforce(JSON) & Validate("fraud_score", ">=", "0") & Validate("fraud_score", "<=", "100")
 policy CostGuard     : MaxSpend(0.50)
 
 // --- Tools ---
@@ -33,13 +36,18 @@ agent ReturnBot [openai/gpt-4o-mini, temp: 0.0]
   requires PII, CostGuard
 
 agent FraudDetector [anthropic/claude-sonnet-4, temp: 0.0]
+  system """
+    Score how likely a return is abuse (0-100): serial returns, wardrobing
+    (worn and returned), item-not-received claims against delivered orders.
+    Answer JSON: {"fraud_score": <0-100>, "signals": [...]}.
+  """
   equips ReturnHistory, FraudSignals
   requires PII, FraudPolicy, CostGuard
 
 // --- The Pipeline ---
 @timeout(2m)
 @retry(2, 5s)
-pipeline ProcessReturn(request: ReturnRequest) -> ReturnDecision:
+pipeline ProcessReturn(request: JSON) -> ReturnDecision:
   request
     // Step 1: Fan-out — verify order and check fraud signals in parallel
     |* {
@@ -56,21 +64,32 @@ pipeline ProcessReturn(request: ReturnRequest) -> ReturnDecision:
          )
        }
 
-    // Step 2: Gate — if fraud score is high, escalate immediately
-    |? (context.data.score_risk.fraud_score > 70)
-    |> CXSlack.post(
-         message: "FRAUD ALERT — manual review required",
-         order: context.data.verify_order,
+    // Step 2: Route on the fraud score: a low-risk return is refunded,
+    // anything else waits for loss prevention
+    |? {
+        (context.data.score_risk.fraud_score < 30) => Refund(context.data.request),
+        else => LossPrevention(context.data.request, context.data.score_risk, context.data.verify_order),
+      } as outcome
+
+    // Step 3: Record the decision in the declared shape
+    |> ReturnBot.decide(
          fraud: context.data.score_risk,
-         channel: "loss-prevention"
+         outcome: context.data.outcome,
+         request: context.data.request
+       ) as decision
+
+    // Step 4: Log the return for future pattern detection
+    |> ReturnHistory.log(
+         customer: context.data.request.customer_id,
+         amount: context.data.request.item_price,
+         reason: context.data.request.reason,
+         fraud_score: context.data.score_risk.fraud_score
        )
-    |! yield(CXSlack, context.data.score_risk, [context.data.verify_order], 4h)
-    ~> listen(CXSlack.Reaction)
+    |> System.Value(context.data.decision)
 
-    // Step 3: Gate — auto-approve if fraud score is low and within policy
-    |? (context.data.score_risk.fraud_score < 30)
-
-    // Step 4: Process the refund
+// Issue the refund to the original payment method.
+pipeline Refund(request: JSON) -> Result:
+  request
     |> ReturnBot.issue_refund(
          tool: PaymentGW,
          order_id: context.data.request.order_id,
@@ -78,10 +97,18 @@ pipeline ProcessReturn(request: ReturnRequest) -> ReturnDecision:
          method: "original_payment"
        )
 
-    // Step 5: Log the return for future pattern detection
-    |> ReturnHistory.log(
-         customer: context.data.request.customer_id,
-         amount: context.data.request.item_price,
-         reason: context.data.request.reason,
-         fraud_score: context.data.score_risk.fraud_score
+// A risky return: loss prevention approves or declines it before any money moves.
+pipeline LossPrevention(request: JSON, risk: JSON, order: JSON) -> Result:
+  risk
+    |> CXSlack.post(
+         message: "FRAUD ALERT — manual review required",
+         order: context.data.order,
+         fraud: context.data.risk,
+         channel: "loss-prevention"
        )
+    |! yield(CXSlack, context.data.risk, [context.data.order], 4h)
+    ~> listen(CXSlack.Reaction) as review
+    |? {
+        (context.data.review.approved == true) => Refund(context.data.request),
+        else => System.Value("declined by loss prevention"),
+      }

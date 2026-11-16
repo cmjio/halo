@@ -7,8 +7,9 @@
 // ============================================================
 
 // --- GUARDRAILS: Hard boundaries ---
-policy PIIProtection   : Redact(SSN) & Redact(CreditCard) & Redact(HealthData)
-policy OutputSafety    : Block(HarmfulContent) & Block(HateSpeech) & Block(SexualContent)
+// Personal data in a submission is masked before any model reads it. Whether content is
+// harmful is a judgment no pattern can make: the triage score and the review route decide it.
+policy PIIProtection   : Redact(PII)
 policy CostControl     : MaxSpend(2.00)
 
 // --- TOOLS ---
@@ -29,7 +30,7 @@ agent TriageAgent [openai/gpt-4o-mini, temp: 0.0]
     safe, borderline, or blocked. Optimize for throughput
     — most content should auto-clear in under 500ms.
   """
-  requires CostControl
+  requires PIIProtection, CostControl
 
 // The deep-review agent handles edge cases with precision
 @timeout(60s)
@@ -40,6 +41,7 @@ agent ReviewAgent [google/gemini-flash, temp: 0.1]
     context, satire, and intent. Report risk level with
     detailed reasoning for borderline decisions.
   """
+  requires PIIProtection, CostControl
 
 // The policy expert knows regulations inside-out
 agent PolicyExpert [anthropic/claude-sonnet-4, temp: 0.2]
@@ -50,13 +52,14 @@ agent PolicyExpert [anthropic/claude-sonnet-4, temp: 0.2]
     every decision. Never approve content you're uncertain about.
   """
   equips PolicyRules
+  requires PIIProtection, CostControl
 
 // --- The Pipelines ---
 // Every submission gets exactly one outcome: the branch (|? { ... })
 // sends it down the first route whose condition holds.
 @timeout(5m)
 @retry(3, 10s)
-pipeline ModerateContent(submission: ContentSubmission) -> Decision:
+pipeline ModerateContent(submission: JSON) -> Result:
   submission
     // Layer 1: Quick triage scores every submission cheaply
     |> TriageAgent.screen(
@@ -82,7 +85,7 @@ pipeline ModerateContent(submission: ContentSubmission) -> Decision:
 
 // Ambiguous content: a careful model reviews it against policy.
 @timeout(2m)
-pipeline DeepReview(submission: ContentSubmission) -> Decision:
+pipeline DeepReview(submission: JSON) -> Result:
   submission
     |> ReviewAgent.evaluate(
         content: context.data.submission.body,
@@ -97,7 +100,7 @@ pipeline DeepReview(submission: ContentSubmission) -> Decision:
       }
 
 // High-risk content: a human moderator makes the call.
-pipeline HumanReview(submission: ContentSubmission, review: Review) -> Decision:
+pipeline HumanReview(submission: JSON, review: JSON) -> Result:
   review
     |! yield(
         queue: EscalationQueue,

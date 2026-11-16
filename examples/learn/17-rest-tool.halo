@@ -8,7 +8,8 @@
 // Define a REST API tool
 tool WeatherAPI : REST("api.openweathermap.org/data/2.5", apiKey: Env.OWM_KEY)
 
-policy NoSensitive : Redact(APIKey) & Redact(Location)
+// A key echoed back in an API response is masked before the agent sees it
+policy NoSensitive : Redact(APIKey)
 
 agent Analyst [openai/gpt-4o, temp: 0.3]
   equips WeatherAPI

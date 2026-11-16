@@ -2,9 +2,17 @@
 // Founder / CEO
 // PURPOSE: Morning briefing — synthesize metrics, news, and
 //          investor updates into an executive summary
+//
+// ENFORCED IN CODE:
+//   - News and competitor feeds are untrusted: text in them that
+//     tries to instruct a model is blocked.
+//   - Personal details and API keys are redacted on the way in and
+//     out, so they can't reach the Slack digest.
+//   - Analyst_V2 shadows Analyst on every call; its answers are
+//     recorded for comparison and never used.
 // ============================================================
 
-policy Confidential    : Redact(Revenue) & Redact(SalaryData)
+policy Confidential    : Redact(PII) & Redact(APIKey) & Block(PromptInjection)
 policy BrevityPolicy   : MaxWords(500)
 
 // --- Tools ---
@@ -30,6 +38,15 @@ agent Analyst [anthropic/claude-sonnet-4, temp: 0.1]
   equips StripeAPI, AnalyticsAPI, NewsFeed, CompetitorIntel
   requires Confidential
 
+// A candidate replacement for Analyst, run alongside it to compare
+agent Analyst_V2 [openai/gpt-4o, temp: 0.1]
+  system """
+    You are a senior financial analyst at a Series B startup.
+    Respond with structured JSON containing: value, delta,
+    trend ("up"|"down"|"flat"), and confidence (0.0-1.0).
+  """
+  requires Confidential
+
 agent Summarizer [openai/gpt-4o-mini, temp: 0.3]
   system """
     You are an executive communications specialist.
@@ -42,7 +59,7 @@ agent Summarizer [openai/gpt-4o-mini, temp: 0.3]
 // --- The Pipeline ---
 @timeout(5m)
 @retry(2, 30s)
-pipeline MorningBriefing(date: Date, company_name: String) -> Digest:
+pipeline MorningBriefing(date: String, company_name: String) -> Result:
   date
     // Step 1: Fan-out — pull all data sources in parallel (fast, independent reads)
     |* {

@@ -10,7 +10,8 @@ tool StripeAPI : REST("api.stripe.com/v1", apiKey: Env.STRIPE_KEY)
 tool SlackBot  : POST("hooks.slack.com/services/alerts", apiKey: Env.SLACK_TOKEN)
 tool VectorDB  : VectorStore(Env.PINECONE_KEY, namespace: "production")
 
-policy Privacy : Redact(SalaryData) & Redact(Revenue)
+// If a key ever shows up in data an agent reads, it is masked before the model sees it
+policy Privacy : Redact(APIKey)
 
 // Agent that uses environment for API key
 agent Analyst [openai/gpt-4o, temp: 0.3]

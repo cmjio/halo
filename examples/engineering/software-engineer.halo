@@ -6,7 +6,8 @@
 // ============================================================
 
 // --- Policies ---
-policy ChangeSafety    : Block(DestructiveOps) & Require(Approver)
+// A human approves by merging the PR (the yield and listen at the end).
+policy ChangeSafety    : Block(DestructiveOps)
 policy CostControl     : MaxSpend(5.00)
 // The fixer works only inside its sandbox; nothing it does reaches a real repo.
 policy SandboxOnly     : AllowTools("Checkout.run", "Checkout.read", "Checkout.write", "Checkout.list")
@@ -67,9 +68,20 @@ agent CodeReviewer [anthropic/claude-sonnet-4, temp: 0.0]
   requires ChangeSafety, CostControl
 
 // --- The Pipeline ---
+schema Incident {
+  id                : String
+  summary           : String
+  last_50_errors    : Array
+  error_window      : String
+  service_name      : String
+  affected_endpoint : String
+  service_language  : String
+  repo              : String
+}
+
 @timeout(15m)
 @retry(2, 5s)
-pipeline AutoRemediate(incident: PagerDuty.Incident) -> Resolution:
+pipeline AutoRemediate(incident: Incident) -> Result:
   incident
     // Step 1: Fast classification — is this a known issue type?
     |> Triage.classify(

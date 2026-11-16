@@ -242,7 +242,7 @@ Tokens can be `Env.NAME` or the string `"Env.NAME"`. An agent calls an equipped 
 
 Checked on every prompt (input) and answer (output) of agents that `requires` them:
 
-- `Block(...)`: Profanity, DestructiveOps, PromptInjection, PII, SSN, CreditCard (Luhn-checked), Email, Phone, APIKey, Markdown
+- `Block(...)`: Profanity, DestructiveOps, PromptInjection, PII, SSN, CreditCard (Luhn-checked), Email, Phone, APIKey, IPAddress, Markdown
 - `Redact(...)`: PII, SSN, CreditCard, Email, Phone, APIKey, IPAddress
 - `MaxWords(n)`, `MaxChars(n)`, `MaxTokens(n)`, `MaxSpend(usd)` (per run)
 - `Require(JSON | XML | Citation)` (`Enforce(JSON)` also works), `MatchRegex("...")`

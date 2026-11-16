@@ -37,7 +37,7 @@ agent Editor [anthropic/claude-sonnet-4-5, temp: 0.2]
 // --- The Pipeline ---
 @timeout(3m)
 @retry(2, 2s)
-pipeline TriageIssues(repo: String, limit: Number) -> Report:
+pipeline TriageIssues(repo: String, limit: Number) -> Result:
   repo
     // 1. Fetch open issues (pull requests excluded) from GitHub's search API
     |> GitHub.search(
@@ -103,7 +103,7 @@ pipeline TriageIssues(repo: String, limit: Number) -> Report:
        }
 
 // Adds each issue's suggested labels (two requests at a time).
-pipeline ApplyLabels(repo: String, issues: List) -> Labeled:
+pipeline ApplyLabels(repo: String, issues: List) -> List:
   issues
     |* each(issue in issues, concurrency: 2) => GitHubWrite.add_labels(
          path: "/repos/{{repo}}/issues/{{issue.number}}/labels",
