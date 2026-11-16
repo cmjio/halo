@@ -6,7 +6,7 @@
  *   2. Write it where the docs read it: docs/.vitepress/generated/ (data for the theme's
  *      components, and code groups of real output to include) and docs/examples/ (a page
  *      per example).
- *   3. Build the docs, then add the package registry.
+ *   3. Build the docs, then add the package registry and llms.txt (site/llms.ts).
  *
  *   bun site/build.ts                 everything (runs the test suite first)
  *   bun site/build.ts --generate      only step 2 (bun run docs:dev runs this first)
@@ -24,6 +24,7 @@ import { readPackage } from "../src/registry/format.ts";
 import pkg from "../package.json" with { type: "json" };
 import { SECTIONS, exampleFiles } from "../examples/catalog.ts";
 import { icon } from "./src/icons.ts";
+import { buildLlms } from "./llms.ts";
 
 const root = resolve(import.meta.dir, "..");
 const site = import.meta.dir;
@@ -296,4 +297,29 @@ cpSync(join(root, "docs/.vitepress/dist"), dist, { recursive: true });
 cpSync(join(root, "registry/v1"), join(dist, "registry/v1"), { recursive: true });
 cpSync(join(root, "registry/index.json"), join(dist, "registry/index.json"));
 cpSync(join(root, "registry/packages"), join(dist, "registry/packages"), { recursive: true });
+
+// llms.txt, llms-full.txt and each page as Markdown, from the docs' sources and sidebar.
+const config = (await import("../docs/.vitepress/config.ts")).default;
+const effects = (methods: { name: string; effect?: string }[]) =>
+  methods.length ? methods.map((m) => `\`${m.name}\`${m.effect ? ` (${m.effect})` : ""}`).join(", ") : "methods are listed at run time";
+const packageMd = packages
+  .map((p) => `- **${p.name}** ${p.version}: ${p.description}${p.providers.map((pr) => `\n  - \`${pr.name}\`: ${effects(pr.methods)}`).join("")}`)
+  .join("\n");
+const llms = buildLlms({
+  root,
+  version: pkg.version,
+  sidebar: (config.themeConfig?.sidebar as Record<string, any>)["/"],
+  examples: SECTIONS.map((s) => ({
+    text: s.title,
+    items: examples.filter((e) => e.section === s.folder).map((e) => ({ text: e.title || e.name, link: `/examples/${slug(e.file)}`, about: e.about })),
+  })),
+  components: {
+    ProvidersTable: `${Object.entries(providers)
+      .map(([name, p]) => `- \`${name}\`: ${(p.description ?? "").replace(/\.+$/, "")}. Methods: ${effects(p.methods ?? [])}`)
+      .join("\n")}\n\nFrom the package registry:\n\n${packageMd}`,
+    PackageList: packageMd,
+  },
+});
+for (const [path, text] of Object.entries(llms)) await Bun.write(join(dist, path), text);
+console.log(`llms.txt: ${Object.keys(llms).length - 2} pages as Markdown`);
 console.log(`built ${dist}`);
