@@ -91,6 +91,16 @@ after the rest of the release shipped, fix the setup and rerun only that job (`g
 After the first release, open the `halo` package under the account's GitHub Packages, and
 change its visibility to public so `docker pull` works without signing in.
 
+**Homebrew.** `brew install cmjio/halo/halolang` reads the formula from the tap repository
+[cmjio/homebrew-halo](https://github.com/cmjio/homebrew-halo). After each stable release
+(not prereleases or nightlies), the `homebrew` job regenerates `Formula/halolang.rb` with
+`bun scripts/homebrew.ts` (pointing at the GitHub release's binaries and their checksums)
+and pushes it there. That push needs a token, since the workflow's own can't write to
+another repository: a fine-grained personal access token with access to only
+`cmjio/homebrew-halo` and **Contents · Read and write**, stored with
+`gh secret set HOMEBREW_TAP_TOKEN`. If the job fails, fix the token and rerun it
+(`gh run rerun <id> --failed`); it does nothing when the formula is already current.
+
 ## Install counts
 
 ```bash

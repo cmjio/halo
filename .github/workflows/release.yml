@@ -23,6 +23,7 @@
 #      halolang.com/dl (R2), then the site
 #   4. image: ghcr.io/cmjio/halo for amd64 and arm64, from the Linux binaries (docker/)
 #   5. npm: @halolang/halo and its per-platform binary packages (scripts/npm.ts, npm/)
+#   6. homebrew: the halolang formula in cmjio/homebrew-halo, for stable releases (scripts/homebrew.ts)
 #
 # Publishing to halolang.com needs the CLOUDFLARE_API_TOKEN secret and the
 # CLOUDFLARE_ACCOUNT_ID variable (see .github/RELEASING.md).
@@ -292,6 +293,45 @@ jobs:
           name: npm-logs
           path: ~/.npm/_logs/
           if-no-files-found: ignore
+
+  # The halolang formula in the tap, github.com/cmjio/homebrew-halo, for stable releases only:
+  # `brew install cmjio/halo/halolang`. It downloads from the GitHub release, so it runs after
+  # publish. Pushing to the tap needs the HOMEBREW_TAP_TOKEN secret (see .github/RELEASING.md).
+  homebrew:
+    needs: [plan, build, publish]
+    if: needs.plan.outputs.channel == 'latest'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set the version
+        run: jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: Update the formula in cmjio/homebrew-halo
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::error::Set the HOMEBREW_TAP_TOKEN secret to update the Homebrew tap (see .github/RELEASING.md). Everything else is published."
+            exit 1
+          fi
+          git clone "https://x-access-token:$TAP_TOKEN@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-halo.git" tap
+          bun scripts/homebrew.ts --out tap/Formula/halolang.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/halolang.rb
+          if git diff --cached --quiet; then echo "The formula is already at $VERSION"; exit 0; fi
+          git commit -m "halolang $VERSION"
+          git push
 
   publish:
     needs: [plan, build, macos, windows]
