@@ -1013,7 +1013,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           return json(result ? { runId, status: result.status, output: result.output, cost: result.context.meta.cost } : { runId, status: "error" });
         }
 
-        if (path === "/api/runs" && req.method === "GET") return json(telemetry.listRuns(Number(url.searchParams.get("limit") ?? 50)));
+        // `running` says this server is working on it now; a run with no end and no `running` was started elsewhere (the CLI) or cut short.
+        if (path === "/api/runs" && req.method === "GET") return json(telemetry.listRuns(Number(url.searchParams.get("limit") ?? 50)).map((r) => ({ ...r, running: inflight.has(r.run_id) })));
 
         const run = path.match(/^\/api\/runs\/([\w-]+)$/);
         if (run && req.method === "GET") {
