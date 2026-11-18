@@ -56,7 +56,7 @@ The CLI records every `run`, `debug`, `test`, and `resume` to `.halo/telemetry.d
 halo serve        # Studio at http://127.0.0.1:8080/ (also: bun run studio)
 ```
 
-Studio lists recent runs (pipeline, status, duration, cost), draws each one as a chart of its stages, model calls, and tool calls, and shows any step's prompt, answer, tokens, and cost. It can also start pipelines and approve paused runs. Start it from the folder whose `.halo/` you want to see (or set `stateDir` in `halo.json`). See [Serving pipelines](../production/serving.md).
+Studio lists recent runs (pipeline, status, duration, cost), draws each one as a timeline of its stages, model calls, and tool calls (so you can see what ran in parallel and where the time went), and shows any step's prompt, answer, tokens, and cost. It can also start pipelines and answer paused runs. Start it from the folder whose `.halo/` you want to see (or set `stateDir` in `halo.json`). See [Serving pipelines](../production/serving.md).
 
 In the library, telemetry is **opt-in**. Use `SqliteTelemetry` as the event handler:
 
