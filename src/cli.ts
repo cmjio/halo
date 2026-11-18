@@ -1252,8 +1252,13 @@ async function cmdUpgrade(flags: Flags): Promise<number> {
     console.log(`This halo runs from a checkout of the source (${process.execPath} ${Bun.main}); update it with git pull.`);
     return 0;
   }
-  // The npm package and the container image set this, because replacing the binary in place would fight them.
+  // The npm package, the Homebrew formula and the container image set this, because replacing the binary in place would fight them.
   const by = process.env.HALO_INSTALLED_BY;
+  if (by === "homebrew") {
+    const tip = channel === "latest" ? "" : ` (Homebrew has stable releases only; for ${channel}, use curl -fsSL https://halolang.com/install.sh | HALO_VERSION=${channel} sh)`;
+    console.log(`This halo was installed with Homebrew. Update it there: brew upgrade halolang${tip}.`);
+    return 0;
+  }
   if (by === "npm") {
     console.log(`This halo was installed with npm. Update it there: npm install @halolang/halo@${channel} (or bun add, pnpm add, yarn add).`);
     return 0;
