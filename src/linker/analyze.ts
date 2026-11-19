@@ -197,6 +197,7 @@ export function toolEffect(t: ToolDeclaration, file: string): ToolEffectSummary 
     }
   };
   envRefs(t.argList);
+  for (const rule of t.rules ?? []) envRefs(rule.args.map((value) => ({ value })));
   const first = t.argList.find((a) => !a.name)?.value;
   const named = (key: string) => t.argList.find((a) => a.name === key)?.value;
   const hostOf = (v: (typeof t.argList)[number]["value"] | undefined) => {

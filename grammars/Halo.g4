@@ -37,7 +37,8 @@ policyDecl: 'policy' IDENTIFIER ':' policyRule ('&' policyRule)*;
 policyRule: IDENTIFIER '(' callArgs? ')';
 
 // ── Tools & Stores ──
-toolDecl: 'tool' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')';
+// Rules after the provider narrow the tool's arguments: Fixed, Match, Locked, Unlocked.
+toolDecl: 'tool' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')' ('&' policyRule)*;
 
 storeDecl: 'store' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')';
 

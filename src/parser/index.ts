@@ -240,11 +240,13 @@ class Walker {
   tool(ctx: ToolDeclContext | StoreDeclContext): ToolDeclaration {
     const ids = ctx.IDENTIFIER();
     const argList = this.args(ctx.callArgs());
+    const rules = "policyRule" in ctx ? ctx.policyRule().map((r) => ({ name: r.IDENTIFIER().getText(), args: this.args(r.callArgs()).map((a) => a.value) })) : [];
     return {
       name: ids[0]!.getText(),
       provider: ids[1]!.getText(),
       ...renderArgs(argList),
       argList,
+      ...(rules.length ? { rules } : {}),
       loc: this.loc(ctx),
     };
   }

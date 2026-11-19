@@ -45,7 +45,7 @@ module.exports = grammar({
     policy_rule: ($) => seq(field("name", $.identifier), $.call_args),
 
     // === Tool & Store ===
-    tool_decl: ($) => seq("tool", field("name", $.identifier), ":", field("provider", $.identifier), $.call_args),
+    tool_decl: ($) => seq("tool", field("name", $.identifier), ":", field("provider", $.identifier), $.call_args, repeat(seq("&", $.policy_rule))),
 
     store_decl: ($) => seq("store", field("name", $.identifier), ":", field("provider", $.identifier), $.call_args),
 

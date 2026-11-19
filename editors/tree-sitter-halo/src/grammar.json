@@ -574,6 +574,22 @@
         {
           "type": "SYMBOL",
           "name": "call_args"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "&"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "policy_rule"
+              }
+            ]
+          }
         }
       ]
     },

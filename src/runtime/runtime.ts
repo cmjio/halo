@@ -61,6 +61,7 @@ import { skillSources } from "./providers/skills.js";
 import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
 import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } from "./threads.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
+import { constrain, shownParams, ToolRuleViolation } from "./tool-rules.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
 import { HOSTED_PROVIDER, HOSTED_PROVIDER_INFO, hostedProvider } from "./hosted.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
@@ -190,6 +191,13 @@ export interface ShadowRecord {
 
 export interface RunMeta {
   runId: string;
+  /**
+   * What makes this run's tool calls safe to repeat: the key the run was started with, else its
+   * run id. Each call's own key is derived from it (see `ToolCall.idempotencyKey`).
+   */
+  idempotencyKey?: string;
+  /** A rehearsal: models and tools answered from mocks, so nothing was sent anywhere. */
+  dryRun?: boolean;
   pipeline: string;
   startedAt: string;
   finishedAt?: string;
@@ -843,11 +851,13 @@ export class HaloRuntime {
   }
 
   /** Execute a named pipeline and return its output, status, and full context. */
-  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string } = {}): Promise<RunResult> {
+  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string; idempotencyKey?: string; dryRun?: boolean } = {}): Promise<RunResult> {
     const pipeline = this.pipelines.get(pipelineName);
     if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
     const ctx = this.newContext(pipeline, args, 0, options.signal);
     if (options.runId) ctx.meta.runId = options.runId;
+    if (options.idempotencyKey) ctx.meta.idempotencyKey = options.idempotencyKey;
+    if (options.dryRun) ctx.meta.dryRun = true;
     return this.runTop(ctx, 0);
   }
 
@@ -941,6 +951,8 @@ export class HaloRuntime {
         violations: [],
         shadows: [],
         rewoundFrom: { runId: cp.meta.runId, step: s.step },
+        // The same key as the run it came from, so a call it already made isn't made a second time.
+        idempotencyKey: cp.meta.idempotencyKey ?? cp.meta.runId,
       },
     };
     if (cp.thread) {
@@ -1891,7 +1903,7 @@ export class HaloRuntime {
         if (!this.guard.toolVisible(agent, target, method.effect)) continue;
         kit.offered.push(this.displayName(target));
         const about = info?.description ? `${shown} (${info.description}): ${method.description}` : `${shown}: ${method.description}`;
-        kit.specs.push({ name: fn, description: about.slice(0, 1024), parameters: method.params ?? { type: "object", properties: {} } });
+        kit.specs.push({ name: fn, description: about.slice(0, 1024), parameters: shownParams(tool, method.params) });
       }
     }
     if (!kit.specs.length) throw new HaloError(`Agent "${agent.name}" has tools, but its policies allow none of their methods`, { code: "TOOL_CONFIG" });
@@ -1985,6 +1997,17 @@ export class HaloRuntime {
       if (!(err instanceof PolicyViolation)) throw err;
       report("refused", err.message);
       return `Refused by policy "${err.policy}": ${err.message}. Don't try this call again.`;
+    }
+    // The tool's own rules (Fixed, Match, Locked) hold whatever the agent's policies say.
+    try {
+      args = constrain(entry.tool, entry.method.name, isPlainObject(args) ? args : {}, true, (v) => this.resolveValue(v, ctx, { allowEnv: true, owner: entry.tool.name }));
+    } catch (err) {
+      if (!(err instanceof ToolRuleViolation)) throw err;
+      const v: Violation = { policy: entry.tool.name, rule: err.rule, message: err.message, phase: "tool" };
+      ctx.meta.violations.push(v);
+      this.emit({ type: "violation", runId: ctx.meta.runId, ...v });
+      report("refused", err.message);
+      return `Refused by the tool's rules: ${err.message}. Don't try this call again.`;
     }
     let decision: "allowed" | "approved" = "allowed";
     if (check !== "allow") {
@@ -2290,12 +2313,18 @@ export class HaloRuntime {
   /** Call a tool. `chosenBy` names the agent that chose the call: its arguments are all it gets (never the pipeline value). */
   private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean, chosenBy?: string): Promise<unknown> {
     const target = `${tool.name}.${method}`;
+    // A call an agent chose was checked against the tool's rules before anyone was asked to approve it.
+    if (chosenBy === undefined) named = constrain(tool, method, named, false, (v) => this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name }));
     const implicitInput = chosenBy === undefined && !positional.length && ctx.current !== undefined;
     const args = implicitInput ? [ctx.current] : positional;
     const { config, template0 } = this.toolConfig(tool, ctx);
 
     const t0 = performance.now();
     const fingerprint = toolFingerprint(target, args, named);
+    const top = this.topMeta(ctx);
+    // The same call, with the same arguments, at the same step of the same run always gets the same key,
+    // whether it is a retry, a stage run again after a restart, or a model asking twice.
+    const idempotencyKey = `halo_${sha256(top.idempotencyKey ?? top.runId, ctx.pipeline.name, String(ctx.stageIndex), fingerprint).slice(0, 40)}`;
     const mock = this.mockFor(target, tool.name);
     const provider = this.providers.get(tool.provider);
     if (!mock && !provider) throw new HaloError(`Unknown tool provider "${tool.provider}" for tool "${tool.name}" (register it with runtime.registerToolProvider)`);
@@ -2303,7 +2332,7 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current, fingerprint }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId, branch: ctx.branch, pauses: this.topMeta(ctx).pauses ?? 0 }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: top.runId, branch: ctx.branch, pauses: top.pauses ?? 0, idempotencyKey }, this.toolServices()), mocked: false },
     );
     (ctx.effects ??= []).push(sha256(target, fingerprint, safeJson(result.value)));
     // A sandbox's egress allowlist refused hosts: a policy violation, like a refused tool call.

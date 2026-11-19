@@ -25,6 +25,8 @@ import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
+import { mockEverything, splitMocks } from "../runtime/mocks.js";
+import { SIGNATURE_HEADER, signBody } from "../runtime/signing.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
 import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
 import { checkTimeZone, CronError, nextSlot, parseCron, slotsBetween, type CronSchedule } from "./cron.js";
@@ -55,8 +57,18 @@ export interface ServeConfig {
   schedules?: ScheduleConfig[];
   /** POST /hooks/<path> starts <pipeline>. With a secret, requests must carry it (or a GitHub signature). */
   webhooks?: Array<{ path: string; pipeline: string; secret?: string }>;
-  /** Where to announce paused runs: a Slack incoming-webhook URL. */
-  notify?: { slack?: string };
+  /**
+   * `slack`: a Slack incoming-webhook URL, to announce paused runs.
+   * `webhook`: your app's URL. Halo POSTs there when a run completes, halts, fails or pauses,
+   * signed with `secret` (see runtime/signing.ts). `events` narrows which: "completed",
+   * "halted", "failed", "paused".
+   */
+  notify?: { slack?: string; webhook?: string; secret?: string; events?: string[] };
+  /**
+   * A mocks file (as `halo run --mocks` reads) for dry runs: a start request with
+   * `"dryRun": true` answers every model and tool from it, and nothing is sent anywhere.
+   */
+  mocks?: string;
   /** Start pipelines when a URL, file, or command's output changes (see watch.ts). */
   watches?: WatchConfig[];
   /**
@@ -139,6 +151,10 @@ export interface ServeOptions extends ServeConfig {
   studio?: boolean;
   /** Set to "PORT" when the host was chosen because PORT is set (see listenAddress), to explain a refusal. */
   hostFrom?: string;
+  /** Every run is a dry run (`halo serve --mocks <file>`): no model is called and no tool runs. */
+  dryRun?: boolean;
+  /** How long to wait before each further try of a run callback. Default 2s, 10s, 60s. */
+  callbackRetryMs?: number[];
   /** Start the cron timer. Default true (tests call tick() instead). */
   scheduler?: boolean;
   logger?: Pick<Console, "log" | "warn" | "error">;
@@ -158,6 +174,8 @@ interface Entry {
   name: string;
   file: string;
   runtime: HaloRuntime;
+  /** The same file with every model and tool mocked, for dry runs (made when first needed). */
+  dry?: HaloRuntime;
   decl: PipelineDeclaration;
   ast: ParseResult;
   /** Absolute path of the file. */
@@ -178,7 +196,7 @@ export interface HaloServer {
   /** Check every watch now; resolves with the runs started by changes. */
   checkWatches(): Promise<string[]>;
   /** Start a run as the API would; resolves with its id. */
-  start(pipeline: string, args: Record<string, unknown>, source: string): string;
+  start(pipeline: string, args: Record<string, unknown>, source: string, how?: StartOptions): string;
   /** Wait for a started run to finish its current stretch (complete, halt, pause, or fail). */
   settled(runId: string): Promise<RunResult | undefined>;
   /** The signed link answering a paused run's current pause (undefined if it isn't paused). */
@@ -189,6 +207,40 @@ export interface HaloServer {
 }
 
 export class ServeError extends Error {}
+
+/** How a run is started, beyond its arguments. */
+export interface StartOptions {
+  /**
+   * Starting again with the same key (for the same pipeline) returns the first run instead of
+   * starting another. The key also seeds each tool call's own idempotency key.
+   */
+  idempotencyKey?: string;
+  /** Answer every model and tool from mocks. */
+  dryRun?: boolean;
+}
+
+/** What a run callback carries. */
+export interface RunCallback {
+  /** Unique per event; the same on every retry of its delivery. */
+  id: string;
+  type: "run.completed" | "run.halted" | "run.failed" | "run.paused";
+  at: string;
+  runId: string;
+  pipeline: string;
+  status: "completed" | "halted" | "failed" | "paused";
+  output?: unknown;
+  error?: string;
+  cost?: number;
+  durationMs?: number;
+  /** For a paused run: what it waits for, and the link that answers it. */
+  waitingFor?: string;
+  approveUrl?: string;
+  idempotencyKey?: string;
+  dryRun?: boolean;
+}
+
+/** A start with a key keeps its run this long, so a late retry still finds it. */
+const IDEMPOTENCY_KEEP = 7 * 24 * 60 * 60_000;
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
 
@@ -266,6 +318,9 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)${why}`);
   }
 
+  const startedAt = new Date().toISOString();
+  /** What was deployed, when the host says: an image tag or digest, a commit. */
+  const build = env.HALO_BUILD?.trim() || undefined;
   const stateDir = resolve(options.stateDir ?? ".halo");
   mkdirSync(stateDir, { recursive: true });
   const runStore = new FileRunStore(join(stateDir, "runs"));
@@ -294,6 +349,22 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   }
   // A link answers one particular pause of one run, so it can't be replayed on a later pause.
   const sign = (runId: string, pauseId: string) => createHmac("sha256", signingKey!).update(`approve:${runId}:${pauseId}`).digest("hex").slice(0, 32);
+
+  // ── Dry runs ──
+  let fileMocks: ReturnType<typeof splitMocks> | undefined;
+  if (options.mocks) {
+    const mocksFile = resolve(options.root ?? ".", options.mocks);
+    if (!existsSync(mocksFile)) throw new ServeError(`Mocks file not found: ${options.mocks}`);
+    try {
+      fileMocks = splitMocks(JSON.parse(readFileSync(mocksFile, "utf8")), options.mocks);
+    } catch (err) {
+      throw new ServeError(err instanceof SyntaxError ? `Mocks file ${options.mocks} is not valid JSON: ${err.message}` : err instanceof Error ? err.message : String(err));
+    }
+  }
+  const mockForDryRun = (rt: HaloRuntime, ast: ParseResult) => {
+    mockEverything(rt, ast, fileMocks?.live);
+    if (fileMocks) rt.mockAll(fileMocks.mocks);
+  };
 
   // ── Load pipelines ──
   const registry = new AdapterRegistry();
@@ -335,6 +406,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
+    if (options.dryRun) mockForDryRun(runtime, ast);
     for (const decl of own) {
       const prev = entries.get(decl.name);
       if (prev) throw new ServeError(`Pipeline "${decl.name}" is declared in both ${prev.file} and ${rel}`);
@@ -346,6 +418,22 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const e = entries.get(name);
     if (!e) throw new ServeError(`Unknown pipeline "${name}" (have: ${[...entries.keys()].join(", ")})`);
     return e;
+  };
+
+  /** The runtime a run of this entry uses: the real one, or (for a dry run) one where nothing is real. */
+  const dryRuntimes = new Map<string, HaloRuntime>();
+  const runtimeFor = (e: Entry, dry: boolean | undefined): HaloRuntime => {
+    if (!dry || options.dryRun) return e.runtime;
+    let rt = dryRuntimes.get(e.path);
+    if (!rt) {
+      // Thread state stays in memory, so a rehearsal never changes a real thread.
+      rt = new HaloRuntime({ logger, ...options.runtime, env, runStore, onEvent, threadPath: ":memory:" }).load(e.ast);
+      for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
+      mockForDryRun(rt, e.ast);
+      dryRuntimes.set(e.path, rt);
+      runtimes.push(rt);
+    }
+    return rt;
   };
 
   // ── Triggers from config ──
@@ -398,6 +486,17 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     webhooks.set(path, { pipeline: w.pipeline, secret });
   }
   const slackUrl = fromEnv(options.notify?.slack);
+  const callbackUrl = fromEnv(options.notify?.webhook);
+  const callbackSecret = fromEnv(options.notify?.secret);
+  if (options.notify?.webhook !== undefined) {
+    if (!callbackUrl || !/^https?:\/\/[^/]/.test(callbackUrl)) throw new ServeError(`notify.webhook "${options.notify.webhook}" must be an http(s) URL (it is empty or not set)`);
+    // An unsigned callback could be sent by anyone who knows the URL, so there is no unsigned mode.
+    if (!callbackSecret) throw new ServeError(`notify.webhook needs notify.secret (e.g. "Env.HALO_CALLBACK_SECRET"): your app uses it to check that a callback came from this server`);
+  }
+  const CALLBACK_EVENTS = ["completed", "halted", "failed", "paused"];
+  const unknownEvents = (options.notify?.events ?? []).filter((e) => !CALLBACK_EVENTS.includes(e));
+  if (unknownEvents.length) throw new ServeError(`notify.events: ${unknownEvents.join(", ")} is not one of ${CALLBACK_EVENTS.join(", ")}`);
+  const callbackEvents = new Set(options.notify?.events ?? CALLBACK_EVENTS);
   const slackSecret = fromEnv(options.slack?.signingSecret);
   if (options.slack?.signingSecret !== undefined && !slackSecret) throw new ServeError(`slack.signingSecret "${options.slack.signingSecret}" is empty or not set`);
 
@@ -430,14 +529,30 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
         logger.log(`[halo] ${label} ${r.status} (run ${runId.slice(0, 8)})`);
         remember(runId, r);
         scheduledRunEnded(runId, r.status);
+        const meta = r.context.meta;
+        void (async () =>
+          callback({
+            type: `run.${r.status}`,
+            runId,
+            pipeline: label,
+            status: r.status,
+            output: r.output,
+            cost: meta.cost,
+            durationMs: meta.durationMs,
+            ...(r.status === "paused" ? { waitingFor: meta.paused?.waitingFor, approveUrl: await approvalUrl(runId) } : {}),
+            idempotencyKey: meta.idempotencyKey,
+            dryRun: meta.dryRun,
+          }))();
         return r;
       },
       (err: unknown) => {
-        logger.error(`[halo] ${label} failed (run ${runId.slice(0, 8)}): ${err instanceof Error ? err.message : err}`);
-        failures.set(runId, err instanceof Error ? err.message : String(err));
+        const error = err instanceof Error ? err.message : String(err);
+        logger.error(`[halo] ${label} failed (run ${runId.slice(0, 8)}): ${error}`);
+        failures.set(runId, error);
         if (failures.size > 500) failures.delete(failures.keys().next().value!);
         remember(runId, undefined);
         scheduledRunEnded(runId, "error");
+        callback({ type: "run.failed", runId, pipeline: label, status: "failed", error, ...started.get(runId) });
         return undefined;
       },
     );
@@ -448,16 +563,97 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     return p;
   };
 
-  const start = (pipeline: string, args: Record<string, unknown>, source: string) => {
+  // ── Run callbacks ──
+  /** How each run this process started was started, for the callback of one that fails. */
+  const started = new Map<string, { idempotencyKey?: string; dryRun?: boolean }>();
+  const deliveries = new Set<Promise<void>>();
+  let stopping = false;
+  const callbackDelays = options.callbackRetryMs ?? [2_000, 10_000, 60_000];
+  function callback(event: Omit<RunCallback, "id" | "at">) {
+    if (!callbackUrl || !callbackSecret || !callbackEvents.has(event.status)) return;
+    const full: RunCallback = { id: crypto.randomUUID(), at: new Date().toISOString(), ...event };
+    const body = JSON.stringify(full);
+    const deliver = async () => {
+      for (let attempt = 0; ; attempt++) {
+        let problem: string;
+        try {
+          const res = await (options.fetch ?? fetch)(callbackUrl, {
+            method: "POST",
+            // Signed afresh each try, so a late retry isn't refused as stale.
+            headers: { "Content-Type": "application/json", "User-Agent": `halo/${pkg.version}`, "Halo-Event": full.type, "Halo-Delivery": full.id, [SIGNATURE_HEADER]: signBody(callbackSecret, body) },
+            body,
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (res.ok) return;
+          problem = `answered ${res.status}`;
+          // The app said no (not "try later"): sending it again won't change that.
+          if (res.status < 500 && res.status !== 408 && res.status !== 429) attempt = callbackDelays.length;
+        } catch (err) {
+          problem = err instanceof Error ? err.message : String(err);
+        }
+        const wait = callbackDelays[attempt];
+        if (wait === undefined || stopping) {
+          logger.warn(`[halo] Callback ${full.type} for run ${full.runId.slice(0, 8)} was not delivered: ${callbackUrl} ${problem}`);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    };
+    const p = deliver();
+    deliveries.add(p);
+    void p.finally(() => deliveries.delete(p));
+  }
+
+  // ── Starting a run once ──
+  const idempotencyFile = join(stateDir, "idempotency.json");
+  let idempotent: Record<string, { runId: string; at: number }> = {};
+  try {
+    if (existsSync(idempotencyFile)) idempotent = JSON.parse(readFileSync(idempotencyFile, "utf8"));
+  } catch (err) {
+    logger.warn(`[halo] ${idempotencyFile} could not be read, so earlier idempotency keys are forgotten: ${err instanceof Error ? err.message : err}`);
+  }
+  const saveIdempotent = () => {
+    const cutoff = Date.now() - IDEMPOTENCY_KEEP;
+    for (const [k, v] of Object.entries(idempotent)) if (v.at < cutoff) delete idempotent[k];
+    try {
+      writeFileSync(`${idempotencyFile}.tmp`, JSON.stringify(idempotent));
+      renameSync(`${idempotencyFile}.tmp`, idempotencyFile);
+    } catch (err) {
+      logger.error(`[halo] could not save ${idempotencyFile}: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  /** Start a run, or find the run an earlier start with the same idempotency key began. */
+  const startOnce = (pipeline: string, args: Record<string, unknown>, source: string, how: StartOptions = {}): { runId: string; duplicate: boolean } => {
     const e = entry(pipeline);
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new ServeError(`${pipeline} needs its arguments as a JSON object`);
     const missing = e.decl.params.filter((p) => !Object.hasOwn(args, p.name)).map((p) => p.name);
     if (missing.length) throw new ServeError(`${pipeline} needs ${missing.join(", ")}`);
+    const dryRun = how.dryRun || options.dryRun || undefined;
+    const key = how.idempotencyKey?.trim() || undefined;
+    if (key !== undefined && key.length > 255) throw new ServeError("An idempotency key is at most 255 characters");
+    // A rehearsal and the real thing are different runs, even with one key.
+    const slot = key === undefined ? undefined : `${dryRun ? "dry:" : ""}${pipeline}\n${key}`;
+    const earlier = slot === undefined ? undefined : idempotent[slot];
+    if (earlier && Date.now() - earlier.at < IDEMPOTENCY_KEEP) {
+      logger.log(`[halo] ${pipeline} asked for again by ${source} with the same idempotency key (run ${earlier.runId.slice(0, 8)})`);
+      return { runId: earlier.runId, duplicate: true };
+    }
     const runId = crypto.randomUUID();
-    logger.log(`[halo] ${pipeline} started by ${source} (run ${runId.slice(0, 8)})`);
-    track(runId, pipeline, recorded(runId, pipeline, args, () => e.runtime.run(pipeline, args, { runId })));
-    return runId;
+    if (slot !== undefined) {
+      idempotent[slot] = { runId, at: Date.now() };
+      saveIdempotent();
+    }
+    started.set(runId, { idempotencyKey: key, dryRun });
+    if (started.size > 2000) started.delete(started.keys().next().value!);
+    logger.log(`[halo] ${pipeline} started by ${source}${dryRun ? " as a dry run" : ""} (run ${runId.slice(0, 8)})`);
+    const rt = runtimeFor(e, dryRun);
+    const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun });
+    // A dry run's answers are made up, so it isn't kept as something to replay or learn from.
+    track(runId, pipeline, dryRun ? work() : recorded(runId, pipeline, args, work));
+    return { runId, duplicate: false };
   };
+  const start = (pipeline: string, args: Record<string, unknown>, source: string, how?: StartOptions) => startOnce(pipeline, args, source, how).runId;
 
   /** Writes how a recorded run ended (each time it ends: a run that pauses ends, then ends again after resuming). */
   function ended(rec: Recorder, work: Promise<RunResult>): Promise<RunResult> {
@@ -499,9 +695,10 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (snap?.waitingFor === undefined) return { error: "That run is not paused", status: 409 };
     try {
       // The resumed run keeps appending to its recording (the answer to the pause is recorded too).
-      const rec = recordingsDir ? new Recorder(recordingsDir, runId) : undefined;
+      const rec = recordingsDir && !snap.meta.dryRun ? new Recorder(recordingsDir, runId) : undefined;
       const waitingFor = event ?? snap.waitingFor;
-      const claim = () => entry(snap.pipeline).runtime.resumePaused(runId, waitingFor, payload, { pauseId });
+      // A dry run continues as one, wherever it was started.
+      const claim = () => runtimeFor(entry(snap.pipeline), snap.meta.dryRun).resumePaused(runId, waitingFor, payload, { pauseId });
       // The run continues inside the recorder's context; a failed claim (already answered, wrong event) records nothing.
       const claimed = rec ? await recording.run(rec, claim) : await claim();
       logger.log(`[halo] ${claimed.pipeline} resumed (run ${runId.slice(0, 8)})`);
@@ -933,7 +1130,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         }
 
         // For load balancers and hosts' health checks: no token, and nothing about the pipelines.
-        if (path === "/healthz" && req.method === "GET") return json({ ok: true });
+        // `version` and `build` let a host tell whether the process it reached is the one it just deployed.
+        if (path === "/healthz" && req.method === "GET") return json({ ok: true, version: pkg.version, startedAt, ...(build ? { build } : {}), ...(options.dryRun ? { dryRun: true } : {}) });
 
         if (path === "/slack/actions" && req.method === "POST") return slackAction(req);
 
@@ -961,8 +1159,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           } catch {
             return json({ error: "Webhook body must be JSON" }, 400);
           }
-          const runId = start(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`);
-          return json({ runId, status: "running" }, 202);
+          const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`, { idempotencyKey: req.headers.get("idempotency-key") ?? undefined });
+          return json({ runId: begun.runId, status: "running", ...(begun.duplicate ? { duplicate: true } : {}) }, 202);
         }
 
         if (served && (path === "/mcp" || path.startsWith("/api/"))) {
@@ -1006,11 +1204,13 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         const startRun = path.match(/^\/api\/pipelines\/([\w]+)\/runs$/);
         if (startRun && req.method === "POST") {
-          const body = ((await readJson(req)) ?? {}) as { args?: Record<string, unknown>; wait?: boolean };
-          const runId = start(startRun[1]!, body.args ?? {}, "API");
-          if (!body.wait) return json({ runId, status: "running" }, 202);
+          const body = ((await readJson(req)) ?? {}) as { args?: Record<string, unknown>; wait?: boolean; idempotencyKey?: string; dryRun?: boolean };
+          const dryRun = body.dryRun === true || /^(1|true)$/i.test(req.headers.get("halo-dry-run") ?? "");
+          const { runId, duplicate } = startOnce(startRun[1]!, body.args ?? {}, "API", { idempotencyKey: req.headers.get("idempotency-key") ?? body.idempotencyKey, dryRun });
+          const extra = { ...(duplicate ? { duplicate: true } : {}), ...(dryRun || options.dryRun ? { dryRun: true } : {}) };
+          if (!body.wait) return json({ runId, status: inflight.has(runId) ? "running" : (recent.get(runId)?.status ?? "running"), ...extra }, 202);
           const result = await settled(runId);
-          return json(result ? { runId, status: result.status, output: result.output, cost: result.context.meta.cost } : { runId, status: "error" });
+          return json(result ? { runId, status: result.status, output: result.output, cost: result.context.meta.cost, ...extra } : { runId, status: "error", error: failures.get(runId), ...extra });
         }
 
         // `running` says this server is working on it now; a run with no end and no `running` was started elsewhere (the CLI) or cut short.
@@ -1088,6 +1288,9 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
       }
       await server.stop(true);
       await Promise.allSettled([...inflight.values()]);
+      // Callbacks for what just ended get one try each; a retry that is waiting gives up.
+      stopping = true;
+      await Promise.race([Promise.allSettled([...deliveries]), new Promise((r) => setTimeout(r, 5_000))]);
       await Promise.all(runtimes.map((r) => r.close()));
       telemetry.close();
       usage?.close();

@@ -14,6 +14,7 @@
  *   halo add | remove | install | outdated | update | search | info | pack | publish | ...   (packages: src/registry/cli.ts)
  */
 
+import { mockEverything } from "./runtime/mocks.js";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -443,17 +444,7 @@ async function promptListen(req: ListenRequest): Promise<unknown> {
   return answer ? toEvent(answer) : AUTO_EVENT;
 }
 
-function mockRuntime(rt: HaloRuntime, ast: ParseResult, live: Set<string> = new Set()): void {
-  const preview = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").slice(0, 80);
-  const mocks: Record<string, unknown> = {
-    "*": (req: { target: string; prompt?: string }) => `[mock ${req.target}] ${preview(req.prompt)}`,
-  };
-  for (const t of [...ast.tools, ...ast.stores]) {
-    if (live.has(t.name)) continue;
-    mocks[t.name] = (req: { target: string; args: unknown[]; named: Record<string, unknown> }) => ({ mock: true, tool: req.target, named: req.named });
-  }
-  rt.mockAll(mocks);
-}
+const mockRuntime = mockEverything;
 
 /**
  * `--mocks <file.json>`: canned answers, keyed like `runtime.mockAll` (`Agent.method`, `Agent`,

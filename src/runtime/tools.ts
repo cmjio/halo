@@ -34,6 +34,12 @@ export interface ToolCall {
   branch?: string;
   /** How many times that run has paused so far (so a link back can answer only its next pause). */
   pauses?: number;
+  /**
+   * A key for this call that stays the same when the call is made again: on a retry, when the
+   * stage runs again after a restart, or when a model repeats itself. It changes with the run
+   * (or the key the run was started with), the step, the method and the arguments.
+   */
+  idempotencyKey?: string;
 }
 
 /** JSON Schema for a method's named arguments (the subset providers need). */
@@ -171,12 +177,28 @@ const rest: ToolProvider = async (call, { fetch }) => {
   return readResponse(res, `GET ${url.origin}${url.pathname}`, call);
 };
 
+/**
+ * `idempotencyKey:` on a declaration: true sends the call's key as an `Idempotency-Key` header,
+ * a name sends it as that header, and "body.field" puts it in the JSON body as `field`.
+ */
+export function idempotencyPlace(call: ToolCall): { header?: string; field?: string } {
+  const where = call.config("idempotencyKey");
+  if (where === undefined || where === false || where === null || !call.idempotencyKey) return {};
+  if (where === true) return { header: "Idempotency-Key" };
+  if (typeof where !== "string" || !where) throw new HaloError(`Tool "${call.tool.name}": idempotencyKey is true, a header name, or "body.<field>"`, { code: "TOOL_CONFIG" });
+  return where.startsWith("body.") ? { field: where.slice(5) } : { header: where };
+}
+
 const post: ToolProvider = async (call, { fetch }) => {
   const url = buildUrl(call, "");
+  const key = idempotencyPlace(call);
+  const body = params(call);
+  // A key the caller set itself (an argument with that name) is kept.
+  if (key.field && body[key.field] === undefined) body[key.field] = call.idempotencyKey;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(call) },
-    body: JSON.stringify(params(call)),
+    headers: { "Content-Type": "application/json", ...authHeaders(call), ...(key.header ? { [key.header]: call.idempotencyKey! } : {}) },
+    body: JSON.stringify(body),
     signal: call.signal,
   });
   return readResponse(res, `POST ${url.origin}${url.pathname}`, call);
