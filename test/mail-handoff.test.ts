@@ -80,7 +80,7 @@ describe("Email", () => {
   });
 
   test("an unknown service, or Mailgun without a domain, says what to fix", async () => {
-    await expect(rt(`tool Mail : Email(Env.KEY, via: "pigeon", from: "a@example.com")\n${NOTE}`).runtime.run("Note", { to: "b@example.com" })).rejects.toThrow(/"pigeon" is not an email service Halo knows \(resend, postmark, sendgrid, mailgun\)/);
+    await expect(rt(`tool Mail : Email(Env.KEY, via: "pigeon", from: "a@example.com")\n${NOTE}`).runtime.run("Note", { to: "b@example.com" })).rejects.toThrow(/"pigeon" is not an email service Halo knows \(resend, postmark, sendgrid, mailgun, cloudflare, smtp, imap, gmail, outlook\)/);
     await expect(rt(`tool Mail : Email(Env.KEY, via: "mailgun", from: "a@example.com")\n${NOTE}`).runtime.run("Note", { to: "b@example.com" })).rejects.toThrow(/Mailgun needs domain/);
   });
 

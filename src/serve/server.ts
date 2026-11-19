@@ -25,6 +25,7 @@ import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
+import { mailFromRaw } from "../runtime/mail/provider.js";
 import { mockEverything, splitMocks } from "../runtime/mocks.js";
 import { SIGNATURE_HEADER, signBody } from "../runtime/signing.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
@@ -1185,7 +1186,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         if (hook && req.method === "POST") {
           const target = webhooks.get(hook[1]!.replace(/\/+$/, ""));
           if (!target) return json({ error: "Unknown webhook" }, 404);
-          const raw = await req.text();
+          const bytes = new Uint8Array(await req.arrayBuffer());
+          const raw = new TextDecoder().decode(bytes);
           if (target.secret) {
             const ghSig = req.headers.get("x-hub-signature-256");
             const ok = ghSig
@@ -1200,12 +1202,22 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
             if (refused) return json({ error: refused }, 403);
           }
           let body: unknown;
-          try {
-            body = raw.trim() ? JSON.parse(raw) : undefined;
-          } catch {
-            return json({ error: "Webhook body must be JSON" }, 400);
+          let messageId: string | undefined;
+          if (/^message\/rfc822\b/i.test(req.headers.get("content-type") ?? "")) {
+            // A whole email, as a mail route (Cloudflare Email Routing, a mail server's pipe) hands it over.
+            const mail = mailFromRaw(bytes, { from: req.headers.get("x-envelope-from") ?? undefined, to: req.headers.get("x-envelope-to") ?? undefined });
+            if (!mail.from && !mail.subject && !mail.text) return json({ error: "That is not an email message" }, 400);
+            body = mail;
+            // The same message delivered twice is one run.
+            messageId = mail.messageId;
+          } else {
+            try {
+              body = raw.trim() ? JSON.parse(raw) : undefined;
+            } catch {
+              return json({ error: "Webhook body must be JSON (or an email, as message/rfc822)" }, 400);
+            }
           }
-          const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`, { idempotencyKey: req.headers.get("idempotency-key") ?? undefined });
+          const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`, { idempotencyKey: req.headers.get("idempotency-key") || (messageId ? `mail:${messageId}`.slice(0, 255) : undefined) });
           return json({ runId: begun.runId, status: "running", ...(begun.duplicate ? { duplicate: true } : {}) }, 202);
         }
 

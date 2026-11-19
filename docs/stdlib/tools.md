@@ -136,6 +136,8 @@ pipeline Alert(msg: String) -> Result:
 
 ## `Email`
 
+One tool sends mail and reads a mailbox, through the service `via:` names.
+
 ```halo
 tool Mail : Email(Env.RESEND_API_KEY, from: "bot@example.com")
 
@@ -143,24 +145,64 @@ pipeline Send(report: String) -> Result:
   report |> Mail.send(to: "team@example.com", subject: "Daily report", body: "{{report}}")
 ```
 
-`send` takes `to:` (a string or a list), `subject:`, and `body:` (plain text; also `text:`). Optional: `html:`, `cc:`, `bcc:`, `reply_to:`. `from:`, `to:` and `reply_to:` can be set on the declaration. It returns `{ sent, id, to }`.
+| Method | Arguments | Returns | Effect |
+|---|---|---|---|
+| `send` | `to:` (a string or a list), `subject:`, `body:` (plain text; also `text:`). Optional: `html:`, `cc:`, `bcc:`, `reply_to:`, `in_reply_to:` (a `messageId`, to stay in its thread) | `{ sent, id, to }` | external |
+| `list` | `unread:`, `from:`, `subject:`, `text:`, `since:` (a date, or `"24h"`, `"7d"`), `limit:` (10; at most 50), `folder:`, `full:` (include bodies) | Messages, newest first | read |
+| `read` | `id:` (from `list`), `folder:` | One message with `text`, `html` and `attachments` | read |
+| `mark` | `id:`, `read:` (`false` marks it unread) | `{ id, unread }` | external |
 
-`via:` picks the service. The first argument is that service's key:
+A message is `{ id, from, fromName, to, cc, subject, date, unread, snippet, messageId, inReplyTo }`, plus `text`, `html` and `attachments` (name, type and size; not the contents) from `read` or `list(full: true)`. It is the same shape whichever service it came from. `list` and `read` never mark anything read.
 
-| `via:` | Key | Also on the declaration |
-|---|---|---|
-| `"resend"` (default) | `RESEND_API_KEY` | |
-| `"postmark"` | A server token | `stream:` (the message stream) |
-| `"sendgrid"` | An API key | |
-| `"mailgun"` | An API key | `domain:` (required), `apiUrl:` (`"https://api.eu.mailgun.net"` for the EU region) |
+`from:`, `to:` and `reply_to:` can be set on the declaration. The first argument is the service's secret:
 
-With Resend, the call's [idempotency key](#idempotency-keys) goes along, so a step that runs again doesn't send the message twice. To keep a model's mail inside one domain, put a rule on the tool:
+| `via:` | Sends | Reads | First argument | Also on the declaration |
+|---|---|---|---|---|
+| `"resend"` (default) | yes | | API key | |
+| `"cloudflare"` | yes | | An API token that may send email | `account:` (the account id). The `from:` domain must be set up for [Email Sending](https://developers.cloudflare.com/email-service/) |
+| `"smtp"` | yes | with `imap:` | Password | `host:`, `user:`, `port:` (587), `tls:`; `imap: "host"` to read too |
+| `"imap"` | with `smtp:` | yes | Password | `host:`, `user:`, `port:` (993), `tls:`; `smtp: "host"` to send too |
+| `"gmail"` | yes | yes | An [app password](https://support.google.com/accounts/answer/185833), with `user:`. Or a refresh token, with `clientId:` and `clientSecret:` | |
+| `"outlook"` | yes | yes | The app's client secret | `tenant:`, `clientId:`, `user:` (the mailbox) |
+| `"postmark"` | yes | | Server token | `stream:` |
+| `"sendgrid"` | yes | | API key | |
+| `"mailgun"` | yes | | API key | `domain:` (required), `apiUrl:` (`"https://api.eu.mailgun.net"` in the EU) |
+
+**SMTP and IMAP** work with any mail server:
+
+```halo
+tool Mail : Email(Env.MAIL_PASSWORD, via: "smtp", host: "smtp.example.com", user: "support@example.com", imap: "imap.example.com")
+```
+
+- Port 465 (SMTP) and 993 (IMAP) are TLS from the first byte. Port 587, 25 and 143 start plain and switch with STARTTLS; a server that doesn't offer it is refused, so mail and passwords never travel in the clear. `tls: "none"` allows it for a relay on the same machine, and a password is still never sent unencrypted to any other host.
+- `tlsVerify: false` accepts a certificate that can't be checked (a relay with a private CA).
+- With no `from:`, mail is from `user:`.
+- `accessToken:` signs in with OAuth (XOAUTH2) in place of the password.
+- An IMAP search takes plain ASCII; `id` is the message's UID in its folder.
+
+**Gmail** with an app password uses Gmail's own SMTP and IMAP servers. With `clientId:` it uses the Gmail API, signing in with the refresh token; `text:` is then a Gmail search (`"has:attachment newer_than:2d"`), and `folder:` a label.
+
+**Outlook** uses Microsoft Graph as an app (client credentials): register an app in Entra, give it the `Mail.Send` and `Mail.ReadWrite` application permissions, and name the mailbox in `user:`. For one person's mailbox instead, pass `refreshToken:` (or `accessToken:`) with `clientId:`. Graph sends one body, so `html:` wins over `body:` when both are given.
+
+**Not sending twice.** Resend gets the call's [idempotency key](#idempotency-keys). Over SMTP and the Gmail API the key becomes the message's `Message-ID`, so a repeat is the same message to whoever receives it, though the server will still accept it. `via: "cloudflare"` reports `delivered`, `queued` and `bounced` addresses in place of an id.
+
+**A mailbox an agent can read but not write to:**
+
+```halo
+tool Inbox : Email(Env.IMAP_PASSWORD, via: "imap", host: "imap.example.com", user: "support@example.com")
+policy ReadOnly : AllowEffects("read")
+agent Triage [anthropic/claude-sonnet-4-5] equips Inbox requires ReadOnly
+```
+
+To keep a model's mail inside one domain, put a rule on the tool:
 
 ```halo
 tool Mail : Email(Env.POSTMARK_TOKEN, via: "postmark", from: "prizes@example.com")
   & Match("to", "[\\w.+-]+@example\\.com")
   & Locked("cc", "bcc")
 ```
+
+**Mail that starts a run.** Poll a mailbox on a [schedule](../guide/production/serving.md#schedules) (`Inbox.list(unread: true, full: true)`, then `Inbox.mark` each one handled), or have mail pushed to a webhook as it arrives (see [Inbound email](../guide/production/serving.md#inbound-email)).
 
 ## `Handoff`
 

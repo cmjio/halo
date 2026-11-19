@@ -49,7 +49,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used, then the address Render, Railway or Fly gives the app |
 | `timezone` | The IANA time zone schedules run in unless they name their own `tz`, e.g. `"Europe/London"`. Default: the server's, which is usually UTC in a container |
 | `schedules` | Start `pipeline` with `args` on a cron schedule (see [Schedules](#schedules)) |
-| `webhooks` | `POST /hooks/<path>` starts `pipeline` |
+| `webhooks` | `POST /hooks/<path>` starts `pipeline`, with a JSON body or a whole email (see [Inbound email](#inbound-email)) |
 | `watches` | Start `pipeline` when a URL, file, or command's output changes |
 | `notify.slack` | A Slack incoming-webhook URL to announce paused runs |
 | `notify.webhook`, `notify.secret` | Your app's URL, and the secret Halo signs with. Halo POSTs there when a run completes, halts, fails or pauses (see [Run callbacks](#run-callbacks)). `notify.events` narrows which |
@@ -100,6 +100,39 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 The JSON body becomes the pipeline's arguments: fields that match parameter names are passed by name, and a pipeline with a single parameter that isn't in the body gets the whole body (handy for GitHub or Stripe events).
 
 With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup. It still refuses requests a web page sends through someone's browser: an `Origin` other than localhost or `publicUrl`, and, when listening on localhost, a `Host` that isn't (DNS rebinding).
+
+### Inbound email
+
+A webhook also takes a whole email, posted as `Content-Type: message/rfc822`. The pipeline gets it parsed, in the shape the [`Email` tool](../../stdlib/tools.md#email) reads mail: `{ id, from, fromName, to, cc, subject, date, text, html, attachments, messageId, inReplyTo, headers }`, plus `envelope` (`from`, `to`) when the request carries `X-Envelope-From` and `X-Envelope-To`.
+
+```json
+"webhooks": [{ "path": "inbound-mail", "pipeline": "HandleEmail", "secret": "Env.MAIL_HOOK_SECRET" }]
+```
+
+```halo
+pipeline HandleEmail(email: JSON) -> Result:
+  email |> Helper.answer("Answer {{email.subject}} from {{email.from}}: {{email.text}}")
+```
+
+With [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/), route an address to a Worker that hands the message on:
+
+```js
+export default {
+  async email(message, env) {
+    const res = await fetch(`${env.HALO_URL}/hooks/inbound-mail`, {
+      method: "POST",
+      headers: { "Content-Type": "message/rfc822", "X-Halo-Secret": env.MAIL_HOOK_SECRET, "X-Envelope-From": message.from, "X-Envelope-To": message.to },
+      body: await new Response(message.raw).arrayBuffer(),
+    });
+    if (!res.ok) message.setReject("This address can't take mail right now");
+  },
+};
+```
+
+- The message's `Message-ID` is the run's [idempotency key](#starting-a-run-once) (unless the request sends its own), so a delivery that is retried starts one run.
+- `envelope.from` is who the sending server said it was; the `from` header is whatever the message claims. Mail is input from strangers: treat `text` like any other untrusted input (see [Guardrails](../architecture/guardrails-and-safety.md)).
+- Attachments are listed by name, type and size; their contents aren't passed on.
+- Any mail server that can pipe a message to a command works the same way: `curl --data-binary @- -H 'Content-Type: message/rfc822' ...`.
 
 ### Watches
 

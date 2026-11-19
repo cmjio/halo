@@ -104,7 +104,7 @@ const slack: ProviderInfo = {
 };
 
 const email: ProviderInfo = {
-  description: "Sends email",
+  description: "Email: sends mail, and reads a mailbox when the tool is set up for one",
   methods: [
     {
       name: "send",
@@ -118,11 +118,29 @@ const email: ProviderInfo = {
           cc: { type: ["string", "array"], description: "Copy to" },
           bcc: { type: ["string", "array"], description: "Blind copy to" },
           reply_to: text("Where replies go"),
+          in_reply_to: text("The messageId of the message this answers, to keep the thread"),
         },
         ["subject", "body"],
       ),
       effect: "external",
     },
+    {
+      name: "list",
+      description: "List messages in the mailbox, newest first, without their bodies. Works with imap, gmail and outlook tools.",
+      params: obj({
+        unread: { type: "boolean", description: "Only unread messages" },
+        from: text("Only from this sender"),
+        subject: text("Only with this in the subject"),
+        text: text("Only containing this"),
+        since: text('Only since a date ("2026-11-01") or this far back ("24h", "7d")'),
+        limit: num("Most to return (default 10, at most 50)"),
+        folder: text("Folder (default the inbox)"),
+        full: { type: "boolean", description: "Include each message's body" },
+      }),
+      effect: "read",
+    },
+    { name: "read", description: "Read one message: its text, HTML and attachment names.", params: obj({ id: text("The message's id, from list"), folder: text("Folder it is in (default the inbox)") }, ["id"]), effect: "read" },
+    { name: "mark", description: "Mark a message read (or unread, with read: false).", params: obj({ id: text("The message's id, from list"), read: { type: "boolean", description: "false marks it unread" } }, ["id"]), effect: "external" },
   ],
 };
 

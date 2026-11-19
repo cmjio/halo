@@ -5,7 +5,7 @@
  *   tool Reader  : Browser()                       fetch(url) → page text
  *   tool History : File(".halo/chat.json", keep: 10)  read / append / clear
  *   tool Chat    : Slack(Env.SLACK_BOT_TOKEN)       post(channel:, text:, buttons:)
- *   tool Mail    : Email(Env.RESEND_API_KEY, from: "bot@example.com")  send(to:, subject:, body:)  (via: postmark, sendgrid, mailgun)
+ *   tool Mail    : Email(Env.RESEND_API_KEY, from: "bot@example.com")  send, list, read, mark (see mail/provider.ts for via:)
  *   tool App     : Handoff(Env.APP_URL, secret: Env.HALO_HANDOFF_SECRET)  send(kind:, ...) → your app
  *   tool Repo    : GitHub(Env.GITHUB_TOKEN)        create_issue, comment, add_labels, create_pr, get_issue, list_issues
  *   tool Tickets : Linear(Env.LINEAR_TOKEN)        create_issue(team:, title:, description:)
@@ -17,6 +17,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { HaloError, HttpError } from "./errors.js";
+import { email } from "./mail/provider.js";
 import { SIGNATURE_HEADER, signBody } from "./signing.js";
 import type { ToolCall, ToolProvider } from "./tools.js";
 
@@ -230,68 +231,9 @@ export const slack: ToolProvider = async (call, { fetch }) => {
   }
 };
 
-// ── Email (Resend, Postmark, SendGrid, Mailgun) ──
+// ── Email: see mail/provider.ts ──
 
-const EMAIL_SERVICES = ["resend", "postmark", "sendgrid", "mailgun"] as const;
-
-/**
- * Sends one email through the service named by `via:` (Resend when unset). The call's
- * idempotency key goes along where the service takes one, so a stage that runs again
- * doesn't send the same message twice.
- */
-export const email: ToolProvider = async (call, { fetch }) => {
-  if (!["send", "email", "execute", "notify"].includes(call.method)) unknownMethod(call, ["send"]);
-  const via = String(call.config("via") ?? "resend").toLowerCase() as (typeof EMAIL_SERVICES)[number];
-  if (!EMAIL_SERVICES.includes(via)) throw new HaloError(`Tool "${call.tool.name}": via: "${via}" is not an email service Halo knows (${EMAIL_SERVICES.join(", ")})`, { code: "TOOL_CONFIG" });
-  const many = (v: unknown): string[] => (v === undefined || v === null || v === "" ? [] : Array.isArray(v) ? v.map(str) : [str(v)]);
-  const from = need(call, "from: (here or in the tool declaration)", call.named.from ?? call.config("from"));
-  const to = many(call.named.to ?? call.config("to"));
-  if (!to.length) need(call, "to:", undefined);
-  const subject = need(call, "subject:", call.named.subject);
-  const html = call.named.html === undefined ? undefined : str(call.named.html);
-  const plain = call.named.body ?? call.named.text ?? call.positional[0];
-  const text = html === undefined || plain !== undefined ? need(call, "body:", plain) : undefined;
-  const cc = many(call.named.cc);
-  const bcc = many(call.named.bcc);
-  const replyTo = many(call.named.reply_to ?? call.named.replyTo ?? call.config("reply_to") ?? call.config("replyTo"));
-  const key = call.idempotencyKey;
-  const send = async (url: string, headers: Record<string, string>, body: string | FormData) => {
-    const res = await fetch(url, { method: "POST", headers, body, signal: call.signal });
-    return { res, out: await json(res, `${via[0]!.toUpperCase()}${via.slice(1)} send`) };
-  };
-  const secret = token(call, { resend: "RESEND_API_KEY", postmark: "POSTMARK_SERVER_TOKEN", sendgrid: "SENDGRID_API_KEY", mailgun: "MAILGUN_API_KEY" }[via]);
-  let id: unknown;
-  if (via === "resend") {
-    const body = { from, to, subject, ...(text !== undefined ? { text } : {}), ...(html !== undefined ? { html } : {}), ...(cc.length ? { cc } : {}), ...(bcc.length ? { bcc } : {}), ...(replyTo.length ? { reply_to: replyTo } : {}) };
-    ({ id } = (await send("https://api.resend.com/emails", { Authorization: `Bearer ${secret}`, "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) }, JSON.stringify(body))).out);
-  } else if (via === "postmark") {
-    const body = { From: from, To: to.join(","), Subject: subject, TextBody: text, HtmlBody: html, Cc: cc.join(",") || undefined, Bcc: bcc.join(",") || undefined, ReplyTo: replyTo.join(",") || undefined, MessageStream: call.config("stream") ?? undefined };
-    id = (await send("https://api.postmarkapp.com/email", { "X-Postmark-Server-Token": secret, "Content-Type": "application/json", Accept: "application/json" }, JSON.stringify(body))).out.MessageID;
-  } else if (via === "sendgrid") {
-    const addr = (list: string[]) => list.map((email) => ({ email }));
-    const body = {
-      personalizations: [{ to: addr(to), ...(cc.length ? { cc: addr(cc) } : {}), ...(bcc.length ? { bcc: addr(bcc) } : {}) }],
-      from: /<(.+)>/.test(from) ? { email: from.match(/<(.+)>/)![1]!.trim(), name: from.replace(/<.+>/, "").trim() } : { email: from },
-      ...(replyTo.length ? { reply_to: { email: replyTo[0] } } : {}),
-      subject,
-      content: [...(text !== undefined ? [{ type: "text/plain", value: text }] : []), ...(html !== undefined ? [{ type: "text/html", value: html }] : [])],
-    };
-    id = (await send("https://api.sendgrid.com/v3/mail/send", { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" }, JSON.stringify(body))).res.headers.get("x-message-id") ?? undefined;
-  } else {
-    const domain = call.config("domain");
-    if (typeof domain !== "string" || !domain) throw new HaloError(`Tool "${call.tool.name}": Mailgun needs domain: "mg.example.com" on the declaration`, { code: "TOOL_CONFIG" });
-    const form = new FormData();
-    form.set("from", from);
-    for (const [name, list] of [["to", to], ["cc", cc], ["bcc", bcc]] as const) for (const a of list) form.append(name, a);
-    form.set("subject", subject);
-    if (text !== undefined) form.set("text", text);
-    if (html !== undefined) form.set("html", html);
-    if (replyTo.length) form.set("h:Reply-To", replyTo.join(","));
-    const base = String(call.config("apiUrl") ?? "https://api.mailgun.net").replace(/\/+$/, "");
-    id = (await send(`${base}/v3/${encodeURIComponent(domain)}/messages`, { Authorization: `Basic ${btoa(`api:${secret}`)}` }, form)).out.id;
-  }
-  return { sent: true, id, to };
-};
+export { email };
 
 // ── Handoff (to the app that hosts the pipelines) ──
 
