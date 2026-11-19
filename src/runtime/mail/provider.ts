@@ -40,7 +40,7 @@ export interface MailMessage {
   html?: string;
   messageId?: string;
   inReplyTo?: string;
-  attachments?: Array<{ filename?: string; type: string; size: number }>;
+  attachments?: ParsedMessage["attachments"];
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : JSON.stringify(v));

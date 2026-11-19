@@ -95,6 +95,26 @@ describe("halo migrate", () => {
     expect(await migrationHint(dir)).toBeUndefined();
   });
 
+  test("a screenshot read as base64 is listed, in files that use Chrome", async () => {
+    const dir = project({
+      "shots.halo": `tool Tab : Chrome()
+agent Eye [anthropic/claude-haiku-4-5]
+pipeline P(url: String) -> Result:
+  url |> Tab.screenshot() as shot
+    |> Eye.look(image: context.data.shot.base64)   // .base64 in a comment is ignored
+`,
+      "other.halo": `tool Api : GET("https://example.com")
+pipeline Q(x: String) -> Result:
+  x |> Api.get() |> System.Value(context.data.Api.get.base64)
+`,
+      "halo.json": JSON.stringify({ halo: "^1.5.0" }),
+    });
+    const report = await migrateProject(dir, { haloVersion: "1.6.0" });
+    expect(report.results.map((r) => [r.id, r.findings])).toEqual([["screenshot-image", [{ file: "shots.halo", line: 5, message: "reads a screenshot's base64 or mimeType" }]]]);
+    // A Halo before the change has nothing to say about it.
+    expect((await migrateProject(dir, { haloVersion: "1.5.0" })).results).toEqual([]);
+  });
+
   test("a 0.x halo.lock is rewritten by installing again", async () => {
     const dir = project({ "main.halo": "pipeline P(x: String) -> Result:\n  x |> System.Print()\n" });
     const pkgDir = join(dir, "tools/acme");

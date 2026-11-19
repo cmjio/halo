@@ -27,11 +27,11 @@ const rest: ProviderInfo = {
 };
 
 const post: ProviderInfo = {
-  description: "HTTP POST with a JSON body to the tool's URL",
+  description: "HTTP POST to the tool's URL: a JSON body, or form or multipart (body:)",
   methods: [
     {
       name: "post",
-      description: "POST the arguments (except path) as a JSON body.",
+      description: "POST the arguments (except path). To send a file you were shown, pass its label, e.g. \"[image: dent.jpg #3fa2c1]\", or its id, \"#3fa2c1\".",
       params: { type: "object", properties: { path: text("Path under the base URL") }, additionalProperties: true },
       effect: "external",
     },
@@ -139,7 +139,7 @@ const email: ProviderInfo = {
       }),
       effect: "read",
     },
-    { name: "read", description: "Read one message: its text, HTML and attachment names.", params: obj({ id: text("The message's id, from list"), folder: text("Folder it is in (default the inbox)") }, ["id"]), effect: "read" },
+    { name: "read", description: "Read one message: its text, HTML and attachments (an image or PDF attachment's file is sent to a model the message reaches).", params: obj({ id: text("The message's id, from list"), folder: text("Folder it is in (default the inbox)") }, ["id"]), effect: "read" },
     { name: "mark", description: "Mark a message read (or unread, with read: false).", params: obj({ id: text("The message's id, from list"), read: { type: "boolean", description: "false marks it unread" } }, ["id"]), effect: "external" },
   ],
 };

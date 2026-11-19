@@ -97,6 +97,8 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 
 ### Webhooks
 
+A webhook takes JSON, a form post (`application/x-www-form-urlencoded`, as an object of its fields), or an email (below). For a Twilio number's text messages, see [Text messages](../files.md#text-messages).
+
 The JSON body becomes the pipeline's arguments: fields that match parameter names are passed by name, and a pipeline with a single parameter that isn't in the body gets the whole body (handy for GitHub or Stripe events).
 
 With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup. It still refuses requests a web page sends through someone's browser: an `Origin` other than localhost or `publicUrl`, and, when listening on localhost, a `Host` that isn't (DNS rebinding).
@@ -220,6 +222,7 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 | `POST /api/evolve` | Start one in the background. Body `{"pipeline": "Name", "variants": 4, "rounds": 2, "budget": 3, "criteria": "..."}`; returns `202 {"id"}`. Needs `minRuns` (default 10) finished recordings |
 | `GET /api/evolve/<id>` | Its progress while it runs, then its `evolve.json` (`record`), every variant's diff, and the report |
 | `POST /api/evolve/<id>/apply` | Write a variant (`{"variant": "v2"}`, default the winner) over its file. Refused when the file changed since. The server keeps serving the version it loaded until restarted |
+| `GET /api/blobs/<sha256>` | A [file](../files.md) a run holds. Images, audio and video are shown in place; documents are downloads. A file in a run's `output` carries its `url`. An approval link shows the files in what it asks about without the token |
 | `GET /api/health` | `{"ok": true, "pipelines": n}` |
 | `GET /healthz` | `{"ok": true, "version", "startedAt"}`, without the token, for health checks. Also `build` (whatever `HALO_BUILD` is set to: an image tag, a commit) and `project` (the [pushed version](./deploying.md#deploy-without-building-an-image) being served), so a deploy script can tell that the server answering is the one it just deployed |
 
@@ -227,6 +230,8 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 curl -X POST localhost:8080/api/pipelines/TriageIssues/runs \
   -H 'Content-Type: application/json' -d '{"args": {"repo": "oven-sh/bun", "limit": 5}}'
 ```
+
+A file argument (`Image`, `Document`, `Audio`, `Video`) is a `data:` URI or an https URL in the JSON, or the request is a `multipart/form-data` upload (see [Files](../files.md#giving-a-pipeline-a-file)). A request body can be up to 256 MB.
 
 ### Starting a run once
 
@@ -332,6 +337,7 @@ Some hosts give a container a disk that is thrown away on every deploy. There, k
 ```
 
 - On start, before anything else, the folder is filled from the store. While the server runs, a file that changed is copied up within a second (databases at most every `"every"`, default `"30s"`), and everything once more when it stops.
+- Images and documents runs hold (`blobs/`) are copied up as soon as they are made, and brought down only when a run needs one, not at start.
 - So after a deploy the new container has the paused runs, the link-signing secret (links people were already sent still work), schedule state, idempotency keys, `@thread` state, vector stores, checkpoints and telemetry.
 - `s3://bucket/prefix` is any S3-compatible store: AWS S3, Cloudflare R2, Google Cloud Storage, MinIO, Spaces. Credentials come from `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` (or the `AWS_` names), the endpoint from `S3_ENDPOINT` (for R2, `https://<account-id>.r2.cloudflarestorage.com`) and the region from `S3_REGION`. A plain path is a folder, for a shared mount.
 - It can be set without touching `halo.json`: `HALO_STATE_STORE=s3://my-bucket/halo/prod`.

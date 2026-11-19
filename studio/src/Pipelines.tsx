@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Switch } from "@ark-ui/react";
 import { IconClock, IconPlayerPlayFilled, IconWebhook } from "@tabler/icons-react";
-import { api, message, type PipelineInfo, type RunSummary } from "./api";
+import { api, message, upload, type PipelineInfo, type RunSummary } from "./api";
 import { cronInWords, dayLabel, until, when } from "./format";
 import { RUN_LABEL, type RunStatus } from "./trace";
 import { CopyButton, StatusDot, TextField, Tip } from "./ui";
@@ -16,6 +16,14 @@ function remembered(name: string): Record<string, string> {
     return {};
   }
 }
+
+/** The parameter types that take a file, and what the picker offers for each. */
+const FILE_TYPES: Record<string, string> = {
+  Image: "image/png,image/jpeg,image/gif,image/webp",
+  Document: ".pdf,.docx,.pptx,.eml,.csv,.tsv,.md,.markdown,.txt,.html,.htm,.json",
+};
+const fileType = (type: string) => FILE_TYPES[/^(?:Array|List)<\s*(\w+)\s*>$/.exec(type)?.[1] ?? type];
+const many = (type: string) => /^(Array|List)</.test(type);
 
 /** What a field's text means for its type, or why it can't be used. */
 function readArg(text: string, type: string): { value: unknown } | { problem: string } {
@@ -43,6 +51,7 @@ export function runStatus(r: RunSummary, now: number): RunStatus {
 
 function PipelineCard({ p, runs, now, onStarted }: { p: PipelineInfo; runs: RunSummary[]; now: number; onStarted: (runId: string) => void }) {
   const [values, setValues] = useState<Record<string, string>>(() => remembered(p.name));
+  const [files, setFiles] = useState<Record<string, File[]>>({});
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,6 +61,10 @@ function PipelineCard({ p, runs, now, onStarted }: { p: PipelineInfo; runs: RunS
     const args: Record<string, unknown> = {};
     const found: Record<string, string> = {};
     for (const param of p.params) {
+      if (fileType(param.type)) {
+        if (!files[param.name]?.length) found[param.name] = many(param.type) ? "choose one or more files" : "choose a file";
+        continue;
+      }
       const read = readArg(values[param.name] ?? (param.type === "Boolean" ? "false" : ""), param.type);
       if ("problem" in read) found[param.name] = read.problem;
       else args[param.name] = read.value;
@@ -61,7 +74,17 @@ function PipelineCard({ p, runs, now, onStarted }: { p: PipelineInfo; runs: RunS
     setError(null);
     setBusy(true);
     try {
-      const { runId } = await api<{ runId: string }>(`/api/pipelines/${p.name}/runs`, { method: "POST", body: JSON.stringify({ args }) });
+      const chosen = Object.entries(files).filter(([, list]) => list.length);
+      let runId: string;
+      if (chosen.length) {
+        // Files go as an upload; the other arguments ride along as JSON.
+        const form = new FormData();
+        form.set("args", JSON.stringify(args));
+        for (const [name, list] of chosen) for (const f of list) form.append(name, f, f.name);
+        ({ runId } = await upload<{ runId: string }>(`/api/pipelines/${p.name}/runs`, form));
+      } else {
+        ({ runId } = await api<{ runId: string }>(`/api/pipelines/${p.name}/runs`, { method: "POST", body: JSON.stringify({ args }) }));
+      }
       try {
         localStorage.setItem(ARGS_KEY + p.name, JSON.stringify(values));
       } catch {}
@@ -128,7 +151,24 @@ function PipelineCard({ p, runs, now, onStarted }: { p: PipelineInfo; runs: RunS
 
       <form className="run-form" onSubmit={start} noValidate>
         {p.params.map((param) =>
-          param.type === "Boolean" ? (
+          fileType(param.type) ? (
+            <label key={param.name} className="form-field" data-invalid={problems[param.name] ? "" : undefined}>
+              <span className="label">
+                {param.name} <span className="type">{param.type}</span>
+                {problems[param.name] && <span className="problem">{problems[param.name]}</span>}
+              </span>
+              <input
+                type="file"
+                className="file-input"
+                accept={fileType(param.type)}
+                multiple={many(param.type)}
+                onChange={(e) => {
+                  setFiles({ ...files, [param.name]: [...(e.target.files ?? [])] });
+                  if (problems[param.name]) setProblems({ ...problems, [param.name]: "" });
+                }}
+              />
+            </label>
+          ) : param.type === "Boolean" ? (
             <Switch.Root key={param.name} className="switch" checked={values[param.name] === "true"} onCheckedChange={(d) => set(param.name, String(d.checked))}>
               <Switch.Label className="label">
                 {param.name} <span className="type">{param.type}</span>

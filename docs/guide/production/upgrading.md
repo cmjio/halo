@@ -72,3 +72,4 @@ Once the version is recorded, older changes are not checked again, including the
 |---|---|---|
 | 1.0.0 | `halo.lock` in the 0.x format (`tools`) becomes `dependencies` in `halo.json` and a version 2 `halo.lock`. `halo install` does the same | Yes |
 | 1.4.0 | A model can no longer set a `POST` tool's `path` unless the tool is declared `& Unlocked("path")` (see [Rules on a tool's arguments](../../stdlib/tools.md#rules-on-a-tool-s-arguments)). Listed for each `POST` tool an agent equips that has no rule for `path` | No |
+| 1.6.0 | `Chrome.screenshot()` without a `path:` returns `{ image }`, an [image value](../files.md), instead of `{ mimeType, base64 }`. Listed for each line that reads `.base64` or `mimeType` in a file that declares a `Chrome` tool | No |

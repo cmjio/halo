@@ -19,6 +19,9 @@ import {
   CONTEXT_NAMESPACES,
   DIRECTIVES,
   ENFORCED_RULES,
+  MEDIA_FIELDS,
+  MEDIA_NAMES,
+  MEDIA_TYPE_NAMES,
   HOST_PATTERN,
   RESERVED_SECRET,
   SECRET_NAME,
@@ -172,6 +175,9 @@ class Validator {
       } else if (rule.name === "AllowHosts") {
         if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowHosts(...) needs at least one host, e.g. AllowHosts("pypi.org", "*.pythonhosted.org")`, g.loc);
         for (const h of rule.args) if (!HOST_PATTERN.test(h)) this.add("error", `Policy "${g.name}": AllowHosts(${h}) is not a host name like "pypi.org" or "*.pythonhosted.org"`, g.loc);
+      } else if (rule.name === "AllowMedia") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowMedia(...) needs at least one kind, e.g. AllowMedia(image, pdf)`, g.loc);
+        for (const m of rule.args) if (!includes(MEDIA_NAMES, m.toLowerCase())) this.add("error", `Policy "${g.name}": AllowMedia(${m}) is not a kind of media; use ${MEDIA_NAMES.join(", ")}`, g.loc);
       } else if (rule.name === "AllowFiles") {
         if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowFiles(...) needs at least one folder or file, e.g. AllowFiles("src/billing", "test/billing")`, g.loc);
         for (const f of rule.args) if (scopePath(f) === undefined) this.add("error", `Policy "${g.name}": AllowFiles(${f}) should be a path inside the project, like "src/billing" (no leading /, no ..)`, g.loc);
@@ -327,6 +333,7 @@ class Validator {
   }
 
   private checkSchema(sc: SchemaDeclaration) {
+    if (includes(MEDIA_TYPE_NAMES, sc.name)) this.add("warning", `Schema "${sc.name}" replaces the built-in ${sc.name} type in this program: a value of it is an object with these fields, not a file`, sc.loc);
     const names = new Set<string>();
     for (const f of sc.fields) {
       if (names.has(f.name)) this.add("error", `Schema "${sc.name}": duplicate field "${f.name}"`, sc.loc);
@@ -359,6 +366,17 @@ class Validator {
     let type = param.type;
     for (const [i, field] of path.slice(1).entries()) {
       const schema = this.schemas.get(baseType(type));
+      if (!schema && kindOf(baseType(type), this.schemas) === "media" && !/[<]/.test(type)) {
+        // A file's fields are fixed.
+        const known = MEDIA_FIELDS[field];
+        if (!known && report) {
+          const read = path.slice(0, i + 2).join(".");
+          this.add("error", `Pipeline "${s.name}": ${read}: "${field}" is not something ${article(baseType(type))} has (it has ${Object.keys(MEDIA_FIELDS).join(", ")})`, loc, read);
+        }
+        if (!known) return "";
+        type = known;
+        continue;
+      }
       if (!schema) return ""; // not a schema (Object, Any, ...): fields aren't known
       const f = schema.fields.find((x) => x.name === field);
       if (!f) {
@@ -411,7 +429,7 @@ class Validator {
     const a = kindOf(baseType(from), this.schemas);
     const b = kindOf(baseType(to), this.schemas);
     if (a === "any" || b === "any") return true;
-    if (a === b) return a !== "schema" || baseType(from) === baseType(to);
+    if (a === b) return (a !== "schema" && a !== "media") || baseType(from) === baseType(to);
     // A Number may hold a whole number; only a written 1.5 is known not to (see checkCallTypes).
     if ((a === "integer" && b === "number") || (a === "number" && b === "integer")) return true;
     if (a === "schema" && b === "object") return true;
@@ -756,7 +774,7 @@ function baseType(type: string): string {
   return (lt < 0 ? type : type.slice(0, lt)).trim();
 }
 
-type Kind = "string" | "number" | "integer" | "boolean" | "list" | "object" | "schema" | "any";
+type Kind = "string" | "number" | "integer" | "boolean" | "list" | "object" | "schema" | "media" | "any";
 
 /** What a type name accepts, folding aliases (List = Array, JSON = Map = Object). Unknown and unchecked types are "any". */
 function kindOf(base: string, schemas: Map<string, SchemaDeclaration>): Kind {
@@ -777,7 +795,8 @@ function kindOf(base: string, schemas: Map<string, SchemaDeclaration>): Kind {
     case "Map":
       return "object";
   }
-  return schemas.has(base) ? "schema" : "any";
+  if (schemas.has(base)) return "schema";
+  return includes(MEDIA_TYPE_NAMES, base) ? "media" : "any";
 }
 
 /** A likely typo: the same name in another case, or within an edit or two (one for short names). */

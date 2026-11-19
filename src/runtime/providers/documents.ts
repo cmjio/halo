@@ -14,13 +14,16 @@
  * leave it, the same way Workspace paths can't. An http(s) URL is fetched.
  */
 
-import { inflateRawSync, inflateSync } from "node:zlib";
+import { inflateSync } from "node:zlib";
 import { lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { HaloError, HttpError } from "../errors.js";
 import type { ToolCall, ToolProvider } from "../tools.js";
 import { intArg, need, unknownMethod } from "./common.js";
+import { readZipEntry } from "../zip.js";
+import { parseMessage } from "../mail/mime.js";
+import { isMediaRef, mediaLabel } from "../media.js";
 import { confine, workspaceRoot } from "./workspace.js";
 
 /** Largest document read (bytes), and largest file inflated out of a zip or PDF stream. */
@@ -29,7 +32,7 @@ const MAX_INFLATED = 50_000_000;
 const DEFAULT_MAX_CHARS = 200_000;
 const MAX_ROWS = 10_000;
 
-export type DocType = "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "docx" | "pdf";
+export type DocType = "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "docx" | "pptx" | "eml" | "pdf";
 
 const BY_EXTENSION: Record<string, DocType> = {
   ".txt": "text", ".text": "text", ".log": "text",
@@ -38,6 +41,8 @@ const BY_EXTENSION: Record<string, DocType> = {
   ".csv": "csv", ".tsv": "tsv",
   ".json": "json",
   ".docx": "docx",
+  ".pptx": "pptx",
+  ".eml": "eml",
   ".pdf": "pdf",
 };
 
@@ -52,6 +57,8 @@ function detect(name: string, contentType: string, bytes: Uint8Array): DocType {
   const ct = contentType.toLowerCase();
   if (ct.includes("pdf")) return "pdf";
   if (ct.includes("wordprocessingml")) return "docx";
+  if (ct.includes("presentationml")) return "pptx";
+  if (ct.includes("rfc822")) return "eml";
   if (ct.includes("html")) return "html";
   if (ct.includes("csv")) return "csv";
   if (ct.includes("tab-separated")) return "tsv";
@@ -147,52 +154,9 @@ export function rowsToRecords(rows: string[][]): Record<string, string>[] {
   });
 }
 
-// ── Zip (for .docx) ──
+// ── Word and PowerPoint (zip archives of XML) ──
 
-/**
- * Read one file out of a zip archive, through the central directory (the
- * listing at the end of the file). Supports stored and deflated entries; ZIP64
- * and encrypted archives aren't supported.
- */
-export function readZipEntry(zip: Uint8Array, name: string): Uint8Array | undefined {
-  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
-  // The end-of-central-directory record is in the last 22 bytes, plus up to a 64KB comment.
-  let eocd = -1;
-  for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
-    if (view.getUint32(i, true) === 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) throw new Error("not a zip file");
-  const count = view.getUint16(eocd + 10, true);
-  let p = view.getUint32(eocd + 16, true);
-  if (p === 0xffffffff) throw new Error("ZIP64 archives aren't supported");
-  const decoder = new TextDecoder();
-  for (let n = 0; n < count; n++) {
-    if (p + 46 > zip.length || view.getUint32(p, true) !== 0x02014b50) throw new Error("corrupt zip central directory");
-    const flags = view.getUint16(p + 8, true);
-    const method = view.getUint16(p + 10, true);
-    const compressedSize = view.getUint32(p + 20, true);
-    const size = view.getUint32(p + 24, true);
-    const nameLen = view.getUint16(p + 28, true);
-    const extraLen = view.getUint16(p + 30, true);
-    const commentLen = view.getUint16(p + 32, true);
-    const local = view.getUint32(p + 42, true);
-    const entryName = decoder.decode(zip.subarray(p + 46, p + 46 + nameLen));
-    p += 46 + nameLen + extraLen + commentLen;
-    if (entryName !== name) continue;
-    if (flags & 1) throw new Error(`${name} is encrypted`);
-    if (size > MAX_INFLATED) throw new Error(`${name} is too large (${size} bytes)`);
-    if (local + 30 > zip.length || view.getUint32(local, true) !== 0x04034b50) throw new Error("corrupt zip local header");
-    const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
-    const data = zip.subarray(start, start + compressedSize);
-    if (method === 0) return data;
-    if (method === 8) return new Uint8Array(inflateRawSync(data, { maxOutputLength: MAX_INFLATED }));
-    throw new Error(`${name} uses unsupported zip compression method ${method}`);
-  }
-  return undefined;
-}
+export { readZipEntry } from "../zip.js";
 
 /** The text of a .docx: word/document.xml with tags removed, one line per paragraph. */
 export function docxText(bytes: Uint8Array): string {
@@ -209,6 +173,43 @@ export function docxText(bytes: Uint8Array): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+/** The text of a PowerPoint deck: each slide in order, its text and its speaker notes. */
+export function pptxText(bytes: Uint8Array): { text: string; slides: number } {
+  const read = (name: string) => {
+    const b = readZipEntry(bytes, name);
+    return b ? new TextDecoder().decode(b) : undefined;
+  };
+  const runs = (xml: string) =>
+    decodeEntities(
+      xml
+        .replace(/<a:br\b[^>]*\/>/g, "\n")
+        .replace(/<\/a:p>/g, "\n")
+        .replace(/<(?!\/?a:t\b)[^>]+>/g, "")
+        .replace(/<\/?a:t\b[^>]*>/g, ""),
+    )
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  // Slides in the order the deck shows them: presentation.xml lists their relationship ids.
+  const order = [...(read("ppt/presentation.xml") ?? "").matchAll(/<p:sldId\b[^>]*\br:id="([^"]+)"/g)].map((m) => m[1]!);
+  const rels = new Map([...(read("ppt/_rels/presentation.xml.rels") ?? "").matchAll(/<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"/g)].map((m) => [m[1]!, m[2]!.replace(/^\/?(ppt\/)?/, "")]));
+  let files = order.map((id) => rels.get(id)).filter((t): t is string => !!t && /^slides\/slide\d+\.xml$/.test(t));
+  if (!files.length) {
+    // No listing: slide1, slide2, ... while they exist.
+    for (let n = 1; n < 2000 && read(`ppt/slides/slide${n}.xml`) !== undefined; n++) files.push(`slides/slide${n}.xml`);
+  }
+  const out: string[] = [];
+  files.forEach((file, i) => {
+    const slide = runs(read(`ppt/${file}`) ?? "");
+    const rel = read(`ppt/slides/_rels/${file.split("/")[1]}.rels`) ?? "";
+    const notesFile = /Target="\.\.\/(notesSlides\/notesSlide\d+\.xml)"/.exec(rel)?.[1];
+    // A notes page also holds the slide's image and number; its body text is what the speaker wrote.
+    const notes = notesFile ? runs(read(`ppt/${notesFile}`) ?? "").replace(/^\d+$/m, "").trim() : "";
+    out.push(`Slide ${i + 1}:\n${slide || "(no text)"}${notes ? `\nNotes: ${notes}` : ""}`);
+  });
+  return { text: out.join("\n\n"), slides: files.length };
+}
+
 
 // ── PDF ──
 
@@ -371,9 +372,13 @@ async function load(call: ToolCall, source: string, fetch: typeof globalThis.fet
 
 export const documents: ToolProvider = async (call, services) => {
   if (!["extract", "read", "text"].includes(call.method)) unknownMethod(call, ["extract"]);
-  const source = need(call, "a path or url", call.named.path ?? call.named.url ?? call.named.source ?? call.positional[0]).trim();
+  const given0 = call.named.path ?? call.named.url ?? call.named.source ?? call.named.document ?? call.positional[0];
+  // A Document value (or an image) the run holds: its bytes come from the run, not from a path or URL.
+  const held = isMediaRef(given0) ? given0 : undefined;
+  if (held && !services.media) throw docError(call, "this runtime can't read files a run holds");
+  const source = held ? mediaLabel(held) : need(call, "a path or url", given0).trim();
   const maxChars = intArg(call, "maxChars", call.named.maxChars ?? call.config("maxChars"), DEFAULT_MAX_CHARS, 1, 10_000_000);
-  const { name, contentType, bytes } = await load(call, source, services.fetch);
+  const { name, contentType, bytes } = held ? { name: held.name ?? "", contentType: held.type, bytes: await services.media!(held) } : await load(call, source, services.fetch);
   const given = call.named.type;
   const type = typeof given === "string" && given ? (BY_EXTENSION[`.${given.toLowerCase()}`] ?? (given as DocType)) : detect(name, contentType, bytes);
 
@@ -408,12 +413,22 @@ export const documents: ToolProvider = async (call, services) => {
       }
       case "docx":
         return { source, type, ...cap(docxText(bytes)) };
+      case "pptx": {
+        const { text, slides } = pptxText(bytes);
+        return { source, type, ...cap(text), slides };
+      }
+      case "eml": {
+        const m = parseMessage(bytes);
+        const { attachments, headers: _headers, ...message } = m;
+        // Attachments are described here; their files are the run's when the message came in as a Document.
+        return { source, type, ...message, attachments: attachments.map(({ file: _file, ...a }) => a), ...cap(m.text || (m.html ? htmlText(m.html) : "")) };
+      }
       case "pdf": {
         const { text, pages } = (await pdftotext(call, bytes)) ?? pdfText(bytes);
         return { source, type, ...cap(text), pages };
       }
       default:
-        throw new Error(`unknown type "${type}" (use text, markdown, html, csv, tsv, json, docx or pdf)`);
+        throw new Error(`unknown type "${type}" (use text, markdown, html, csv, tsv, json, docx, pptx, eml or pdf)`);
     }
   } catch (e) {
     if (e instanceof HaloError) throw e;

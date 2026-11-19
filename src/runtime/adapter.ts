@@ -5,6 +5,8 @@
  * authentication, and response parsing.
  */
 
+import { mediaLabel, type MediaRef } from "./media-ref.js";
+
 // ── Adapter Interface ─────
 
 /** A tool the model may call, by a name made of letters, digits, `_` and `-`. */
@@ -23,14 +25,43 @@ export interface LLMToolCall {
 }
 
 /**
+ * An image or document sent with a user turn. `label` is how the turn's text refers to it.
+ * `data` (base64) is filled in just before the request is built; stored conversations
+ * carry the reference only.
+ */
+export interface LLMMedia extends MediaRef {
+  data?: string;
+  /** Where the provider holds the file already (an upload to its own file store). */
+  fileUri?: string;
+}
+
+/** Each attachment as its label followed by itself, in the provider's own form, ahead of the turn's text. */
+function attachments<T>(media: LLMMedia[] | undefined, label: (text: string) => T, part: (m: LLMMedia & { data: string }) => T): T[] {
+  return (media ?? []).filter((m): m is LLMMedia & { data: string } => typeof m.data === "string").flatMap((m) => [label(mediaLabel(m)), part(m)]);
+}
+
+/** Like attachments, for an API that also takes a file by reference (an upload, or a YouTube link). */
+function attachmentsOrLinks<T>(media: LLMMedia[] | undefined, label: (text: string) => T, part: (m: LLMMedia) => T): T[] {
+  return (media ?? []).filter((m) => typeof m.data === "string" || m.fileUri || m.url).flatMap((m) => [label(mediaLabel(m)), part(m)]);
+}
+
+const MB = 1024 * 1024;
+/** Gemini names a few media types its own way. */
+const GEMINI_TYPES: Record<string, string> = { "audio/mpeg": "audio/mp3", "video/quicktime": "video/mov" };
+const accepts = (types: string[], bytes: number) => Object.fromEntries(types.map((t) => [t, bytes]));
+const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/**
  * A conversation turn. An assistant turn that asked for tools carries them in
  * `toolCalls` (and `raw`, the adapter's own form of the turn, which some APIs
  * need sent back unchanged); each result is a `tool` turn.
  */
 export type LLMMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string; media?: LLMMedia[] }
   | { role: "assistant"; content: string; toolCalls?: LLMToolCall[]; raw?: unknown }
-  | { role: "tool"; toolCallId: string; name: string; content: string };
+  /** `media`: images and documents in the result, sent to the model in a user turn after the run of tool turns. */
+  | { role: "tool"; toolCallId: string; name: string; content: string; media?: LLMMedia[] };
 
 export interface LLMRequest {
   model: string;
@@ -80,6 +111,19 @@ export interface ProviderAdapter {
 
   /** False when the API can't call tools (agents with `tools:` then fail with a clear error). Defaults to true. */
   supportsTools?: boolean;
+
+  /**
+   * The media types this API reads, each with the most bytes one may be. Unset, it reads
+   * none, and a call that carries an image or a document fails with a clear error.
+   */
+  input?: Record<string, number>;
+
+  /**
+   * For an API with its own file store: files larger than `inlineLimit` are uploaded with
+   * `upload` and sent by reference, instead of inline.
+   */
+  inlineLimit?: number;
+  upload?(file: MediaRef, bytes: Uint8Array, o: { apiKey: string; fetch: typeof fetch; signal?: AbortSignal }): Promise<string>;
 
   /** Check if this adapter can handle the given model ID */
   canHandle(modelId: string): boolean;
@@ -159,6 +203,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   id: string;
   envKeys?: string[];
   requiresApiKey?: boolean;
+  /** Images, as `image_url` parts. Whether a given model reads them is the provider's to say. */
+  input: Record<string, number> = accepts(IMAGES, 20 * MB);
   protected prefixes: string[];
   protected baseUrl: string;
   protected extraHeaders: Record<string, string>;
@@ -198,6 +244,19 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             role: "assistant",
             content: m.content || null,
             tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } })),
+          };
+        }
+        if (m.role === "user" && m.media?.length) {
+          return {
+            role: "user",
+            content: [
+              ...attachments<unknown>(
+                m.media,
+                (text) => ({ type: "text", text }),
+                (a) => (a.$media === "image" ? { type: "image_url", image_url: { url: `data:${a.type};base64,${a.data}` } } : { type: "file", file: { filename: a.name ?? "document.pdf", file_data: `data:${a.type};base64,${a.data}` } }),
+              ),
+              { type: "text", text: m.content },
+            ],
           };
         }
         return { role: m.role, content: m.content };
@@ -240,6 +299,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 export class OpenAIAdapter extends OpenAICompatibleAdapter {
   constructor(options: { baseUrl?: string } = {}) {
     super({ id: "openai", prefixes: ["openai/", "oai/"], baseUrl: options.baseUrl ?? "https://api.openai.com/v1", envKeys: ["OPENAI_API_KEY"] });
+    this.input = { ...accepts(IMAGES, 20 * MB), "application/pdf": 25 * MB };
   }
 
   override canHandle(modelId: string): boolean {
@@ -268,6 +328,8 @@ export class OpenAIAdapter extends OpenAICompatibleAdapter {
 export class AnthropicAdapter implements ProviderAdapter {
   id = "anthropic";
   envKeys = ["ANTHROPIC_API_KEY"];
+  // An image may be 10 MB once base64-encoded, which is 7.5 MB of bytes.
+  input = { ...accepts(IMAGES, 7 * MB), "application/pdf": 25 * MB };
   private prefixes = ["anthropic/", "claude/"];
 
   constructor(private options: { baseUrl?: string } = {}) {}
@@ -347,7 +409,9 @@ function anthropicMessages(messages: LLMMessage[]): unknown[] {
     } else if (m.role === "user" && out.at(-1)?.role === "user") {
       // Turns must alternate: a note after tool results joins their turn.
       const last = out.at(-1)!;
-      last.content = [...(Array.isArray(last.content) ? last.content : [{ type: "text", text: last.content }]), { type: "text", text: m.content }];
+      last.content = [...(Array.isArray(last.content) ? last.content : [{ type: "text", text: last.content }]), ...anthropicAttachments(m.media), { type: "text", text: m.content }];
+    } else if (m.role === "user" && m.media?.length) {
+      out.push({ role: "user", content: [...anthropicAttachments(m.media), { type: "text", text: m.content }] });
     } else {
       out.push({ role: m.role === "assistant" ? "assistant" : "user", content: m.content });
     }
@@ -355,11 +419,54 @@ function anthropicMessages(messages: LLMMessage[]): unknown[] {
   return out;
 }
 
+const anthropicAttachments = (media: LLMMedia[] | undefined) =>
+  attachments<unknown>(
+    media,
+    (text) => ({ type: "text", text }),
+    (a) => ({ type: a.$media === "image" ? "image" : "document", source: { type: "base64", media_type: a.type, data: a.data } }),
+  );
+
 // ── Google Gemini Adapter ─────
 
 export class GoogleAdapter implements ProviderAdapter {
   id = "google";
   envKeys = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
+  // Inline data shares a 20 MB request with everything else in it, base64-encoded; larger files go
+  // through the Files API. A YouTube link is watched where it is.
+  inlineLimit = 14 * MB;
+  input = {
+    ...accepts(["image/png", "image/jpeg", "image/webp"], 25 * MB),
+    "application/pdf": 50 * MB,
+    ...accepts(["audio/wav", "audio/mpeg", "audio/aac", "audio/ogg", "audio/flac"], 100 * MB),
+    ...accepts(["video/mp4", "video/quicktime", "video/webm"], 500 * MB),
+    "video/youtube": 1,
+  };
+
+  /** Upload to the Files API (a resumable upload in one go), and wait until the file can be used. */
+  async upload(file: MediaRef, bytes: Uint8Array, o: { apiKey: string; fetch: typeof fetch; signal?: AbortSignal }): Promise<string> {
+    const root = (this.options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(/\/v1beta\/?$/, "");
+    const type = GEMINI_TYPES[file.type] ?? file.type;
+    const start = await o.fetch(`${root}/upload/v1beta/files`, {
+      method: "POST",
+      headers: { "x-goog-api-key": o.apiKey, "X-Goog-Upload-Protocol": "resumable", "X-Goog-Upload-Command": "start", "X-Goog-Upload-Header-Content-Length": String(bytes.length), "X-Goog-Upload-Header-Content-Type": type, "Content-Type": "application/json" },
+      body: JSON.stringify({ file: { display_name: file.name ?? file.sha256.slice(0, 12) } }),
+      signal: o.signal,
+    });
+    const to = start.headers.get("x-goog-upload-url");
+    if (!start.ok || !to) throw new Error(`Uploading ${mediaLabel(file)} to Gemini failed (${start.status}): ${(await start.text()).slice(0, 300)}`);
+    const sent = await o.fetch(to, { method: "POST", headers: { "Content-Length": String(bytes.length), "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize" }, body: bytes as Uint8Array<ArrayBuffer>, signal: o.signal });
+    const body = (await sent.json().catch(() => ({}))) as { file?: { uri?: string; name?: string; state?: string } };
+    if (!sent.ok || !body.file?.uri || !body.file.name) throw new Error(`Uploading ${mediaLabel(file)} to Gemini failed (${sent.status})`);
+    // A video is processed before it can be used: wait for it (up to 10 minutes).
+    let state = body.file.state;
+    for (let i = 0; state === "PROCESSING" && i < 300; i++) {
+      await Bun.sleep(2000);
+      const got = await o.fetch(`${root}/v1beta/${body.file.name}`, { headers: { "x-goog-api-key": o.apiKey }, signal: o.signal });
+      state = ((await got.json().catch(() => ({}))) as { state?: string }).state;
+    }
+    if (state && state !== "ACTIVE") throw new Error(`Gemini couldn't use ${mediaLabel(file)} (its file is ${state})`);
+    return body.file.uri;
+  }
 
   constructor(private options: { baseUrl?: string } = {}) {}
 
@@ -440,10 +547,19 @@ function googleContents(messages: LLMMessage[]): unknown[] {
     } else if (m.role === "assistant" && m.toolCalls?.length) {
       const parts = Array.isArray(m.raw) ? m.raw : [...(m.content ? [{ text: m.content }] : []), ...m.toolCalls.map((c) => ({ functionCall: { id: c.id, name: c.name, args: c.args } }))];
       out.push({ role: "model", parts });
-    } else if (m.role === "user" && out.at(-1)?.role === "user") {
-      out.at(-1)!.parts.push({ text: m.content });
+    } else if (m.role === "user") {
+      const parts = [
+        ...attachmentsOrLinks<unknown>(
+          m.media,
+          (text) => ({ text }),
+          (a) => (a.url ? { fileData: { fileUri: a.url } } : a.fileUri ? { fileData: { fileUri: a.fileUri, mimeType: GEMINI_TYPES[a.type] ?? a.type } } : { inlineData: { mimeType: GEMINI_TYPES[a.type] ?? a.type, data: a.data } }),
+        ),
+        { text: m.content },
+      ];
+      if (out.at(-1)?.role === "user") out.at(-1)!.parts.push(...parts);
+      else out.push({ role: "user", parts });
     } else {
-      out.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
+      out.push({ role: "model", parts: [{ text: m.content }] });
     }
   }
   return out;
@@ -562,6 +678,7 @@ export class ReplicateAdapter implements ProviderAdapter {
 export class OllamaAdapter implements ProviderAdapter {
   id = "ollama";
   requiresApiKey = false;
+  input = accepts(IMAGES, 25 * MB);
   private prefixes = ["ollama/", "local/"];
 
   constructor(private options: { baseUrl?: string } = {}) {}
@@ -587,6 +704,9 @@ export class OllamaAdapter implements ProviderAdapter {
         if (m.role === "assistant" && m.toolCalls?.length) {
           return { role: "assistant", content: m.content, tool_calls: m.toolCalls.map((c) => ({ function: { name: c.name, arguments: c.args } })) };
         }
+        // Ollama takes a turn's images beside its text, so the labels go in the text, in order.
+        const images = m.role === "user" ? (m.media ?? []).filter((a) => typeof a.data === "string") : [];
+        if (images.length) return { role: "user", content: `${images.map((a) => mediaLabel(a)).join("\n")}\n\n${m.content}`, images: images.map((a) => a.data) };
         return { role: m.role, content: m.content };
       }),
       tools: req.tools?.length ? req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })) : undefined,

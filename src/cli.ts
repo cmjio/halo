@@ -26,6 +26,7 @@ import { checkLinked, displayName, entryPipelines, type LinkedProgram } from "./
 import { linkFile } from "./linker/node.js";
 import type { CallStage, ParseResult, PipelineStage, PipelineDeclaration } from "./parser/types.js";
 import { AdapterRegistry } from "./runtime/adapter.js";
+import { FileBlobStore } from "./runtime/media.js";
 import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type ListenRequest, type RunResult, type RuntimeEvent } from "./runtime/runtime.js";
 import { SqliteTelemetry } from "./runtime/telemetry.js";
 import { initProject } from "./init.js";
@@ -71,6 +72,9 @@ USAGE:
                                         (--reset --yes deletes its state; --json)
   halo history <runId|steps file>       List every step of a @checkpoint run (--step N: the
                                         state after step N; --json for the raw steps)
+  halo blobs [prune]                    List the images and documents runs stored (.halo/blobs); prune
+                                        removes those nothing in .halo mentions any more (--dry-run,
+                                        --dir <stateDir>, --json)
   halo sandboxes [prune]                List the Docker sandboxes, snapshots and networks Halo made;
                                         prune removes the snapshots and networks (--all: stops
                                         running sandboxes too; --json)
@@ -236,7 +240,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -556,6 +560,9 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     onInterrupt: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptInterrupt : undefined,
     onListen: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptListen : undefined,
     runStore: new FileRunStore(".halo/runs"),
+    // Images and documents a run is given or makes, by hash.
+    blobs: new FileBlobStore(".halo/blobs"),
+    media: (await haloConfig()).media,
     // Mock runs keep thread state in memory, so they never change a real thread.
     threadPath: mock ? ":memory:" : THREADS,
     onEvent: (e) => {
@@ -598,7 +605,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     } else if (checkpoint) {
       result = await rt.resume(checkpoint);
     } else if (replaying) {
-      result = await rt.run(replaying.pipeline, replaying.args);
+      result = await rt.run(replaying.pipeline, replaying.args, { media: "files" });
     } else {
       const pipeline = pickStream(ast, last(flags, "pipeline"));
       // --body <file.json>: the arguments a webhook would get from that body; --arg/--args add to them.
@@ -615,7 +622,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
       }
       recorder?.start(pipeline.name, args);
       pruneRecordings(RECORDINGS, (await haloConfig()).recordings?.keep ?? 50);
-      result = await rt.run(pipeline.name, args, { runId, idempotencyKey: last(flags, "idempotency-key") });
+      // An Image or Document argument may be a path to a file here: this is the person's own machine.
+      result = await rt.run(pipeline.name, args, { runId, idempotencyKey: last(flags, "idempotency-key"), media: "files" });
     }
     recorder?.finish({ status: result.status, output: result.output });
   } catch (err) {
@@ -1026,6 +1034,7 @@ async function cmdCompare(flags: Flags): Promise<number> {
 /** halo.json settings that the CLI's commands read (all optional). */
 interface HaloConfig {
   recordings?: { keep?: number };
+  media?: { transcribe?: string; transcribeModel?: string };
   evolve?: { proposer?: string; judge?: string; models?: string[]; maxCostRatio?: number; holdout?: number; criteria?: Record<string, string> };
 }
 
@@ -1473,6 +1482,25 @@ async function cmdMigrate(flags: Flags): Promise<number> {
 
 // ── Tool packages ──
 
+async function cmdBlobs(flags: Flags): Promise<number> {
+  const prune = flags.positional[0] === "prune";
+  if (flags.positional[0] && !prune) fail("Usage: halo blobs [prune] [--dry-run] [--dir <stateDir>] [--json]");
+  const { blobUsage, megabytes } = await import("./runtime/media.js");
+  const dir = last(flags, "dir") ?? (await loadServeConfig(last(flags, "config"))).stateDir ?? ".halo";
+  const dryRun = flags.bools.has("dry-run");
+  const usage = await blobUsage(dir, { prune, dryRun });
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(usage, null, 2));
+    return 0;
+  }
+  const total = usage.blobs.reduce((n, b) => n + b.size, 0);
+  const unused = usage.blobs.filter((b) => !b.referenced);
+  console.log(`${usage.blobs.length} file(s), ${megabytes(total)} in ${join(dir, "blobs")}; ${unused.length} not mentioned by any run, recording, thread or telemetry`);
+  if (prune) console.log(`${dryRun ? "Would remove" : "Removed"} ${usage.removed.length} file(s), ${megabytes(usage.freedBytes)}${unused.length > usage.removed.length ? ` (${unused.length - usage.removed.length} stored in the last hour are kept)` : ""}.`);
+  else if (unused.length) console.log(dim("Run halo blobs prune to remove them."));
+  return 0;
+}
+
 async function cmdSandboxes(flags: Flags): Promise<number> {
   const { listDockerSandboxes, pruneDockerSandboxes } = await import("./runtime/providers/remote.js");
   if (flags.positional[0] === "prune") {
@@ -1602,6 +1630,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdHistory(flags);
       case "sandboxes":
         return await cmdSandboxes(flags);
+      case "blobs":
+        return await cmdBlobs(flags);
       case "init":
         if (rest.includes("--package")) return await runPackageCommand("init", rest);
         const template = last(flags, "template");

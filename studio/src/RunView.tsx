@@ -134,7 +134,7 @@ function Inspector({ span, trace, onClose }: { span: Span; trace: Trace; onClose
   const callOutput = call?.output;
   // What the stage passed on is usually the call's answer; show it again only when it isn't.
   const passedOnDiffers = span.result !== undefined && span.call !== undefined && JSON.stringify(result) !== JSON.stringify(callOutput);
-  const extra = call ? Object.entries(call).filter(([k, v]) => !["system", "prompt", "output", "cost", "mocked"].includes(k) && v !== null && v !== undefined) : [];
+  const extra = call ? Object.entries(call).filter(([k, v]) => !["system", "prompt", "media", "sent", "output", "cost", "mocked"].includes(k) && v !== null && v !== undefined) : [];
   const took = span.duration ?? (span.status === "running" ? span.end - span.start : null);
 
   return (
@@ -196,9 +196,11 @@ function Inspector({ span, trace, onClose }: { span: Span; trace: Trace; onClose
           <>
             {typeof call.system === "string" && call.system && <Field title="System prompt" value={call.system} />}
             <Field title="Prompt" value={call.prompt} />
+            {Array.isArray(call.media) && call.media.length > 0 && <Field title={call.media.length === 1 ? "File sent with it" : "Files sent with it"} value={call.media} />}
             <Field title="Answer" value={callOutput} />
           </>
         )}
+        {span.kind === "tool" && call && Array.isArray(call.sent) && call.sent.length > 0 && <Field title={call.sent.length === 1 ? "File sent" : "Files sent"} value={call.sent} />}
         {span.kind === "tool" && call && <Field title="Output" value={callOutput} />}
         {extra.map(([k, v]) => (
           <Field key={k} title={k} value={v} />

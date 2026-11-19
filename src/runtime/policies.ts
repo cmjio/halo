@@ -9,6 +9,7 @@
  * DenyArgs) run on the tool calls an agent chooses, before they run.
  */
 
+import { aKind, type MediaKind } from "./media-ref.js";
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
 import { HaloError, PolicyViolation } from "./errors.js";
 import { splitToolPath } from "../linker/names.js";
@@ -379,6 +380,38 @@ export class PolicyEngine {
       const limit = Number(b.rule.args[0]);
       if (hooks.spent() >= limit) this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}`, "budget", hooks);
     }
+  }
+
+  /**
+   * Why this agent may not be sent these images or documents, if it may not. Block and Redact
+   * read text, so an agent that has either is sent no media unless a policy of its says
+   * `AllowMedia(image, pdf)`: a rule like Redact(PII) must not become untrue because the
+   * input was a photo. `AllowMedia` on any agent also limits it to the kinds it names.
+   */
+  mediaRefusal(agent: Agent, media: Array<{ $media: string; type: string }>): { rule: BoundRule; message: string } | undefined {
+    if (!media.length) return undefined;
+    const rules = this.rulesFor(agent);
+    const allow = rules.filter((b) => b.rule.name === "AllowMedia");
+    const guard = rules.find((b) => b.rule.name === "Block" || b.rule.name === "Redact");
+    if (!allow.length && !guard) return undefined;
+    const allowed = new Set(allow.flatMap((b) => b.rule.args.map((a) => a.toLowerCase())));
+    // A file answers to its kind, its media type, and the short names people use for it (mp3, mov).
+    const names = (m: { $media: string; type: string }) => {
+      const sub = m.type.split("/")[1]!;
+      return [m.$media, m.type, sub, ...(sub === "mpeg" ? ["mp3"] : []), ...(sub === "quicktime" ? ["mov"] : [])];
+    };
+    const refused = media.find((m) => !names(m).some((n) => allowed.has(n)));
+    if (!refused) return undefined;
+    const kind = aKind(refused.$media as MediaKind);
+    const word = refused.$media === "document" ? "pdf" : refused.$media;
+    if (allow.length) return { rule: allow[0]!, message: `Agent "${agent.name}" was sent ${kind}, and its policy allows only ${[...allowed].join(", ")} (AllowMedia)` };
+    return { rule: guard!, message: `Agent "${agent.name}" was sent ${kind}, which ${guard!.rule.name} can't read. Add AllowMedia(${word}) to one of its policies to send it anyway` };
+  }
+
+  /** Refuse a call whose images or documents the agent's policies don't allow. */
+  checkMedia(agent: Agent, media: Array<{ $media: string; type: string }>, hooks: PolicyHooks): void {
+    const refusal = this.mediaRefusal(agent, media);
+    if (refusal) this.violate({ ...refusal.rule, rule: { ...refusal.rule.rule, name: "AllowMedia" } }, refusal.message, "input", hooks);
   }
 
   /** Redact and screen a prompt before it is sent. Returns the (possibly redacted) text. */

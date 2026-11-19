@@ -88,7 +88,7 @@ pipeline Summarize(file: String) -> Result:
     |> Writer.summarize(text: context.data.doc.text)
 ```
 
-`extract(path)` or `extract(url:)` returns `{ source, type, text }`, plus:
+`extract(path)`, `extract(url:)`, or `extract(doc)` with a `Document` the run holds (see [Files](../guide/files.md)) returns `{ source, type, text }`, plus:
 
 | Type | From | Extra |
 |---|---|---|
@@ -97,6 +97,8 @@ pipeline Summarize(file: String) -> Result:
 | `csv`, `tsv` | `.csv`, `.tsv` | `rows`: one record per line, keyed by the header (quoted fields handled) |
 | `json` | `.json` | `data`: the parsed value |
 | `docx` | `.docx` | paragraphs one per line |
+| `pptx` | `.pptx` | `slides`: the slide count; each slide's text and speaker notes, in the deck's order |
+| `eml` | `.eml` | the message's `from`, `to`, `cc`, `subject`, `date`, and `attachments` (name, type, size); `text` is its body |
 | `pdf` | `.pdf` | `pages`: the page count |
 
 - The type comes from the extension, then the content type, then the first bytes; `type:` overrides it.

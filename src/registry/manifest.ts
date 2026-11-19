@@ -45,7 +45,8 @@ export interface HttpProviderSpec {
   baseUrl: string;
   auth?: HttpAuth;
   /** How POST/PUT/PATCH send their arguments. Default json. */
-  body?: "json" | "form";
+  /** "multipart": multipart/form-data, each file a file part. In "json", a file goes inline as a data: URI. */
+  body?: "json" | "form" | "multipart";
   /** Fixed headers sent with every request, e.g. an API version. */
   headers?: Record<string, string>;
   methods: HttpMethodSpec[];
@@ -153,7 +154,7 @@ function checkHttp(p: HttpProviderSpec, at: string, bad: (m: string) => void) {
     if ((auth.type === "header" || auth.type === "query") && !auth.name) bad(`${at}.auth.name is required for ${auth.type} auth`);
     if (auth.type === "basic" && (!Array.isArray(auth.env) || auth.env.length !== 2)) bad(`${at}.auth.env must name two variables (user, password) for basic auth`);
   }
-  if (p.body !== undefined && p.body !== "json" && p.body !== "form") bad(`${at}.body must be json or form`);
+  if (p.body !== undefined && p.body !== "json" && p.body !== "form" && p.body !== "multipart") bad(`${at}.body must be json, form or multipart`);
   if (!Array.isArray(p.methods) || !p.methods.length) return bad(`${at}.methods must list at least one method`);
   const seen = new Set<string>();
   for (const [i, method] of p.methods.entries()) {

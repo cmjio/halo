@@ -7,6 +7,7 @@
  * provider is the package's own code.
  */
 
+import { collectMedia, inlineFiles, multipartBody, type MediaRef } from "../runtime/media.js";
 import { HaloError, HttpError } from "../runtime/errors.js";
 import { MCP_INFO, mcpProvider } from "../runtime/mcp.js";
 import type { JsonSchema, ProviderInfo, ToolCall, ToolMethod, ToolProvider, ToolServices } from "../runtime/tools.js";
@@ -97,14 +98,23 @@ export function httpProvider(providerName: string, spec: HttpProviderSpec): Buil
       headers.Authorization = `Basic ${btoa(`${user}:${pass}`)}`;
     }
 
-    let body: string | URLSearchParams | undefined;
+    let body: string | URLSearchParams | FormData | undefined;
+    const files = collectMedia(args).length > 0;
+    const read = (ref: MediaRef) => {
+      if (!services.media) throw new HaloError(`${call.tool.name}: this runtime can't read the files its runs hold, so it can't send them`, { code: "TOOL_CONFIG" });
+      return services.media(ref);
+    };
     if (method.http.method === "GET" || method.http.method === "DELETE") {
+      if (files) throw new HaloError(`${call.tool.name}.${call.method}: a ${method.http.method} request can't carry a file`, { code: "TOOL_ARGUMENT" });
       for (const [k, v] of Object.entries(args)) if (v !== undefined) url.searchParams.set(k, str(v));
     } else if (spec.body === "form") {
+      if (files) throw new HaloError(`${call.tool.name}.${call.method}: this API takes a form body, which can't carry a file`, { code: "TOOL_ARGUMENT" });
       body = formBody(args);
+    } else if (spec.body === "multipart") {
+      body = await multipartBody(args, read);
     } else {
       headers["Content-Type"] = "application/json";
-      body = JSON.stringify(args);
+      body = JSON.stringify(await inlineFiles(args, read));
     }
 
     const res = await services.fetch(url, { method: method.http.method, headers, body, signal: call.signal });
