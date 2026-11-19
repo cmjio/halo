@@ -49,6 +49,7 @@ import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks }
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
 import { PACKAGE_COMMANDS, PACKAGE_HELP, runPackageCommand } from "./registry/cli.js";
+import { MigrateError, migrateProject, migrationHint } from "./migrate/index.js";
 
 const HELP = `
 Halo CLI - AI Workflow Language
@@ -79,6 +80,9 @@ USAGE:
                                         blueprint (support-inbox, fix-issue)
   halo upgrade [--channel <name>]       Update an installed halo on its channel (latest, next or
                                         nightly), or move it to another with --channel
+  halo migrate [dir] [--write]          Show what newer versions of Halo changed for this project;
+                                        --write applies what it can and records the version in
+                                        halo.json (--from <version>, --check: exit 1 if behind, --json)
   halo push [dir] [--to <store>]        Upload the project to a store (s3://bucket/prefix or a
                                         folder; default HALO_PROJECT). Servers started with
                                         HALO_PROJECT set to it run that version, with no image
@@ -232,7 +236,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -382,6 +386,11 @@ async function cmdValidate(flags: Flags): Promise<number> {
   }
   const summary = `${files.length} file(s), ${errors} error(s), ${warnings} warning(s)`;
   console.log(`\n${errors ? red(summary) : warnings ? yellow(summary) : green(summary)}`);
+  // Checking the project itself (not one file of it) also says when it is behind this Halo.
+  if (flags.positional.every((p) => resolve(p) === process.cwd())) {
+    const hint = await migrationHint(process.cwd());
+    if (hint) console.log(yellow(`! ${hint}`));
+  }
   return errors || (flags.bools.has("strict") && warnings) ? 1 : 0;
 }
 
@@ -785,6 +794,8 @@ async function cmdServe(flags: Flags): Promise<number> {
     if (err instanceof ServeError) fail(err.message);
     throw err;
   }
+  const behind = await migrationHint(asPackage ? resolve(flags.positional[0] ?? ".") : process.cwd());
+  if (behind) console.log(yellow(`[halo] ${behind}`));
   const announce = () => {
     if (asPackage) {
       console.log(bold(`\nHalo is serving hosted pipeline(s) ${server.pipelines.join(", ")} at ${server.url}`));
@@ -1415,7 +1426,49 @@ async function cmdUpgrade(flags: Flags): Promise<number> {
   const env = { ...process.env, HALO_INSTALL: installDir, HALO_NO_MODIFY_PATH: "1", HALO_VERSION: latest.version, HALO_INSTALLED_VIA: "upgrade" };
   const cmd = process.platform === "win32" ? ["powershell", "-NoProfile", "-Command", "irm https://halolang.com/install.ps1 | iex"] : ["sh", "-c", "curl -fsSL https://halolang.com/install.sh | sh"];
   const proc = Bun.spawn(cmd, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-  return await proc.exited;
+  const code = await proc.exited;
+  if (code === 0) console.log(dim("Run halo migrate in a project to see what this version changes for it."));
+  return code;
+}
+
+async function cmdMigrate(flags: Flags): Promise<number> {
+  const root = resolve(flags.positional[0] ?? ".");
+  const write = flags.bools.has("write");
+  let report;
+  try {
+    report = await migrateProject(root, { write, from: last(flags, "from"), trust: flags.bools.has("trust") });
+  } catch (err) {
+    if (err instanceof MigrateError) fail(err.message);
+    throw err;
+  }
+  const failed = report.results.filter((r) => r.error);
+  const automatic = report.results.filter((r) => r.automatic && !r.applied);
+  const manual = report.results.filter((r) => !r.automatic);
+  const behind = !!report.needsUpgrade || automatic.length > 0 || (!!report.stamp && !report.stamp.written) || (!write && manual.length > 0);
+  if (flags.bools.has("json")) {
+    console.log(JSON.stringify(report, null, 2));
+    return failed.length || (flags.bools.has("check") && behind) ? 1 : 0;
+  }
+  if (report.needsUpgrade) {
+    console.log(`${red("✗")} This project is written for Halo ${report.needsUpgrade}, and this is Halo ${report.halo}. Run halo upgrade.`);
+    return 1;
+  }
+  const where = relative(process.cwd(), root) || ".";
+  console.log(dim(`${where}: ${report.from ? `written for Halo ${report.from}` : "halo.json doesn't say which Halo it was written for, so every change is checked"}; this is Halo ${report.halo}\n`));
+  for (const r of report.results) {
+    const state = r.error ? red("failed") : r.applied ? green("applied") : r.automatic ? yellow(write ? "not applied" : "--write applies this") : yellow("yours to decide");
+    console.log(`${r.error ? red("✗") : r.applied ? green("✓") : yellow("!")} ${bold(r.title)} ${dim(`(Halo ${r.since})`)}  ${state}`);
+    for (const f of r.findings) console.log(`    ${f.file}${f.line ? `:${f.line}` : ""}  ${f.message}`);
+    console.log(dim(`    ${r.detail}`));
+    if (r.error) console.log(red(`    ${r.error}`));
+    console.log("");
+  }
+  if (!report.results.length) console.log(`${green("✓")} Nothing in this project is affected by a change to Halo${report.from ? ` since ${report.from}` : ""}.`);
+  if (report.stamp?.written) console.log(`${green("✓")} halo.json now says "halo": "${report.stamp.after}"${report.stamp.before ? ` (was "${report.stamp.before}")` : ""}.`);
+  else if (failed.length) console.log(red(`${failed.length} change(s) could not be applied, so halo.json was left as it was.`));
+  else if (report.stamp) console.log(`Run ${bold(`halo migrate${where === "." ? "" : ` ${where}`} --write`)} to ${automatic.length ? `apply ${automatic.length} change(s) and ` : ""}record "halo": "${report.stamp.after}" in halo.json.`);
+  if (report.stamp?.written && manual.length) console.log(dim(`The ${manual.length} change(s) marked "yours to decide" are not checked again once the version is recorded.`));
+  return failed.length || (flags.bools.has("check") && behind) ? 1 : 0;
 }
 
 // ── Tool packages ──
@@ -1559,6 +1612,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdServe(flags);
       case "push":
         return await cmdPush(flags);
+      case "migrate":
+        return await cmdMigrate(flags);
       case "validate":
       case "lint":
         return await cmdValidate(flags);

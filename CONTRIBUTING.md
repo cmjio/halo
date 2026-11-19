@@ -28,6 +28,7 @@ The [Layout](README.md#layout) section of the README says where things live. A f
 - **The grammar is the source of truth.** Edit `grammars/Halo.g4`, then run `bun run generate` (needs Java 11+) and commit the regenerated `src/parser/generated/`. Don't edit the generated files by hand.
 - **Keep the editors in step.** Syntax changes usually also touch `editors/` (VS Code, Zed, Sublime, tree-sitter), the LSP in `src/lsp/`, and the docs.
 - **Docs ship with the code.** If you change behavior, update `docs/` and, where it applies, `README.md`. Preview the site with `bun run docs:dev`.
+- **A change that breaks existing projects ships with a migration.** If a project that worked on the last release would behave differently, add an entry to `MIGRATIONS` in `src/migrate/index.ts` with the version that makes the change: `find` reports each place in a project it affects, and `apply` rewrites them when that can be done without guessing what the author meant. Add a row to the table in `docs/guide/production/upgrading.md`.
 - **Examples must validate.** Anything in `examples/` or `blueprints/` is run by the test suite.
 - **Add a test.** Tests live in `test/` and use `bun test`. A bug fix should come with a test that fails without it.
 

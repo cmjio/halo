@@ -4,7 +4,7 @@ title: CLI
 
 # CLI
 
-`halo` is one binary: install it with `curl -fsSL https://halolang.com/install.sh | sh` (see [Quickstart](/guide/quickstart)), update it with `halo upgrade`. This is `halo --help` from the current release:
+`halo` is one binary: install it with `curl -fsSL https://halolang.com/install.sh | sh` (see [Quickstart](/guide/quickstart)), update it with `halo upgrade`, and bring a project written for an older Halo up to date with `halo migrate` (see [Upgrading](/guide/production/upgrading)). This is `halo --help` from the current release:
 
 <!--@include: ../.vitepress/generated/help.md-->
 

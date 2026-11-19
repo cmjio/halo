@@ -140,6 +140,7 @@ export default defineConfig({
         items: [
           { text: 'Serving pipelines', link: '/guide/production/serving' },
           { text: 'Deploying', link: '/guide/production/deploying' },
+          { text: 'Upgrading', link: '/guide/production/upgrading' },
           { text: 'Blueprints', link: '/guide/production/blueprints' },
         ]
       },
