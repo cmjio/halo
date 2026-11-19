@@ -55,7 +55,7 @@ tool Ledger : POST("ledger.example.com/v1/prizes/issue", apiKey: Env.LEDGER_KEY,
 - The rules apply to the named argument on every method of the tool.
 - They are checked before an approval is asked for, so a person is never asked to approve a call the tool would refuse.
 
-**A `POST` tool's `path` is locked by default.** A `POST` tool is bound to the address it declares, so a model that calls it can't add a path under that address unless the declaration says `& Unlocked("path")`. A pipeline's own call can still pass `path:`. Use [`DenyArgs`](./policies.md#tool-rules) when a limit belongs to one agent and not to the tool.
+**A `POST` tool's `path` is locked by default.** A `POST` tool is bound to the address it declares, so a model that calls it can't add a path under that address unless the declaration says `& Unlocked("path")`. A pipeline's own call can still pass `path:`. Use [`DenyArgs`](./policies.md#tool-rules) when a limit belongs to one agent and not to the tool. This changed in Halo 1.4.0: [`halo migrate`](../guide/production/upgrading.md) lists the tools it affects in a project written before then.
 
 ## `REST` / `GET` and `POST`
 

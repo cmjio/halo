@@ -31,7 +31,7 @@ cp .env.example .env                           # add your API key
 halo run main.halo --arg topic="tide pools"    # for real
 ```
 
-The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it (with Homebrew, `brew upgrade halolang`). For prereleases or nightly builds of `main`, install with `HALO_VERSION=next` or `HALO_VERSION=nightly` (or `@halolang/halo@next`, `ghcr.io/cmjio/halo:nightly`).
+The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it (with Homebrew, `brew upgrade halolang`). After an upgrade, `halo migrate` in a project shows what the new version changes for it, and `halo migrate --write` applies what it can. For prereleases or nightly builds of `main`, install with `HALO_VERSION=next` or `HALO_VERSION=nightly` (or `@halolang/halo@next`, `ghcr.io/cmjio/halo:nightly`).
 
 From 0.5.0 it also fits whatever you already run:
 
@@ -288,6 +288,7 @@ grammars/Halo.g4        the grammar (source of truth); `bun run generate` rebuil
 src/parser/             generated parser, AST walker, validator
 src/runtime/            runtime, adapters, router, policies, schemas, tools, telemetry
 src/cli.ts, src/lsp/    CLI and language server
+src/migrate/            what each release changed for existing projects (`halo migrate`)
 editors/, studio/, docs/, examples/, test/
 ```
 

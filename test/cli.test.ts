@@ -143,7 +143,7 @@ pipeline S(x: String) -> Result:
     try {
       const r = cliIn(dir, "init", "demo");
       expect(r.code).toBe(0);
-      expect(readdirSync(join(dir, "demo")).sort()).toEqual([".env.example", ".gitignore", "README.md", "main.halo"]);
+      expect(readdirSync(join(dir, "demo")).sort()).toEqual([".env.example", ".gitignore", "README.md", "halo.json", "main.halo"]);
       expect(cliIn(dir, "init", "demo").err).toContain(`"demo" already exists`);
       const project = join(dir, "demo");
       expect(cliIn(project, "validate", ".").out).toContain("1 file(s), 0 error(s), 0 warning(s)");
