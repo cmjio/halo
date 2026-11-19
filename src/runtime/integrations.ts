@@ -5,7 +5,8 @@
  *   tool Reader  : Browser()                       fetch(url) → page text
  *   tool History : File(".halo/chat.json", keep: 10)  read / append / clear
  *   tool Chat    : Slack(Env.SLACK_BOT_TOKEN)       post(channel:, text:, buttons:)
- *   tool Mail    : Email(Env.RESEND_API_KEY, from: "bot@example.com")  send(to:, subject:, body:)
+ *   tool Mail    : Email(Env.RESEND_API_KEY, from: "bot@example.com")  send(to:, subject:, body:)  (via: postmark, sendgrid, mailgun)
+ *   tool App     : Handoff(Env.APP_URL, secret: Env.HALO_HANDOFF_SECRET)  send(kind:, ...) → your app
  *   tool Repo    : GitHub(Env.GITHUB_TOKEN)        create_issue, comment, add_labels, create_pr, get_issue, list_issues
  *   tool Tickets : Linear(Env.LINEAR_TOKEN)        create_issue(team:, title:, description:)
  *   tool Design  : Figma(Env.FIGMA_TOKEN)          get_file(file:), get_node(file:, node:)
@@ -16,6 +17,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { HaloError, HttpError } from "./errors.js";
+import { SIGNATURE_HEADER, signBody } from "./signing.js";
 import type { ToolCall, ToolProvider } from "./tools.js";
 
 function str(v: unknown): string {
@@ -228,26 +230,104 @@ export const slack: ToolProvider = async (call, { fetch }) => {
   }
 };
 
-// ── Email (Resend) ──
+// ── Email (Resend, Postmark, SendGrid, Mailgun) ──
 
+const EMAIL_SERVICES = ["resend", "postmark", "sendgrid", "mailgun"] as const;
+
+/**
+ * Sends one email through the service named by `via:` (Resend when unset). The call's
+ * idempotency key goes along where the service takes one, so a stage that runs again
+ * doesn't send the same message twice.
+ */
 export const email: ToolProvider = async (call, { fetch }) => {
   if (!["send", "email", "execute", "notify"].includes(call.method)) unknownMethod(call, ["send"]);
+  const via = String(call.config("via") ?? "resend").toLowerCase() as (typeof EMAIL_SERVICES)[number];
+  if (!EMAIL_SERVICES.includes(via)) throw new HaloError(`Tool "${call.tool.name}": via: "${via}" is not an email service Halo knows (${EMAIL_SERVICES.join(", ")})`, { code: "TOOL_CONFIG" });
+  const many = (v: unknown): string[] => (v === undefined || v === null || v === "" ? [] : Array.isArray(v) ? v.map(str) : [str(v)]);
   const from = need(call, "from: (here or in the tool declaration)", call.named.from ?? call.config("from"));
-  const to = call.named.to ?? call.config("to");
-  const body = {
-    from,
-    to: Array.isArray(to) ? to.map(str) : [need(call, "to:", to)],
-    subject: need(call, "subject:", call.named.subject),
-    text: need(call, "body:", call.named.body ?? call.named.text ?? call.positional[0]),
+  const to = many(call.named.to ?? call.config("to"));
+  if (!to.length) need(call, "to:", undefined);
+  const subject = need(call, "subject:", call.named.subject);
+  const html = call.named.html === undefined ? undefined : str(call.named.html);
+  const plain = call.named.body ?? call.named.text ?? call.positional[0];
+  const text = html === undefined || plain !== undefined ? need(call, "body:", plain) : undefined;
+  const cc = many(call.named.cc);
+  const bcc = many(call.named.bcc);
+  const replyTo = many(call.named.reply_to ?? call.named.replyTo ?? call.config("reply_to") ?? call.config("replyTo"));
+  const key = call.idempotencyKey;
+  const send = async (url: string, headers: Record<string, string>, body: string | FormData) => {
+    const res = await fetch(url, { method: "POST", headers, body, signal: call.signal });
+    return { res, out: await json(res, `${via[0]!.toUpperCase()}${via.slice(1)} send`) };
   };
-  const res = await fetch("https://api.resend.com/emails", {
+  const secret = token(call, { resend: "RESEND_API_KEY", postmark: "POSTMARK_SERVER_TOKEN", sendgrid: "SENDGRID_API_KEY", mailgun: "MAILGUN_API_KEY" }[via]);
+  let id: unknown;
+  if (via === "resend") {
+    const body = { from, to, subject, ...(text !== undefined ? { text } : {}), ...(html !== undefined ? { html } : {}), ...(cc.length ? { cc } : {}), ...(bcc.length ? { bcc } : {}), ...(replyTo.length ? { reply_to: replyTo } : {}) };
+    ({ id } = (await send("https://api.resend.com/emails", { Authorization: `Bearer ${secret}`, "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) }, JSON.stringify(body))).out);
+  } else if (via === "postmark") {
+    const body = { From: from, To: to.join(","), Subject: subject, TextBody: text, HtmlBody: html, Cc: cc.join(",") || undefined, Bcc: bcc.join(",") || undefined, ReplyTo: replyTo.join(",") || undefined, MessageStream: call.config("stream") ?? undefined };
+    id = (await send("https://api.postmarkapp.com/email", { "X-Postmark-Server-Token": secret, "Content-Type": "application/json", Accept: "application/json" }, JSON.stringify(body))).out.MessageID;
+  } else if (via === "sendgrid") {
+    const addr = (list: string[]) => list.map((email) => ({ email }));
+    const body = {
+      personalizations: [{ to: addr(to), ...(cc.length ? { cc: addr(cc) } : {}), ...(bcc.length ? { bcc: addr(bcc) } : {}) }],
+      from: /<(.+)>/.test(from) ? { email: from.match(/<(.+)>/)![1]!.trim(), name: from.replace(/<.+>/, "").trim() } : { email: from },
+      ...(replyTo.length ? { reply_to: { email: replyTo[0] } } : {}),
+      subject,
+      content: [...(text !== undefined ? [{ type: "text/plain", value: text }] : []), ...(html !== undefined ? [{ type: "text/html", value: html }] : [])],
+    };
+    id = (await send("https://api.sendgrid.com/v3/mail/send", { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" }, JSON.stringify(body))).res.headers.get("x-message-id") ?? undefined;
+  } else {
+    const domain = call.config("domain");
+    if (typeof domain !== "string" || !domain) throw new HaloError(`Tool "${call.tool.name}": Mailgun needs domain: "mg.example.com" on the declaration`, { code: "TOOL_CONFIG" });
+    const form = new FormData();
+    form.set("from", from);
+    for (const [name, list] of [["to", to], ["cc", cc], ["bcc", bcc]] as const) for (const a of list) form.append(name, a);
+    form.set("subject", subject);
+    if (text !== undefined) form.set("text", text);
+    if (html !== undefined) form.set("html", html);
+    if (replyTo.length) form.set("h:Reply-To", replyTo.join(","));
+    const base = String(call.config("apiUrl") ?? "https://api.mailgun.net").replace(/\/+$/, "");
+    id = (await send(`${base}/v3/${encodeURIComponent(domain)}/messages`, { Authorization: `Basic ${btoa(`api:${secret}`)}` }, form)).out.id;
+  }
+  return { sent: true, id, to };
+};
+
+// ── Handoff (to the app that hosts the pipelines) ──
+
+const HANDOFF_PLAIN = new Set(["send", "handoff", "hand", "post", "execute", "notify", "emit"]);
+
+/**
+ * Hands something to your own app to act on: a note to email, a record to store, a job to
+ * queue. Halo POSTs a signed JSON body to the URL the tool declares, and the pipeline goes
+ * on with whatever your app answers.
+ *
+ *   tool App : Handoff(Env.APP_URL, secret: Env.HALO_HANDOFF_SECRET)
+ *   ... |> App.send(kind: "winner_note", to: winner.email, note: context.data.note)
+ *
+ * The body is `{ id, type: "handoff", kind, at, runId, data }`: `id` is the call's
+ * idempotency key (the same when the step runs again), and `data` the call's arguments.
+ * It is signed like a run callback (`Halo-Signature`, see signing.ts).
+ */
+export const handoff: ToolProvider = async (call, { fetch }) => {
+  const url = call.config(0);
+  if (typeof url !== "string" || !/^https?:\/\/[^/]/.test(url)) throw new HaloError(`Tool "${call.tool.name}" needs your app's URL, e.g. Handoff(Env.APP_URL, secret: Env.HALO_HANDOFF_SECRET)`, { code: "TOOL_CONFIG" });
+  const secret = call.config("secret");
+  if (typeof secret !== "string" || !secret) throw new HaloError(`Tool "${call.tool.name}" needs secret: (e.g. Env.HALO_HANDOFF_SECRET), which your app uses to check the handoff came from Halo`, { code: "TOOL_CONFIG" });
+  const { kind: named, ...data } = call.named;
+  const kind = named !== undefined ? str(named) : HANDOFF_PLAIN.has(call.method) ? undefined : call.method;
+  if (!kind) need(call, `kind: (what this is, e.g. kind: "winner_note")`, undefined);
+  const [input] = call.implicitInput ? [] : call.positional;
+  const id = call.idempotencyKey ?? crypto.randomUUID();
+  const body = JSON.stringify({ id, type: "handoff", kind, at: new Date().toISOString(), runId: call.runId, data, ...(input !== undefined ? { input } : {}) });
+  const res = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token(call, "RESEND_API_KEY")}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", "Halo-Event": "handoff", "Halo-Delivery": id, "Idempotency-Key": id, [SIGNATURE_HEADER]: signBody(secret, body) },
+    body,
     signal: call.signal,
   });
-  const out = await json(res, "Resend send");
-  return { sent: true, id: out.id, to: body.to };
+  const out = await json(res, `${call.tool.name} handoff (${kind})`);
+  return out === "" || (typeof out === "object" && out !== null && !Object.keys(out).length) ? { delivered: true, id, kind } : out;
 };
 
 // ── GitHub ──
@@ -346,6 +426,7 @@ export const INTEGRATIONS: Record<string, ToolProvider> = {
   File: fileStore,
   Slack: slack,
   Email: email,
+  Handoff: handoff,
   GitHub: github,
   Linear: linear,
   Figma: figma,

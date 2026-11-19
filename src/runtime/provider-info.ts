@@ -109,7 +109,30 @@ const email: ProviderInfo = {
     {
       name: "send",
       description: "Send an email.",
-      params: obj({ to: { type: ["string", "array"], description: "Recipient address(es)" }, subject: text("Subject line"), body: text("Plain-text body") }, ["subject", "body"]),
+      params: obj(
+        {
+          to: { type: ["string", "array"], description: "Recipient address(es)" },
+          subject: text("Subject line"),
+          body: text("Plain-text body"),
+          html: text("HTML body, as well as or instead of the plain-text one"),
+          cc: { type: ["string", "array"], description: "Copy to" },
+          bcc: { type: ["string", "array"], description: "Blind copy to" },
+          reply_to: text("Where replies go"),
+        },
+        ["subject", "body"],
+      ),
+      effect: "external",
+    },
+  ],
+};
+
+const handoff: ProviderInfo = {
+  description: "Hands something to the app that hosts this pipeline, to act on",
+  methods: [
+    {
+      name: "send",
+      description: "Hand an item to the app. The other arguments are the item's data.",
+      params: { type: "object", properties: { kind: text("What this is, e.g. winner_note") }, required: ["kind"], additionalProperties: true },
       effect: "external",
     },
   ],
@@ -159,6 +182,7 @@ export const BUILTIN_PROVIDER_INFO: Record<string, ProviderInfo> = {
   VectorStore: vectorStore,
   Slack: slack,
   Email: email,
+  Handoff: handoff,
   GitHub: github,
   Linear: linear,
   Figma: figma,

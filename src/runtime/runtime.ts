@@ -218,6 +218,8 @@ export interface RunMeta {
   checkpoint?: string;
   /** For a run started from an earlier step of another (`rewind`): that run and step. */
   rewoundFrom?: { runId: string; step: number };
+  /** How many times the run was picked up again after the process running it died. */
+  resumes?: number;
 }
 
 export interface TraceEntry {
@@ -420,6 +422,12 @@ export interface RuntimeConfig {
   checkpointDir?: string;
   /** Where paused runs wait for `signal()`. Defaults to an in-memory store. */
   runStore?: RunStore;
+  /**
+   * Where each running run's state is kept after every stage, until the run ends or pauses.
+   * A run found there later was cut short (the process died); `continueRun` picks it up at
+   * the stage it was on. Unset, nothing is kept.
+   */
+  progressStore?: RunStore;
   onInterrupt?: InterruptHandler;
   onListen?: ListenHandler;
   /** Receives System.Publish / Distribute / ResolveIncident / TriggerWebhook / Notify. */
@@ -919,6 +927,19 @@ export class HaloRuntime {
   }
 
   /**
+   * Pick up a run that was cut short, from the state `progressStore` last kept for it. The
+   * stage it was on runs again from its start: its tool calls carry the same idempotency
+   * keys as before, so a tool that honours them does nothing twice.
+   */
+  async continueRun(snapshot: RunSnapshot): Promise<RunResult> {
+    if (snapshot.waitingFor !== undefined) throw new HaloError(`Run ${snapshot.meta.runId} is paused, not cut short: answer it with signal()`);
+    if (snapshot.thread && this.threads().savedBy(snapshot.thread.name, snapshot.thread.key, snapshot.meta.runId)) snapshot.thread.saved = snapshot.thread.ops.length;
+    const ctx = this.restore(snapshot);
+    ctx.meta.resumes = (snapshot.meta.resumes ?? 0) + 1;
+    return this.runTop(ctx, snapshot.nextStage);
+  }
+
+  /**
    * Go back to a step of a @checkpoint run and continue from there, as a new run.
    * The new run starts with the state, trace, calls and cost the old one had after
    * that step (and, with @checkpoint, the history up to it). The old run is untouched.
@@ -1050,7 +1071,10 @@ export class HaloRuntime {
     this.emit({ type: "run", ...base, status: "start" });
     try {
       ctx.thread ??= this.openThread(ctx);
+      await this.saveProgress(ctx, start);
       const result = await this.runFrom(ctx, start);
+      // Ended, or paused (and so in the run store): there is nothing left to pick up.
+      await this.config.progressStore?.delete(ctx.meta.runId);
       // A run that ended (not one that paused) saves what it changed in its thread.
       if (ctx.thread && result.status !== "paused") result.context.thread = this.saveThread(ctx.thread, ctx.meta.runId);
       // A browser or sandbox the run opened stays open only while the run may still need it.
@@ -1059,6 +1083,7 @@ export class HaloRuntime {
       return result;
     } catch (err) {
       await Promise.all([closeChromeSessions(ctx.meta.runId), closeRemoteSessions(ctx.meta.runId)]);
+      await Promise.resolve(this.config.progressStore?.delete(ctx.meta.runId)).catch(() => {});
       // Errors name things as people know them, not by the linker's internal names.
       if (err instanceof Error && err.message.includes("#")) {
         try {
@@ -1304,7 +1329,14 @@ export class HaloRuntime {
     return `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
   }
 
+  /** Keep a top-level run's state as it is before `nextStage`, for `continueRun` after a restart. */
+  private async saveProgress(ctx: ExecutionContext, nextStage: number): Promise<void> {
+    if (ctx.depth > 0 || !this.config.progressStore) return;
+    await this.config.progressStore.save(ctx.meta.runId, this.toSnapshot(ctx, nextStage));
+  }
+
   private async writeCheckpoint(ctx: ExecutionContext, nextStage: number): Promise<void> {
+    await this.saveProgress(ctx, nextStage);
     const path = this.checkpointPath(ctx);
     if (!path) return;
     ctx.meta.checkpoint = path;

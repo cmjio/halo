@@ -34,6 +34,7 @@ import { parseDuration } from "../parser/builtins.js";
 import { createMcpServer } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
+import { openStateStore, StateMirror, StateStoreError } from "./state-mirror.js";
 import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
 import { loadPackageProviders } from "../registry/resolver.js";
 import { pausePath } from "../registry/hosted.js";
@@ -64,6 +65,18 @@ export interface ServeConfig {
    * "halted", "failed", "paused".
    */
   notify?: { slack?: string; webhook?: string; secret?: string; events?: string[] };
+  /**
+   * `store`: where a copy of the state folder is kept, for hosts whose disk doesn't outlive a
+   * deploy: "s3://bucket/prefix" (S3, R2, GCS, MinIO; credentials from S3_* or AWS_*
+   * variables), a folder on a shared mount, or "Env.NAME". Default: HALO_STATE_STORE.
+   * `every`: how often databases are copied (default "30s"); other files go as they change.
+   */
+  state?: { store?: string; every?: string };
+  /**
+   * Pick up runs that were cut short when the server last stopped or died, at the stage
+   * they were on. That stage runs again, so its tools should honour idempotency keys.
+   */
+  resumeRuns?: boolean;
   /**
    * A mocks file (as `halo run --mocks` reads) for dry runs: a start request with
    * `"dryRun": true` answers every model and tool from it, and nothing is sent anywhere.
@@ -197,6 +210,8 @@ export interface HaloServer {
   checkWatches(): Promise<string[]>;
   /** Start a run as the API would; resolves with its id. */
   start(pipeline: string, args: Record<string, unknown>, source: string, how?: StartOptions): string;
+  /** The runs that were cut short last time and picked up when this server started. */
+  resumed: string[];
   /** Wait for a started run to finish its current stretch (complete, halt, pause, or fail). */
   settled(runId: string): Promise<RunResult | undefined>;
   /** The signed link answering a paused run's current pause (undefined if it isn't paused). */
@@ -323,7 +338,27 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const build = env.HALO_BUILD?.trim() || undefined;
   const stateDir = resolve(options.stateDir ?? ".halo");
   mkdirSync(stateDir, { recursive: true });
+  // A host without a lasting disk gets its state back from the store, before anything reads the folder.
+  const storeAt = fromEnv(options.state?.store) ?? env.HALO_STATE_STORE;
+  if (options.state?.store !== undefined && !storeAt) throw new ServeError(`state.store "${options.state.store}" is empty or not set`);
+  let mirror: StateMirror | undefined;
+  if (storeAt) {
+    const everyMs = options.state?.every === undefined ? 30_000 : parseDuration(options.state.every);
+    if (!(everyMs >= 1000)) throw new ServeError(`state.every must be a duration of at least 1s, like 30s or 2m (got "${options.state?.every}")`);
+    try {
+      mirror = new StateMirror(stateDir, openStateStore(storeAt, env), { everyMs, logger });
+      const restored = await mirror.restore();
+      logger.log(`[halo] State is kept in ${mirror.store.label}${restored ? ` (${restored} file(s) restored)` : ""}`);
+    } catch (err) {
+      if (err instanceof StateStoreError) throw new ServeError(err.message);
+      throw err;
+    }
+  }
   const runStore = new FileRunStore(join(stateDir, "runs"));
+  /** Runs in progress, as they were after their last finished stage. */
+  const progressStore = options.resumeRuns ? new FileRunStore(join(stateDir, "running")) : undefined;
+  // With a store, everything a run keeps lives in the state folder, so it is all copied.
+  const kept = mirror ? { threadPath: join(stateDir, "threads.sqlite"), vectorPath: join(stateDir, "vectors.sqlite"), checkpointDir: join(stateDir, "checkpoints") } : {};
   const telemetry = new SqliteTelemetry(join(stateDir, "telemetry.db"));
   let keys: ReturnType<typeof consumerKeys> | undefined;
   let usage: UsageLog | undefined;
@@ -382,6 +417,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     telemetry.handler(e);
     options.runtime?.onEvent?.(e);
     if (e.type === "paused") void announcePause(e.runId);
+    // A stage ended, or a run started, paused or ended: what is on disk changed.
+    if (e.type === "run" || e.type === "paused" || (e.type === "stage" && e.status === "end")) mirror?.touch();
   };
   const files = collectHaloFiles(options.files?.length ? options.files : ["."]);
   if (!files.length) throw new ServeError(`No .halo files found in ${(options.files ?? ["."]).join(", ")}`);
@@ -402,7 +439,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     }
     const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
     if (!own.length) continue;
-    const runtime = new HaloRuntime({ logger, ...options.runtime, ...recorder, env, runStore, onEvent }).load(ast);
+    const runtime = new HaloRuntime({ logger, ...kept, ...options.runtime, ...recorder, env, runStore, progressStore, onEvent }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
@@ -427,7 +464,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     let rt = dryRuntimes.get(e.path);
     if (!rt) {
       // Thread state stays in memory, so a rehearsal never changes a real thread.
-      rt = new HaloRuntime({ logger, ...options.runtime, env, runStore, onEvent, threadPath: ":memory:" }).load(e.ast);
+      rt = new HaloRuntime({ logger, ...kept, ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:" }).load(e.ast);
       for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
       mockForDryRun(rt, e.ast);
       dryRuntimes.set(e.path, rt);
@@ -467,6 +504,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     try {
       writeFileSync(`${scheduleFile}.tmp`, JSON.stringify(scheduleState, null, 2));
       renameSync(`${scheduleFile}.tmp`, scheduleFile);
+      mirror?.touch();
     } catch (err) {
       logger.error(`[halo] could not save ${scheduleFile}: ${err instanceof Error ? err.message : err}`);
     }
@@ -618,6 +656,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     try {
       writeFileSync(`${idempotencyFile}.tmp`, JSON.stringify(idempotent));
       renameSync(`${idempotencyFile}.tmp`, idempotencyFile);
+      mirror?.touch();
     } catch (err) {
       logger.error(`[halo] could not save ${idempotencyFile}: ${err instanceof Error ? err.message : err}`);
     }
@@ -691,7 +730,12 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
    * a different event expected, or already answered by someone else.
    */
   const resume = async (runId: string, payload: unknown, event?: string, pauseId?: string): Promise<{ work: Promise<RunResult | undefined> } | { error: string; status: number }> => {
-    const snap = await runStore.load(runId);
+    let snap = await runStore.load(runId);
+    // Paused on another server since this one started (a deploy in progress): its files are in the store.
+    if (!snap && mirror && /^[\w-]+$/.test(runId) && (await mirror.pull(`runs/${runId}.json`))) {
+      await mirror.pull(`runs/${runId}.log.jsonl`);
+      snap = await runStore.load(runId);
+    }
     if (snap?.waitingFor === undefined) return { error: "That run is not paused", status: 409 };
     try {
       // The resumed run keeps appending to its recording (the answer to the pause is recorded too).
@@ -1264,6 +1308,37 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     arm();
   }
 
+  // ── Runs cut short last time ──
+  const MAX_RESUMES = 3;
+  const resumed: string[] = [];
+  if (progressStore) {
+    const dir = join(stateDir, "running");
+    const ids = existsSync(dir) ? readdirSync(dir).filter((f) => /^[\w-]+\.json$/.test(f)).map((f) => f.slice(0, -5)) : [];
+    for (const runId of ids) {
+      // Claimed, so two servers on one state folder don't both pick it up.
+      const snap = await progressStore.take(runId);
+      if (!snap) continue;
+      await progressStore.finished(runId);
+      const e = entries.get(snap.pipeline);
+      const tries = snap.meta.resumes ?? 0;
+      const giveUp = !e ? `its pipeline ${snap.pipeline} is no longer served` : tries >= MAX_RESUMES ? `it was picked up ${tries} times already and the server stopped each time` : undefined;
+      if (giveUp) {
+        logger.warn(`[halo] Run ${runId.slice(0, 8)} (${snap.pipeline}) was cut short and is not continued: ${giveUp}`);
+        telemetry.handler({ type: "run", pipeline: snap.pipeline, runId, status: "error", error: `Cut short by a restart and not continued: ${giveUp}` });
+        callback({ type: "run.failed", runId, pipeline: snap.pipeline, status: "failed", error: `Cut short by a restart and not continued: ${giveUp}`, idempotencyKey: snap.meta.idempotencyKey, dryRun: snap.meta.dryRun });
+        continue;
+      }
+      const stage = snap.nextStage;
+      logger.log(`[halo] ${snap.pipeline} was cut short; continuing at stage ${stage} (run ${runId.slice(0, 8)})`);
+      started.set(runId, { idempotencyKey: snap.meta.idempotencyKey, dryRun: snap.meta.dryRun });
+      const rec = recordingsDir && !snap.meta.dryRun ? new Recorder(recordingsDir, runId) : undefined;
+      const work = () => runtimeFor(e!, snap.meta.dryRun).continueRun(snap);
+      track(runId, snap.pipeline, rec ? ended(rec, recording.run(rec, work)) : work());
+      resumed.push(runId);
+    }
+  }
+  mirror?.start();
+
   const watchTimers = options.scheduler === false ? [] : watches.map((w) => setInterval(() => void checkWatch(w), w.every));
   if (options.scheduler !== false) void checkWatches();
 
@@ -1277,6 +1352,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     start,
     settled,
     approvalUrl,
+    resumed,
     usage: (since = 0) => usage?.byKey(since) ?? [],
     async stop() {
       clearTimeout(timer);
@@ -1294,6 +1370,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
       await Promise.all(runtimes.map((r) => r.close()));
       telemetry.close();
       usage?.close();
+      // Last, with every database closed: the copy the next server starts from.
+      await mirror?.stop();
     },
   };
 }

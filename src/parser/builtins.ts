@@ -30,7 +30,7 @@ export const THREAD_METHODS = ["set", "append", "clear"] as const;
 export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "TriggerWebhook", "Notify"] as const;
 
 export const TOOL_PROVIDERS = [
-  "REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "GitHub", "Linear", "Figma",
+  "REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "Handoff", "GitHub", "Linear", "Figma",
   "MCP", "Chrome", "Workspace", "KV", "SQLite", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote",
 ] as const;
 

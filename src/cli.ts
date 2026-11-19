@@ -78,6 +78,8 @@ USAGE:
                                         nightly), or move it to another with --channel
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
+                                        (--mock or --mocks <file.json>: every run is a dry run
+                                        that calls no model and runs no tool)
   halo plan <file.halo>                 Show what a run could do: model calls and worst-case
                                         cost, tool calls and their effects, approvals
   halo mcp [files|dirs ...]             Serve pipelines as MCP tools over stdio
@@ -120,6 +122,8 @@ RUN OPTIONS:
   --mocks <file.json>    Canned answers by target ("Agent.method", "Tool", "yield", ...);
                          "live" on a tool runs it for real under --mock
   --body <file.json>     Arguments from a JSON body, the way a webhook maps it
+  --idempotency-key <k>  Seed the keys this run's tool calls carry, so running it again
+                         with the same key repeats no call a tool already took
   --auto-approve         Approve every |! yield and ~> listen automatically
   --checkpoint <file>    Resume from a @checkpoint snapshot
   --api-key <key>        API key for any provider without its own env var
@@ -595,7 +599,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
       }
       recorder?.start(pipeline.name, args);
       pruneRecordings(RECORDINGS, (await haloConfig()).recordings?.keep ?? 50);
-      result = await rt.run(pipeline.name, args, { runId });
+      result = await rt.run(pipeline.name, args, { runId, idempotencyKey: last(flags, "idempotency-key") });
     }
     recorder?.finish({ status: result.status, output: result.output });
   } catch (err) {
@@ -691,6 +695,9 @@ async function cmdServe(flags: Flags): Promise<number> {
         host: listen.host,
         hostFrom: listen.from,
         studio: !flags.bools.has("no-studio"),
+        // --mock or --mocks: a rehearsal server, where no run calls a model or runs a tool.
+        mocks: last(flags, "mocks") ?? config.mocks,
+        dryRun: flags.bools.has("mock") || last(flags, "mocks") !== undefined,
       });
     }
   } catch (err) {
@@ -705,6 +712,7 @@ async function cmdServe(flags: Flags): Promise<number> {
     console.log(dim("  Consumer keys: HALO_PACKAGE_KEYS=\"id=key,...\" or .halo/package-keys.json (re-read on change). Ctrl-C to stop.\n"));
   } else {
     console.log(bold(`\nHalo is serving ${server.pipelines.length} pipeline(s) at ${server.url}`));
+    if (flags.bools.has("mock") || last(flags, "mocks") !== undefined) console.log(yellow("  Dry runs only: every model and tool answers from mocks, and nothing is sent anywhere."));
     if (!flags.bools.has("no-studio")) console.log(`  Studio     ${server.url}/`);
     console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  {"args": {...}}`);
     for (const w of config.webhooks ?? []) console.log(`  Webhook    POST ${server.url}/hooks/${w.path.replace(/^\/+/, "")} → ${w.pipeline}`);
