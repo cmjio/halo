@@ -39,10 +39,41 @@ COPY --chown=halo . .
 ```
 
 - It refuses to serve without `HALO_SERVE_TOKEN`, because it listens on every interface inside the container.
-- Paused runs, schedule state, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart, and so scheduled runs aren't repeated or forgotten.
+- Paused runs, schedule state, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart, and so scheduled runs aren't repeated or forgotten. On a host without volumes, set `HALO_STATE_STORE` to a bucket instead (see [State without a disk](./serving.md#state-without-a-disk)).
 - The container's clock is UTC. Set `timezone` in `halo.json` for schedules in local time (see [Schedules](./serving.md#schedules)).
 - On Linux, a bind-mounted folder must be writable by uid 1000. Otherwise add `--user "$(id -u)"`.
 - `halo upgrade` doesn't replace the binary in the image. Use a newer tag.
+
+### Deploy without building an image
+
+The image above already has everything except your project. Instead of building your own image around it (which needs Docker where you build), push the project to a bucket and point the stock image at it:
+
+```bash
+# From your machine or CI. No Docker.
+halo push --to s3://my-bucket/halo/app
+# ✓ Pushed version 3f9c1a2b7d04 to s3://my-bucket/halo/app (14 file(s), 38 KB; 14 new)
+```
+
+On the host, run `ghcr.io/cmjio/halo` as it is, with:
+
+| Variable | Value |
+|---|---|
+| `HALO_PROJECT` | `s3://my-bucket/halo/app` |
+| `HALO_STATE_STORE` | `s3://my-bucket/halo/state`, if the host has no lasting disk (see [State without a disk](./serving.md#state-without-a-disk)) |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT` | The bucket's credentials (the `AWS_` names work too) |
+| `HALO_SERVE_TOKEN`, provider keys | As always |
+
+`halo serve` pulls the project into `/app` before it starts. After that, a deploy is `halo push`:
+
+- The server checks for a new version every 30 seconds (`HALO_PROJECT_POLL`). When there is one it pulls it, lets running pipelines reach a stopping point, and starts again on the new files in the same process. No container is replaced, so there is no old container left running the old project.
+- If the new version doesn't start (a pipeline has an error), the server goes back to the version it was running, keeps serving it, and logs why. Push a fix and it switches.
+- `GET /healthz` reports `project`, the version being served. `halo push` prints the version it pushed, so a deploy script can wait until they match.
+- `halo push` checks the project the way `halo serve` does and refuses to push one with errors (`--force` pushes anyway).
+- What is pushed: the files git tracks or would track (everything outside dot-folders when there is no git repository), plus installed packages (`.halo/packages`). Never `.env` files, `.git`, `node_modules`, or the state in `.halo`. Secrets stay on the host, as environment variables.
+- The same files are the same version, whoever pushes them. The last five versions are kept (`--keep N`).
+- A folder works in place of a bucket (`halo push --to /mnt/shared/app`), for hosts with a shared mount.
+
+The project and its state can share one bucket under different prefixes.
 
 ### GitHub Actions
 

@@ -13,7 +13,7 @@
  * runtime checks a pipeline's output against its return type.
  */
 
-import type { Agent, Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, Value } from "./types.js";
+import type { Agent, Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, ToolDeclaration, Value } from "./types.js";
 import {
   BLOCK_CATEGORIES,
   CONTEXT_NAMESPACES,
@@ -37,6 +37,7 @@ import {
   parseDuration,
 } from "./builtins.js";
 import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
+import { DEFAULT_LOCKED, TOOL_ARG_RULES } from "../runtime/tool-rules.js";
 import { sandboxChoice, sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
@@ -105,6 +106,7 @@ class Validator {
       if (!known) this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
       if (t.provider === "SQLite") this.checkSqliteTool(t);
       if (t.provider === "Remote") this.checkRemoteSecrets(t);
+      this.checkArgRules(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
     for (const sc of this.ast.schemas) this.checkSchema(sc);
@@ -215,6 +217,39 @@ class Validator {
     for (const pattern of patterns) {
       const tool = splitToolPath(pattern).tool;
       if (tool !== "*" && !this.tools.has(tool) && !this.sandboxTools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
+    }
+  }
+
+  /** `& Fixed(...) & Match(...) & Locked(...) & Unlocked(...)` on a tool declaration. */
+  private checkArgRules(t: ToolDeclaration) {
+    const name = (v: Value | undefined) => (v?.kind === "string" && v.value ? v.value : undefined);
+    const fixed = new Set<string>();
+    for (const rule of t.rules ?? []) {
+      const where = `Tool "${t.name}": ${rule.name}`;
+      if (!includes(TOOL_ARG_RULES, rule.name)) {
+        this.add("error", `${where} is not a rule a tool can have (use ${TOOL_ARG_RULES.join(", ")}; policies go on agents with \`requires\`)`, t.loc);
+      } else if (rule.name === "Fixed") {
+        const arg = name(rule.args[0]);
+        if (rule.args.length !== 2 || !arg) this.add("error", `${where} needs an argument name and its value, e.g. Fixed("currency", "USD")`, t.loc);
+        else if (rule.args[1]!.kind === "context") this.add("error", `${where}("${arg}", …): a fixed value is the same for every run, so it can't read context`, t.loc);
+        else if (fixed.has(arg)) this.add("error", `${where}("${arg}", …) is written twice`, t.loc);
+        else fixed.add(arg);
+      } else if (rule.name === "Match") {
+        const pattern = rule.args[1];
+        if (rule.args.length !== 2 || !name(rule.args[0]) || pattern?.kind !== "string") this.add("error", `${where} needs an argument name and a regular expression for its whole value, e.g. Match("amount", "\\\\d+")`, t.loc);
+        else if (!validRegex(pattern.value)) this.add("error", `${where}("${name(rule.args[0])}", ${JSON.stringify(pattern.value)}) is not a valid regular expression`, t.loc);
+      } else {
+        if (!rule.args.length || rule.args.some((a) => !name(a))) this.add("error", `${where} needs argument names, e.g. ${rule.name}("path")`, t.loc);
+        if (rule.name === "Unlocked") {
+          const defaults = DEFAULT_LOCKED[t.provider] ?? [];
+          const locked = new Set((t.rules ?? []).filter((r) => r.name === "Locked").flatMap((r) => r.args.map(name)));
+          for (const a of rule.args) {
+            const arg = name(a);
+            if (arg && locked.has(arg)) this.add("error", `Tool "${t.name}": "${arg}" is both Locked and Unlocked`, t.loc);
+            else if (arg && !defaults.includes(arg)) this.add("warning", `Tool "${t.name}": Unlocked("${arg}") changes nothing: a ${t.provider} tool doesn't lock "${arg}"`, t.loc);
+          }
+        }
+      }
     }
   }
 

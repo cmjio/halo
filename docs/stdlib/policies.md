@@ -92,6 +92,8 @@ How they combine:
 
 **`DenyArgs`** is case-insensitive. With no argument name, it checks every string, number and boolean in the arguments, at any depth, each on its own. With a name, it checks only that argument, and a missing argument is checked as `""`. Each value is also checked with look-alike characters folded and JSON escapes decoded. To allow only some values, write a negative lookahead: `"^(?!bun test[\\w ./-]*$)"` refuses any `command` that isn't `bun test` followed by plain arguments. `$` matches only at the very end, so a second line (`bun test\nrm -rf .`) is refused.
 
+A limit that belongs to the tool, whoever calls it, goes on the tool's declaration instead: `Fixed`, `Match` and `Locked` (see [Rules on a tool's arguments](./tools.md#rules-on-a-tool-s-arguments)).
+
 In a Halo string, a regular expression's backslash is written `\\`: `"\\.test\\."` is the regex `\.test\.`. `halo validate` reports a pattern that isn't a valid regular expression, an effect that isn't one of the three, and a tool name that isn't declared.
 
 Tool rules don't apply to tool calls the pipeline makes itself (`|> Files.write(...)`) or to `Agent.task(tool: T)`, which runs `T` before the agent sees anything. Those calls are written in the pipeline, so `halo plan` lists them.

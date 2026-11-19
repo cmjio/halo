@@ -26,8 +26,36 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `Remote` | A remote computer: a server over SSH, or a sandbox (E2B, Daytona, or a local Docker container) for the run (see [Remote Computers](./remote.md)) |
 | `MCP` | Any Model Context Protocol server's tools (see [MCP](../guide/integrations/mcp.md)) |
 | `Slack`, `Email`, `GitHub`, `Linear`, `Figma` | API clients for those services |
+| `Handoff` | Hands an item to your own app, signed, to act on (see [Handoff](#handoff)) |
 
 More providers come in [packages](../guide/tool-packages.md) (`halo add stripe`), and `halo tools` lists every provider in a project with its methods and their effects.
+
+## Rules on a tool's arguments
+
+Rules written after the provider say what a tool's arguments may be, for everything that calls it:
+
+```halo
+tool Ledger : POST("ledger.example.com/v1/prizes/issue", apiKey: Env.LEDGER_KEY, idempotencyKey: true)
+  & Fixed("currency", "USD")
+  & Match("amount", "\\d+(\\.\\d\\d)?")
+  & Match("winner", "[a-z0-9_]{3,32}")
+  & Locked("memo")
+```
+
+| Rule | What it does |
+|---|---|
+| `Fixed("arg", value)` | Every call sends this value. A model isn't shown the argument, and a call that sets it to anything else is refused. The value is a literal or `Env.NAME` |
+| `Match("arg", "regex")` | The argument's whole value must match. A missing argument is checked as `""`, so a pattern that needs something also makes the argument required |
+| `Locked("arg", ...)` | A model may not set these, and isn't shown them. A pipeline's own calls still can |
+| `Unlocked("arg", ...)` | Undoes a default lock (see below) |
+
+- `Fixed` and `Match` hold for a pipeline's own calls as well as a model's: a call that breaks one fails with `TOOL_ARGUMENT`. `Locked` is only about models.
+- A `Match` pattern covers the whole value: `"\\d+"` accepts `25` and refuses `25; and 9000 more`. It is case-sensitive.
+- A model's call that breaks a rule isn't made. The model is told why, the run goes on, and the refusal is recorded in `context.meta.violations` with the tool's name as the policy and `phase: "tool"`, like a call refused by a [policy](./policies.md#tool-rules).
+- The rules apply to the named argument on every method of the tool.
+- They are checked before an approval is asked for, so a person is never asked to approve a call the tool would refuse.
+
+**A `POST` tool's `path` is locked by default.** A `POST` tool is bound to the address it declares, so a model that calls it can't add a path under that address unless the declaration says `& Unlocked("path")`. A pipeline's own call can still pass `path:`. Use [`DenyArgs`](./policies.md#tool-rules) when a limit belongs to one agent and not to the tool.
 
 ## `REST` / `GET` and `POST`
 
@@ -45,10 +73,22 @@ pipeline Issues(repo: String) -> Result:
 - `apiKey:` adds `Authorization: Bearer …`.
 - **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`; a method named `get`, `fetch`, `request`, `call`, `execute`, or `send` (or a call by an agent) requests just `base`. Named arguments become query parameters. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments (URL-encoded, so a value can't add path segments or a query), which are then not sent again as parameters.
 - A request must stay under the declared URL: a `path:` that climbs out with `../` or names another host is refused, and so is one with `?` or `#` (pass query parameters as named arguments or `query:`).
-- **POST** sends the named arguments as a JSON body to `base + path`. The method name is ignored.
+- **POST** sends the named arguments as a JSON body to `base + path`. The method name is ignored. A model that chooses the call can't set `path` unless the tool is declared `& Unlocked("path")` (see [Rules on a tool's arguments](#rules-on-a-tool-s-arguments)).
+- `idempotencyKey: true` on a `POST` declaration sends the call's [idempotency key](#idempotency-keys) as an `Idempotency-Key` header. A header name (`idempotencyKey: "X-Request-Id"`) sends it as that header, and `"body.<field>"` puts it in the JSON body.
 - Only what you pass is sent: the flowing value is never added implicitly. An explicit first positional argument is sent as `input` (`sendInput: false` on the declaration turns that off too).
 - 408, 429, and 5xx responses are retryable under `@retry`.
 - `allowNotFound: true` (on the declaration) returns `null` for a 404, for APIs that answer "no matches" with 404 (openFDA does); check it with `|? (context.data.x != null)`.
+
+## Idempotency keys
+
+Every tool call has a key that stays the same when the call is made again, so a service that honours it does the work once:
+
+- The same call, with the same arguments, at the same step of the same run always gets the same key: on a `@retry`, when the step runs again after the server restarted, and when a model asks twice.
+- Another run gets other keys, unless both were started with the same key: `halo run --idempotency-key <k>`, the `Idempotency-Key` header or `"idempotencyKey"` on [the API](../guide/production/serving.md#starting-a-run-once), or `runtime.run(name, args, { idempotencyKey })`. Give the run a key that names what it is for (an order, a confirmation id), and running it twice pays once.
+- A run started by [`halo rewind`](../guide/plan-and-replay.md#halo-rewind) keeps the keys of the run it came from.
+- Two identical calls in one step have one key. If you mean two, give them something that tells them apart (a line id, a reference).
+
+`POST` sends it with `idempotencyKey:` on the declaration, `Email` and `Handoff` always send it, and a provider you register reads it as `call.idempotencyKey`. A key looks like `halo_3f9c…` (45 characters).
 
 ## `PostgreSQL` / `SQL`
 
@@ -94,7 +134,9 @@ pipeline Alert(msg: String) -> Result:
 
 `post` (also `send`, `message`, `notify`, `execute`) calls `chat.postMessage` with `channel:`, `text:`, and optional `buttons:`, and returns `{ ok, channel, ts }`. During a run, each button's value is JSON with the run id, how many times the run has paused so far (`after`), and the button's label (`answer`). Under `halo serve` with `slack.signingSecret`, a click answers the run's next pause after the post (never a tool-call approval), with the label as the answer (see [Serving pipelines](../guide/production/serving.md#slack-buttons)). Elsewhere, Halo doesn't receive the clicks: your Slack app's endpoint calls `runtime.signal()` (see [Human-in-the-Loop](../guide/architecture/human-in-the-loop.md)).
 
-## `Email` (Resend)
+## `Email`
+
+One tool sends mail and reads a mailbox, through the service `via:` names.
 
 ```halo
 tool Mail : Email(Env.RESEND_API_KEY, from: "bot@example.com")
@@ -103,7 +145,90 @@ pipeline Send(report: String) -> Result:
   report |> Mail.send(to: "team@example.com", subject: "Daily report", body: "{{report}}")
 ```
 
-`send` posts to the Resend API with `from:`, `to:` (a string or a list), `subject:`, and `body:`/`text:`. `from:` and `to:` can be set on the declaration. It returns `{ sent, id, to }`.
+| Method | Arguments | Returns | Effect |
+|---|---|---|---|
+| `send` | `to:` (a string or a list), `subject:`, `body:` (plain text; also `text:`). Optional: `html:`, `cc:`, `bcc:`, `reply_to:`, `in_reply_to:` (a `messageId`, to stay in its thread) | `{ sent, id, to }` | external |
+| `list` | `unread:`, `from:`, `subject:`, `text:`, `since:` (a date, or `"24h"`, `"7d"`), `limit:` (10; at most 50), `folder:`, `full:` (include bodies) | Messages, newest first | read |
+| `read` | `id:` (from `list`), `folder:` | One message with `text`, `html` and `attachments` | read |
+| `mark` | `id:`, `read:` (`false` marks it unread) | `{ id, unread }` | external |
+
+A message is `{ id, from, fromName, to, cc, subject, date, unread, snippet, messageId, inReplyTo }`, plus `text`, `html` and `attachments` (name, type and size; not the contents) from `read` or `list(full: true)`. It is the same shape whichever service it came from. `list` and `read` never mark anything read.
+
+`from:`, `to:` and `reply_to:` can be set on the declaration. The first argument is the service's secret:
+
+| `via:` | Sends | Reads | First argument | Also on the declaration |
+|---|---|---|---|---|
+| `"resend"` (default) | yes | | API key | |
+| `"cloudflare"` | yes | | An API token that may send email | `account:` (the account id). The `from:` domain must be set up for [Email Sending](https://developers.cloudflare.com/email-service/) |
+| `"smtp"` | yes | with `imap:` | Password | `host:`, `user:`, `port:` (587), `tls:`; `imap: "host"` to read too |
+| `"imap"` | with `smtp:` | yes | Password | `host:`, `user:`, `port:` (993), `tls:`; `smtp: "host"` to send too |
+| `"gmail"` | yes | yes | An [app password](https://support.google.com/accounts/answer/185833), with `user:`. Or a refresh token, with `clientId:` and `clientSecret:` | |
+| `"outlook"` | yes | yes | The app's client secret | `tenant:`, `clientId:`, `user:` (the mailbox) |
+| `"postmark"` | yes | | Server token | `stream:` |
+| `"sendgrid"` | yes | | API key | |
+| `"mailgun"` | yes | | API key | `domain:` (required), `apiUrl:` (`"https://api.eu.mailgun.net"` in the EU) |
+
+**SMTP and IMAP** work with any mail server:
+
+```halo
+tool Mail : Email(Env.MAIL_PASSWORD, via: "smtp", host: "smtp.example.com", user: "support@example.com", imap: "imap.example.com")
+```
+
+- Port 465 (SMTP) and 993 (IMAP) are TLS from the first byte. Port 587, 25 and 143 start plain and switch with STARTTLS; a server that doesn't offer it is refused, so mail and passwords never travel in the clear. `tls: "none"` allows it for a relay on the same machine, and a password is still never sent unencrypted to any other host.
+- `tlsVerify: false` accepts a certificate that can't be checked (a relay with a private CA).
+- With no `from:`, mail is from `user:`.
+- `accessToken:` signs in with OAuth (XOAUTH2) in place of the password.
+- An IMAP search takes plain ASCII; `id` is the message's UID in its folder.
+
+**Gmail** with an app password uses Gmail's own SMTP and IMAP servers. With `clientId:` it uses the Gmail API, signing in with the refresh token; `text:` is then a Gmail search (`"has:attachment newer_than:2d"`), and `folder:` a label.
+
+**Outlook** uses Microsoft Graph as an app (client credentials): register an app in Entra, give it the `Mail.Send` and `Mail.ReadWrite` application permissions, and name the mailbox in `user:`. For one person's mailbox instead, pass `refreshToken:` (or `accessToken:`) with `clientId:`. Graph sends one body, so `html:` wins over `body:` when both are given.
+
+**Not sending twice.** Resend gets the call's [idempotency key](#idempotency-keys). Over SMTP and the Gmail API the key becomes the message's `Message-ID`, so a repeat is the same message to whoever receives it, though the server will still accept it. `via: "cloudflare"` reports `delivered`, `queued` and `bounced` addresses in place of an id.
+
+**A mailbox an agent can read but not write to:**
+
+```halo
+tool Inbox : Email(Env.IMAP_PASSWORD, via: "imap", host: "imap.example.com", user: "support@example.com")
+policy ReadOnly : AllowEffects("read")
+agent Triage [anthropic/claude-sonnet-4-5] equips Inbox requires ReadOnly
+```
+
+To keep a model's mail inside one domain, put a rule on the tool:
+
+```halo
+tool Mail : Email(Env.POSTMARK_TOKEN, via: "postmark", from: "prizes@example.com")
+  & Match("to", "[\\w.+-]+@example\\.com")
+  & Locked("cc", "bcc")
+```
+
+**Mail that starts a run.** Poll a mailbox on a [schedule](../guide/production/serving.md#schedules) (`Inbox.list(unread: true, full: true)`, then `Inbox.mark` each one handled), or have mail pushed to a webhook as it arrives (see [Inbound email](../guide/production/serving.md#inbound-email)).
+
+## `Handoff`
+
+Hands an item to the app that hosts your pipelines, for the things that app already does well: sending from its own mail system, writing to its database, queueing a job.
+
+```halo
+tool App : Handoff(Env.APP_URL, secret: Env.HALO_HANDOFF_SECRET)
+
+pipeline Announce(winner: JSON) -> Result:
+  winner
+    |> Announcer.note("Write a short congratulation for {{winner.name}}") as note
+    |> App.send(kind: "winner_note", to: winner.email, note: context.data.note)
+```
+
+Halo POSTs this to the URL, and the pipeline goes on with what your app answers (`{ delivered, id, kind }` when it answers with nothing):
+
+```json
+{ "id": "halo_3f9c…", "type": "handoff", "kind": "winner_note", "at": "2026-11-19T10:04:11.000Z",
+  "runId": "6f9696ef-…", "data": { "to": "ada@example.com", "note": "Well played." } }
+```
+
+- `kind:` says what the item is. A method name works too: `App.winner_note(to: ...)`.
+- `id` is the call's [idempotency key](#idempotency-keys), also sent as `Idempotency-Key`. Store it and ignore an `id` you have already acted on: the same step running again sends the same one.
+- The request is signed with `secret:`, the same way as a [run callback](../guide/production/serving.md#run-callbacks), so one check covers both.
+- An answer of 4xx or 5xx fails the step (408, 429 and 5xx are retryable under `@retry`).
+- Its effect is `external`, so `ApproveEffects("external")` asks a person first.
 
 ## `GitHub`
 

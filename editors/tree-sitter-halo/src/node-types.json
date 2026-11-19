@@ -1364,11 +1364,15 @@
       }
     },
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
         {
           "type": "call_args",
+          "named": true
+        },
+        {
+          "type": "policy_rule",
           "named": true
         }
       ]

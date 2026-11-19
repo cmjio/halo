@@ -90,6 +90,12 @@ export interface SchemaDeclaration {
   loc?: Loc;
 }
 
+/** A rule on a tool's arguments, written after its provider: `& Fixed("currency", "USD")`. */
+export interface ToolRule {
+  name: string;
+  args: Value[];
+}
+
 export interface ToolDeclaration {
   name: string;
   provider: string;
@@ -99,6 +105,8 @@ export interface ToolDeclaration {
   namedArgs: Record<string, string>;
   /** All args, typed, in source order. */
   argList: Arg[];
+  /** Rules on its arguments (Fixed, Match, Locked, Unlocked), for every caller. */
+  rules?: ToolRule[];
   loc?: Loc;
 }
 
