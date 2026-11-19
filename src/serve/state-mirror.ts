@@ -137,8 +137,12 @@ export function openStateStore(where: string, env: Record<string, string | undef
 }
 
 const DATABASE = /\.(db|sqlite|sqlite3)$/;
-/** Files that only mean something to the process that wrote them, or are part of another file. */
-const SKIPPED = /(^|\/)(scheduler\.lock|[^/]*\.tmp|[^/]*\.part|[^/]*-(wal|shm|journal)|[^/]*\.taken-[^/]*)$/;
+/**
+ * Files that only mean something to the process that wrote them, or are part of another file.
+ * Installed packages belong to the project, not to its state; and a project pushed to the same
+ * store (project/…) is not state either.
+ */
+const SKIPPED = /(^|\/)(scheduler\.lock|[^/]*\.tmp|[^/]*\.part|[^/]*-(wal|shm|journal)|[^/]*\.taken-[^/]*)$|^(packages\/|trust\.json$)|^project\//;
 
 export interface MirrorOptions {
   /** How often databases (and anything missed) are copied. Default 30s. */

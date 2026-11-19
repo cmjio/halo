@@ -164,6 +164,8 @@ export interface ServeOptions extends ServeConfig {
   studio?: boolean;
   /** Set to "PORT" when the host was chosen because PORT is set (see listenAddress), to explain a refusal. */
   hostFrom?: string;
+  /** The pushed project version being served (`halo serve` with HALO_PROJECT), for /healthz. */
+  project?: string;
   /** Every run is a dry run (`halo serve --mocks <file>`): no model is called and no tool runs. */
   dryRun?: boolean;
   /** How long to wait before each further try of a run callback. Default 2s, 10s, 60s. */
@@ -1175,7 +1177,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         // For load balancers and hosts' health checks: no token, and nothing about the pipelines.
         // `version` and `build` let a host tell whether the process it reached is the one it just deployed.
-        if (path === "/healthz" && req.method === "GET") return json({ ok: true, version: pkg.version, startedAt, ...(build ? { build } : {}), ...(options.dryRun ? { dryRun: true } : {}) });
+        if (path === "/healthz" && req.method === "GET") return json({ ok: true, version: pkg.version, startedAt, ...(build ? { build } : {}), ...(options.project ? { project: options.project } : {}), ...(options.dryRun ? { dryRun: true } : {}) });
 
         if (path === "/slack/actions" && req.method === "POST") return slackAction(req);
 

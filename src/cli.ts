@@ -14,6 +14,8 @@
  *   halo add | remove | install | outdated | update | search | info | pack | publish | ...   (packages: src/registry/cli.ts)
  */
 
+import { currentProject, ProjectError, pullProject, pushProject } from "./serve/project.js";
+import { openStateStore, StateStoreError } from "./serve/state-mirror.js";
 import { mockEverything } from "./runtime/mocks.js";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -27,7 +29,8 @@ import { AdapterRegistry } from "./runtime/adapter.js";
 import { FileRunStore, HaloRuntime, stageLabel, type InterruptRequest, type ListenRequest, type RunResult, type RuntimeEvent } from "./runtime/runtime.js";
 import { SqliteTelemetry } from "./runtime/telemetry.js";
 import { initProject } from "./init.js";
-import { argsFromBody, listenAddress, loadServeConfig, startServer, ServeError, type ServeConfig } from "./serve/server.js";
+import { argsFromBody, listenAddress, loadServeConfig, startServer, ServeError, type ServeConfig, type HaloServer } from "./serve/server.js";
+import { parseDuration } from "./parser/builtins.js";
 import { APPROVED, answerToEvent, formatValue } from "./runtime/values.js";
 import pkg from "../package.json" with { type: "json" };
 import { CHANNELS, channelOf, isChannel, type Channel } from "./channel.js";
@@ -76,6 +79,10 @@ USAGE:
                                         blueprint (support-inbox, fix-issue)
   halo upgrade [--channel <name>]       Update an installed halo on its channel (latest, next or
                                         nightly), or move it to another with --channel
+  halo push [dir] [--to <store>]        Upload the project to a store (s3://bucket/prefix or a
+                                        folder; default HALO_PROJECT). Servers started with
+                                        HALO_PROJECT set to it run that version, with no image
+                                        to build (--force: skip the checks; --keep N versions)
   halo serve [files|dirs ...]           Serve pipelines: HTTP API, webhooks, schedules,
                                         approval links, MCP at /mcp, and Halo Studio at /
                                         (--mock or --mocks <file.json>: every run is a dry run
@@ -664,11 +671,82 @@ function stageAt(ast: ParseResult, pipeline: string, index: number): string {
   return stage ? stageLabel(stage) : "";
 }
 
+/** The store a `--project` / HALO_PROJECT / `--to` address names. */
+function projectStore(where: string) {
+  try {
+    return openStateStore(where, Bun.env);
+  } catch (err) {
+    if (err instanceof StateStoreError) fail(err.message);
+    throw err;
+  }
+}
+
+/** `halo push [dir] [--to <store>]`: upload the project, so servers started with HALO_PROJECT run it. */
+async function cmdPush(flags: Flags): Promise<number> {
+  const root = resolve(flags.positional[0] ?? ".");
+  let config: ServeConfig & { project?: string } = {};
+  try {
+    if (existsSync(join(root, "halo.json"))) config = await loadServeConfig(join(root, "halo.json"));
+  } catch (err) {
+    if (err instanceof ServeError) fail(err.message);
+    throw err;
+  }
+  const named = last(flags, "to") ?? Bun.env.HALO_PROJECT ?? config.project;
+  const where = named && /^Env\.\w+$/.test(named) ? Bun.env[named.slice(4)] : named;
+  if (!where) fail(`Where to? Pass --to <store> (s3://bucket/prefix, or a folder), or set HALO_PROJECT, or "project" in halo.json`);
+  // What is pushed is what a server will run, so it has to pass the checks `halo serve` makes.
+  if (!flags.bools.has("force")) {
+    const targets = (config.files?.length ? config.files : ["."]).map((f) => resolve(root, f));
+    let errors = 0;
+    for (const file of collectFiles(targets)) {
+      const rel = relative(root, file) || file;
+      const diags = checkLinked(linkFile(file, { root }), { canHandleModel, toolProviders: installedProviderNames(root) }).filter((d) => d.severity === "error");
+      for (const d of diags) console.error(formatDiag(d, rel));
+      errors += diags.length;
+    }
+    if (errors) fail(`Not pushed: ${errors} error(s). Fix them, or pass --force to push anyway.`);
+  }
+  const store = projectStore(where);
+  try {
+    const r = await pushProject(root, store, pkg.version, { keep: Number(last(flags, "keep") ?? 5) });
+    const size = r.bytes < 1024 * 1024 ? `${Math.max(1, Math.round(r.bytes / 1024))} KB` : `${(r.bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (flags.bools.has("json")) console.log(JSON.stringify({ ...r, store: store.label }));
+    else if (!r.changed) console.log(`${green("✓")} ${store.label} already has this version (${r.version}); nothing changed`);
+    else {
+      console.log(`${green("✓")} Pushed version ${bold(r.version)} to ${store.label} (${r.files} file(s), ${size}; ${r.uploaded} new)`);
+      console.log(dim(`  Servers started with HALO_PROJECT=${store.label} switch to it within a minute. Secrets (.env) are never pushed: set them on the host.`));
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof ProjectError) fail(err.message);
+    fail(`Could not push to ${store.label}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 async function cmdServe(flags: Flags): Promise<number> {
-  let server;
+  let server: HaloServer;
   let config: ServeConfig;
   const asPackage = flags.bools.has("package");
-  try {
+  const dryRun = flags.bools.has("mock") || last(flags, "mocks") !== undefined;
+
+  // --project / HALO_PROJECT: the project comes from a store (see `halo push`), into this folder.
+  const projectAt = asPackage ? undefined : (last(flags, "project") ?? Bun.env.HALO_PROJECT);
+  const store = projectAt ? projectStore(projectAt) : undefined;
+  let version: string | undefined;
+  const pull = async (which?: string) => {
+    const r = await pullProject(store!, process.cwd(), which);
+    version = r.version;
+    console.log(`[halo] Project version ${r.version} from ${store!.label} (${r.files} file(s), ${r.written} written${r.removed ? `, ${r.removed} removed` : ""})`);
+  };
+  if (store) {
+    try {
+      await pull();
+    } catch (err) {
+      fail(err instanceof ProjectError ? err.message : `Could not pull the project from ${store.label}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  const boot = async (): Promise<HaloServer> => {
     if (asPackage) {
       // halo serve --package [dir]: the package's hosted pipelines, for its consumers. Its halo.json is
       // a package manifest; only the serve settings in it apply (port, host, token, publicUrl, stateDir, mcp, keysFile).
@@ -676,7 +754,7 @@ async function cmdServe(flags: Flags): Promise<number> {
       const raw = (await loadServeConfig(last(flags, "config") ?? join(dir, "halo.json"))) as ServeConfig & { keysFile?: string };
       config = { port: raw.port, host: raw.host, token: raw.token, publicUrl: raw.publicUrl, stateDir: raw.stateDir, mcp: raw.mcp, recordings: raw.recordings };
       const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
-      server = await startServer({
+      return startServer({
         ...config,
         package: dir,
         keysFile: last(flags, "keys") ?? raw.keysFile,
@@ -685,34 +763,39 @@ async function cmdServe(flags: Flags): Promise<number> {
         hostFrom: listen.from,
         studio: false,
       });
-    } else {
-      config = await loadServeConfig(last(flags, "config"));
-      const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
-      server = await startServer({
-        ...config,
-        files: flags.positional.length ? flags.positional : config.files,
-        port: listen.port,
-        host: listen.host,
-        hostFrom: listen.from,
-        studio: !flags.bools.has("no-studio"),
-        // --mock or --mocks: a rehearsal server, where no run calls a model or runs a tool.
-        mocks: last(flags, "mocks") ?? config.mocks,
-        dryRun: flags.bools.has("mock") || last(flags, "mocks") !== undefined,
-      });
     }
+    config = await loadServeConfig(last(flags, "config"));
+    const listen = listenAddress({ port: last(flags, "port"), host: last(flags, "host") }, config, Bun.env);
+    return startServer({
+      ...config,
+      files: flags.positional.length ? flags.positional : config.files,
+      port: listen.port,
+      host: listen.host,
+      hostFrom: listen.from,
+      studio: !flags.bools.has("no-studio"),
+      // --mock or --mocks: a rehearsal server, where no run calls a model or runs a tool.
+      mocks: last(flags, "mocks") ?? config.mocks,
+      dryRun,
+      project: version,
+    });
+  };
+  try {
+    server = await boot();
   } catch (err) {
     if (err instanceof ServeError) fail(err.message);
     throw err;
   }
-  if (asPackage) {
-    console.log(bold(`\nHalo is serving hosted pipeline(s) ${server.pipelines.join(", ")} at ${server.url}`));
-    console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  (Halo-Package header and a consumer key required)`);
-    console.log(`  MCP        ${server.url}/mcp`);
-    console.log(`  Usage      GET ${server.url}/api/usage  (HALO_SERVE_TOKEN), or the hosted_usage table in .halo/telemetry.db`);
-    console.log(dim("  Consumer keys: HALO_PACKAGE_KEYS=\"id=key,...\" or .halo/package-keys.json (re-read on change). Ctrl-C to stop.\n"));
-  } else {
-    console.log(bold(`\nHalo is serving ${server.pipelines.length} pipeline(s) at ${server.url}`));
-    if (flags.bools.has("mock") || last(flags, "mocks") !== undefined) console.log(yellow("  Dry runs only: every model and tool answers from mocks, and nothing is sent anywhere."));
+  const announce = () => {
+    if (asPackage) {
+      console.log(bold(`\nHalo is serving hosted pipeline(s) ${server.pipelines.join(", ")} at ${server.url}`));
+      console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  (Halo-Package header and a consumer key required)`);
+      console.log(`  MCP        ${server.url}/mcp`);
+      console.log(`  Usage      GET ${server.url}/api/usage  (HALO_SERVE_TOKEN), or the hosted_usage table in .halo/telemetry.db`);
+      console.log(dim("  Consumer keys: HALO_PACKAGE_KEYS=\"id=key,...\" or .halo/package-keys.json (re-read on change). Ctrl-C to stop.\n"));
+      return;
+    }
+    console.log(bold(`\nHalo is serving ${server.pipelines.length} pipeline(s) at ${server.url}${version ? ` (project version ${version})` : ""}`));
+    if (dryRun) console.log(yellow("  Dry runs only: every model and tool answers from mocks, and nothing is sent anywhere."));
     if (!flags.bools.has("no-studio")) console.log(`  Studio     ${server.url}/`);
     console.log(`  API        POST ${server.url}/api/pipelines/<name>/runs  {"args": {...}}`);
     for (const w of config.webhooks ?? []) console.log(`  Webhook    POST ${server.url}/hooks/${w.path.replace(/^\/+/, "")} → ${w.pipeline}`);
@@ -720,15 +803,63 @@ async function cmdServe(flags: Flags): Promise<number> {
       const next = s.next ? new Date(s.next).toLocaleString("en-US", { timeZone: s.tz }) : "never";
       console.log(`  Schedule   ${s.cron} ${dim(s.tz)} → ${s.pipeline}${dim(` (next ${next})`)}`);
     }
+    if (server.resumed.length) console.log(`  Continuing ${server.resumed.length} run(s) that were cut short last time`);
     console.log(dim("  Paused runs get an approval link (logged here; also sent to notify.slack if set). Ctrl-C to stop.\n"));
-  }
+  };
+  announce();
+
+  // A pushed version replaces the one running: its runs finish, then the new project starts in this process.
+  let swapping: Promise<void> | undefined;
+  let refused: string | undefined;
+  let stopped = false;
+  const check = async () => {
+    if (!store || swapping || stopped) return;
+    let next: string | undefined;
+    try {
+      next = (await currentProject(store))?.version;
+    } catch (err) {
+      console.error(`[halo] Could not check ${store.label} for a new project version: ${err instanceof Error ? err.message : err}`);
+      return;
+    }
+    if (!next || next === version || next === refused) return;
+    const previous = version!;
+    swapping = (async () => {
+      console.log(`[halo] Project version ${next} was pushed; switching from ${previous} once running pipelines reach a stopping point`);
+      await pull(next);
+      await server.stop();
+      try {
+        server = await boot();
+        announce();
+      } catch (err) {
+        // The pushed version doesn't start: keep serving the one that did, and say so loudly.
+        console.error(red(`[halo] Project version ${next} does not start, so ${previous} keeps running: ${err instanceof Error ? err.message : err}`));
+        refused = next;
+        await pull(previous);
+        server = await boot();
+        announce();
+      }
+    })()
+      .catch((err) => {
+        console.error(red(`[halo] Switching project versions failed: ${err instanceof Error ? err.message : err}`));
+        process.exitCode = 1;
+        process.kill(process.pid, "SIGTERM");
+      })
+      .finally(() => (swapping = undefined));
+    await swapping;
+  };
+  const pollMs = Math.max(1000, parseDuration(Bun.env.HALO_PROJECT_POLL ?? "30s") || 30_000);
+  const poll = store ? setInterval(() => void check(), pollMs) : undefined;
 
   await new Promise<void>((done) => {
     const stop = () => {
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
+      stopped = true;
+      clearInterval(poll);
       console.log(dim("\nStopping (waiting for running pipelines to reach a stopping point)..."));
-      void server.stop().then(done);
+      void Promise.resolve(swapping)
+        .then(() => server.stop())
+        .then(done, done);
     };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
@@ -1426,6 +1557,8 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdUpgrade(flags);
       case "serve":
         return await cmdServe(flags);
+      case "push":
+        return await cmdPush(flags);
       case "validate":
       case "lint":
         return await cmdValidate(flags);
