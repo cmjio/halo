@@ -6,6 +6,7 @@ import PackageList from "./PackageList.vue";
 import RecordedRun from "./RecordedRun.vue";
 import { installMetrickleEvents } from "./metrickle";
 import "./custom.css";
+import "./home.css";
 
 export default {
   extends: DefaultTheme,

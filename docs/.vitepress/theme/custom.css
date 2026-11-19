@@ -1,38 +1,146 @@
 /* halolang.com: VitePress's default theme, tuned for reading code. */
 
+/* Colours: the colours of the words in a .halo file. Values come from ../palette.ts;
+   test/site-palette.test.ts checks they match it and that each text pair meets WCAG AA. */
 :root {
   --vp-font-family-base: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --vp-font-family-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --vp-c-brand-1: #a3650a;
-  --vp-c-brand-2: #b9770e;
-  --vp-c-brand-3: #c98a1f;
-  --vp-c-brand-soft: rgb(185 119 14 / 0.14);
-  --vp-home-hero-name-color: var(--vp-c-text-1);
-  --halo-read: #1a7f52;
-  --halo-write: #9a5f08;
-  --halo-external: #c9372c;
+
+  --halo-keyword: #ac4800;
+  --halo-name: #0174b6;
+  --halo-constant: #9633ff;
+  --halo-string: #587819;
+  --halo-model: #98641c;
+  --halo-comment: #5c6370;
+  --halo-punct: #716f6a;
+  --halo-danger: #db1424;
+  --halo-control: #7a818c;
+  --halo-on-brand: #ffffff;
+
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #f7f8fa;
+  --vp-c-bg-soft: #f5f6f8;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-divider: #e2e4e8;
+  --vp-code-block-bg: #f7f8fa;
+  --vp-c-text-1: #1c2027;
+  --vp-c-text-2: #3d434c;
+  --vp-c-text-3: #5c6370;
+
+  --vp-c-brand-1: var(--halo-keyword);
+  --vp-c-brand-2: #963e00;
+  --vp-c-brand-3: var(--halo-keyword);
+  --vp-c-brand-soft: rgb(172 72 0 / 0.1);
+
+  --halo-read: var(--halo-string);
+  --halo-write: var(--halo-model);
+  --halo-external: var(--halo-danger);
   --halo-code-bg: var(--vp-code-block-bg);
+  --halo-focus: var(--halo-name);
+
+  --vp-home-hero-name-color: var(--vp-c-text-1);
+  --vp-button-brand-text: var(--halo-on-brand);
+  --vp-button-brand-hover-text: var(--halo-on-brand);
+  --vp-button-brand-active-text: var(--halo-on-brand);
+  --vp-button-brand-hover-bg: var(--vp-c-brand-2);
+  --vp-button-brand-active-bg: var(--vp-c-brand-2);
+
+  --vp-c-tip-1: var(--halo-string);
+  --vp-c-tip-soft: rgb(88 120 25 / 0.1);
+  --vp-c-note-1: var(--halo-name);
+  --vp-c-note-soft: rgb(1 116 182 / 0.08);
+  --vp-c-important-1: var(--halo-constant);
+  --vp-c-important-soft: rgb(150 51 255 / 0.08);
+  --vp-c-warning-1: var(--halo-model);
+  --vp-c-warning-soft: rgb(152 100 28 / 0.1);
+  --vp-c-danger-1: var(--halo-danger);
+  --vp-c-danger-soft: rgb(219 20 36 / 0.08);
+  --vp-c-caution-1: var(--halo-danger);
+  --vp-c-caution-soft: rgb(219 20 36 / 0.08);
 }
 
 .dark {
-  --vp-c-bg: #0e1013;
-  --vp-c-bg-alt: #0b0d10;
-  --vp-c-bg-soft: #161a20;
-  --vp-c-bg-elv: #171b21;
-  --vp-c-divider: #262c35;
-  --vp-c-gutter: #0b0d10;
-  --vp-code-block-bg: #0b0d10;
-  --vp-c-brand-1: #f3b44c;
-  --vp-c-brand-2: #e5a53a;
-  --vp-c-brand-3: #d39428;
-  --vp-c-brand-soft: rgb(243 180 76 / 0.14);
-  --halo-read: #56d39a;
-  --halo-write: #f3b44c;
-  --halo-external: #ff7b72;
+  --halo-keyword: #ff8f3f;
+  --halo-name: #5ac2fe;
+  --halo-constant: #d1a6ff;
+  --halo-string: #a9d94c;
+  --halo-model: #e5b572;
+  --halo-comment: #8b929c;
+  --halo-punct: #a6a4a0;
+  --halo-danger: #f26d78;
+  --halo-control: #6b7380;
+  --halo-on-brand: #0d1016;
+
+  --vp-c-bg: #0d1016;
+  --vp-c-bg-alt: #0a0d12;
+  --vp-c-bg-soft: #141820;
+  --vp-c-bg-elv: #171b23;
+  --vp-c-divider: #262c36;
+  --vp-c-gutter: #0a0d12;
+  --vp-code-block-bg: #0a0d12;
+  --vp-c-text-1: #e6e4df;
+  --vp-c-text-2: #b8bcc3;
+  --vp-c-text-3: #8b929c;
+
+  --vp-c-brand-2: #ffa463;
+  --vp-c-brand-soft: rgb(255 143 63 / 0.12);
+
+  --vp-c-tip-soft: rgb(169 217 76 / 0.1);
+  --vp-c-note-soft: rgb(90 194 254 / 0.1);
+  --vp-c-important-soft: rgb(209 166 255 / 0.1);
+  --vp-c-warning-soft: rgb(229 181 114 / 0.1);
+  --vp-c-danger-soft: rgb(242 109 120 / 0.1);
+  --vp-c-caution-soft: rgb(242 109 120 / 0.1);
 }
 
 * {
   font-variant-ligatures: none;
+}
+
+/* Accessibility, site-wide */
+
+/* A visible focus ring on everything a keyboard can reach (WCAG 2.4.7, 2.4.13). */
+:focus-visible {
+  outline: 2px solid var(--halo-focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.vp-doc pre:focus-visible,
+.vp-doc [tabindex="0"]:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Fields: a border a person can find (WCAG 1.4.11, 3:1). */
+.VPNavBarSearch .DocSearch-Button,
+.vp-doc input,
+.vp-doc select,
+.vp-doc textarea {
+  border-color: var(--halo-control) !important;
+}
+.vp-doc input::placeholder,
+.vp-doc textarea::placeholder {
+  color: var(--vp-c-text-3);
+  opacity: 1;
+}
+
+/* Links inside prose stay underlined, so colour is never the only cue (WCAG 1.4.1). */
+.vp-doc p a,
+.vp-doc li a,
+.vp-doc td a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Movement only for people who haven't asked for less (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Home */
@@ -42,10 +150,6 @@
 }
 .VPHero .text {
   font-weight: 500;
-}
-.VPHome .vp-doc {
-  max-width: 960px;
-  margin: 0 auto;
 }
 .VPButton.medium {
   font-family: var(--vp-font-family-mono);
@@ -58,7 +162,7 @@
   margin: 16px 0;
   border: 1px solid var(--vp-c-divider);
   border-radius: 12px;
-  background: #0e1013;
+  background: var(--vp-c-bg-alt);
 }
 
 /* Code groups: tab labels like file names and commands */
@@ -309,26 +413,17 @@
   white-space: pre-wrap;
 }
 
-/* Halo syntax inside the playground (the docs' code blocks use the TextMate grammar) */
-.t-kw { color: #8250df; }
-.t-op { color: #b35900; }
-.t-string { color: #116329; }
-.t-comment { color: #6e7781; font-style: italic; }
-.t-number { color: #c4432b; }
-.t-type { color: #0550ae; }
-.t-decl { color: var(--vp-c-text-1); font-weight: 600; }
-.t-model { color: #0a6c7a; }
-.t-ph { color: #9a6700; }
-.t-directive { color: #c4432b; }
-.dark .t-kw { color: #c792ea; }
-.dark .t-op { color: #f3b44c; }
-.dark .t-string { color: #a5e075; }
-.dark .t-comment { color: #637082; }
-.dark .t-number,
-.dark .t-directive { color: #f78c6c; }
-.dark .t-type { color: #82aaff; }
-.dark .t-model { color: #89ddff; }
-.dark .t-ph { color: #ffcb6b; }
+/* Halo syntax inside the playground (the docs' code blocks use the same colours, from ../shiki.ts) */
+.t-kw,
+.t-op { color: var(--halo-keyword); }
+.t-decl,
+.t-directive { color: var(--halo-name); }
+.t-number,
+.t-type { color: var(--halo-constant); }
+.t-string { color: var(--halo-string); }
+.t-model,
+.t-ph { color: var(--halo-model); }
+.t-comment { color: var(--halo-comment); font-style: italic; }
 
 /* Playground */
 .pg-loading {
