@@ -1,0 +1,41 @@
+// ============================================================
+// Pay Once - A Tool That Can Only Do What It Is For
+// ============================================================
+// LEARN: Rules on a tool's arguments, idempotency keys, and handing work to your app
+// WHY:   An agent pays prize winners through a ledger API. The tool's own
+//        rules say what a payment may look like, whoever asks for it: the
+//        currency is fixed, the amount and winner must look right, and the
+//        model can't choose where the request goes. Each payment carries a
+//        key that stays the same if the step runs again, so a retry or a
+//        restart can't pay anyone twice. The winner's note is written here
+//        and handed to the app that sends mail.
+//
+//   halo run examples/patterns/pay-once.halo --mock \
+//     --arg challenge=spring-9 --arg 'winners=[{"winner":"ada_l","amount":"25.00"}]' \
+//     --idempotency-key spring-9:confirmation-3
+// ============================================================
+
+// One address, one job. A model that calls this can't add a path under it
+// (a POST tool's path is locked unless the declaration says & Unlocked("path")).
+tool Ledger : POST("ledger.example.com/v1/prizes/issue", apiKey: Env.LEDGER_KEY, idempotencyKey: true)
+  & Fixed("currency", "USD")
+  & Match("amount", "\\d{1,3}(\\.\\d\\d)?")
+  & Match("winner", "[a-z0-9_]{3,32}")
+
+// The app that hosts these pipelines sends the mail; Halo hands it the note, signed.
+tool App : Handoff(Env.APP_URL, secret: Env.HALO_HANDOFF_SECRET)
+
+policy Budget : MaxSpend(0.50)
+
+agent Paymaster [anthropic/claude-sonnet-4-5] equips Ledger requires Budget
+agent Announcer [openai/gpt-4o-mini]
+
+pipeline PayWinners(challenge: String, winners: JSON) -> Result:
+  winners
+    // One Ledger call per winner. A call that breaks a rule is refused and the
+    // agent is told why; the refusals are in context.meta.violations.
+    |> Paymaster.pay("Pay each winner of challenge {{challenge}} their prize, one Ledger call per winner: {{winners}}", tools: [Ledger]) as paid
+    |> Announcer.note("Write two warm sentences telling the winners of {{challenge}} that their prizes are on the way.") as note
+    // The app gets { id, type: "handoff", kind: "winner_note", runId, data: {...} }.
+    // id is the same if this step runs again, so the app sends the mail once.
+    |> App.send(kind: "winner_note", challenge: challenge, winners: winners, note: context.data.note)
