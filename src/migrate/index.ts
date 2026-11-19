@@ -100,6 +100,24 @@ export const MIGRATIONS: Migration[] = [
       return out;
     },
   },
+  {
+    id: "screenshot-image",
+    since: "1.6.0",
+    title: "Chrome.screenshot returns an image, not base64",
+    detail:
+      "Without a path, Chrome.screenshot used to return { mimeType, base64 }. It now returns { image }, an image value: a model the result reaches is sent the picture itself, and the text reads [image: screenshot.png #abc123]. Read .image instead of .base64; to keep the file, pass path: as before.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        if (!file.ast.tools.some((t) => t.provider === "Chrome")) continue;
+        const lines = readFileSync(join(project.root, file.path), "utf8").split("\n");
+        for (const [i, line] of lines.entries()) {
+          if (/\.base64\b|\bmimeType\b/.test(line.replace(/\/\/.*$/, ""))) out.push({ file: file.path, line: i + 1, message: "reads a screenshot's base64 or mimeType" });
+        }
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {
@@ -179,7 +197,8 @@ export function loadProject(root: string): Project {
 /** Check a project against this Halo, and with `write`, bring it up to date. */
 export async function migrateProject(root: string, options: MigrateOptions = {}): Promise<MigrationReport> {
   const halo = options.haloVersion ?? HALO_VERSION;
-  const migrations = [...(options.migrations ?? MIGRATIONS)].sort((a, b) => compare(a.since, b.since));
+  // Changes from a Halo newer than this one aren't this one's to make.
+  const migrations = [...(options.migrations ?? MIGRATIONS)].filter((m) => compare(m.since, core(halo)) <= 0).sort((a, b) => compare(a.since, b.since));
   let project = loadProject(root);
   const report: MigrationReport = { root: project.root, halo, results: [] };
 

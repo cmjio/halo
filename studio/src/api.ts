@@ -33,6 +33,31 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * An image or document a run holds, as an address the page can show or download. The file
+ * is fetched with the token (an <img> can't send one), so the address is local to this page.
+ */
+export async function blobUrl(sha256: string): Promise<string> {
+  const token = readToken();
+  const res = await fetch(`/api/blobs/${sha256}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new ApiError(res.status === 404 ? "This file isn't on the server" : `Couldn't load the file (${res.status})`, res.status);
+  return URL.createObjectURL(await res.blob());
+}
+
+/** Start a run with files: multipart, with the header that marks it as a client's (see the server's crossSite). */
+export async function upload<T>(path: string, form: FormData): Promise<T> {
+  const token = readToken();
+  let res: Response;
+  try {
+    res = await fetch(path, { method: "POST", headers: { "Halo-Client": "studio", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: form });
+  } catch {
+    throw new ApiError("Can't reach the Halo server", 0);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError((body as { error?: string }).error ?? `${res.status} ${res.statusText}`, res.status);
+  return body as T;
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = readToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };

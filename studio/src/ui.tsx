@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { Clipboard, Collapsible, createListCollection, Dialog, Field as ArkField, Portal, SegmentGroup, Select, Tooltip } from "@ark-ui/react";
-import { IconCheck, IconCopy, IconSelector } from "@tabler/icons-react";
+import { IconBrandYoutube, IconCheck, IconCopy, IconFileTypePdf, IconMovie, IconMusic, IconPhoto, IconSelector } from "@tabler/icons-react";
+import { blobUrl } from "./api";
 import { bytes } from "./format";
 
 // Studio's controls are Ark UI components (unstyled, accessible) wearing Studio's styles from App.css.
@@ -102,6 +103,119 @@ export function CopyButton({ text, label, className = "" }: { text: string; labe
 
 export const asText = (value: unknown) => (typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value)));
 
+/** An image or document a run holds (see src/runtime/media.ts). */
+export interface MediaRef {
+  $media: "image" | "document" | "audio" | "video";
+  sha256: string;
+  type: string;
+  size: number;
+  name?: string;
+  width?: number;
+  height?: number;
+  pages?: number;
+  duration?: number;
+  /** A video held as a link (YouTube). */
+  url?: string;
+}
+
+export function isMediaRef(v: unknown): v is MediaRef {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const r = v as Record<string, unknown>;
+  return ["image", "document", "audio", "video"].includes(r.$media as string) && typeof r.sha256 === "string" && /^[0-9a-f]{64}$/.test(r.sha256);
+}
+
+/** Every image and document inside a value, each once. */
+export function mediaIn(v: unknown, found = new Map<string, MediaRef>(), depth = 0): MediaRef[] {
+  if (isMediaRef(v)) found.set(v.sha256, v);
+  else if (v && typeof v === "object" && depth < 50) for (const x of Object.values(v)) mediaIn(x, found, depth + 1);
+  return [...found.values()];
+}
+
+/** An image as a thumbnail that opens full size, or a document as a file to open. */
+export function MediaItem({ media }: { media: MediaRef }) {
+  const [url, setUrl] = useState<string>();
+  const [problem, setProblem] = useState<string>();
+  useEffect(() => {
+    let made: string | undefined;
+    let live = true;
+    // A link (YouTube) has no file on the server to fetch.
+    if (media.url) return;
+    blobUrl(media.sha256).then(
+      (u) => (live ? setUrl((made = u)) : URL.revokeObjectURL(u)),
+      (e: unknown) => live && setProblem(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [media.sha256]);
+  const name = media.name ?? { image: "Image", document: "Document", audio: "Recording", video: "Video" }[media.$media];
+  const length = media.duration ? `${Math.floor(media.duration / 60)}:${String(Math.round(media.duration % 60)).padStart(2, "0")}` : undefined;
+  const detail = [media.width && media.height ? `${media.width} × ${media.height}` : undefined, media.pages ? `${media.pages} page${media.pages === 1 ? "" : "s"}` : undefined, length, media.url ? "YouTube" : bytes(media.size)].filter(Boolean).join(" · ");
+  // Sound and video play in place; a YouTube link opens YouTube.
+  if (media.url) {
+    return (
+      <figure className="media-item">
+        <a href={media.url} target="_blank" rel="noreferrer">
+          <span className="media-icon" aria-hidden="true">
+            <IconBrandYoutube size={22} stroke={1.5} />
+          </span>
+        </a>
+        <figcaption>
+          <span className="media-name">{name}</span>
+          <span className="media-detail">{detail}</span>
+        </figcaption>
+      </figure>
+    );
+  }
+  if ((media.$media === "audio" || media.$media === "video") && url) {
+    return (
+      <figure className={`media-item ${media.$media === "video" ? "wide" : "wide audio"}`}>
+        {media.$media === "video" ? <video src={url} controls preload="metadata" /> : <audio src={url} controls preload="metadata" />}
+        <figcaption>
+          <span className="media-name">{name}</span>
+          <span className="media-detail">{detail}</span>
+        </figcaption>
+      </figure>
+    );
+  }
+  const Icon = { image: IconPhoto, document: IconFileTypePdf, audio: IconMusic, video: IconMovie }[media.$media];
+  const body =
+    media.$media === "image" && url ? (
+      <img src={url} alt={name} loading="lazy" />
+    ) : (
+      <span className="media-icon" aria-hidden="true">
+        <Icon size={20} stroke={1.5} />
+      </span>
+    );
+  return (
+    <figure className="media-item">
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" download={media.$media === "document" ? `${name.replace(/\.pdf$/i, "")}.pdf` : undefined}>
+          {body}
+        </a>
+      ) : (
+        body
+      )}
+      <figcaption>
+        <span className="media-name">{name}</span>
+        <span className="media-detail">{problem ?? detail}</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+export function MediaStrip({ media }: { media: MediaRef[] }) {
+  if (!media.length) return null;
+  return (
+    <div className="media-strip">
+      {media.map((m) => (
+        <MediaItem key={m.sha256} media={m} />
+      ))}
+    </div>
+  );
+}
+
 const FOLD_CHARS = 1400;
 const FOLD_LINES = 18;
 
@@ -109,6 +223,21 @@ const FOLD_LINES = 18;
 export function Value({ value, empty = "Nothing recorded" }: { value: unknown; empty?: string }) {
   const [open, setOpen] = useState(false);
   if (value === null || value === undefined || value === "") return <p className="value-empty">{empty}</p>;
+  // An image or document is shown as itself; one inside a value is shown above it.
+  if (isMediaRef(value)) return <MediaStrip media={[value]} />;
+  const media = mediaIn(value);
+  if (media.length) {
+    return (
+      <>
+        <MediaStrip media={media} />
+        <TextValue value={value} open={open} setOpen={setOpen} />
+      </>
+    );
+  }
+  return <TextValue value={value} open={open} setOpen={setOpen} />;
+}
+
+function TextValue({ value, open, setOpen }: { value: unknown; open: boolean; setOpen: (open: boolean) => void }) {
   const text = asText(value);
   const long = text.length > FOLD_CHARS || text.split("\n", FOLD_LINES + 1).length > FOLD_LINES;
   if (!long) {

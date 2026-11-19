@@ -7,6 +7,7 @@
 
 import type { ToolDeclaration, Value } from "../parser/types.js";
 import { HttpError, HaloError } from "./errors.js";
+import { collectMedia, inlineFiles, multipartBody, type MediaRef } from "./media.js";
 import type { LocalVectorStore } from "./vectors.js";
 import { INTEGRATIONS } from "./integrations.js";
 import { mcpProvider } from "./mcp.js";
@@ -89,6 +90,10 @@ export interface ToolServices {
   sql(url: string): InstanceType<typeof Bun.SQL>;
   /** Environment for provider defaults (e.g. VectorStore's OPENAI_API_KEY). Defaults to process.env. */
   env?: Record<string, string | undefined>;
+  /** The bytes of an image or document the run holds. Refuses one the run wasn't given or didn't make. */
+  media?(ref: { sha256: string }): Promise<Uint8Array>;
+  /** Add what a call cost (USD) to the run's cost, for a tool that pays per use (transcription). */
+  spend?(usd: number): void;
 }
 
 export type ToolProvider = (call: ToolCall, services: ToolServices) => Promise<unknown>;
@@ -170,7 +175,16 @@ async function readResponse(res: Response, label: string, call?: ToolCall): Prom
   return text;
 }
 
+/** The bytes of a file a tool sends: only one the run holds. */
+function fileReader(call: ToolCall, services: ToolServices): (ref: MediaRef) => Promise<Uint8Array> {
+  return (ref) => {
+    if (!services.media) throw new HaloError(`${call.tool.name}: this runtime can't read the files its runs hold, so it can't send them`, { code: "TOOL_CONFIG" });
+    return services.media(ref);
+  };
+}
+
 const rest: ToolProvider = async (call, { fetch }) => {
+  if (collectMedia(call.named, call.positional).length) throw new HaloError(`${call.tool.name}: a GET request can't carry a file; declare a POST tool to send one`, { code: "TOOL_ARGUMENT" });
   const url = buildUrl(call, call.viaAgent || PLAIN_METHODS.has(call.method.toLowerCase()) ? "" : call.method);
   for (const [k, v] of Object.entries(params(call))) url.searchParams.set(k, str(v));
   const res = await fetch(url, { method: "GET", headers: authHeaders(call), signal: call.signal });
@@ -189,18 +203,33 @@ export function idempotencyPlace(call: ToolCall): { header?: string; field?: str
   return where.startsWith("body.") ? { field: where.slice(5) } : { header: where };
 }
 
-const post: ToolProvider = async (call, { fetch }) => {
+/**
+ * `body:` on a POST declaration: "json" (the default), "form" (url-encoded), or "multipart"
+ * (multipart/form-data, each file a file part). In JSON, a file goes inline as a data: URI, or
+ * as bare base64 with `files: "base64"`.
+ */
+const post: ToolProvider = async (call, services) => {
   const url = buildUrl(call, "");
   const key = idempotencyPlace(call);
-  const body = params(call);
+  const fields = params(call);
   // A key the caller set itself (an argument with that name) is kept.
-  if (key.field && body[key.field] === undefined) body[key.field] = call.idempotencyKey;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders(call), ...(key.header ? { [key.header]: call.idempotencyKey! } : {}) },
-    body: JSON.stringify(body),
-    signal: call.signal,
-  });
+  if (key.field && fields[key.field] === undefined) fields[key.field] = call.idempotencyKey;
+  const mode = call.config("body") ?? "json";
+  if (mode !== "json" && mode !== "form" && mode !== "multipart") throw new HaloError(`Tool "${call.tool.name}": body is "json", "form" or "multipart", not ${JSON.stringify(mode)}`, { code: "TOOL_CONFIG" });
+  const read = fileReader(call, services);
+  let body: string | URLSearchParams | FormData;
+  const headers: Record<string, string> = { ...authHeaders(call), ...(key.header ? { [key.header]: call.idempotencyKey! } : {}) };
+  if (mode === "multipart") {
+    body = await multipartBody(fields, read);
+  } else if (mode === "form") {
+    if (collectMedia(fields).length) throw new HaloError(`${call.tool.name}: a form body can't carry a file; declare the tool with body: "multipart"`, { code: "TOOL_ARGUMENT" });
+    body = new URLSearchParams(Object.entries(fields).filter(([, v]) => v !== undefined && v !== null).map(([k, v]): [string, string] => [k, str(v)]));
+  } else {
+    const as = call.config("files") === "base64" ? "base64" : "dataUri";
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(await inlineFiles(fields, read, as));
+  }
+  const res = await services.fetch(url, { method: "POST", headers, body, signal: call.signal });
   return readResponse(res, `POST ${url.origin}${url.pathname}`, call);
 };
 

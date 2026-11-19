@@ -5,6 +5,7 @@ export * from "./runtime/adapter.js";
 export * from "./runtime/router.js";
 export { SqliteTelemetry, toTelemetryRow, type TelemetryRow } from "./runtime/telemetry.js";
 export { SIGNATURE_HEADER, signBody, verifySignature } from "./runtime/signing.js";
+export { FileBlobStore, MediaBytes, MemoryBlobStore, isMediaRef, mediaLabel, type BlobStore, type MediaRef } from "./runtime/media.js";
 export { LocalVectorStore, embed } from "./runtime/vectors.js";
 export { findSteps, readSteps, stateAt, stepsPathFor, type Step, type StepState } from "./runtime/history.js";
 

@@ -3,6 +3,8 @@
  * one that arrived (from IMAP, the Gmail and Outlook APIs, or a mail route that posts it).
  */
 
+import { MediaBytes, sniff } from "../media.js";
+
 export interface Address {
   address: string;
   name?: string;
@@ -34,7 +36,8 @@ export interface ParsedMessage {
   references: string[];
   text: string;
   html?: string;
-  attachments: Array<{ filename?: string; type: string; size: number }>;
+  /** `file`: the bytes of an attachment Halo can read (an image, PDF, Word, PowerPoint or text file), which a run stores and a model can be sent. */
+  attachments: Array<{ filename?: string; type: string; size: number; file?: MediaBytes }>;
   /** Every header, by lower-case name (the last one wins when a name repeats). */
   headers: Record<string, string>;
 }
@@ -223,7 +226,10 @@ export function parseMessage(raw: Uint8Array | string): ParsedMessage {
     const filename = dp.filename ?? p.name;
     if (type === "message/rfc822" && depth < 20 && disposition !== "attachment") return walk(splitEntity(bytes.toString("latin1")), depth + 1);
     if (disposition === "attachment" || filename || !type.startsWith("text/")) {
-      out.attachments.push({ ...(filename ? { filename: decodeHeader(filename) } : {}), type: type || "application/octet-stream", size: bytes.length });
+      const name = filename ? decodeHeader(filename) : undefined;
+      // Attachments Halo can read (images, PDFs, Word, PowerPoint, text) keep their bytes, so a pipeline can show them to a model; others are described only.
+      const file = sniff(bytes) ? new MediaBytes(new Uint8Array(bytes), { name }) : undefined;
+      out.attachments.push({ ...(name ? { filename: name } : {}), type: type || "application/octet-stream", size: bytes.length, ...(file ? { file } : {}) });
       return;
     }
     const text = decodeBytes(bytes, p.charset).replace(/\r\n/g, "\n");

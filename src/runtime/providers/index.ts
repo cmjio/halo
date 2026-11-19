@@ -28,6 +28,8 @@ import { documents } from "./documents.js";
 import { kv } from "./kv.js";
 import { sqlite } from "./sqlite.js";
 import { workspace } from "./workspace.js";
+import { TRANSCRIBE_INFO, transcribeProvider } from "./transcribe.js";
+import { SMS_INFO, smsProvider } from "./sms.js";
 
 export { closeKvDatabases } from "./kv.js";
 export { closeSqliteDatabases } from "./sqlite.js";
@@ -46,6 +48,8 @@ export const LOCAL_PROVIDERS: Record<string, ToolProvider> = {
   WebSearch: webSearch,
   Skills: skills,
   Remote: remote,
+  Transcribe: transcribeProvider,
+  SMS: smsProvider,
 };
 
 function object(properties: Record<string, JsonSchema>, required: string[] = []): JsonSchema {
@@ -65,6 +69,8 @@ const listArg: JsonSchema = { type: "array", description: "A list of records." }
 const whereArg: JsonSchema = { type: ["object", "string"], description: "Conditions, all of which must hold: { path: value } or { path: { op: value } }, or text like \"total > 100 && status == 'paid'\"." };
 
 export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
+  Transcribe: TRANSCRIBE_INFO,
+  SMS: SMS_INFO,
   Workspace: {
     description: "Files in one folder (the workspace root). Paths are relative to the root; absolute paths, .. and symlinks out of it are refused. Writing needs the tool declared with write: true.",
     methods: [
@@ -261,7 +267,7 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
     methods: [
       {
         name: "extract",
-        description: "Extract a document's text from a file path (relative to the tool's root) or an http(s) URL. Returns { source, type, text }, plus rows (CSV/TSV records), data (parsed JSON), or pages (PDF page count).",
+        description: "Extract a document's text from a file path (relative to the tool's root), an http(s) URL, or a Document the pipeline holds (Docs.extract(doc)). Returns { source, type, text }, plus rows (CSV/TSV records), data (parsed JSON), or pages (PDF page count).",
         params: object({
           path: { type: "string", description: "File path, relative to the tool's root." },
           url: { type: "string", description: "An http(s) URL to fetch instead of a path." },

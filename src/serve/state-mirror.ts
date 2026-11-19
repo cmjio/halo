@@ -14,6 +14,7 @@
  * overwrite each other's files.
  */
 
+import { FileBlobStore, type BlobStore } from "../runtime/media.js";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile, rm, writeFile, mkdir, rename } from "node:fs/promises";
@@ -142,7 +143,31 @@ const DATABASE = /\.(db|sqlite|sqlite3)$/;
  * Installed packages belong to the project, not to its state; and a project pushed to the same
  * store (project/…) is not state either.
  */
-const SKIPPED = /(^|\/)(scheduler\.lock|[^/]*\.tmp|[^/]*\.part|[^/]*-(wal|shm|journal)|[^/]*\.taken-[^/]*)$|^(packages\/|trust\.json$)|^project\//;
+const SKIPPED = /(^|\/)(scheduler\.lock|[^/]*\.tmp|[^/]*\.part|[^/]*-(wal|shm|journal)|[^/]*\.taken-[^/]*)$|^(packages\/|trust\.json$)|^project\/|^blobs\//;
+
+/**
+ * Images and documents (`blobs/<sha256>`): written to the store as soon as they are made, and
+ * brought down only when a run needs one, so a server doesn't download every file at start.
+ * They never change, so nothing else about them needs syncing.
+ */
+export class MirroredBlobStore implements BlobStore {
+  private local: FileBlobStore;
+  constructor(dir: string, private store: StateStore) {
+    this.local = new FileBlobStore(join(dir, "blobs"));
+  }
+  async put(sha256: string, bytes: Uint8Array) {
+    const had = await this.local.get(sha256);
+    await this.local.put(sha256, bytes);
+    if (!had) await this.store.put(`blobs/${sha256}`, bytes);
+  }
+  async get(sha256: string) {
+    const here = await this.local.get(sha256);
+    if (here) return here;
+    const there = await this.store.get(`blobs/${sha256}`);
+    if (there) await this.local.put(sha256, there);
+    return there;
+  }
+}
 
 export interface MirrorOptions {
   /** How often databases (and anything missed) are copied. Default 30s. */

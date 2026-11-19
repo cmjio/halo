@@ -16,6 +16,7 @@
 
 import { HOSTED_PACKAGE_HEADER } from "../registry/contract.js";
 import { HaloError, HttpError } from "./errors.js";
+import { inlineToBytes, mapMedia, mediaLabel } from "./media.js";
 import type { ProviderInfo, ToolCall, ToolProvider, ToolServices } from "./tools.js";
 
 export { HOSTED_PROVIDER } from "../linker/hosted.js";
@@ -50,11 +51,16 @@ export const hostedProvider: ToolProvider = async (call: ToolCall, services: Too
 
   // Positional arguments fill the parameters in order; the linker's stub passes them by name.
   const args: Record<string, unknown> = { ...call.named };
+  // The publisher's server can't read this machine's files: each image or document goes inline, as a data: URI.
+  const sent = await mapMedia(args, async (ref) => {
+    if (!services.media) throw new HaloError(`${label}: this runtime can't read the files its runs hold, so ${mediaLabel(ref)} can't be sent`, { code: "TOOL_CONFIG" });
+    return `data:${ref.type};base64,${Buffer.from(await services.media(ref)).toString("base64")}`;
+  });
   const url = `${endpoint}/api/pipelines/${encodeURIComponent(pipeline)}/runs`;
   let res: Response;
   try {
     // Never follow a redirect: it would re-send the key and the inputs to wherever it points.
-    res = await services.fetch(url, { method: "POST", headers, body: JSON.stringify({ args, wait: true }), signal: call.signal, redirect: "manual" });
+    res = await services.fetch(url, { method: "POST", headers, body: JSON.stringify({ args: sent, wait: true }), signal: call.signal, redirect: "manual" });
   } catch (err) {
     if (call.signal.aborted) throw err;
     throw new HaloError(`${label}: can't reach ${endpoint}: ${err instanceof Error ? err.message : String(err)}`, { code: "HTTP_ERROR", retryable: true, cause: err });
@@ -82,5 +88,6 @@ export const hostedProvider: ToolProvider = async (call: ToolCall, services: Too
   if (parsed.status !== "completed") {
     throw new HaloError(`${label}: the run on ${endpoint} ended ${parsed.status ?? "without a status"}${parsed.error ? `: ${parsed.error}` : ""}`, { code: "HOSTED_RUN" });
   }
-  return parsed.output;
+  // Files in the answer arrive inline; the runtime stores them as this run's own.
+  return inlineToBytes(parsed.output);
 };

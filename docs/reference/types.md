@@ -33,6 +33,10 @@ Field types:
 | `Array`, `List`, `Array<T>` | a list (every item checked against `T`) |
 | `Object`, `JSON` | an object |
 | `Any`, `Result` | anything |
+| `Image` | an image (PNG, JPEG, GIF, WebP); see [Files](/guide/files) |
+| `Document` | a document: PDF, Word, PowerPoint, email, CSV, Markdown, HTML, JSON or text |
+| `Audio` | a recording: MP3, WAV, M4A, AAC, Ogg, FLAC, WebM |
+| `Video` | a video: MP4, MOV, WebM, or a YouTube link |
 | another schema's name | an object matching that schema |
 
 Every field is required. Extra fields are allowed.
@@ -58,4 +62,4 @@ Parameter types (`text: String`, `items: List`, `user: UserProfile`) are checked
 
 Values that come from models and tools aren't known until the pipeline runs, so they aren't checked here. The CLI requires that every parameter is given.
 
-There are no `Asset` or `Embedding` types. Multimodal inputs are not supported.
+An `Image`, `Document`, `Audio` or `Video` parameter takes a file, which a model the value reaches is sent, as itself or as what the model can read: see [Files](/guide/files). Its fields (`photo.size`, `doc.pages`, `call.duration`) are known to the validator. There is no `Embedding` type.

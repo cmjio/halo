@@ -3,7 +3,11 @@
 export const DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "cascade", "thread", "expect"] as const;
 
 /** Types a schema field, parameter or return can name (besides declared schemas). `Result` is the usual unchecked return type, like `Any`. */
-export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any", "Result"] as const;
+export const SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any", "Result", "Image", "Document", "Audio", "Video"] as const;
+
+/** The built-in types that hold a file, and the fields a pipeline can read from one. A program's own schema of the same name replaces the built-in. */
+export const MEDIA_TYPE_NAMES = ["Image", "Document", "Audio", "Video"] as const;
+export const MEDIA_FIELDS: Record<string, string> = { type: "String", size: "Integer", name: "String", sha256: "String", format: "String", width: "Integer", height: "Integer", pages: "Integer", duration: "Number", url: "String" };
 
 /** What each built-in type accepts, for editors (hover, completions). */
 export const TYPE_DESCRIPTIONS: Record<(typeof SCHEMA_TYPES)[number], string> = {
@@ -18,6 +22,10 @@ export const TYPE_DESCRIPTIONS: Record<(typeof SCHEMA_TYPES)[number], string> = 
   JSON: "an object (same as Object)",
   Any: "anything (not checked)",
   Result: "anything (not checked); the usual return type of a pipeline whose output isn't checked",
+  Image: "an image (PNG, JPEG, GIF or WebP): a model the value reaches is sent the image; read its type, size, name, width and height",
+  Document: "a document (PDF, Word, PowerPoint, email, CSV, Markdown, HTML, JSON or text): a model the value reaches is sent it, or its text; read its type, format, size, name and pages",
+  Audio: "an audio file (MP3, WAV, M4A, AAC, Ogg, FLAC, WebM): a model the value reaches is sent it, or its transcript; read its type, size, name and duration",
+  Video: "a video (MP4, MOV, WebM, or a YouTube link): Gemini is sent it; other models get its transcript and frames; read its type, size, duration, width and height",
 };
 
 /** System methods with built-in behavior. */
@@ -31,7 +39,7 @@ export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "Trigg
 
 export const TOOL_PROVIDERS = [
   "REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "Handoff", "GitHub", "Linear", "Figma",
-  "MCP", "Chrome", "Workspace", "KV", "SQLite", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote",
+  "MCP", "Chrome", "Workspace", "KV", "SQLite", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote", "Transcribe", "SMS",
 ] as const;
 
 /** Content categories detectable by `Block(...)`. */
@@ -47,7 +55,10 @@ export const TOOL_RULES = ["AllowTools", "DenyTools", "AllowEffects", "ApproveTo
 export const TOOL_EFFECTS = ["read", "write", "external"] as const;
 
 /** Policy rules the runtime enforces deterministically. */
-export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", ...TOOL_RULES] as const;
+export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", "AllowMedia", ...TOOL_RULES] as const;
+
+/** What `AllowMedia(...)` can name: a kind, or one media type. */
+export const MEDIA_NAMES = ["image", "document", "audio", "video", "pdf", "png", "jpeg", "gif", "webp", "mpeg", "mp3", "wav", "mp4", "webm", "ogg", "flac", "aac", "quicktime", "mov"] as const;
 
 /**
  * A host for AllowHosts or a sandbox's hosts: ("pypi.org", or "*.pythonhosted.org" for it and its

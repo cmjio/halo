@@ -35,7 +35,9 @@ import { parseDuration } from "../parser/builtins.js";
 import { createMcpServer } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
-import { openStateStore, StateMirror, StateStoreError } from "./state-mirror.js";
+import { MirroredBlobStore, openStateStore, StateMirror, StateStoreError } from "./state-mirror.js";
+import { incomingText, twilioSignature, twiml } from "../runtime/providers/sms.js";
+import { collectMedia, FileBlobStore, isMediaRef, mapMedia, MediaBytes, mediaLabel } from "../runtime/media.js";
 import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
 import { loadPackageProviders } from "../registry/resolver.js";
 import { pausePath } from "../registry/hosted.js";
@@ -58,7 +60,12 @@ export interface ServeConfig {
   timezone?: string;
   schedules?: ScheduleConfig[];
   /** POST /hooks/<path> starts <pipeline>. With a secret, requests must carry it (or a GitHub signature). */
-  webhooks?: Array<{ path: string; pipeline: string; secret?: string }>;
+  /**
+   * `twilio`: the Twilio auth token ("Env.TWILIO_AUTH_TOKEN"): the request's signature is checked,
+   * and the pipeline gets the message as { from, to, text, media }. `reply: true` answers the
+   * sender with the run's output when it is text and ready within 10 seconds.
+   */
+  webhooks?: Array<{ path: string; pipeline: string; secret?: string; twilio?: string; reply?: boolean }>;
   /**
    * `slack`: a Slack incoming-webhook URL, to announce paused runs.
    * `webhook`: your app's URL. Halo POSTs there when a run completes, halts, fails or pauses,
@@ -100,6 +107,8 @@ export interface ServeConfig {
    * `keep` is how many to keep (default 50).
    */
   recordings?: { serve?: boolean; keep?: number };
+  /** How files reach models that can't take them: `transcribe` ("openai" or "gemini") for audio. */
+  media?: { transcribe?: string; transcribeModel?: string };
   /** Defaults for `halo evolve` and Studio's Evolve tab. */
   evolve?: EvolveConfig;
 }
@@ -358,6 +367,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     }
   }
   const runStore = new FileRunStore(join(stateDir, "runs"));
+  // Images and documents runs are given or make, by hash. With a store, each is copied up when made.
+  const blobs = mirror ? new MirroredBlobStore(stateDir, mirror.store) : new FileBlobStore(join(stateDir, "blobs"));
   /** Runs in progress, as they were after their last finished stage. */
   const progressStore = options.resumeRuns ? new FileRunStore(join(stateDir, "running")) : undefined;
   // With a store, everything a run keeps lives in the state folder, so it is all copied.
@@ -442,7 +453,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     }
     const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
     if (!own.length) continue;
-    const runtime = new HaloRuntime({ logger, ...kept, ...options.runtime, ...recorder, env, runStore, progressStore, onEvent }).load(ast);
+    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, ...options.runtime, ...recorder, env, runStore, progressStore, onEvent }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
@@ -467,7 +478,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     let rt = dryRuntimes.get(e.path);
     if (!rt) {
       // Thread state stays in memory, so a rehearsal never changes a real thread.
-      rt = new HaloRuntime({ logger, ...kept, ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:" }).load(e.ast);
+      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:" }).load(e.ast);
       for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
       mockForDryRun(rt, e.ast);
       dryRuntimes.set(e.path, rt);
@@ -515,7 +526,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const stateOf = (key: string) => (scheduleState[key] ??= { skipped: 0, missed: 0 });
   /** Which schedule started each run, so its outcome is recorded when the run ends (again, after a resume). */
   const scheduledRuns = new Map<string, string>();
-  const webhooks = new Map<string, { pipeline: string; secret?: string }>();
+  const webhooks = new Map<string, { pipeline: string; secret?: string; twilio?: string; reply?: boolean }>();
   for (const w of options.webhooks ?? []) {
     entry(w.pipeline);
     const path = w.path.replace(/^\/+|\/+$/g, "");
@@ -523,8 +534,10 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const secret = fromEnv(w.secret);
     // A secret that names an unset variable must not silently turn into "no secret".
     if (w.secret !== undefined && !secret) throw new ServeError(`Webhook /hooks/${path} has secret "${w.secret}", but it is empty or not set`);
-    if (secret === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
-    webhooks.set(path, { pipeline: w.pipeline, secret });
+    const twilio = fromEnv(w.twilio);
+    if (w.twilio !== undefined && !twilio) throw new ServeError(`Webhook /hooks/${path} has twilio "${w.twilio}", but it is empty or not set`);
+    if (secret === undefined && twilio === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
+    webhooks.set(path, { pipeline: w.pipeline, secret, twilio, reply: w.reply === true });
   }
   const slackUrl = fromEnv(options.notify?.slack);
   const callbackUrl = fromEnv(options.notify?.webhook);
@@ -690,7 +703,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (started.size > 2000) started.delete(started.keys().next().value!);
     logger.log(`[halo] ${pipeline} started by ${source}${dryRun ? " as a dry run" : ""} (run ${runId.slice(0, 8)})`);
     const rt = runtimeFor(e, dryRun);
-    const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun });
+    // An Image or Document argument may be a data: URI or an https URL; never a path on this machine.
+    const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun, media: "urls" });
     // A dry run's answers are made up, so it isn't kept as something to replay or learn from.
     track(runId, pipeline, dryRun ? work() : recorded(runId, pipeline, args, work));
     return { runId, duplicate: false };
@@ -926,6 +940,54 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     });
 
   // ── HTTP ──
+  /** A value with each image or document given the address to download it from. */
+  const linkMedia = (v: unknown): unknown => {
+    if (isMediaRef(v)) return { ...v, url: `/api/blobs/${v.sha256}` };
+    if (Array.isArray(v)) return v.map(linkMedia);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, linkMedia(x)]));
+    return v;
+  };
+  /**
+   * A run started with files: multipart/form-data, with `args` (JSON) for the rest. Each file
+   * field fills the parameter of its name: a list for an `Array<...>` parameter, else one file.
+   */
+  const uploadBody = async (req: Request, pipeline: string) => {
+    const form = await req.formData();
+    const text = (k: string) => (typeof form.get(k) === "string" ? (form.get(k) as string) : undefined);
+    let args: Record<string, unknown> = {};
+    try {
+      args = text("args") ? JSON.parse(text("args")!) : {};
+    } catch {
+      throw new ServeError(`The "args" field is not valid JSON`);
+    }
+    const params = entries.get(pipeline)?.decl.params ?? [];
+    const files = new Map<string, MediaBytes[]>();
+    for (const [k, v] of form.entries()) {
+      if (typeof v === "string") continue;
+      files.set(k, [...(files.get(k) ?? []), new MediaBytes(new Uint8Array(await v.arrayBuffer()), { name: v.name })]);
+    }
+    for (const [k, list] of files) args[k] = /^(Array|List)</.test(params.find((p) => p.name === k)?.type ?? "") || list.length > 1 ? list : list[0];
+    return { args, wait: text("wait") === "true", idempotencyKey: text("idempotencyKey"), dryRun: text("dryRun") === "true" };
+  };
+
+  /** An image is shown in place; anything else (a PDF) is a download. Never a type the browser would run. */
+  const blobResponse = async (sha256: string): Promise<Response> => {
+    const bytes = /^[0-9a-f]{64}$/.test(sha256) ? await blobs.get(sha256) : undefined;
+    if (!bytes) return json({ error: "No such file" }, 404);
+    const { sniff } = await import("../runtime/media.js");
+    const type = sniff(bytes)?.type ?? "application/octet-stream";
+    // Pictures, sound and video play in place; documents download.
+    const inline = /^(image|audio|video)\//.test(type);
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": type,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Content-Disposition": inline ? "inline" : `attachment; filename="${sha256.slice(0, 12)}${type === "application/pdf" ? ".pdf" : ""}"`,
+        "Cache-Control": "private, max-age=31536000, immutable",
+      },
+    });
+  };
   const authorized = (req: Request, url: URL) => {
     if (!token) return true;
     const header = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? url.searchParams.get("token") ?? "";
@@ -954,8 +1016,12 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     // (and a same-site Origin when the browser sends one) means only Studio and API clients get in.
     const refused = foreign(req, url);
     if (refused) return refused;
-    if (req.method === "POST" && !(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
-      return "POST requests to /api must be Content-Type: application/json";
+    const type = (req.headers.get("content-type") ?? "").toLowerCase();
+    // Files come as multipart/form-data, which any page could post; only with a header a page
+    // can't send to another site (Authorization, or Halo-Client) does it count as a client's.
+    if (req.method === "POST" && type.startsWith("multipart/form-data") && /^\/api\/pipelines\/\w+\/runs$/.test(url.pathname) && (req.headers.has("authorization") || req.headers.has("halo-client"))) return undefined;
+    if (req.method === "POST" && !type.startsWith("application/json")) {
+      return "POST requests to /api must be Content-Type: application/json (or multipart/form-data, with an Authorization or Halo-Client header, to start a run with files)";
     }
     return undefined;
   };
@@ -989,10 +1055,23 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     if (done) return new Response(`${head}<h2>${escapeHtml(done)}</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (!snap?.waitingFor) return new Response(`${head}<h2>This run is no longer waiting.</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     const message = snap.meta.paused?.message ?? (snap.waitingFor === "yield" ? "Approve this run?" : `Waiting for ${snap.waitingFor}`);
-    const action = `/approve/${runId}?sig=${sign(runId, linked!.pauseId)}`;
+    const sig = sign(runId, linked!.pauseId);
+    const action = `/approve/${runId}?sig=${sig}`;
+    // The images and documents in what is being approved, shown so a person sees what they say yes to.
+    const files = collectMedia(snap.current)
+      .map((m) => {
+        const src = escapeHtml(`/approve/${runId}/file/${m.sha256}?sig=${sig}`);
+        const name = escapeHtml(m.name ?? { image: "Image", document: "Document", audio: "Recording", video: "Video" }[m.$media]);
+        if (m.url) return `<p><a href="${escapeHtml(m.url)}" target="_blank" rel="noreferrer">${name}</a> (YouTube)</p>`;
+        if (m.$media === "audio") return `<p>${name}</p><audio src="${src}" controls preload="metadata" style="width:100%"></audio>`;
+        if (m.$media === "video") return `<p>${name}</p><video src="${src}" controls preload="metadata" style="max-width:100%;max-height:360px;border-radius:8px"></video>`;
+        return m.$media === "image" ? `<a href="${src}" target="_blank"><img src="${src}" alt="${name}" style="max-width:100%;max-height:360px;border-radius:8px;border:1px solid #e5e7eb"></a>` : `<p><a href="${src}">${name}</a> (PDF${m.pages ? `, ${m.pages} page${m.pages === 1 ? "" : "s"}` : ""})</p>`;
+      })
+      .join("\n");
     return new Response(
       `${head}<h2>${escapeHtml(snap.pipeline)} is waiting for you</h2>
 <p>${escapeHtml(message)}</p>
+${files}
 <details><summary>Current value</summary><pre>${escapeHtml(formatValue(snap.current))}</pre></details>
 <form method="post" action="${escapeHtml(action)}">
 <p><button class="approve" name="answer" value="approve">Approve</button><button name="answer" value="reject">Reject</button></p>
@@ -1117,7 +1196,18 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
       const result = await settled(runId);
       meter(who, name, runId, result, t0);
       if (!result) return json({ runId, status: "error", error: failures.get(runId) ?? "The run failed", code: "run_failed" }, 500);
-      return json({ runId, status: result.status, output: result.output });
+      // A consumer can't fetch this server's files, so each one in the answer goes inline.
+      let output: unknown;
+      try {
+        output = await mapMedia(result.output, async (ref) => {
+          const bytes = await blobs.get(ref.sha256);
+          if (!bytes) throw new Error(`the bytes of ${mediaLabel(ref)} are missing`);
+          return { ...ref, data: Buffer.from(bytes).toString("base64") };
+        });
+      } catch (err) {
+        return json({ runId, status: "error", error: `${name}'s output couldn't be sent: ${err instanceof Error ? err.message : String(err)}`, code: "media_output" }, 500);
+      }
+      return json({ runId, status: result.status, output });
     }
     if (path === "/api/pipelines" && req.method === "GET") {
       return json([...entries.values()].map((e) => ({ name: e.name, params: e.decl.params, returnType: e.decl.returnType })));
@@ -1155,12 +1245,21 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     port: options.port ?? 8080,
     hostname: host,
     development: false,
+    // A run's arguments may carry files: uploaded (multipart), or as data: URIs (a third larger than the file).
+    maxRequestBodySize: 256 * 1024 * 1024,
     ...(options.studio === false ? {} : { routes: { "/": studioPage } }),
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
       try {
         // Approval links carry their own signature; they work without the API token.
+        // So does a file the paused run shows, and only while that pause waits.
+        const approveFile = path.match(/^\/approve\/([\w-]+)\/file\/([0-9a-f]{64})$/);
+        if (approveFile && req.method === "GET") {
+          const linked = await linkedPause(approveFile[1]!, url);
+          if (!linked || !collectMedia(linked.snap.current).some((m) => m.sha256 === approveFile[2])) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
+          return blobResponse(approveFile[2]!);
+        }
         const approve = path.match(/^\/approve\/([\w-]+)$/);
         if (approve) {
           const runId = approve[1]!;
@@ -1188,6 +1287,27 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
           if (!target) return json({ error: "Unknown webhook" }, 404);
           const bytes = new Uint8Array(await req.arrayBuffer());
           const raw = new TextDecoder().decode(bytes);
+          const form = /^application\/x-www-form-urlencoded\b/i.test(req.headers.get("content-type") ?? "");
+          if (target.twilio) {
+            // Twilio signs the address it called (the public one, behind a proxy) and the form fields.
+            if (!form) return json({ error: "A Twilio webhook takes Twilio's form posts" }, 400);
+            const called = options.publicUrl ? `${options.publicUrl.replace(/\/+$/, "")}${url.pathname}${url.search}` : req.url;
+            if (!safeEqual(req.headers.get("x-twilio-signature") ?? "", twilioSignature(target.twilio, called, new URLSearchParams(raw)))) return json({ error: "Bad Twilio signature" }, 401);
+            let message;
+            try {
+              message = await incomingText(new URLSearchParams(raw), { token: target.twilio, fetch: options.fetch ?? fetch });
+            } catch (err) {
+              return json({ error: `Couldn't fetch the message's pictures: ${err instanceof Error ? err.message : String(err)}` }, 502);
+            }
+            const sid = message.twilio.MessageSid;
+            const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, message), `text from ${message.from || "Twilio"} (/hooks/${hook[1]})`, { idempotencyKey: sid ? `sms:${sid}` : undefined });
+            let reply: string | undefined;
+            if (target.reply && !begun.duplicate) {
+              const done = await Promise.race([settled(begun.runId), Bun.sleep(10_000).then(() => undefined)]);
+              if (done?.status === "completed" && typeof done.output === "string" && done.output.trim()) reply = done.output.trim();
+            }
+            return new Response(twiml(reply), { headers: { "Content-Type": "text/xml; charset=utf-8" } });
+          }
           if (target.secret) {
             const ghSig = req.headers.get("x-hub-signature-256");
             const ok = ghSig
@@ -1210,11 +1330,16 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
             body = mail;
             // The same message delivered twice is one run.
             messageId = mail.messageId;
+          } else if (form) {
+            // A form post: its fields as an object (a field sent more than once, as a list).
+            const fields: Record<string, string | string[]> = {};
+            for (const [k, v] of new URLSearchParams(raw)) fields[k] = k in fields ? [fields[k]!, v].flat() : v;
+            body = fields;
           } else {
             try {
               body = raw.trim() ? JSON.parse(raw) : undefined;
             } catch {
-              return json({ error: "Webhook body must be JSON (or an email, as message/rfc822)" }, 400);
+              return json({ error: "Webhook body must be JSON, a form post, or an email (message/rfc822)" }, 400);
             }
           }
           const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`, { idempotencyKey: req.headers.get("idempotency-key") || (messageId ? `mail:${messageId}`.slice(0, 255) : undefined) });
@@ -1242,6 +1367,9 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         if (path === "/api/health") return json({ ok: true, pipelines: entries.size });
 
+        const blob = path.match(/^\/api\/blobs\/([0-9a-f]{64})$/);
+        if (blob && req.method === "GET") return blobResponse(blob[1]!);
+
         if (path === "/api/evolve" || path.startsWith("/api/evolve/")) {
           const handled = await evolveRoutes(req, path, readJson);
           if (handled) return handled;
@@ -1262,13 +1390,14 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         const startRun = path.match(/^\/api\/pipelines\/([\w]+)\/runs$/);
         if (startRun && req.method === "POST") {
-          const body = ((await readJson(req)) ?? {}) as { args?: Record<string, unknown>; wait?: boolean; idempotencyKey?: string; dryRun?: boolean };
+          const multipart = (req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data");
+          const body = (multipart ? await uploadBody(req, startRun[1]!) : ((await readJson(req)) ?? {})) as { args?: Record<string, unknown>; wait?: boolean; idempotencyKey?: string; dryRun?: boolean };
           const dryRun = body.dryRun === true || /^(1|true)$/i.test(req.headers.get("halo-dry-run") ?? "");
           const { runId, duplicate } = startOnce(startRun[1]!, body.args ?? {}, "API", { idempotencyKey: req.headers.get("idempotency-key") ?? body.idempotencyKey, dryRun });
           const extra = { ...(duplicate ? { duplicate: true } : {}), ...(dryRun || options.dryRun ? { dryRun: true } : {}) };
           if (!body.wait) return json({ runId, status: inflight.has(runId) ? "running" : (recent.get(runId)?.status ?? "running"), ...extra }, 202);
           const result = await settled(runId);
-          return json(result ? { runId, status: result.status, output: result.output, cost: result.context.meta.cost, ...extra } : { runId, status: "error", error: failures.get(runId), ...extra });
+          return json(result ? { runId, status: result.status, output: linkMedia(result.output), cost: result.context.meta.cost, ...extra } : { runId, status: "error", error: failures.get(runId), ...extra });
         }
 
         // `running` says this server is working on it now; a run with no end and no `running` was started elsewhere (the CLI) or cut short.

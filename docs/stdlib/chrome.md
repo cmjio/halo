@@ -27,7 +27,7 @@ An agent can use it too (`Agent.task(tool: Web, ...)`): it sees each method belo
 | `html` | `selector` (optional) | The page's HTML, or the element's outer HTML |
 | `links` | `limit` (default 200) | `[{ text, href }]` |
 | `wait` | `selector`, `timeout_ms` (default 10000) | `{ selector, found, waited_ms }` (`found: false` on timeout, not an error) |
-| `screenshot` | `path` (optional), `fullPage` | `{ path, bytes }`, or `{ mimeType, base64 }` with no path |
+| `screenshot` | `path` (optional), `fullPage` | `{ path, bytes }`, or `{ image }` with no path: an [image](/guide/files) a model the result reaches is sent |
 | `back` | | `{ wentBack, url, title }` |
 | `evaluate` | `script` | The expression's value. Only with `allowScript: true` |
 

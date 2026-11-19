@@ -5,7 +5,7 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | Provider | What it does |
 |---|---|
 | `REST` / `GET` | HTTP GET, JSON or text response |
-| `POST` | HTTP POST with a JSON body |
+| `POST` | HTTP POST with a JSON, form or multipart body; can send files |
 | `PostgreSQL` / `SQL` | SQL queries, read-only by default |
 | `Bash` | Run a shell command |
 | `Browser` | Fetch a page's readable text |
@@ -16,7 +16,9 @@ Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directl
 | `KV` | A key-value store in a local SQLite file (see [Local Tools](./local-tools.md)) |
 | `SQLite` | A SQLite database file in the project: parameterised reads and writes, read-only by default (see [SQLite](./sqlite.md)) |
 | `Code` | Run a JavaScript, TypeScript or Python snippet in its own process (see [Local Tools](./local-tools.md)) |
-| `Documents` | Text from text, HTML, CSV, JSON, Word and PDF files (see [Local Tools](./local-tools.md)) |
+| `Documents` | Text from text, HTML, CSV, JSON, Word, PowerPoint, email and PDF files (see [Local Tools](./local-tools.md)) |
+| `Transcribe` | Speech to text, with OpenAI or Gemini (see [Files](../guide/files.md#audio-and-transcription)) |
+| `SMS` | Send text messages through Twilio (see [Files](../guide/files.md#text-messages)) |
 | `Clock` | The date and time, date arithmetic, timezones (see [Utility Tools](./utility-tools.md)) |
 | `Calc` | Exact arithmetic expressions and statistics (see [Utility Tools](./utility-tools.md)) |
 | `Data` | Filter, sort, group, aggregate, join and diff JSON; CSV (see [Utility Tools](./utility-tools.md)) |
@@ -73,7 +75,7 @@ pipeline Issues(repo: String) -> Result:
 - `apiKey:` adds `Authorization: Bearer …`.
 - **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`; a method named `get`, `fetch`, `request`, `call`, `execute`, or `send` (or a call by an agent) requests just `base`. Named arguments become query parameters. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments (URL-encoded, so a value can't add path segments or a query), which are then not sent again as parameters.
 - A request must stay under the declared URL: a `path:` that climbs out with `../` or names another host is refused, and so is one with `?` or `#` (pass query parameters as named arguments or `query:`).
-- **POST** sends the named arguments as a JSON body to `base + path`. The method name is ignored. A model that chooses the call can't set `path` unless the tool is declared `& Unlocked("path")` (see [Rules on a tool's arguments](#rules-on-a-tool-s-arguments)).
+- **POST** sends the named arguments as a JSON body to `base + path`, or with `body: "form"` as a form, or with `body: "multipart"` as an upload. A file in the arguments goes as a `data:` URI in JSON (`files: "base64"` for bare base64) and as a file part in multipart; a form or a GET request can't carry one (see [Files to tools](../guide/files.md#files-to-tools)). The method name is ignored. A model that chooses the call can't set `path` unless the tool is declared `& Unlocked("path")` (see [Rules on a tool's arguments](#rules-on-a-tool-s-arguments)).
 - `idempotencyKey: true` on a `POST` declaration sends the call's [idempotency key](#idempotency-keys) as an `Idempotency-Key` header. A header name (`idempotencyKey: "X-Request-Id"`) sends it as that header, and `"body.<field>"` puts it in the JSON body.
 - Only what you pass is sent: the flowing value is never added implicitly. An explicit first positional argument is sent as `input` (`sendInput: false` on the declaration turns that off too).
 - 408, 429, and 5xx responses are retryable under `@retry`.
@@ -152,7 +154,7 @@ pipeline Send(report: String) -> Result:
 | `read` | `id:` (from `list`), `folder:` | One message with `text`, `html` and `attachments` | read |
 | `mark` | `id:`, `read:` (`false` marks it unread) | `{ id, unread }` | external |
 
-A message is `{ id, from, fromName, to, cc, subject, date, unread, snippet, messageId, inReplyTo }`, plus `text`, `html` and `attachments` (name, type and size; not the contents) from `read` or `list(full: true)`. It is the same shape whichever service it came from. `list` and `read` never mark anything read.
+A message is `{ id, from, fromName, to, cc, subject, date, unread, snippet, messageId, inReplyTo }`, plus `text`, `html` and `attachments` from `read` or `list(full: true)`. Each attachment has its name, type and size; one Halo can read (an image, PDF, Word, PowerPoint or text file) also has `file`, a [file](../guide/files.md) a model the message reaches is sent. It is the same shape whichever service it came from. `list` and `read` never mark anything read.
 
 `from:`, `to:` and `reply_to:` can be set on the declaration. The first argument is the service's secret:
 

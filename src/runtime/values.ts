@@ -1,4 +1,5 @@
 import { HaloError } from "./errors.js";
+import { isMediaRef, mediaLabel } from "./media-ref.js";
 /** Helpers for walking, formatting, and parsing runtime values. */
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -60,14 +61,23 @@ export function pick(value: unknown, fields: string[], maxChars = Infinity): unk
 export function formatValue(v: unknown): string {
   if (v === undefined) return "";
   if (typeof v === "string") return v;
+  // A media value reads as its label wherever a value becomes text, never as its fields.
+  if (isMediaRef(v)) return mediaLabel(v);
   try {
-    return JSON.stringify(v, null, 2) ?? String(v);
+    const text = JSON.stringify(v, null, 2) ?? String(v);
+    return text.includes('"$media"') ? JSON.stringify(v, (_k, x: unknown) => (isMediaRef(x) ? mediaLabel(x) : x), 2) : text;
   } catch (err) {
     if (err instanceof RangeError) throw new HaloError("A value is nested too deeply to use (thousands of levels of lists or objects)", { code: "VALUE_TOO_DEEP" });
     // A value that contains itself: show the repeat instead of failing.
     const seen = new WeakSet<object>();
     return JSON.stringify(v, (_k, x: unknown) => (x && typeof x === "object" ? (seen.has(x) ? "[Circular]" : (seen.add(x), x)) : x), 2) ?? "";
   }
+}
+
+/** A value as compact JSON, with each media value as its label. */
+export function compactJson(v: unknown): string {
+  const text = JSON.stringify(v) ?? "null";
+  return text.includes('"$media"') ? (JSON.stringify(v, (_k, x: unknown) => (isMediaRef(x) ? mediaLabel(x) : x)) ?? "null") : text;
 }
 
 /**

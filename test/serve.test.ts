@@ -482,7 +482,7 @@ describe("halo serve", () => {
       // A page on another site can send a "simple" text/plain POST without a preflight
       const plain = await fetch(url, { method: "POST", headers: { "Content-Type": "text/plain" }, body });
       expect(plain.status).toBe(403);
-      expect(await plain.json()).toEqual({ error: "POST requests to /api must be Content-Type: application/json" });
+      expect(await plain.json()).toEqual({ error: "POST requests to /api must be Content-Type: application/json (or multipart/form-data, with an Authorization or Halo-Client header, to start a run with files)" });
       expect((await post(url, { args: { n: 1 } }, { Origin: "https://evil.example" })).status).toBe(403);
       // DNS rebinding: an attacker's name pointed at 127.0.0.1
       expect((await fetch(`${s.url}/api/runs`, { headers: { Host: "attacker.example" } })).status).toBe(403);

@@ -27,6 +27,7 @@ agent Refunder [openai/gpt-4o-mini]
 | `MatchRegex("pattern")` | answer | Fails unless the pattern matches |
 | `Validate("field", "op", value)` | answer | Compares a field of the JSON answer with a literal or a `"context.…"` path. `op` is one of `== != < <= > >=`. Numbers compare as numbers (`"4"` counts as 4); `true`, `[]`, and `""` are not numbers, so `<` and `>` fail on them. |
 | `LogViolation()` | — | Also logs this policy's violations with `logger.warn` |
+| `AllowMedia(kind, ...)` | images and documents sent to the agent | Lets an agent with `Block` or `Redact` be sent these kinds of file (`image`, `document`, `pdf`, `png`, `jpeg`, `gif`, `webp`), and limits any agent to them. See [Images and documents](#images-and-documents) |
 
 Redaction runs before blocking, so `Redact(Email) & Block(Email)` never blocks.
 
@@ -36,6 +37,10 @@ Both apply everywhere text crosses the agent's boundary, so a model talked into 
 - **Out:** the answer, and the arguments of every tool call the agent chooses. A call whose arguments a `Block` rule matches is refused (a violation with `phase: "tool"`), and `Redact` masks the arguments before the tool sees them.
 
 They also read the text the ways a model can be asked to disguise it: look-alikes folded (fullwidth and other-script digits, accents, invisible characters, Cyrillic and Greek letters that look Latin, dash and space look-alikes, soft hyphens), HTML entities and `%` escapes decoded, digits spread out or split by `_`, `/`, `*` or HTML tags (`1 2 3 - 4 5 - 6 7 8 9`), emails spelled out (`bob [at] example [dot] com`, `bob at example dot com`), defanged IPs (`10[.]0[.]0[.]1`), and base64 or hex runs decoded. The word categories (`PromptInjection`, `DestructiveOps`, `Profanity`) also read the text with comments and tags removed (`DROP/**/TABLE`), spread-out letters joined (`I-g-n-o-r-e`), and digits for letters undone (`1gn0re`). Objects are read field by field (keys and numbers too), and an output's redacted or blocked text is what telemetry and Studio keep.
+
+### Images and documents
+
+`Block` and `Redact` read text, so they can't see what is in a picture, a PDF, a recording or a video. An agent with either rule is sent none of those [files](../guide/files.md) unless one of its policies says `AllowMedia(...)`: the call is refused with a violation (`rule: "AllowMedia"`, `phase: "input"`), and an image a tool returns to it is left out, with the agent told why. A file's name is part of the text the rules read.
 
 The detectors are patterns, so they are one layer, not a guarantee: they can't see a value split across several fields, spelled out in words, or in a cipher. What `Redact` removes from the input never reaches the model, so the dependable way to keep a value out of an answer is to redact it on the way in, or not pass it at all (`System.Pick`).
 

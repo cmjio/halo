@@ -1,3 +1,4 @@
+import { MediaBytes } from "../src/runtime/media";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -88,7 +89,7 @@ describe.skipIf(!chrome)("Chrome provider", () => {
     expect(back.title).toBe("Form page");
   }, 60_000);
 
-  test("screenshot to a file and as base64", async () => {
+  test("screenshot to a file and as an image", async () => {
     const dir = mkdtempSync(join(process.cwd(), ".chrome-test-"));
     try {
       const rel = relative(process.cwd(), join(dir, "shot.png"));
@@ -97,9 +98,11 @@ describe.skipIf(!chrome)("Chrome provider", () => {
       expect(saved.bytes).toBeGreaterThan(100);
       const bytes = new Uint8Array(await Bun.file(rel).arrayBuffer());
       expect([...bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+      // Without a path, the bytes come back for the runtime to store as an image value.
       const inline = await invoke(call("screenshot"));
-      expect(inline.mimeType).toBe("image/png");
-      expect(inline.base64.length).toBeGreaterThan(100);
+      expect(inline.image).toBeInstanceOf(MediaBytes);
+      expect(inline.image.name).toBe("screenshot.png");
+      expect([...inline.image.bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
       await expect(invoke(call("screenshot", { path: join(tmpdir(), "x.png") }))).rejects.toThrow(/outside/);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -11,6 +11,9 @@ export function mockEverything(rt: HaloRuntime, ast: ParseResult, live: Set<stri
   const preview = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").slice(0, 80);
   const mocks: Record<string, unknown> = {
     "*": (req: { target: string; prompt?: string }) => `[mock ${req.target}] ${preview(req.prompt)}`,
+    // The runtime's own transcription calls a paid service: a rehearsal says what it would have done.
+    "Media.transcript": (req: { args: unknown[] }) => ({ text: `[mock transcript of ${(req.args[0] as { name?: string })?.name ?? "the recording"}]`, model: "mock", cost: 0 }),
+    "Media.digest": (req: { args: unknown[] }) => ({ transcript: { text: `[mock transcript of ${(req.args[0] as { name?: string })?.name ?? "the video"}]` }, frames: [] }),
   };
   for (const t of [...ast.tools, ...ast.stores]) {
     if (live.has(t.name)) continue;
