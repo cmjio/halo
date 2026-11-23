@@ -64,7 +64,7 @@ runs:
         echo "dir=$RUNNER_TOOL_CACHE/halo/$version" >> "$GITHUB_OUTPUT"
 
     - id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ steps.version.outputs.dir }}
         key: halo-${{ steps.version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
