@@ -136,7 +136,7 @@ jobs:
       CHANNEL: ${{ needs.plan.outputs.channel }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist/release
@@ -160,7 +160,7 @@ jobs:
       CHANNEL: ${{ needs.plan.outputs.channel }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist/release
@@ -206,7 +206,7 @@ jobs:
       CHANNEL: ${{ needs.plan.outputs.channel }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist/release
@@ -273,7 +273,7 @@ jobs:
           node-version: 24
       # Trusted publishing needs npm 11.5.1 or later.
       - run: npm install -g npm@11
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist/release
@@ -313,7 +313,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist/release
@@ -350,7 +350,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Set the version
         run: jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist/release
