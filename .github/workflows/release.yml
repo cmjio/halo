@@ -224,7 +224,7 @@ jobs:
           esac
           echo "TAGS=$tags" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: The amd64 image runs
         run: |
           docker buildx build --platform linux/amd64 --load -t halo:test -f docker/Dockerfile ctx
