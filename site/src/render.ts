@@ -47,39 +47,103 @@ function summarize(target: string, value: unknown): string {
   return clip(JSON.stringify(v), 200);
 }
 
-export function runHtml(data: SiteData): string {
+export interface RunCall {
+  effect: string;
+  target: string;
+  args: string;
+  result: string;
+  ok: boolean;
+}
+export interface RunStep {
+  n: number;
+  /** "model" for the agent's turns, "pipeline" for a call the pipeline makes itself. */
+  who: "model" | "pipeline";
+  calls: RunCall[];
+  /** The model's final answer, on the step where it stops calling tools. */
+  answer?: string;
+}
+export interface RunSummary {
+  command: string;
+  model: string;
+  steps: RunStep[];
+  seconds: string;
+  cost: string;
+  replayMs: number;
+  modelCalls: number;
+  toolCalls: number;
+  /** Tool calls the model asked for; the rest are the pipeline's own. */
+  modelToolCalls: number;
+  tally: string;
+}
+
+/** A Code.edit's old and new text, cut to the first line that changed, so the edit is visible in one line. */
+function editedLines(target: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (target !== "Code.edit" || typeof args.old !== "string" || typeof args.new !== "string") return args;
+  const a = args.old.split("\n"), b = args.new.split("\n");
+  const i = a.findIndex((line, k) => line !== b[k]);
+  if (i < 0) return args;
+  return { ...args, old: a[i]!.trim(), new: (b[i] ?? "").trim() };
+}
+
+/** The recorded fixer run as steps: each model turn with the tool calls it asked for, then the pipeline's own checks. */
+export function runSteps(data: Pick<SiteData, "fixerRun" | "providers">): RunSummary {
   const run = data.fixerRun;
   const effects = new Map<string, string>([["Tests.run", "external"], ...(data.providers.Workspace?.methods ?? []).map((m) => [`Code.${m.name}`, m.effect] as [string, string])]);
   const calls = run.lines.flatMap((l) => (l.c ? [l.c] : []));
-  const steps: string[] = [];
-  let n = 0;
+  const call = (target: string, args: Record<string, unknown>, value: unknown): RunCall => {
+    const result = value === undefined ? "" : summarize(target, value);
+    return {
+      effect: effects.get(target) ?? "unknown",
+      target,
+      args: Object.entries(editedLines(target, args))
+        .map(([key, v]) => `${key}: ${JSON.stringify(typeof v === "string" ? clip(v.split("\n")[0]!, 70) : v)}`)
+        .join(", "),
+      result,
+      ok: /\b0 fail\b|"replacements":1/.test(result),
+    };
+  };
+  const steps: RunStep[] = [];
+  let modelToolCalls = 0;
   for (let i = 0; i < calls.length; i++) {
     const c = calls[i]!;
-    if (c.kind !== "agent") continue;
-    n++;
-    if (!c.toolCalls?.length) {
-      steps.push(`<li class="step" data-n="${n}"><div class="who">model → answer</div><div class="answer">${escapeHtml(clip(String(c.value), 420))}</div></li>`);
+    const n = steps.length + 1;
+    if (c.kind === "tool") {
+      // Not answering a model's request: a step of the pipeline itself.
+      const t = c.target.split(".");
+      const v = c.value as { command?: string } | undefined;
+      const args = (c as { args?: Record<string, unknown> }).args ?? (v?.command ? { command: v.command } : {});
+      steps.push({ n, who: "pipeline", calls: [call(`${t[0]}.${t[1]}`, args, c.value)] });
       continue;
     }
-    const parts = c.toolCalls.map((t, k) => {
-      const target = t.name.replace("__", ".");
-      const result = calls[i + 1 + k];
-      const args = Object.entries(t.args)
-        .map(([key, v]) => `${key}: ${JSON.stringify(typeof v === "string" ? clip(v.split("\n")[0]!, 70) : v)}`)
-        .join(", ");
-      const out = result?.kind === "tool" ? summarize(target, result.value) : "";
-      const ok = /\b0 fail\b|"replacements":1/.test(out);
-      const eff = effects.get(target) ?? "unknown";
-      return `<div class="call"><span class="effect ${eff}">${eff}</span><span class="target">${target}</span><span class="args">(${escapeHtml(args)})</span></div>${out ? `<div class="result${ok ? " ok" : ""}">${escapeHtml(out)}</div>` : ""}`;
+    if (c.kind !== "agent") continue;
+    if (!c.toolCalls?.length) {
+      steps.push({ n, who: "model", calls: [], answer: clip(String(c.value), 420) });
+      continue;
+    }
+    modelToolCalls += c.toolCalls.length;
+    steps.push({
+      n,
+      who: "model",
+      calls: c.toolCalls.map((t, k) => {
+        const result = calls[i + 1 + k];
+        return call(t.name.replace("__", "."), t.args, result?.kind === "tool" ? result.value : undefined);
+      }),
     });
-    steps.push(`<li class="step" data-n="${n}"><div class="who">model → ${c.toolCalls.length} tool call${c.toolCalls.length > 1 ? "s" : ""}</div>${parts.join("")}</li>`);
     i += c.toolCalls.length;
   }
-  const agentCalls = calls.filter((c) => c.kind === "agent").length;
-  const toolCalls = calls.filter((c) => c.kind === "tool").length;
-  return `<div class="run-head"><span>$ halo run examples/engineering/software-team.halo --pipeline FixUntilGreen</span><span>${run.model}</span></div>
-    <ol>${steps.join("")}</ol>
-    <div class="run-foot"><span>${(run.durationMs / 1000).toFixed(1)}s · ${agentCalls} model calls · ${toolCalls} tool calls · $${run.cost.toFixed(4)}</span><span class="ok">2 pass · 0 fail</span></div>`;
+  const last = [...steps].reverse().flatMap((s) => s.calls).find((c) => c.target === "Tests.run");
+  return {
+    command: "halo run examples/engineering/software-team.halo --pipeline FixUntilGreen",
+    model: run.model,
+    steps,
+    seconds: (run.durationMs / 1000).toFixed(1),
+    cost: run.cost.toFixed(4),
+    replayMs: run.replayMs,
+    modelCalls: calls.filter((c) => c.kind === "agent").length,
+    toolCalls: calls.filter((c) => c.kind === "tool").length,
+    modelToolCalls,
+    tally: last?.result.match(/\d+ pass \d+ fail/)?.[0]?.replace(/ (\d+ fail)/, " · $1") ?? "",
+  };
 }
 
 // ── Providers ──

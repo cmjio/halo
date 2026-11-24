@@ -2,7 +2,7 @@
  * Custom Metrickle events for halolang.com. Pageviews, web vitals, rage/dead clicks and
  * errors are automatic (m.js, loaded in config.ts); these are the actions pages can't show:
  *
- *   install_command_copied  the copy button on a code block holding an install command
+ *   install_command_copied  the copy button on a code block holding an install command, or the home page's install box
  *   download_clicked        a link to /dl/… or the install scripts
  *   outbound_click          a link to another host (registry.halolang.com, GitHub, …)
  *   playground_shared       the playground's Share button
@@ -42,6 +42,13 @@ function installMethod(code: string): string {
 function onClick(ev: MouseEvent) {
   const target = ev.target as Element | null;
   if (!target?.closest) return;
+
+  // The home page's install box names what it copies.
+  const installCopy = target.closest("[data-install-copy]");
+  if (installCopy) {
+    track("install_command_copied", { method: installMethod(installCopy.getAttribute("data-install-copy") ?? "") });
+    return;
+  }
 
   // VitePress code blocks: <div class="language-*"><button class="copy"> … <pre><code>
   const copy = target.closest("button.copy");
