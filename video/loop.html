@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The home page's hero loop. A pure function of time: window.render(t). loop.ts fills
+     window.SCENE with real data before load and screenshots each frame. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=block" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0e1013; --panel: #12151a; --raise: #161a20; --line: #232830; --line-2: #2f353e;
+    --fg: #e4e7eb; --fg-2: #c3c8cf; --muted: #9198a2; --faint: #6c737d;
+    --amber: #f3b44c; --amber-wash: rgba(243, 180, 76, 0.14);
+    --ok: #6fcf97; --ok-wash: rgba(111, 207, 151, 0.1); --err: #f2867a; --err-wash: rgba(242, 134, 122, 0.12);
+    --read: #56d39a; --write: #f3b44c; --external: #ff7b72;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; background: var(--bg); color: var(--fg); font-family: "IBM Plex Sans", sans-serif; -webkit-font-smoothing: antialiased; }
+  .mono { font-family: "IBM Plex Mono", monospace; font-variant-ligatures: none; }
+  .glow { position: absolute; inset: 0; background: radial-gradient(760px 420px at 50% 42%, rgba(243, 180, 76, 0.06), transparent 70%); }
+  .scene { position: absolute; inset: 0; opacity: 0; will-change: opacity, transform; }
+  .caption { position: absolute; left: 0; right: 0; top: 58px; text-align: center; font-size: 40px; font-weight: 600; letter-spacing: -0.02em; }
+  .caption em { font-style: normal; color: var(--amber); }
+
+  /* syntax: the site's dark palette */
+  .t-kw { color: #c792ea; } .t-op { color: #f3b44c; } .t-string { color: #a5e075; } .t-comment { color: #637082; }
+  .t-number, .t-directive { color: #f78c6c; } .t-type { color: #82aaff; } .t-model { color: #89ddff; } .t-ph { color: #ffcb6b; } .t-decl { color: var(--fg); font-weight: 600; }
+
+  /* logo */
+  #logo { display: grid; place-items: center; align-content: center; gap: 26px; }
+  #logo img { width: 560px; }
+  #logo p { font: 500 22px "IBM Plex Mono", monospace; color: var(--muted); letter-spacing: 0.02em; }
+
+  .card { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.8); overflow: hidden; }
+  .card-head { height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--raise); font: 500 16px "IBM Plex Mono", monospace; color: var(--faint); }
+  .card-head i { width: 11px; height: 11px; border-radius: 50%; background: var(--line-2); display: inline-block; }
+
+  /* refusal */
+  #policy { left: 120px; right: 120px; top: 140px; }
+  #policy pre { padding: 18px 26px 20px; font-size: 21px; line-height: 36px; white-space: pre; }
+  #policy .ln { display: block; margin: 0 -26px; padding: 0 26px; border-left: 3px solid transparent; }
+  #policy .ln.hit { background: var(--amber-wash); border-left-color: var(--amber); }
+  .calls { position: absolute; left: 120px; right: 120px; top: 432px; display: grid; gap: 14px; }
+  .call { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; align-items: center; padding: 16px 22px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
+  .call .who { font: 500 18px "IBM Plex Mono", monospace; color: var(--muted); }
+  .call .what { font: 500 23px "IBM Plex Mono", monospace; color: var(--fg); white-space: pre; }
+  .call .what .chip { font: 600 14px "IBM Plex Mono", monospace; color: var(--write); border: 1.5px solid currentColor; border-radius: 6px; padding: 3px 7px 2px; margin-right: 12px; position: relative; top: -3px; }
+  .call .verdict { grid-column: 2; font: 500 19px "IBM Plex Mono", monospace; white-space: pre; }
+  .call.refused { border-color: rgba(242, 134, 122, 0.55); background: linear-gradient(var(--err-wash), var(--err-wash)), var(--panel); }
+  .call.refused .verdict { color: var(--err); }
+  .call.allowed { border-color: rgba(111, 207, 151, 0.45); background: linear-gradient(var(--ok-wash), var(--ok-wash)), var(--panel); }
+  .call.allowed .verdict { color: var(--ok); }
+  .stamp { display: inline-block; font: 600 15px "IBM Plex Mono", monospace; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 9px 3px; border-radius: 6px; margin-right: 12px; }
+  .refused .stamp { background: var(--err); color: #1a0f0d; }
+  .allowed .stamp { background: var(--ok); color: #0c1a12; }
+
+  /* plan */
+  #term { left: 150px; right: 150px; top: 132px; }
+  #term pre { padding: 16px 26px 18px; font-size: 18px; line-height: 27px; white-space: pre; color: var(--fg-2); }
+  #term .l { display: block; }
+  #term .cmd { color: var(--fg); font-weight: 500; }
+  #term .cmd b { color: var(--faint); font-weight: 400; }
+  #term .dim { color: var(--faint); }
+  #term .read { color: var(--read); } #term .write { color: var(--write); } #term .external { color: var(--external); }
+  #term .num { color: var(--fg); font-weight: 600; }
+  #term .worst { margin: 0 -26px; padding: 0 26px; border-left: 3px solid transparent; }
+  #term .worst.hit { background: var(--amber-wash); border-left-color: var(--amber); }
+  #term .worst .lim { color: var(--amber); }
+
+  /* replay */
+  .bars { position: absolute; left: 150px; right: 150px; top: 230px; display: grid; gap: 54px; }
+  .bar-row { display: grid; gap: 14px; }
+  .bar-row .label { display: flex; justify-content: space-between; align-items: baseline; font: 500 25px "IBM Plex Mono", monospace; }
+  .bar-row .label b { font-weight: 500; color: var(--fg); }
+  .bar-row .label b span { color: var(--faint); }
+  .bar-row .label em { font-style: normal; color: var(--muted); }
+  .bar-row.replay .label em { color: var(--amber); font-weight: 600; }
+  .track { height: 22px; border-radius: 11px; background: var(--raise); border: 1px solid var(--line); overflow: hidden; }
+  .fill { height: 100%; width: 0; border-radius: 11px; background: var(--muted); }
+  .replay .fill { background: var(--amber); }
+  .note { position: absolute; left: 150px; right: 150px; top: 520px; text-align: center; font-size: 22px; color: var(--muted); }
+  .note code { font: 500 20px "IBM Plex Mono", monospace; color: var(--fg-2); }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+
+<div class="scene" id="logo">
+  <img src="assets/halolang-mark.png" alt="HaloLang">
+  <p>a language for AI pipelines</p>
+</div>
+
+<div class="scene" id="refuse">
+  <div class="caption">Policy checks every tool call <em>before it runs</em>.</div>
+  <div class="card" id="policy"><div class="card-head"><i></i><i></i><i></i><span>software-team.halo</span></div><pre class="mono" id="policy-code"></pre></div>
+  <div class="calls" id="calls"></div>
+</div>
+
+<div class="scene" id="plan">
+  <div class="caption">Plan before: what it could do, <em>and what it could cost</em>.</div>
+  <div class="card" id="term"><div class="card-head"><i></i><i></i><i></i><span>~/project</span></div><pre class="mono" id="plan-out"></pre></div>
+</div>
+
+<div class="scene" id="replay">
+  <div class="caption">Replay after: exactly what it did, <em>for $0</em>.</div>
+  <div class="bars">
+    <div class="bar-row run"><div class="label"><b><span>$ </span>halo run</b><em id="run-label"></em></div><div class="track"><div class="fill" id="run-fill"></div></div></div>
+    <div class="bar-row replay"><div class="label"><b><span>$ </span>halo replay</b><em id="replay-label"></em></div><div class="track"><div class="fill" id="replay-fill"></div></div></div>
+  </div>
+  <p class="note">The fixer's recorded run, fed back from disk: no model or tool calls.</p>
+</div>
+
+<script>
+const S = window.SCENE;
+const DURATION = 16;
+window.DURATION = DURATION;
+window.POSTER_AT = 7.2;
+
+const clamp = (x) => Math.max(0, Math.min(1, x));
+const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);
+const span = (t, a, b) => clamp((t - a) / (b - a));
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const $ = (id) => document.getElementById(id);
+
+// A scene's visibility: fades in over [a, a+in], out over [b-out, b].
+function show(el, t, a, b, fin = 0.4, fout = 0.4) {
+  const o = Math.min(ease(span(t, a, a + fin)), 1 - ease(span(t, b - fout, b)));
+  el.style.opacity = o;
+  el.style.transform = `translateY(${(1 - ease(span(t, a, a + fin))) * 14}px)`;
+  return o > 0;
+}
+
+// ── Static content ──
+$("policy-code").innerHTML = S.policy.map((h, i) => `<span class="ln" data-i="${i}">${h || " "}</span>`).join("");
+$("calls").innerHTML = S.calls.map((c, i) => `
+  <div class="call" id="call-${i}">
+    <div class="who">Fixer →</div>
+    <div class="what"><span class="chip">write</span><span class="typed"></span></div>
+    <div class="verdict"></div>
+  </div>`).join("");
+
+function planLine(raw) {
+  if (raw.startsWith("$ ")) return `<span class="cmd"><b>$ </b>${esc(raw.slice(2))}</span>`;
+  let h = esc(raw)
+    .replace(/(may call )([\w.]+)(: )(read|write|external)/, '<span class="dim">$1</span>$2$3<span class="$4">$4</span>')
+    .replace(/(≤ \$[\d.]+)/, '<span class="num">$1</span>')
+    .replace(/^(\s+chooses its own calls.*|\s+…)$/, '<span class="dim">$1</span>')
+    .replace(/^(Acts on the world without asking:|Plan for)/, '<span class="dim">$1</span>');
+  if (/^Worst-case model cost:/.test(raw)) h = h.replace(/^(Worst-case model cost:)(.*?)(, but )(.*)$/, '<span class="dim">$1</span><span class="num">$2</span>$3<span class="lim">$4</span>');
+  return h;
+}
+$("plan-out").innerHTML = S.plan.map((l) => `<span class="l${/^Worst-case/.test(l) ? " worst" : ""}">${planLine(l) || " "}</span>`).join("");
+const planEls = [...$("plan-out").children];
+$("run-label").textContent = `${S.run.seconds}s · $${S.run.cost}`;
+$("replay-label").textContent = `${S.run.replayMs} ms · $0`;
+
+function type(el, text, t, a, b) {
+  const n = Math.round(text.length * span(t, a, b));
+  el.textContent = text.slice(0, n);
+}
+
+window.render = function (t) {
+  // Logo: on screen at the start and again at the end, so the loop joins up.
+  const logo = $("logo");
+  const lo = t < 8 ? 1 - ease(span(t, 1.5, 2.0)) : ease(span(t, 15.3, 15.85));
+  logo.style.opacity = lo;
+  logo.style.transform = `scale(${0.985 + 0.015 * lo})`;
+
+  // 1. Refusal
+  if (show($("refuse"), t, 2.0, 7.9)) {
+    S.calls.forEach((c, i) => {
+      const el = $(`call-${i}`);
+      const t0 = i === 0 ? 2.7 : 5.3;
+      el.style.opacity = ease(span(t, t0 - 0.2, t0 + 0.1));
+      type(el.querySelector(".typed"), c.call, t, t0, t0 + 0.75);
+      const v = t0 + (i === 0 ? 1.45 : 1.0);
+      const on = t >= v;
+      el.classList.toggle(c.allowed ? "allowed" : "refused", on);
+      const verdict = el.querySelector(".verdict");
+      verdict.innerHTML = on ? `<span class="stamp">${c.allowed ? "allowed" : "refused"}</span>` : "";
+      if (on) {
+        const msg = document.createElement("span");
+        msg.textContent = c.message.slice(0, Math.round(c.message.length * span(t, v, v + 0.5)));
+        verdict.appendChild(msg);
+      }
+    });
+    // The DenyArgs rule lights as the runtime checks the call, and stays lit while it's refused.
+    const hit = t >= 3.75 && t < 5.2;
+    document.querySelectorAll("#policy .ln").forEach((l) => l.classList.toggle("hit", hit && Number(l.dataset.i) === S.denyLine));
+  }
+
+  // 2. Plan
+  if (show($("plan"), t, 7.9, 11.9)) {
+    planEls.forEach((el, i) => (el.style.opacity = ease(span(t, 8.3 + i * 0.07, 8.5 + i * 0.07))));
+    planEls.find((el) => el.classList.contains("worst"))?.classList.toggle("hit", t >= 9.9);
+  }
+
+  // 3. Replay: both bars to the same scale, so the replay is a sliver.
+  if (show($("replay"), t, 11.9, 15.3)) {
+    $("run-fill").style.width = `${ease(span(t, 12.4, 13.9)) * 100}%`;
+    $("run-label").style.opacity = ease(span(t, 13.6, 13.9));
+    const r = t >= 14.1;
+    $("replay-fill").style.width = r ? `max(4px, ${(S.run.replayMs / (Number(S.run.seconds) * 1000)) * 100}%)` : "0";
+    $("replay-label").style.opacity = r ? 1 : 0;
+  }
+};
+render(0);
+</script>
+</body>
+</html>

@@ -1,4 +1,24 @@
-# Showcase video
+# Videos
+
+## Home page loop
+
+A silent 16-second, 1280×720 loop that plays muted on the home page ([`loop.html`](loop.html), [`loop.ts`](loop.ts)):
+
+1. The HaloLang wordmark ([`assets/halolang-mark.png`](assets/halolang-mark.png))
+2. **Refused before it runs**: the fixer's `FixerTools` policy from `examples/engineering/software-team.halo`, and what the runtime's `PolicyEngine` says to `Code.edit` on `acceptance.test.ts` (refused) and on `stats.ts` (allowed)
+3. **Planned before it starts**: `halo plan` for that file's `FixUntilGreen` pipeline
+4. **Replayed for $0**: the recorded fixer run's time and cost against its replay, to scale
+5. The wordmark again, so the end joins the start
+
+```bash
+cd video && bun install
+bun loop.ts             # ../docs/public/video/halo-loop.mp4 and halo-loop.jpg (the poster)
+bun loop.ts --still 7 10 # out/loop-7.png, out/loop-10.png
+```
+
+Nothing on screen is typed in by hand: `loop.ts` reads the policy from the example, asks the real `PolicyEngine` for its verdicts (and fails if the test file stops being refused), runs `halo plan`, and takes the run's numbers from `site/data/fixer-run.json`. Re-render after changing any of them.
+
+## Showcase video
 
 A 60-second, 1920×1080 video of Halo, with a soundtrack:
 
