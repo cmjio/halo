@@ -24,7 +24,9 @@ import { readPackage } from "../src/registry/format.ts";
 import pkg from "../package.json" with { type: "json" };
 import { SECTIONS, exampleFiles } from "../examples/catalog.ts";
 import { icon } from "./src/icons.ts";
-import { buildLlms } from "./llms.ts";
+import { ORIGIN, buildLlms } from "./llms.ts";
+import { homeMarkdown, type HomeExample } from "./src/home.ts";
+import { runSteps } from "./src/render.ts";
 
 const root = resolve(import.meta.dir, "..");
 const site = import.meta.dir;
@@ -228,22 +230,22 @@ rmSync(generated, { recursive: true, force: true });
 rmSync(examplesDir, { recursive: true, force: true });
 mkdirSync(generated, { recursive: true });
 mkdirSync(examplesDir, { recursive: true });
+// The home page's examples: a file, and what the CLI says about it (Home.vue, site/src/home.ts).
+const homeExamples: HomeExample[] = [
+  { file: "triage.halo", verb: "plan", run: runs.plan },
+  { file: "typo.halo", verb: "validate", run: runs.validate },
+  { file: "hello.halo", verb: "test", run: runs.hello },
+].map(({ file, verb, run }) => ({ file, verb, source: SNIPPETS[file]!, output: `$ ${run.cmd}\n${run.out}` }));
+const homePlan = { cmd: "halo plan examples/data-research/research-assistant.halo", text: data.plans.research };
 await Bun.write(join(generated, "data.json"), JSON.stringify(data));
 // Everything but the example sources, for the components on ordinary pages.
-await Bun.write(join(generated, "lite.json"), JSON.stringify({ ...data, examples: [], snippets: {}, runs: {}, docPages: [] }));
+await Bun.write(join(generated, "lite.json"), JSON.stringify({ ...data, examples: [], snippets: {}, runs: {}, docPages: [], home: { examples: homeExamples, plan: homePlan } }));
 
 /** Text that goes into markdown outside a code block: Vue reads {{ }} there, so escape it. */
 const md = (text: string) => text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!).replace(/\{\{/g, "&#123;&#123;").replace(/\}\}/g, "&#125;&#125;");
 const fence = (lang: string, label: string, body: string) => `\`\`\`${lang}${label ? ` [${label}]` : ""}\n${body.replace(/\n+$/, "")}\n\`\`\`\n`;
-const shell = (r: { cmd: string; out: string }) => `$ ${r.cmd}\n${r.out}`;
 
-// The home page's tabs: a file, and what the CLI says about it.
-await Bun.write(
-  join(generated, "hero.md"),
-  `::: code-group\n\n${fence("halo", "triage.halo", SNIPPETS["triage.halo"]!)}\n${fence("txt", "$ halo plan", shell(runs.plan))}\n${fence("halo", "typo.halo", SNIPPETS["typo.halo"]!)}\n${fence("txt", "$ halo validate", shell(runs.validate))}\n${fence("halo", "hello.halo", SNIPPETS["hello.halo"]!)}\n${fence("txt", "$ halo test", shell(runs.hello))}\n:::\n`,
-);
 await Bun.write(join(generated, "help.md"), fence("txt", "", `$ halo --help\n${runs.help.out.trim()}`));
-await Bun.write(join(generated, "plan-research.md"), fence("txt", "", `$ halo plan examples/data-research/research-assistant.halo\n${data.plans.research}`));
 
 // A page per example, and the list of them.
 // File names are unique across folders, so /examples/software-team stays put whichever folder the file is in.
@@ -318,6 +320,7 @@ const llms = buildLlms({
       .map(([name, p]) => `- \`${name}\`: ${(p.description ?? "").replace(/\.+$/, "")}. Methods: ${effects(p.methods ?? [])}`)
       .join("\n")}\n\nFrom the package registry:\n\n${packageMd}`,
     PackageList: packageMd,
+    Home: homeMarkdown({ version: pkg.version, examples: homeExamples, plan: homePlan, run: runSteps(data) }, ORIGIN),
   },
 });
 for (const [path, text] of Object.entries(llms)) await Bun.write(join(dist, path), text);

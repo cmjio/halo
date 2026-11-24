@@ -35,32 +35,11 @@
   font-variant-ligatures: none;
 }
 
-/* Home */
-.VPHero .name {
-  font-family: var(--vp-font-family-mono);
-  letter-spacing: -0.03em;
-}
-.VPHero .text {
-  font-weight: 500;
-}
-.VPHome .vp-doc {
-  max-width: 960px;
-  margin: 0 auto;
-}
+/* Buttons */
 .VPButton.medium {
   font-family: var(--vp-font-family-mono);
   font-weight: 500;
 }
-.vp-doc .showcase {
-  display: block;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  margin: 16px 0;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 12px;
-  background: #0e1013;
-}
-
 /* Code groups: tab labels like file names and commands */
 .vp-code-group .tabs label {
   font-family: var(--vp-font-family-mono);
@@ -207,76 +186,7 @@
   color: var(--halo-external);
 }
 
-/* A recorded run */
-.log {
-  margin: 16px 0;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  background: var(--halo-code-bg);
-  font-family: var(--vp-font-family-mono);
-  overflow: hidden;
-}
-.log .run-head,
-.log .run-foot {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 9px 16px;
-  font-size: 12.5px;
-  color: var(--vp-c-text-3);
-  background: var(--vp-c-bg-soft);
-}
-.log .run-head {
-  border-bottom: 1px solid var(--vp-c-divider);
-}
-.log .run-foot {
-  border-top: 1px solid var(--vp-c-divider);
-}
-.log .ok {
-  color: var(--halo-read);
-}
-.vp-doc .log ol {
-  list-style: none;
-  margin: 0;
-  padding: 6px 0;
-}
-.vp-doc .log .step {
-  position: relative;
-  margin: 0;
-  padding: 9px 16px 9px 52px;
-}
-.log .step::before {
-  content: "#" attr(data-n);
-  position: absolute;
-  left: 16px;
-  top: 10px;
-  font-size: 12px;
-  color: var(--vp-c-text-3);
-}
-.log .step + .step {
-  border-top: 1px solid var(--vp-c-divider);
-}
-.log .who {
-  font-size: 12px;
-  color: var(--vp-c-text-3);
-}
-.log .call {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 5px;
-  font-size: 12.5px;
-}
-.log .target {
-  color: var(--vp-c-brand-1);
-  font-weight: 600;
-}
-.log .args {
-  color: var(--vp-c-text-2);
-  word-break: break-word;
-}
+/* Effect badges (read / write / external) */
 .effect {
   font-size: 10.5px;
   padding: 0 6px;
@@ -287,28 +197,6 @@
 .effect.write { color: var(--halo-write); }
 .effect.external { color: var(--halo-external); }
 .effect.unknown { color: var(--vp-c-text-3); }
-.log .result {
-  margin: 5px 0 0;
-  padding-left: 12px;
-  border-left: 2px solid var(--vp-c-divider);
-  color: var(--vp-c-text-3);
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  max-height: 7.8em;
-  overflow: hidden;
-}
-.log .result.ok {
-  border-left-color: var(--halo-read);
-  color: var(--vp-c-text-2);
-}
-.log .answer {
-  margin-top: 6px;
-  font: 14px/1.6 var(--vp-font-family-base);
-  color: var(--vp-c-text-1);
-  white-space: pre-wrap;
-}
-
 /* Halo syntax inside the playground (the docs' code blocks use the TextMate grammar) */
 .t-kw { color: #8250df; }
 .t-op { color: #b35900; }
