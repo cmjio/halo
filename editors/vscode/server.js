@@ -36410,6 +36410,7 @@ var TOOL_PROVIDERS = [
   "Figma",
   "MCP",
   "Chrome",
+  "Vault",
   "Workspace",
   "KV",
   "SQLite",
@@ -36428,8 +36429,8 @@ var TOOL_PROVIDERS = [
 var BLOCK_CATEGORIES = ["Profanity", "DestructiveOps", "PromptInjection", "PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress", "Markdown"];
 var REDACT_CATEGORIES = ["PII", "SSN", "CreditCard", "Email", "Phone", "APIKey", "IPAddress"];
 var TOOL_RULES = ["AllowTools", "DenyTools", "AllowEffects", "ApproveTools", "ApproveEffects", "DenyArgs"];
-var TOOL_EFFECTS = ["read", "write", "external"];
-var ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", "AllowMedia", ...TOOL_RULES];
+var TOOL_EFFECTS = ["read", "write", "external", "wallet"];
+var ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", "AllowMedia", "AllowWallet", "ApproveWallet", ...TOOL_RULES];
 var MEDIA_NAMES = ["image", "document", "audio", "video", "pdf", "png", "jpeg", "gif", "webp", "mpeg", "mp3", "wav", "mp4", "webm", "ogg", "flac", "aac", "quicktime", "mov"];
 var HOST_PATTERN = /^(?!(.*\.)?localhost$)(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z]([a-z0-9-]*[a-z0-9])?$/i;
 var SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -36757,7 +36758,362 @@ function splitToolPath(path) {
   return dot < 0 ? { tool: path } : { tool: path.slice(0, dot), method: path.slice(dot + 1) };
 }
 
+// src/runtime/wallet-rules.ts
+var WALLET_SOURCES = ["keychain", "1password", "env", "mock"];
+var CARD_TOKENS = { number: "cc-number", expiry: "cc-exp", cvc: "cc-csc", name: "cc-name" };
+var PERSONAL_TOKENS = {
+  full_name: "name",
+  name: "name",
+  given_name: "given-name",
+  first_name: "given-name",
+  family_name: "family-name",
+  last_name: "family-name",
+  email: "email",
+  phone: "tel",
+  tel: "tel",
+  address: "street-address",
+  address_line1: "address-line1",
+  address_line2: "address-line2",
+  city: "address-level2",
+  region: "address-level1",
+  postcode: "postal-code",
+  postal_code: "postal-code",
+  zip: "postal-code",
+  country: "country-name",
+  organization: "organization",
+  birthday: "bday"
+};
+var KNOWN_TOKENS = new Set([
+  ...Object.values(CARD_TOKENS),
+  ...Object.values(PERSONAL_TOKENS),
+  "cc-given-name",
+  "cc-family-name",
+  "cc-exp-month",
+  "cc-exp-year",
+  "cc-type",
+  "country",
+  "username",
+  "new-password",
+  "current-password",
+  "one-time-code",
+  "url",
+  "photo",
+  "sex",
+  "language",
+  "bday-day",
+  "bday-month",
+  "bday-year",
+  "tel-national",
+  "tel-country-code",
+  "address-line3",
+  "honorific-prefix",
+  "honorific-suffix",
+  "additional-name",
+  "nickname",
+  "organization-title",
+  "transaction-amount",
+  "transaction-currency"
+]);
+function hostMatches(host, pattern) {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const p = pattern.toLowerCase();
+  return p.startsWith("*.") ? h.endsWith(p.slice(1)) && h.length > p.length - 1 : h === p;
+}
+function hostCovers(a, b) {
+  const A = a.toLowerCase();
+  const B = b.toLowerCase();
+  const wa = A.startsWith("*.");
+  const wb = B.startsWith("*.");
+  if (!wa && !wb)
+    return A === B;
+  if (!wa)
+    return hostMatches(A, B);
+  if (!wb)
+    return hostMatches(B, A);
+  const [s, t] = [A.slice(2), B.slice(2)];
+  return s === t || s.endsWith(`.${t}`) || t.endsWith(`.${s}`);
+}
+var USER_CONTENT_HOSTS = [
+  "sites.google.com",
+  "docs.google.com",
+  "drive.google.com",
+  "script.google.com",
+  "forms.gle",
+  "forms.office.com",
+  "*.github.io",
+  "gist.github.com",
+  "raw.githubusercontent.com",
+  "*.githubusercontent.com",
+  "*.gitlab.io",
+  "*.bitbucket.io",
+  "*.pages.dev",
+  "*.workers.dev",
+  "*.r2.dev",
+  "*.vercel.app",
+  "*.netlify.app",
+  "*.web.app",
+  "*.firebaseapp.com",
+  "*.herokuapp.com",
+  "*.glitch.me",
+  "*.repl.co",
+  "*.replit.app",
+  "*.replit.dev",
+  "*.onrender.com",
+  "*.fly.dev",
+  "*.azurewebsites.net",
+  "*.azurestaticapps.net",
+  "*.cloudfront.net",
+  "*.amazonaws.com",
+  "*.appspot.com",
+  "*.ngrok.io",
+  "*.ngrok-free.app",
+  "*.ngrok.app",
+  "*.trycloudflare.com",
+  "*.loca.lt",
+  "*.surge.sh",
+  "*.myshopify.com",
+  "*.wixsite.com",
+  "*.squarespace.com",
+  "*.square.site",
+  "*.webflow.io",
+  "*.weebly.com",
+  "*.wordpress.com",
+  "*.blogspot.com",
+  "*.tumblr.com",
+  "*.notion.site",
+  "*.carrd.co",
+  "*.framer.website",
+  "*.framer.app",
+  "*.typeform.com",
+  "*.jotform.com",
+  "*.substack.com",
+  "*.medium.com",
+  "*.gumroad.com",
+  "codepen.io",
+  "cdpn.io",
+  "jsfiddle.net",
+  "*.csb.app",
+  "*.stackblitz.io",
+  "*.webcontainer.io"
+];
+var PAYMENT_HOSTS = [
+  "js.stripe.com",
+  "checkout.stripe.com",
+  "m.stripe.network",
+  "*.stripe.network",
+  "*.adyen.com",
+  "*.adyenpayments.com",
+  "*.braintreegateway.com",
+  "*.braintree-api.com",
+  "*.checkout.com",
+  "*.squareup.com",
+  "*.squarecdn.com",
+  "*.paypal.com",
+  "*.paypalobjects.com",
+  "*.klarna.com",
+  "*.klarnaservices.com",
+  "*.worldpay.com",
+  "*.authorize.net",
+  "*.recurly.com",
+  "*.chargebee.com",
+  "*.paddle.com",
+  "*.mollie.com",
+  "*.razorpay.com",
+  "*.gocardless.com"
+];
+var HOST_NAME = /^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]([a-z0-9-]*[a-z0-9])?$/i;
+var isLoopback = (host) => /^(localhost|([a-z0-9-]+\.)+localhost|127(\.\d{1,3}){3}|\[?::1\]?)$/i.test(host);
+var TWO_LABEL_SUFFIXES = new Set([
+  "co.uk",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+  "me.uk",
+  "ltd.uk",
+  "plc.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "co.nz",
+  "org.nz",
+  "co.jp",
+  "ne.jp",
+  "or.jp",
+  "com.br",
+  "com.mx",
+  "com.ar",
+  "co.in",
+  "co.za",
+  "com.sg",
+  "com.hk",
+  "com.tr",
+  "co.kr",
+  "com.cn",
+  "com.tw",
+  "co.il",
+  "com.my",
+  "co.id",
+  "com.ph",
+  "com.vn",
+  "com.sa",
+  "com.eg",
+  "com.ng",
+  "co.ke"
+]);
+var FIELD = /^[a-z][a-z0-9_]*$/;
+var TOKEN = /^[a-z][a-z0-9-]*$/;
+function walletItemProblems(name, get) {
+  const out = [];
+  const source = get("source");
+  if (source === undefined)
+    out.push(`source: is required ("keychain", "1password", "env" or "mock")`);
+  else if (typeof source !== "string" || !WALLET_SOURCES.includes(source))
+    out.push(`source: is "keychain", "1password", "env" or "mock", not ${JSON.stringify(source)}`);
+  if (source === "1password" && typeof get("vault") !== "string")
+    out.push(`source: "1password" needs vault:, the 1Password vault the item is in`);
+  const kind = get("kind");
+  if (kind !== undefined && kind !== "card" && kind !== "other")
+    out.push(`kind: is "card" or "other"`);
+  const fieldsRaw = get("fields");
+  if (!Array.isArray(fieldsRaw) || !fieldsRaw.length)
+    out.push(`fields: lists the item's fields, e.g. fields: ["number", "expiry", "cvc", "name"]`);
+  else {
+    const seen = new Set;
+    for (const f of fieldsRaw) {
+      if (typeof f !== "string") {
+        out.push(`fields: lists names in quotes`);
+        continue;
+      }
+      const [field, token, extra] = f.split(":");
+      if (extra !== undefined || !FIELD.test(field ?? ""))
+        out.push(`fields: "${f}" should be a lowercase name, optionally with its autocomplete token, like "number" or "passport_no:off"`);
+      else if (token !== undefined && !TOKEN.test(token))
+        out.push(`fields: "${f}": "${token}" is not an autocomplete token`);
+      else if (seen.has(field))
+        out.push(`fields: "${field}" is listed twice`);
+      seen.add(field);
+    }
+  }
+  const secret = kind === "card" ? get("secret") !== false : get("secret") === true;
+  if (kind === "card" && get("secret") === false)
+    out.push(`a card is always secret; remove secret: false`);
+  const hosts = get("hosts");
+  const hostList = Array.isArray(hosts) ? hosts.filter((h) => typeof h === "string").map((h) => h.toLowerCase()) : [];
+  if (!Array.isArray(hosts) || !hostList.length)
+    out.push(`hosts: is required: the sites the item may be typed on, e.g. hosts: ["www.example.com"]`);
+  const payVia = get("pay_via");
+  const payList = Array.isArray(payVia) ? payVia.filter((h) => typeof h === "string").map((h) => h.toLowerCase()) : [];
+  if (payVia !== undefined && !Array.isArray(payVia))
+    out.push(`pay_via: is a list of payment-frame hosts, e.g. pay_via: ["js.stripe.com"]`);
+  for (const [setting, list] of [["hosts", hostList], ["pay_via", payList]]) {
+    for (const h of list) {
+      if (!HOST_NAME.test(h) && !isLoopback(h)) {
+        out.push(`${setting}: "${h}" is not a host name like "www.example.com"${setting === "hosts" ? "" : ' or "*.adyen.com"'}`);
+        continue;
+      }
+      if (secret && h.startsWith("*."))
+        out.push(`${setting}: "${h}": a secret item takes exact hosts, not *. patterns (name each host it may be typed on)`);
+      const ugc = USER_CONTENT_HOSTS.find((u) => hostCovers(h, u));
+      if (ugc)
+        out.push(`${setting}: "${h}" ${h === ugc ? "is" : `covers ${ugc}, which is`} a host where anyone can publish a page, so a page there could collect the item`);
+      if (setting === "hosts") {
+        const pay = PAYMENT_HOSTS.find((p) => hostCovers(h, p) || hostCovers(p, h));
+        if (pay)
+          out.push(`hosts: "${h}" is a payment provider's host; it serves every merchant's frames, so put it in pay_via: (it then counts only inside a page on hosts:)`);
+      }
+    }
+  }
+  if (payList.length && !secret)
+    out.push(`pay_via: is for secret items (cards and identity numbers)`);
+  if (secret && get("ask") === false)
+    out.push(`ask: false isn't allowed on a secret item: typing it always asks`);
+  for (const key of ["ask", "secret", "serve"]) {
+    const v = get(key);
+    if (v !== undefined && typeof v !== "boolean")
+      out.push(`${key}: is true or false`);
+  }
+  const item = get("item");
+  if (item !== undefined && (typeof item !== "string" || !/^[A-Za-z0-9_.-]+$/.test(item)))
+    out.push(`item: is the name the source stores it under, letters, digits, ".", "_" and "-"`);
+  const hint = get("hint");
+  if (hint !== undefined && typeof hint !== "string")
+    out.push(`hint: is a string`);
+  return out;
+}
+var WALLET_PATTERN = /^(\*|[A-Za-z_][A-Za-z0-9_]*(\.(\*|[a-z][a-z0-9_]*))?)$/;
+var argOf = (t, name) => typeof name === "number" ? t.argList.filter((a) => !a.name)[name]?.value : t.argList.find((a) => a.name === name)?.value;
+var literal = (v) => v?.kind === "string" || v?.kind === "bool" || v?.kind === "number" ? v.value : undefined;
+function walletNames(t) {
+  if (t.provider !== "Chrome")
+    return;
+  const v = argOf(t, "wallet");
+  if (!v)
+    return;
+  const items = v.kind === "list" ? v.items : [v];
+  return items.map((i) => i.kind === "ref" ? i.path.join(".") : i.kind === "string" ? i.value : "?");
+}
+function walletUnsafeTool(t) {
+  const outside = (v) => {
+    if (v === undefined)
+      return false;
+    if (v.kind !== "string")
+      return true;
+    const p = v.value;
+    return /^([\\/~]|[a-zA-Z]:)/.test(p) || p.split(/[\\/]/).includes("..");
+  };
+  switch (t.provider) {
+    case "Bash":
+      return "runs shell commands as you";
+    case "Code":
+      return "runs code as you";
+    case "Git":
+      return "runs git, which runs the repository's hooks and configured commands as you";
+    case "Remote": {
+      const spec = String(literal(argOf(t, 0)) ?? "").trim().toLowerCase();
+      if (!["docker", "e2b", "daytona", "auto"].includes(spec))
+        return "runs commands on a machine over SSH";
+      for (const k of ["from", "root"])
+        if (outside(argOf(t, k)))
+          return `copies files from outside the project (${k}:)`;
+      return;
+    }
+    case "Workspace": {
+      if (literal(argOf(t, "write")) !== undefined && literal(argOf(t, "write")) !== false)
+        return "can change files (write:)";
+      if (outside(argOf(t, 0)) || outside(argOf(t, "root")))
+        return "reads files outside the project";
+      return;
+    }
+    case "MCP": {
+      const url = argOf(t, "url");
+      const first = argOf(t, 0);
+      const isUrl = (v) => v?.kind === "string" && /^https?:\/\//i.test(v.value.trim());
+      if (isUrl(url) || url === undefined && isUrl(first))
+        return;
+      if (literal(argOf(t, "wallet_safe")) === true)
+        return;
+      return "starts a local MCP server, which could be steered into running commands (if it can't, declare it with wallet_safe: true)";
+    }
+    default:
+      return;
+  }
+}
+
 // src/parser/validate.ts
+function stageCalls(st) {
+  switch (st.kind) {
+    case "call":
+      return [st];
+    case "fanout":
+      return st.stages;
+    case "each":
+      return [st.call];
+    case "branch":
+      return st.arms.map((a) => a.call);
+    default:
+      return [];
+  }
+}
 function validate(ast, options = {}) {
   return new Validator(ast, options).run();
 }
@@ -36804,6 +37160,8 @@ class Validator {
         this.checkSqliteTool(t);
       if (t.provider === "Remote")
         this.checkRemoteSecrets(t);
+      if (t.provider === "Bash")
+        this.checkBashEnv(t);
       this.checkArgRules(t);
     }
     for (const m of this.ast.agents)
@@ -36812,6 +37170,7 @@ class Validator {
       this.checkSchema(sc);
     for (const s of this.ast.pipelines)
       this.checkPipeline(s);
+    this.checkWallet();
     const seen = new Set;
     this.diags = this.diags.filter((d) => {
       const key = `${d.severity}|${d.file ?? ""}|${d.line}|${d.message}`;
@@ -36897,6 +37256,15 @@ class Validator {
           else if (RESERVED_SECRET.test(n))
             this.add("error", `Policy "${g.name}": AllowSecrets(${n}): ${n} can't be a secret; it changes how the sandbox or Docker itself runs`, g.loc);
         }
+      } else if (rule.name === "AllowWallet" || rule.name === "ApproveWallet") {
+        if (!rule.args.length)
+          this.add("error", `Policy "${g.name}": ${rule.name}(...) names wallet items or fields, e.g. ${rule.name}("Card", "Me.email")`, g.loc);
+        for (const p of rule.args) {
+          if (!WALLET_PATTERN.test(p))
+            this.add("error", `Policy "${g.name}": ${rule.name}(${p}) should name a Vault, or a Vault's field: "Card", "Card.number" or "Card.*"`, g.loc);
+          else if (p !== "*" && this.tools.get(p.split(".")[0])?.provider !== "Vault")
+            this.add("warning", `Policy "${g.name}": ${rule.name}(${p}): ${p.split(".")[0]} is not a Vault tool declared here`, g.loc);
+        }
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
@@ -36916,6 +37284,114 @@ class Validator {
         this.add("error", `Tool "${t.name}": secrets: "${v.value}" should be an environment variable name, like STRIPE_TEST_KEY`, t.loc);
       else if (RESERVED_SECRET.test(v.value))
         this.add("error", `Tool "${t.name}": secrets: ${v.value} can't be a secret; it changes how the sandbox or Docker itself runs`, t.loc);
+    }
+  }
+  checkWallet() {
+    const tools = [...this.tools.values()];
+    const vaults = new Set(tools.filter((t) => t.provider === "Vault").map((t) => t.name));
+    for (const t of tools) {
+      for (const a of t.argList) {
+        for (const v of a.value.kind === "list" ? a.value.items : [a.value]) {
+          const env = v.kind === "ref" && v.path[0] === "Env" ? v.path.slice(1).join(".") : v.kind === "string" && /^Env\.\w+$/.test(v.value) ? v.value.slice(4) : undefined;
+          if (env?.startsWith("HALO_WALLET_"))
+            this.add("error", `Tool "${t.name}": Env.${env} can't be read: HALO_WALLET_ variables move into the wallet when Halo starts, and only a browser with that wallet can type them`, t.loc);
+          if (env !== undefined && t.provider === "Vault")
+            this.add("error", `Tool "${t.name}": a Vault holds names, not values (Env.${env} would be a value); its values stay in its source`, t.loc);
+        }
+      }
+      if (t.provider === "Vault")
+        this.checkVault(t);
+      const names = walletNames(t);
+      if (names) {
+        if (!names.length)
+          this.add("error", `Tool "${t.name}": wallet: lists Vault tools, e.g. wallet: [Card]`, t.loc);
+        for (const n of names)
+          if (!vaults.has(n))
+            this.add("error", `Tool "${t.name}": wallet: ${n} is not a Vault tool${this.tools.has(n) ? "" : " declared here"}`, t.loc);
+        const script = t.argList.find((a) => a.name === "allowScript")?.value;
+        if (script?.kind === "bool" && script.value)
+          this.add("error", `Tool "${t.name}": a browser with a wallet can't run page scripts (allowScript: true): a script could read what was typed`, t.loc);
+      }
+    }
+    const walletTools = new Set(tools.filter((t) => walletNames(t)).map((t) => t.name));
+    if (!walletTools.size) {
+      if (vaults.size)
+        this.add("warning", `Vault ${[...vaults].join(", ")} ${vaults.size === 1 ? "is" : "are"} in no browser's wallet: (declare one with Chrome(wallet: [${[...vaults][0]}]))`, tools.find((t) => vaults.has(t.name))?.loc);
+      return;
+    }
+    const browser = [...walletTools][0];
+    for (const t of tools) {
+      const why = walletUnsafeTool(t);
+      if (why)
+        this.add("error", `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser} has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file`, t.loc);
+    }
+    const walletAgents = new Set(this.ast.agents.filter((a) => (a.equips ?? []).some((e) => walletTools.has(e))).map((a) => a.name));
+    for (const a of this.ast.agents) {
+      if (walletAgents.has(a.name) && a.directives?.some((d) => d.name === "retry")) {
+        this.add("error", `Agent "${a.name}" equips a browser with a wallet, so it can't have @retry: a retry could type and pay again`, a.loc);
+      }
+    }
+    const usesPipeline = new Map;
+    const callUses = (c, seen) => walletTools.has(c.callee) || walletAgents.has(c.callee) || pipelineUses(c.callee, seen);
+    const pipelineUses = (name, seen = new Set) => {
+      if (usesPipeline.has(name))
+        return usesPipeline.get(name);
+      const p = this.pipelines.get(name);
+      if (!p || seen.has(name))
+        return false;
+      seen.add(name);
+      const r = p.pipeline.some((st) => stageCalls(st).some((c) => callUses(c, seen)));
+      usesPipeline.set(name, r);
+      return r;
+    };
+    for (const s of this.ast.pipelines) {
+      const uses = (c) => callUses(c, new Set([s.name]));
+      if (s.directives?.some((d) => d.name === "retry") && s.pipeline.some((st) => stageCalls(st).some(uses))) {
+        this.add("error", `Pipeline "${s.name}" uses a wallet, so it can't have @retry: a retry could type and pay again`, s.loc);
+      }
+      s.pipeline.forEach((st, i) => {
+        if (st.kind === "fanout" || st.kind === "each") {
+          const hit = stageCalls(st).find(uses);
+          if (hit)
+            this.add("error", `Pipeline "${s.name}": ${hit.callee} uses a wallet inside ${st.kind === "each" ? "|* each" : "a fan-out (|*)"}, where every branch would type it again (and a person couldn't be asked)`, st.loc ?? hit.loc);
+        }
+        if (st.kind === "branch") {
+          const hit = stageCalls(st).find(uses);
+          if (hit)
+            this.add("warning", `Pipeline "${s.name}": ${hit.callee} uses a wallet inside a branch arm, which can't pause for a person's approval; it works only where Halo can ask at once (halo run in a terminal, or runtime.onInterrupt)`, hit.loc);
+        }
+        if (st.kind === "loop") {
+          const to = s.pipeline.findLastIndex((x, j) => j < i && x.kind === "call" && x.callee === st.target);
+          const hit = s.pipeline.slice(Math.max(0, to), i).flatMap(stageCalls).find(uses);
+          if (hit)
+            this.add("error", `Pipeline "${s.name}": loop(${st.target}, ...) runs ${hit.callee} again, which uses a wallet: it could type and pay again. Move the wallet step after the loop`, st.loc);
+        }
+      });
+    }
+  }
+  checkVault(t) {
+    const KNOWN = ["source", "kind", "fields", "secret", "hosts", "pay_via", "ask", "hint", "serve", "item", "vault"];
+    const literal = (v) => v === undefined ? undefined : v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map((i) => literal(i)) : v.kind === "null" ? null : { kind: v.kind };
+    for (const a of t.argList) {
+      if (!a.name)
+        this.add("error", `Tool "${t.name}": Vault takes named settings, like Vault(source: "keychain", fields: [...], hosts: [...])`, t.loc);
+      else if (!KNOWN.includes(a.name))
+        this.add("warning", `Tool "${t.name}": Vault has no setting "${a.name}" (it has ${KNOWN.join(", ")})`, t.loc);
+    }
+    for (const p of walletItemProblems(t.name, (k) => literal(t.argList.find((a) => a.name === k)?.value)))
+      this.add("error", `Tool "${t.name}" (Vault): ${p}`, t.loc);
+  }
+  checkBashEnv(t) {
+    const arg = t.argList.find((a) => a.name === "env");
+    if (!arg || arg.value.kind !== "list")
+      return;
+    for (const v of arg.value.items) {
+      if (v.kind !== "string") {
+        const why = v.kind === "ref" && v.path[0] === "Env" ? `Env.${v.path.slice(1).join(".")} is the value, not the name` : "each entry is a string";
+        this.add("error", `Tool "${t.name}": env: lists names in quotes, like env: ["DATABASE_URL"]; ${why}`, t.loc);
+      } else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.value)) {
+        this.add("error", `Tool "${t.name}": env: "${v.value}" should be an environment variable name, like DATABASE_URL`, t.loc);
+      }
     }
   }
   checkToolRule(g, rule) {
@@ -39332,7 +39808,7 @@ var MAX_MEDIA_BYTES = 500 * MB;
 // package.json
 var package_default = {
   name: "halo",
-  version: "1.6.1",
+  version: "1.7.0",
   description: "Halo: a declarative language for AI workflows",
   license: "MIT",
   homepage: "https://halolang.com",
