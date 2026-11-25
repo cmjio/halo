@@ -39,7 +39,7 @@ export const SYSTEM_EVENTS = ["ResolveIncident", "Publish", "Distribute", "Trigg
 
 export const TOOL_PROVIDERS = [
   "REST", "GET", "POST", "VectorStore", "PostgreSQL", "SQL", "Bash", "Browser", "File", "Slack", "Email", "Handoff", "GitHub", "Linear", "Figma",
-  "MCP", "Chrome", "Workspace", "KV", "SQLite", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote", "Transcribe", "SMS",
+  "MCP", "Chrome", "Vault", "Workspace", "KV", "SQLite", "Code", "Documents", "Clock", "Calc", "Data", "Git", "WebSearch", "Skills", "Remote", "Transcribe", "SMS",
 ] as const;
 
 /** Content categories detectable by `Block(...)`. */
@@ -52,10 +52,10 @@ export const REDACT_CATEGORIES = ["PII", "SSN", "CreditCard", "Email", "Phone", 
 export const TOOL_RULES = ["AllowTools", "DenyTools", "AllowEffects", "ApproveTools", "ApproveEffects", "DenyArgs"] as const;
 
 /** What a tool method can do (see ToolEffect). */
-export const TOOL_EFFECTS = ["read", "write", "external"] as const;
+export const TOOL_EFFECTS = ["read", "write", "external", "wallet"] as const;
 
 /** Policy rules the runtime enforces deterministically. */
-export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", "AllowMedia", ...TOOL_RULES] as const;
+export const ENFORCED_RULES = ["Block", "Redact", "MaxWords", "MaxChars", "MaxTokens", "MaxSpend", "LogViolation", "Enforce", "Require", "MatchRegex", "Validate", "AllowHosts", "AllowFiles", "AllowSecrets", "AllowMedia", "AllowWallet", "ApproveWallet", ...TOOL_RULES] as const;
 
 /** What `AllowMedia(...)` can name: a kind, or one media type. */
 export const MEDIA_NAMES = ["image", "document", "audio", "video", "pdf", "png", "jpeg", "gif", "webp", "mpeg", "mp3", "wav", "mp4", "webm", "ogg", "flac", "aac", "quicktime", "mov"] as const;

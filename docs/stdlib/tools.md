@@ -114,6 +114,14 @@ pipeline Check(file: String) -> Result:
 
 `command:` is required. Any method name works. Values inserted with `{{…}}` are **escaped for where they sit**: a bare word, `'single'`, `"double"` or `$'ANSI-C'` quotes, `$(...)`, `${v:-…}`, a here-string, or a heredoc (whatever way its end marker is quoted). So model output and user input are always read as data and can't add commands. Two things can't be made safe, and `halo validate` warns about both: a command that runs a value as code (`eval {{x}}`, `bash -c {{x}}`, `... | sh`), and a `command:` that isn't written out (`command: context.data.cmd` runs whatever that value is). Bash runs code hidden in array subscripts whenever it evaluates arithmetic, even from a quoted value, so in arithmetic spots (`$((…))`, `((…))`, `$[…]`, `[[ … -eq … ]]` and the other numeric tests, `let`, `declare -i`, `${a[…]}`, `${s:…}`) a value must be a whole number or a plain name, or the run fails. That check can't follow a value through a variable: `n={{x}}; echo $((n))` still runs code from `x`, so check values like that with a policy or a gate first. A value that ends a heredoc early (its end marker on a line of its own) or adds a line break inside a `# comment` is refused. So is a placeholder inside `` `backticks` `` (use `$(...)`) or right after a backslash (`\{{x}}`). Inside `"${v:-…}"` or a heredoc, a `}` in a value ends the `${…}` early; that changes the text but runs nothing. The result is `{ command, stdout, stderr, exitCode }`, plus `json` (stdout, parsed) when the command prints JSON, so `context.data.x.json.length` and `each(item in x.json)` work. A non-zero exit code is not an error, so you can check it with a gate or `|<> loop`. The default timeout is 120 seconds.
 
+A command doesn't see Halo's environment, so an agent with a shell can't print your API keys. It gets `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`, `TZ` and `TERM`, and whatever `env:` passes on:
+
+```halo
+tool Db : Bash(env: ["DATABASE_URL", "PGUSER"])
+```
+
+The names are read from Halo's environment (or the runtime's `env`, in the [SDK](../guide/sdk.md)), and a name that isn't set is left out. They are written in quotes: `Env.DATABASE_URL` there would be the value, and `halo validate` says so. Before Halo 1.7.0 a command inherited everything; `halo migrate` lists each `Bash` tool with no `env:` (see [Upgrading](../guide/production/upgrading.md)).
+
 ## `Browser`
 
 ```halo

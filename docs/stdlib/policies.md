@@ -82,10 +82,12 @@ policy FixerTools : AllowTools("Code.*", "Tests.run")
 | `AllowHosts(host, ...)` | The agent's Docker sandbox (`sandbox: "docker"` or `"auto"`) can reach only these hosts (`"pypi.org"`, `"*.pythonhosted.org"`). See [Allowed hosts](./remote.md#allowed-hosts) |
 | `AllowFiles(path, ...)` | The agent's own sandbox starts with only these folders and files of the project (`"src/billing"`), and only changes to them are written back. See [Only some of the project](./remote.md#only-some-of-the-project) |
 | `AllowSecrets(name, ...)` | The agent's Docker sandbox gets these environment variables for its commands, masked in what comes back. See [Secrets](./remote.md#secrets) |
+| `AllowWallet(item, ...)` | The [wallet](./wallet.md) items or fields the agent may have a browser type (`"Card"`, `"Me.email"`, `"Card.*"`). Without one, an agent can type nothing from a wallet. Several narrow, like `AllowTools` |
+| `ApproveWallet(item, ...)` | Ask a person before typing these, even for an item that says `ask: false` |
 
 **Patterns** match `"Tool.method"`: `Repo` (any method of `Repo`), `Repo.create_pr`, `Repo.*`, `*.delete`, or `*`. A `*` doesn't cross the dot.
 
-**Effects** are `read`, `write`, and `external`. Each method of each provider has one; `halo tools` lists them, and `halo plan` shows them for a pipeline. `external` means the call acts outside this machine or can't be taken back (a POST, a Slack message, a shell command, a click in `Chrome`); `write` changes local or stored state (a file, a KV key, a SQL statement such as `SQLite.execute`). For an MCP server's tools, the effect comes from the server's own annotations (see [MCP](../guide/integrations/mcp.md#effects)). An effect is a description written by whoever made the provider, not something Halo measures. Built-in providers err on the side of `external`: `Code.run` is `external`, because a snippet can use the network and start programs, so `AllowEffects(read, write)` excludes it.
+**Effects** are `read`, `write`, `external` and `wallet`. Each method of each provider has one; `halo tools` lists them, and `halo plan` shows them for a pipeline. `external` means the call acts outside this machine or can't be taken back (a POST, a Slack message, a shell command, a click in `Chrome`); `write` changes local or stored state (a file, a KV key, a SQL statement such as `SQLite.execute`); `wallet` types a value from a [wallet](./wallet.md) into a page (`Chrome.fill_secrets`). For an MCP server's tools, the effect comes from the server's own annotations (see [MCP](../guide/integrations/mcp.md#effects)). An effect is a description written by whoever made the provider, not something Halo measures. Built-in providers err on the side of `external`: `Code.run` is `external`, because a snippet can use the network and start programs, so `AllowEffects(read, write)` excludes it.
 
 How they combine:
 
@@ -99,7 +101,7 @@ How they combine:
 
 A limit that belongs to the tool, whoever calls it, goes on the tool's declaration instead: `Fixed`, `Match` and `Locked` (see [Rules on a tool's arguments](./tools.md#rules-on-a-tool-s-arguments)).
 
-In a Halo string, a regular expression's backslash is written `\\`: `"\\.test\\."` is the regex `\.test\.`. `halo validate` reports a pattern that isn't a valid regular expression, an effect that isn't one of the three, and a tool name that isn't declared.
+In a Halo string, a regular expression's backslash is written `\\`: `"\\.test\\."` is the regex `\.test\.`. `halo validate` reports a pattern that isn't a valid regular expression, an effect that isn't one of the four, and a tool name that isn't declared.
 
 Tool rules don't apply to tool calls the pipeline makes itself (`|> Files.write(...)`) or to `Agent.task(tool: T)`, which runs `T` before the agent sees anything. Those calls are written in the pipeline, so `halo plan` lists them.
 

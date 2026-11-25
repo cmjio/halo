@@ -12,6 +12,7 @@
 import type { Agent, ParseResult, PipelineDeclaration, PipelineStage } from "./parser/types.js";
 import { AdapterRegistry } from "./runtime/adapter.js";
 import { plan, type Plan, type PlanOptions } from "./plan.js";
+import { walletNames } from "./runtime/wallet-rules.js";
 
 export interface FenceCheck {
   rule: string;
@@ -176,6 +177,32 @@ export function checkFence(original: ParseResult, variant: ParseResult, pipeline
     return (x.equips ?? []).filter((e) => !before.has(e)).map((e) => `${x.name} equips ${e}`);
   });
   check("equips", !newEquips.length, newEquips.length ? list(newEquips) : "no agent equips anything new");
+
+  // ── The wallet: what an agent with one is told, and every call that types from one, only a person may change ──
+  // (The Vaults, the browser's wallet: and AllowWallet rules are declarations and policies, held by the checks above.)
+  const walletUse = (ast: ParseResult) => {
+    const browsers = new Set(ast.tools.filter((t) => walletNames(t)).map((t) => t.name));
+    const agents = new Map(ast.agents.filter((x) => (x.equips ?? []).some((e) => browsers.has(e))).map((x) => [x.name, shape(x)]));
+    const calls = reachable(ast, pipeline)
+      .flatMap((p) => p.pipeline.flatMap((s) => (s.kind === "call" ? [s] : s.kind === "fanout" ? s.stages : s.kind === "each" ? [s.call] : s.kind === "branch" ? s.arms.map((a) => a.call) : [])))
+      .filter((c) => browsers.has(c.callee) || agents.has(c.callee))
+      .map((c) => shape(c))
+      .sort();
+    return { agents, calls };
+  };
+  const wa = walletUse(original);
+  const wb = walletUse(variant);
+  const rewritten = [...wb.agents].filter(([n, s]) => wa.agents.get(n) !== s).map(([n]) => n);
+  const callsChanged = wa.calls.join("\n") !== wb.calls.join("\n");
+  check(
+    "wallet",
+    !rewritten.length && !callsChanged,
+    rewritten.length || callsChanged
+      ? `${rewritten.length ? `changes ${list(rewritten)}, which can type from a wallet` : "changes a call to a browser or agent with a wallet"}: a person must read this change, so it isn't replayed or applied automatically`
+      : wa.agents.size || wa.calls.length
+        ? `what ${wa.agents.size ? list(wa.agents.keys()) : "the pipeline"} can type from a wallet is unchanged`
+        : "no wallet",
+  );
 
   // ── Models: data goes to no new provider ──
   const registry = options.adapters ?? new AdapterRegistry();

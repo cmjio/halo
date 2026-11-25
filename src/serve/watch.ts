@@ -81,7 +81,7 @@ export async function readSource(w: WatchConfig, io: { fetch: typeof fetch; env:
     text = existsSync(w.file) ? readFileSync(w.file, "utf8") : "";
   } else {
     // The command comes from the server's own config, written by its operator.
-    const proc = Bun.spawn(["bash", "-c", w.command!], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const proc = Bun.spawn(["bash", "-c", w.command!], { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env } });
     const timer = setTimeout(() => proc.kill(), 60_000);
     const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     clearTimeout(timer);

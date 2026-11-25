@@ -453,7 +453,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     }
     const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
     if (!own.length) continue;
-    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, ...options.runtime, ...recorder, env, runStore, progressStore, onEvent }).load(ast);
+    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, walletLog: join(stateDir, "wallet.log"), ...options.runtime, ...recorder, env, runStore, progressStore, onEvent, serving: true }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
@@ -478,7 +478,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     let rt = dryRuntimes.get(e.path);
     if (!rt) {
       // Thread state stays in memory, so a rehearsal never changes a real thread.
-      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:" }).load(e.ast);
+      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, walletLog: join(stateDir, "wallet.log"), ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:", serving: true }).load(e.ast);
       for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
       mockForDryRun(rt, e.ast);
       dryRuntimes.set(e.path, rt);
@@ -1043,6 +1043,10 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     return snap && pauseId && safeEqual(url.searchParams.get("sig") ?? "", sign(runId, pauseId)) ? { snap, pauseId } : undefined;
   };
 
+  /** A pause to type a wallet value, or to submit one: anyone holding a link could answer it, so only Studio (with the token) can. */
+  const walletPause = (snap: { meta: { paused?: { key?: string } } }) => /^(wallet|submit):/.test(snap.meta.paused?.key ?? "");
+  const WALLET_LINK = "This step types a value from a wallet (or submits one), so it can be answered only in Halo Studio, signed in with this server's token, not from a link.";
+
   const approvalPage = async (runId: string, url: URL, done?: string): Promise<Response> => {
     const linked = done ? undefined : await linkedPause(runId, url);
     if (!done && !linked) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
@@ -1054,6 +1058,7 @@ button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid #d1d5db;
 button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inherit;padding:8px;border:1px solid #d1d5db;border-radius:8px;width:60%}</style>`;
     if (done) return new Response(`${head}<h2>${escapeHtml(done)}</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (!snap?.waitingFor) return new Response(`${head}<h2>This run is no longer waiting.</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    if (walletPause(snap)) return new Response(`${head}<h2>${escapeHtml(WALLET_LINK)}</h2>`, { status: 403, headers: { "Content-Type": "text/html; charset=utf-8" } });
     const message = snap.meta.paused?.message ?? (snap.waitingFor === "yield" ? "Approve this run?" : `Waiting for ${snap.waitingFor}`);
     const sig = sign(runId, linked!.pauseId);
     const action = `/approve/${runId}?sig=${sig}`;
@@ -1267,6 +1272,7 @@ ${files}
           if (req.method === "POST") {
             const linked = await linkedPause(runId, url);
             if (!linked) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
+            if (walletPause(linked.snap)) return new Response(WALLET_LINK, { status: 403 });
             const form = await req.formData().catch(() => new FormData());
             const choice = String(form.get("answer") ?? "approve");
             const answer = choice === "custom" ? String(form.get("custom") ?? "") : choice;

@@ -6,6 +6,7 @@
 
 import { MCP_INFO } from "./mcp.js";
 import { CHROME_INFO } from "./providers/chrome.js";
+import { VAULT_INFO } from "./wallet.js";
 import { LOCAL_PROVIDER_INFO } from "./providers/index.js";
 import type { JsonSchema, ProviderInfo, ToolMethod } from "./tools.js";
 
@@ -206,6 +207,7 @@ export const BUILTIN_PROVIDER_INFO: Record<string, ProviderInfo> = {
   Figma: figma,
   MCP: MCP_INFO,
   Chrome: CHROME_INFO,
+  Vault: VAULT_INFO,
   ...LOCAL_PROVIDER_INFO,
 };
 

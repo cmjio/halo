@@ -48,6 +48,7 @@ import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
+import { cmdWallet } from "./wallet-cli.js";
 import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
 import { PACKAGE_COMMANDS, PACKAGE_HELP, runPackageCommand } from "./registry/cli.js";
 import { MigrateError, migrateProject, migrationHint } from "./migrate/index.js";
@@ -75,6 +76,10 @@ USAGE:
   halo blobs [prune]                    List the images and documents runs stored (.halo/blobs); prune
                                         removes those nothing in .halo mentions any more (--dry-run,
                                         --dir <stateDir>, --json)
+  halo wallet [add|list|remove|check|log]
+                                        Card and personal details a browser agent can type but never
+                                        read: store one in the Keychain at a hidden prompt (add <Item>
+                                        <field>), see which are set, read the audit log
   halo sandboxes [prune]                List the Docker sandboxes, snapshots and networks Halo made;
                                         prune removes the snapshots and networks (--all: stops
                                         running sandboxes too; --json)
@@ -240,7 +245,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run", "stdin"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -462,6 +467,16 @@ async function promptInterrupt(req: InterruptRequest): Promise<unknown> {
 
 const toEvent = answerToEvent;
 
+/**
+ * --auto-approve (and halo test): approve every question, except typing a value from a real wallet,
+ * which only a person can approve. A wallet whose source is "mock" holds test values, and is approved.
+ */
+function autoAnswer(req: InterruptRequest): unknown {
+  const wallet = req.named?.wallet as { mock?: boolean } | undefined;
+  if (wallet && wallet.mock !== true) return { approved: false, reason: "--auto-approve doesn't answer for a real wallet: a person must approve this (run in a terminal, or use a Vault with source: \"mock\" to test)" };
+  return AUTO_EVENT;
+}
+
 async function promptListen(req: ListenRequest): Promise<unknown> {
   console.error(bold(`\n‖ ${req.pipeline} is waiting for ${req.target}`));
   const answer = await ask(`Event (JSON or a word like approve/reject) [approve]: `);
@@ -557,9 +572,10 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     apiKey: last(flags, "api-key"),
     router: routerJson ? (parseJsonish(routerJson) as object) : undefined,
     // In a terminal, ask; otherwise pause the run (it is saved to .halo/runs) unless auto-approving.
-    onInterrupt: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptInterrupt : undefined,
+    onInterrupt: autoApprove ? autoAnswer : process.stdin.isTTY ? promptInterrupt : undefined,
     onListen: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptListen : undefined,
     runStore: new FileRunStore(".halo/runs"),
+    walletLog: ".halo/wallet.log",
     // Images and documents a run is given or makes, by hash.
     blobs: new FileBlobStore(".halo/blobs"),
     media: (await haloConfig()).media,
@@ -1357,7 +1373,7 @@ async function cmdMcp(flags: Flags): Promise<number> {
     const rel = relative(process.cwd(), file);
     if (ast.errors.length) fail(`Parse errors in ${rel}`);
     if (checkLinked(linked, await validateOptions()).some((d) => d.severity === "error")) fail(`${rel} has errors; run halo validate`);
-    const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs") }).load(ast);
+    const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs"), serving: true, walletLog: ".halo/wallet.log" }).load(ast);
     registerInstalled(rt, providers);
     runtimes.push(rt);
     for (const decl of entryPipelines(ast)) entries.set(decl.name, { rt, decl, file: rel });
@@ -1663,6 +1679,8 @@ export async function main(argv: string[]): Promise<number> {
         return cmdAgents(flags);
       case "skills":
         return cmdSkills(flags);
+      case "wallet":
+        return await cmdWallet({ positional: flags.positional, bools: flags.bools, get: (n) => last(flags, n) });
       default:
         // `halo file.halo` runs the file.
         if (command.endsWith(".halo")) return await cmdRun(parseFlags(argv), false);

@@ -28,7 +28,7 @@ export interface Digest {
 const tool = (name: string) => Bun.which(name, { PATH: process.env.PATH ?? "" });
 
 async function run(args: string[], signal?: AbortSignal): Promise<{ code: number; out: string }> {
-  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", signal });
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", signal, env: { ...process.env } });
   const timer = setTimeout(() => proc.kill(), 300_000);
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
   clearTimeout(timer);

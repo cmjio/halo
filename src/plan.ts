@@ -16,6 +16,15 @@ import type { ProviderInfo, ToolEffect, ToolMethod } from "./runtime/tools.js";
 import { stageLabel } from "./parser/labels.js";
 import { displayText } from "./linker/names.js";
 import { HOSTED_PROVIDER } from "./linker/hosted.js";
+import { walletNames } from "./runtime/wallet-rules.js";
+import type { ToolDeclaration, Value } from "./parser/types.js";
+
+/** A declaration's setting as written: literals as themselves, a list item by item, a name as its text. */
+function literalArg(tool: Pick<ToolDeclaration, "argList">, name: string): unknown {
+  const lit = (v: Value): unknown => (v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map(lit) : v.kind === "ref" ? v.path.join(".") : v.kind === "null" ? null : v.kind);
+  const v = tool.argList.find((x) => x.name === name)?.value;
+  return v === undefined ? undefined : lit(v);
+}
 
 export interface PlanStep {
   /** e.g. "3" or "3.1" for a stage inside a called pipeline. */
@@ -83,7 +92,18 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   const methodsOf = (toolName: string): ToolMethod[] | undefined => {
     const tool = tools.get(toolName);
     const info = tool ? options.providerInfo(tool.provider) : undefined;
-    return Array.isArray(info?.methods) ? info.methods : undefined;
+    if (Array.isArray(info?.methods)) return info.methods;
+    // Methods that depend on the declaration's settings (Chrome's evaluate, its wallet), from the settings as written.
+    if (tool && info?.methodsFor) return info.methodsFor((k) => literalArg(tool, k));
+    return undefined;
+  };
+  /** The wallet items a browser asks a person about before typing: every secret item, and any that doesn't say ask: false. */
+  const walletAsks = (toolName: string): string[] => {
+    const tool = tools.get(toolName);
+    return (tool ? (walletNames(tool) ?? []) : []).filter((n) => {
+      const v = tools.get(n);
+      return v?.provider === "Vault" && (literalArg(v, "kind") === "card" || literalArg(v, "secret") === true || literalArg(v, "ask") !== false);
+    });
   };
   const effectOf = (toolName: string, method: string): ToolEffect | "unknown" => methodsOf(toolName)?.find((m) => m.name === method)?.effect ?? "unknown";
 
@@ -97,6 +117,12 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
       if (r.name === "AllowEffects" && effect !== "unknown" && !r.args.includes(effect)) hidden = true;
       if ((r.name === "ApproveTools" && r.args.some((p) => toolMatches(p, target))) || (r.name === "ApproveEffects" && r.args.includes(effect))) approval ??= r.policy;
     }
+    if (effect === "wallet") {
+      const asks = walletAsks(target.split(".")[0]!);
+      if (asks.length) approval ??= `the wallet, for ${asks.join(", ")}`;
+    }
+    // hand_over is itself a question to a person.
+    if (target.endsWith(".hand_over") && effect !== "unknown") approval ??= "hand_over asks a person";
     return { hidden, approval };
   };
 
@@ -251,7 +277,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
 /** The plan as text for the terminal. */
 export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: string): string; red(s: string): string; yellow(s: string): string } = { bold: (s) => s, dim: (s) => s, red: (s) => s, yellow: (s) => s }): string {
   const lines: string[] = [color.bold(`Plan for ${p.pipeline}`), ""];
-  const tag = (e: string) => (e === "external" ? color.red("external") : e === "write" ? color.yellow("write") : e === "read" ? "read" : color.dim("unknown"));
+  const tag = (e: string) => (e === "external" ? color.red("external") : e === "wallet" ? color.red("wallet") : e === "write" ? color.yellow("write") : e === "read" ? "read" : color.dim("unknown"));
   for (const s of p.steps) {
     const cost = s.maxCost !== undefined ? color.dim(` ≤ $${s.maxCost.toFixed(4)}`) : "";
     lines.push(`  ${s.at.padEnd(6)} ${s.label}${s.model ? color.dim(` [${s.model}]`) : ""}${s.times ? color.dim(` (${s.times})`) : ""}${cost}`);
@@ -259,7 +285,7 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
     for (const n of s.notes) lines.push(color.dim(`         ${n}`));
   }
   const all = p.steps.flatMap((s) => s.effects);
-  const ext = [...new Set(all.filter((e) => e.effect === "external" && !e.approval).map((e) => e.target))];
+  const ext = [...new Set(all.filter((e) => (e.effect === "external" || e.effect === "wallet") && !e.approval).map((e) => e.target))];
   const approved = [...new Set(all.filter((e) => e.approval).map((e) => e.target))];
   const unknown = [...new Set(all.filter((e) => e.effect === "unknown").map((e) => e.target))];
   lines.push("");

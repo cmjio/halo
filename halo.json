@@ -1,5 +1,5 @@
 {
-  "halo": "^1.6.0",
+  "halo": "^1.7.0",
   "files": ["pipelines/"],
   "schedules": [
     {

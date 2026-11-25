@@ -17,8 +17,8 @@
  *      approved asks onInterrupt, or pauses the run (waiting for "approval").
  */
 
-import { mkdirSync, renameSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, mkdirSync, realpathSync, renameSync, statSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
 import type {
   BranchStage,
   CallStage,
@@ -63,7 +63,8 @@ import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
 import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } from "./threads.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
 import { constrain, shownParams, ToolRuleViolation } from "./tool-rules.js";
-import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
+import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolApprovalRequest, type ToolMethod, type ToolProvider, type ToolServices, type WalletEvent } from "./tools.js";
+import { captureWalletEnv, dotenvWithWallet, walletItem, walletLimits, walletNames, walletProgramProblem, type WalletItem, type WalletLimits } from "./wallet.js";
 import { HOSTED_PROVIDER, HOSTED_PROVIDER_INFO, hostedProvider } from "./hosted.js";
 import { MEDIA_INFO, MEDIA_PROVIDER, MEDIA_TOOL, mediaProvider, type Transcriber } from "./providers/media-files.js";
 import { clock, isService, TRANSCRIBE_KEYS, TRANSCRIBE_SERVICES, transcriptionCost, transcriptText } from "./providers/transcribe.js";
@@ -71,7 +72,7 @@ import { aKind, kinds } from "./media-ref.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
-import { asNumber, asText, compactJson, formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
+import { asNumber, asText, compactJson, declineReason, formatValue, isApproval, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
 
 export * from "./errors.js";
 export type { Violation } from "./policies.js";
@@ -220,7 +221,7 @@ export interface RunMeta {
   halted?: { stage: number; condition: string };
   /** Set while the run waits at `|! yield` (`waitingFor: "yield"`) or `~> listen(T)` (`waitingFor: T`). */
   /** `id` is new for every pause, so an approval for one pause can't answer a later one. */
-  paused?: { stage: number; waitingFor: string; message?: string; id?: string };
+  paused?: { stage: number; waitingFor: string; message?: string; id?: string; key?: string };
   /** How many times the run has paused. */
   pauses?: number;
   checkpoint?: string;
@@ -408,6 +409,8 @@ export type RuntimeEvent =
   /** Text from a model, in order (the whole answer as one chunk unless the adapter streams). */
   | { type: "token"; runId: string; pipeline: string; target: string; text: string }
   | { type: "paused"; pipeline: string; runId: string; index: number; waitingFor: string }
+  /** A wallet value was typed, refused, declined, or a submission after one was approved (never the value). */
+  | ({ type: "wallet"; pipeline: string; runId: string; at: string } & WalletEvent)
   | { type: "checkpoint"; runId: string; path: string }
   | ({ type: "violation"; runId: string } & Violation);
 
@@ -453,6 +456,13 @@ export interface RuntimeConfig {
   /** Receives every model answer, tool result, and approval as it happened (unredacted), so the run can be replayed. */
   recorder?: (entry: RecordedCall) => void;
   logger?: Pick<Console, "log" | "warn">;
+  /**
+   * Set by `halo serve` and `halo mcp`: the runtime serves pipelines to others. A wallet item is
+   * refused there unless its Vault says serve: true.
+   */
+  serving?: boolean;
+  /** Append each wallet event (never a value) to this file as a JSON line, e.g. ".halo/wallet.log". */
+  walletLog?: string;
 }
 
 // ── Internals ─────
@@ -478,6 +488,8 @@ interface ExecutionContext {
   sessions?: Record<number, AgentSession>;
   /** A person's answer to the approval a stage paused for, by stage index. */
   approvals?: Record<number, unknown>;
+  /** What each of those answers approved (the paused request's key), so it releases only that request. */
+  approvalKeys?: Record<number, string | undefined>;
   /** The calling pipeline's context, for a called pipeline. */
   parent?: ExecutionContext;
   /** When this pipeline's @timeout runs out (ms since epoch). */
@@ -492,7 +504,8 @@ interface ExecutionContext {
 
 /** Thrown inside a run to pause it at a yield/listen with no handler. */
 class Pause {
-  constructor(readonly waitingFor: string, readonly message?: string) {}
+  /** `key`, for an approval: what is being approved (see ToolApprovalRequest.key). */
+  constructor(readonly waitingFor: string, readonly message?: string, readonly key?: string) {}
 }
 
 interface LLMOptions {
@@ -545,21 +558,6 @@ const LLM_OPTION_KEYS = new Set(["max_tokens", "temperature", "temp", "top_p", "
 const DEFAULT_MAX_STEPS = 10;
 const DEFAULT_TOOL_RESULT_CHARS = 16_000;
 
-/** Why a person declined, when they said: `{ reason }`, or what they typed beyond a plain "no". */
-function declineReason(answer: unknown): string {
-  const said = isPlainObject(answer) ? (answer.reason ?? answer.comment ?? answer.text) : answer;
-  if (typeof said !== "string") return "";
-  const text = said.trim();
-  return text && !/^(?:n|no|nope|reject|rejected|deny|denied|decline|declined)$/i.test(text) ? `: ${text.slice(0, 500)}` : "";
-}
-
-/** A person's answer that approves something: "approve", "yes", `{ approved: true }`, ... */
-function isApproval(answer: unknown): boolean {
-  if (answer === true) return true;
-  if (typeof answer === "string") return /^\s*(?:y|yes|approve|approved|allow|ok|okay)\s*$/i.test(answer);
-  if (isPlainObject(answer)) return answer.approved === true || answer.action === "approve" || answer.status === "approved";
-  return false;
-}
 const MAX_STREAM_DEPTH = 16;
 const MAX_PIPELINE_CALLS = 100_000;
 const GENESIS = "0".repeat(64);
@@ -735,6 +733,9 @@ export class HaloRuntime {
     this.blobs = config.blobs ?? new MemoryBlobStore();
     this.router = new LLMRouter(config.router);
     this.routerEnabled = config.router !== undefined;
+    // Wallet values in the environment move into the wallet now, before anything can read them.
+    captureWalletEnv(process.env);
+    if (this.env !== process.env) captureWalletEnv(this.env);
   }
 
   private get env(): Record<string, string | undefined> {
@@ -783,6 +784,9 @@ export class HaloRuntime {
     }
     for (const sc of ast.schemas) this.schemas.set(sc.name, sc);
     this.indexShadows();
+    // A program with a wallet has no tool that runs commands as you, whether or not a run ever uses the browser.
+    const walletProblem = walletProgramProblem(this.tools.values());
+    if (walletProblem) throw new HaloError(walletProblem, { code: "TOOL_CONFIG" });
     return this;
   }
 
@@ -907,6 +911,7 @@ export class HaloRuntime {
     if (options.runId) ctx.meta.runId = options.runId;
     if (options.idempotencyKey) ctx.meta.idempotencyKey = options.idempotencyKey;
     if (options.dryRun) ctx.meta.dryRun = true;
+    this.walletFolders(ctx);
     await this.adoptArgs(ctx, options.media);
     return this.runTop(ctx, 0);
   }
@@ -1266,9 +1271,12 @@ export class HaloRuntime {
         throw err;
       };
       // An agent waiting for approval of a tool call: its stage runs again, picking up its conversation with the answer.
+      // A tool stage waiting for its provider's approval (a wallet fill the pipeline makes itself) runs again too.
       if (snap.waitingFor === "approval") {
-        if (stage?.kind !== "call" || !snap.sessions?.[snap.nextStage]) throw new SignalError(`Run ${runId} is not waiting for an approval`, "RUN_NOT_FOUND");
+        const toolStage = stage?.kind === "call" && this.tools.has(stage.callee) && snap.meta.paused?.key !== undefined;
+        if (stage?.kind !== "call" || (!snap.sessions?.[snap.nextStage] && !toolStage)) throw new SignalError(`Run ${runId} is not waiting for an approval`, "RUN_NOT_FOUND");
         ctx.approvals = { [snap.nextStage]: payload };
+        ctx.approvalKeys = { [snap.nextStage]: snap.meta.paused?.key };
         return { pipeline: snap.pipeline, result: this.runTop(ctx, snap.nextStage).then(done, failed) };
       }
       if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
@@ -1447,7 +1455,7 @@ export class HaloRuntime {
       if (!(err instanceof Pause)) throw err;
       // No handler for this yield/listen: save the run so signal() can continue it.
       const i = ctx.stageIndex;
-      ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message, id: crypto.randomUUID() };
+      ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message, id: crypto.randomUUID(), ...(err.key !== undefined ? { key: err.key } : {}) };
       ctx.meta.pauses = (ctx.meta.pauses ?? 0) + 1;
       const snap = this.toSnapshot(ctx, i, err.waitingFor);
       // A pause can last days: its Docker sandboxes are saved and stopped, and started again on resume.
@@ -1627,6 +1635,9 @@ export class HaloRuntime {
     }
     const to = ctx.pipeline.pipeline.findLastIndex((s, j) => j < index && s.kind === "call" && s.callee === stage.target);
     if (to < 0) throw new HaloError(`loop(${stage.target}, ...) needs an earlier ${stage.target} stage to go back to`, { code: "LOOP_TARGET_NOT_FOUND" });
+    // Going back would type (and maybe pay) again: refused, as halo validate refuses it.
+    const again = ctx.pipeline.pipeline.slice(to, index).find((st) => st.kind === "call" && this.usesWallet(st.callee));
+    if (again) throw new HaloError(`loop(${stage.target}, ...) would run ${(again as CallStage).callee} again, which uses a wallet`, { code: "WALLET_REPEAT" });
     ctx.loops[index] = done + 1;
     ctx.loopFeedback = { stage: to, condition: stage.condition, value: ctx.current, iteration: done + 1, previous: ctx.answers?.[to] };
     ctx.data.loop = { target: stage.target, iteration: done + 1, condition: stage.condition };
@@ -2293,7 +2304,12 @@ export class HaloRuntime {
       return `Refused by the tool's rules: ${err.message}. Don't try this call again.`;
     }
     let decision: "allowed" | "approved" = "allowed";
-    if (check !== "allow") {
+    // A browser with a wallet asks a person itself, about exactly the element and page it checked:
+    // a policy's approval is folded into that question, so the person is asked once, after the checks.
+    const wallet: WalletLimits | undefined = walletNames(entry.tool)
+      ? { ...walletLimits(agent.requires, this.policies), agent: agent.name, ...(check !== "allow" ? { policyApproval: check.approve } : {}) }
+      : undefined;
+    if (check !== "allow" && !wallet) {
       const answer = await this.approval(agent, entry.target, args, check.approve, ctx);
       if (!isApproval(answer)) {
         const reason = declineReason(answer);
@@ -2304,13 +2320,20 @@ export class HaloRuntime {
     }
     let result: unknown;
     try {
-      result = await this.toolCall(entry.tool, entry.method.name, [], args as Record<string, unknown>, ctx, true, agent.name);
+      result = await this.toolCall(entry.tool, entry.method.name, [], args as Record<string, unknown>, ctx, true, agent.name, wallet);
     } catch (err) {
       if (ctx.signal.aborted || err instanceof Pause) throw err;
+      // A wallet value may have gone somewhere it shouldn't: the run stops, rather than the model carrying on.
+      if (err instanceof HaloError && err.code === "WALLET_INCIDENT") throw err;
       const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof HaloError && err.code === "APPROVAL_DECLINED") {
+        report("declined", message);
+        return `${message}. Don't try it again; finish without it, or say what you need.`;
+      }
       report("error", message);
       return `Error: ${message}`;
     }
+    if (wallet?.policyApproval) decision = "approved";
     report(decision);
     // Images and documents in the result go to the model with it, if the agent's policies allow them.
     const files = collectMedia(result).filter((m) => this.holds(ctx, m.sha256));
@@ -2333,24 +2356,45 @@ export class HaloRuntime {
    */
   private async approval(agent: Agent, target: string, args: unknown, policy: string, ctx: ExecutionContext): Promise<unknown> {
     const message = `Allow ${agent.name} to call ${target} with ${clip(formatValue(this.guard.forLog(agent, args)), 2000)}? (policy ${policy})`;
-    if (ctx.approvals && Object.hasOwn(ctx.approvals, ctx.stageIndex)) {
-      const answer = ctx.approvals[ctx.stageIndex];
-      delete ctx.approvals[ctx.stageIndex];
-      this.record({ kind: "approval", target, value: answer });
-      return answer;
+    const key = `tool:${target}:${sha256(safeJson(args)).slice(0, 16)}`;
+    return this.ask(ctx, { target, key, message, attachments: [args], named: { target, args, policy, agent: agent.name } }, agent.name, `${agent.name} needs approval to call ${target} (policy ${policy})`);
+  }
+
+  /**
+   * Put a question to a person: the answer already given to this exact request when the run paused
+   * (by key), a mock, onInterrupt, or a pause. Only a top-level stage that is itself the call (an
+   * agent stage, or a tool stage for a provider's own question) can stop and pick up again.
+   */
+  private async ask(
+    ctx: ExecutionContext,
+    req: { target: string; key: string; message: string; attachments: unknown[]; named: Record<string, unknown>; wallet?: { mock: boolean } },
+    owner: string,
+    needs: string,
+  ): Promise<unknown> {
+    const recorded = (answer: unknown) => (this.record({ kind: "approval", target: req.target, value: answer }), answer);
+    const i = ctx.stageIndex;
+    if (ctx.approvals && Object.hasOwn(ctx.approvals, i)) {
+      // An answer releases only the request it was given to (a pause from before keys existed had none).
+      const k = ctx.approvalKeys?.[i];
+      if (k === undefined || k === req.key) {
+        const answer = ctx.approvals[i];
+        delete ctx.approvals[i];
+        if (ctx.approvalKeys) delete ctx.approvalKeys[i];
+        return recorded(answer);
+      }
     }
-    const mock = this.mockFor(target + "?", "approval");
-    const req: InterruptRequest = { pipeline: ctx.pipeline.name, message, channel: "approval", attachments: [args], args: [], named: { target, args, policy, agent: agent.name }, current: ctx.current, context: this.snapshot(ctx) };
-    const recorded = (answer: unknown) => (this.record({ kind: "approval", target, value: answer }), answer);
-    if (mock) return recorded(await mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current }));
-    if (this.config.onInterrupt) return recorded(await raceAbort(Promise.resolve(this.config.onInterrupt(req)), ctx.signal));
-    // Only a top-level stage that is itself the agent call can stop and pick up again.
-    const stage = ctx.pipeline.pipeline[ctx.stageIndex];
-    const own = stage?.kind === "call" && stage.callee === agent.name;
-    if (ctx.depth > 0 || !own) {
-      throw new HaloError(`${agent.name} needs approval to call ${target} (policy ${policy}), but this stage can't pause (it's inside a called pipeline, fan-out, each, or branch); register runtime.onInterrupt(...)`, { code: "APPROVAL_NEEDED" });
+    const named = { ...req.named, ...(req.wallet ? { wallet: req.wallet } : {}) };
+    const mock = this.mockFor(req.target + "?", "approval");
+    // A wallet approval is a person's: a mock answers it only for the mock source.
+    if (mock && (!req.wallet || req.wallet.mock)) return recorded(await mock({ target: req.target, kind: "approval", prompt: req.message, args: req.attachments, named, input: ctx.current }));
+    const interrupt: InterruptRequest = { pipeline: ctx.pipeline.name, message: req.message, channel: "approval", attachments: req.attachments, args: [], named, current: ctx.current, context: this.snapshot(ctx) };
+    if (this.config.onInterrupt) return recorded(await raceAbort(Promise.resolve(this.config.onInterrupt(interrupt)), ctx.signal));
+    const stage = ctx.pipeline.pipeline[i];
+    const own = stage?.kind === "call" && stage.callee === owner;
+    if (ctx.depth > 0 || !own || ctx.branch) {
+      throw new HaloError(`${needs}, but this stage can't pause (it's inside a called pipeline, fan-out, each, or branch); register runtime.onInterrupt(...)`, { code: "APPROVAL_NEEDED" });
     }
-    throw new Pause("approval", message);
+    throw new Pause("approval", req.message, req.key);
   }
 
   /** `@correct(n)` on the agent, else on the pipeline: how many times a policy-rejected answer may be retried. */
@@ -2626,10 +2670,91 @@ export class HaloRuntime {
     return Promise.all(messages.map(async (m) => (m.role === "user" && m.media?.length ? { ...m, media: await Promise.all(m.media.map(load)) } : m)));
   }
 
-  private toolServices(ctx: ExecutionContext): ToolServices {
+  /** The wallet items a browser's `wallet:` names, checked against the program and where it runs. */
+  private walletItems(names: string[], ctx: ExecutionContext): WalletItem[] {
+    const problem = walletProgramProblem(this.tools.values());
+    if (problem) throw new HaloError(problem, { code: "TOOL_CONFIG" });
+    this.walletFolders(ctx);
+    return names.map((name) => {
+      const t = this.tools.get(name);
+      if (!t || t.provider !== "Vault") throw new HaloError(`wallet: "${name}" is not a Vault tool declared in this program`, { code: "TOOL_CONFIG" });
+      const item = walletItem(name, this.toolConfig(t, ctx).config);
+      if (this.config.serving && !item.serve) {
+        throw new HaloError(`${name} can't be used while Halo serves pipelines to others (halo serve, halo mcp): anyone who can start a run could use it. Declare it with serve: true if that's intended`, { code: "TOOL_CONFIG" });
+      }
+      if (item.source === "env") {
+        const file = dotenvWithWallet(process.cwd());
+        if (file) throw new HaloError(`${file} holds HALO_WALLET_ values. Bun loads it, and file tools can read it: set them in the environment Halo starts with instead`, { code: "TOOL_CONFIG" });
+      }
+      return item;
+    });
+  }
+
+  /**
+   * A program with a wallet: a folder a tool reaches (Workspace, a sandbox's from:) must really be
+   * inside the project, even when it's written as "./docs" and is a link. Checked before every run.
+   */
+  private walletFolders(ctx: ExecutionContext): void {
+    if (![...this.tools.values()].some((t) => walletNames(t))) return;
+    // A folder written as "./docs" can still be a link out of the project: check where it really is.
+    const project = realpathSync(process.cwd());
+    for (const t of this.tools.values()) {
+      const keys: Array<string | number> = t.provider === "Workspace" ? [0, "root"] : t.provider === "Remote" ? ["from", "root"] : [];
+      for (const k of keys) {
+        const v = this.toolConfig(t, ctx).config(k) ?? (t.provider === "Workspace" && k === 0 ? "." : undefined);
+        if (typeof v !== "string") continue;
+        let real: string;
+        try {
+          real = realpathSync(resolve(project, v));
+        } catch {
+          continue;
+        }
+        if (real !== project && !real.startsWith(project + sep)) {
+          throw new HaloError(`Tool "${t.name}" reaches ${real}, outside the project, so it can't be in the same program as a wallet`, { code: "TOOL_CONFIG" });
+        }
+      }
+    }
+  }
+
+  /** Whether a call's callee can type from a wallet: a browser with one, an agent that equips one, or a pipeline that uses either. */
+  private usesWallet(callee: string, seen = new Set<string>()): boolean {
+    const tool = this.tools.get(callee);
+    if (tool) return !!walletNames(tool);
+    const agent = this.agents.get(callee);
+    if (agent) return (agent.equips ?? []).some((e) => { const t = this.tools.get(e); return !!t && !!walletNames(t); });
+    const p = this.pipelines.get(callee);
+    if (!p || seen.has(callee)) return false;
+    seen.add(callee);
+    return p.pipeline.some((st) => (st.kind === "call" ? [st] : st.kind === "fanout" ? st.stages : st.kind === "each" ? [st.call] : st.kind === "branch" ? st.arms.map((a) => a.call) : []).some((c) => this.usesWallet(c.callee, seen)));
+  }
+
+  /** Report a wallet event: telemetry, and the audit log when there is one. */
+  private walletEvent(ctx: ExecutionContext, e: WalletEvent): void {
+    const at = new Date().toISOString();
+    this.emit({ type: "wallet", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, at, ...e });
+    const path = this.config.walletLog;
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, `${JSON.stringify({ at, run: ctx.meta.runId, pipeline: ctx.pipeline.name, ...e })}\n`, { mode: 0o600 });
+    } catch (err) {
+      this.logger.warn(`Could not write the wallet log ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private toolServices(ctx: ExecutionContext, tool?: ToolDeclaration, chosenBy?: string, method?: string): ToolServices {
     return {
       fetch: this.fetch,
       env: this.env,
+      serving: this.config.serving === true,
+      wallet: (names) => this.walletItems(names, ctx),
+      approve: (req: ToolApprovalRequest) => {
+        if (!tool) throw new HaloError("approve() is for a tool call", { code: "TOOL_CONFIG" });
+        const target = method ? `${tool.name}.${method}` : tool.name;
+        // The stage that can pause for it is the agent's, when an agent chose the call; else the tool stage itself.
+        return this.ask(ctx, { target, key: req.key, message: req.message, attachments: [], named: req.named, ...(req.wallet ? { wallet: req.wallet } : {}) }, chosenBy ?? tool.name, `${tool.name} needs a person's approval`);
+      },
+      walletEvent: (e: WalletEvent) => this.walletEvent(ctx, e),
       spend: (usd) => {
         if (!(usd > 0)) return;
         ctx.meta.cost += usd;
@@ -2666,7 +2791,7 @@ export class HaloRuntime {
   }
 
   /** Call a tool. `chosenBy` names the agent that chose the call: its arguments are all it gets (never the pipeline value). */
-  private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean, chosenBy?: string): Promise<unknown> {
+  private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean, chosenBy?: string, wallet?: WalletLimits): Promise<unknown> {
     const target = `${tool.name}.${method}`;
     // A call an agent chose was checked against the tool's rules before anyone was asked to approve it.
     if (chosenBy === undefined) named = constrain(tool, method, named, false, (v) => this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name }));
@@ -2687,7 +2812,13 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current, fingerprint }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: top.runId, branch: ctx.branch, pauses: top.pauses ?? 0, idempotencyKey }, this.toolServices(ctx)), mocked: false },
+        : {
+            value: await provider!(
+              { tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: top.runId, branch: ctx.branch, pauses: top.pauses ?? 0, idempotencyKey, ...(wallet ? { wallet } : {}) },
+              this.toolServices(ctx, tool, chosenBy, method),
+            ),
+            mocked: false,
+          },
     );
     // Files in the result are stored and replaced by references, before anything records or hashes it.
     result.value = await adoptMedia(result.value, (bytes, name) => this.mintFor(ctx, bytes, { name }));
