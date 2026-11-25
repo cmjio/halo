@@ -24,7 +24,6 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { Glob } from "bun";
 import { checkLinked, type LinkedProgram } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
 import { parse } from "../parser/index.js";
@@ -57,7 +56,7 @@ export interface HostedSources {
 
 /** The .halo files in a package folder (relative, POSIX), as pack would see them. */
 function haloFiles(dir: string): string[] {
-  return [...new Glob("**/*.halo").scanSync({ cwd: dir, dot: false, onlyFiles: true })]
+  return [...new Bun.Glob("**/*.halo").scanSync({ cwd: dir, dot: false, onlyFiles: true })]
     .map((p) => p.split("\\").join("/"))
     .filter((p) => !PACK_EXCLUDE.some((re) => re.test(p)))
     .sort();
