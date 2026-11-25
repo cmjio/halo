@@ -50,7 +50,7 @@ What changed:
 | 3 | Selectors: exact attribute tests only, no `.class`; no screenshots once anything is typed | Prefix oracles, class oracles, CSS/canvas/shadow screenshots |
 | 4 | A form holding a typed value may send it only to the item's hosts | A form or `formaction` posting to another host |
 | 5 | Wallet browsers run incognito | Chrome writing the card page's form state to `Sessions/` on disk |
-| 6 | `HALO_WALLET_` values wiped from the native environment block (`bun:ffi`); Halo's spawns pass an explicit environment | `ps eww` showing the card; Chrome inheriting it |
+| 6 | `HALO_WALLET_` values wiped from the native environment block (`bun:ffi`); on Linux, credentials too, in the block `/proc/<pid>/environ` serves (found from `/proc/self/stat`); Halo's spawns pass an explicit environment | `ps eww` showing the card or a provider key; Chrome inheriting it |
 | 7 | The program rule runs at load (not first use), covers `Git`, unwritten or outside folders, `Remote` `from:`, `MCP` without a written `http(s)` URL; folders' real paths checked at run start; the runtime refuses a `loop` that re-runs a wallet stage | `MCP(url: null)`, `Workspace(root: Env.X)`, symlinked folders, loops run from the SDK |
 | 8 | `halo wallet add`: values capped and checked so a line never reaches `security -i`'s 4095-byte read | A long value running a second `security` command |
 

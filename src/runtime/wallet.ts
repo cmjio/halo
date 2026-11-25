@@ -72,6 +72,50 @@ export function captureWalletEnv(env: Record<string, string | undefined>): void 
     if (env === process.env) wipeNative(name);
     delete env[name];
   }
+  if (env === process.env) hideSecretsFromProc();
+}
+
+/** Variables that hold credentials: provider keys, tokens, passwords. */
+export const SECRET_ENV = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$/i;
+let procHidden = false;
+
+/**
+ * Linux keeps the environment a process started with in its own memory, and serves it to any program
+ * running as the same user at /proc/<pid>/environ (which `ps eww` reads). Bun copies the environment at
+ * startup, so wiping what getenv points to doesn't reach that block. Here the block is found from
+ * /proc/self/stat (env_start, env_end) and every HALO_WALLET_ value and credential in it is zeroed in
+ * place. Credentials Halo still needs (a provider's key) stay in process.env first: setting them again
+ * stores a fresh copy outside the block. Best effort: on any failure the block is left as it was.
+ */
+function hideSecretsFromProc(): void {
+  if (procHidden || process.platform !== "linux") return;
+  procHidden = true;
+  try {
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const stat = readFileSync("/proc/self/stat", "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" "); // fields[0] is field 3 (state)
+    const start = Number(fields[50 - 3]), end = Number(fields[51 - 3]);
+    if (!(start > 0 && end > start && end - start < 1 << 20)) return;
+    const keep: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (SECRET_ENV.test(k) && typeof v === "string") keep[k] = v;
+    const ffi = require("bun:ffi") as typeof import("bun:ffi");
+    const block = new Uint8Array(ffi.toArrayBuffer(start as never, 0, end - start));
+    // The block is NUL-separated NAME=value strings.
+    let i = 0;
+    while (i < block.length) {
+      let j = i;
+      while (j < block.length && block[j] !== 0) j++;
+      const eq = block.indexOf(61 /* = */, i);
+      if (eq > i && eq < j) {
+        const name = Buffer.from(block.subarray(i, eq)).toString("latin1");
+        if (name.startsWith("HALO_WALLET_") || SECRET_ENV.test(name)) block.fill(0, eq + 1, j);
+      }
+      i = j + 1;
+    }
+    for (const [k, v] of Object.entries(keep)) process.env[k] = v;
+  } catch {
+    // leave it: the wallet's own values were already moved out of process.env
+  }
 }
 
 let libc: { getenv(name: Buffer): number | null } | null | undefined;
