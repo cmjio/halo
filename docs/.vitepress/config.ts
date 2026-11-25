@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
 import fs from 'fs'
 import path from 'path'
+import lightPlus from 'shiki/themes/light-plus.mjs'
 
 // Read the VS Code TextMate grammar for Halo
 const haloGrammarPath = path.resolve(__dirname, '../../editors/vscode/syntaxes/halo.tmLanguage.json')
@@ -16,7 +17,7 @@ const version = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../packag
 
 export default defineConfig({
   title: "Halo",
-  description: "A language for AI pipelines: agents, tools, and the policies the runtime enforces on every call.",
+  description: "Halo is an open-source programming language for AI agents that use tools, with your rules checked before every action, the cost known before a run, and a free replay after.",
   cleanUrls: true,
   // Served next to the docs, but not pages: the installers, the package registry, release downloads.
   ignoreDeadLinks: [/^\/install\.(sh|ps1)$/, /^\/registry\//, /^\/dl\//],
@@ -29,7 +30,7 @@ export default defineConfig({
     ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
     ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap' }],
     ['meta', { property: 'og:title', content: 'Halo · a language for AI pipelines' }],
-    ['meta', { property: 'og:description', content: 'Agents, tools, and the policies the runtime enforces on every call. Plan a run before it starts; replay it after.' }],
+    ['meta', { property: 'og:description', content: 'A programming language for AI agents that use tools: your rules are checked before every action, the cost is known before a run, and every run replays for free.' }],
     ['meta', { property: 'og:url', content: 'https://halolang.com/' }],
     ['meta', { property: 'og:image', content: 'https://halolang.com/video/halo-loop.jpg' }],
     ['meta', { property: 'og:video', content: 'https://halolang.com/video/halo-loop.mp4' }],
@@ -38,7 +39,8 @@ export default defineConfig({
   ],
   markdown: {
     theme: {
-      light: 'light-plus',
+      // light-plus with its numbers and type names darkened to reach 4.5:1 on the code background.
+      light: { ...lightPlus, name: 'light-plus-aa', colorReplacements: { '#098658': '#07704a', '#267f99': '#1f6f86' } },
       dark: 'dark-plus'
     },
     languages: [

@@ -13,7 +13,7 @@ import { escapeHtml } from "../../../site/src/highlight.ts";
 const site = data as unknown as SiteData & { home: { examples: HomeExample[]; plan: { cmd: string; text: string } } };
 const h = HOME;
 const run = runSteps(site);
-const examples = site.home.examples.map((e) => ({ ...e, sourceHtml: haloHtml(e.source), outputHtml: outputHtml(e.output) }));
+const examples = site.home.examples.map((e) => ({ ...e, about: h.examplesAbout[e.file] ?? "", sourceHtml: haloHtml(e.source), outputHtml: outputHtml(e.output) }));
 const plan = planHtml(site.home.plan.text);
 const planSum = planSummary(site.home.plan.text);
 const proofLabel = (label: string) => (label.startsWith("$ ") ? `<span>$</span> ${escapeHtml(label.slice(2))}` : escapeHtml(label));
@@ -125,6 +125,23 @@ const loopEl = ref<HTMLVideoElement>();
 const loopControls = ref(true);
 let loopObserver: IntersectionObserver | undefined;
 
+// ── The trailer: opened by a press, so it may play with sound. Native <dialog> gives Esc,
+// the focus trap and focus return; a click on the backdrop (the dialog itself) closes it.
+const trailerEl = ref<HTMLDialogElement>();
+const trailerVideo = ref<HTMLVideoElement>();
+function openTrailer(ev: MouseEvent) {
+  const d = trailerEl.value;
+  if (!d || d.open) return;
+  d.showModal();
+  loopEl.value?.pause();
+  // A keyboard press (detail 0) leaves focus on the close button for the player's own controls.
+  trailerVideo.value?.play().catch(() => {});
+  if (ev.detail !== 0) trailerVideo.value?.focus();
+}
+const closeTrailer = () => trailerEl.value?.close();
+const onTrailerClose = () => trailerVideo.value?.pause();
+const onTrailerClick = (ev: MouseEvent) => { if (ev.target === trailerEl.value) closeTrailer(); };
+
 // Until hydration measures the tabs, the selected tab is styled directly.
 const ready = ref(false);
 let resize: ResizeObserver | undefined;
@@ -173,14 +190,10 @@ onBeforeUnmount(() => {
     <section class="hero" aria-labelledby="hh-title">
       <div class="wrap hero-grid">
         <div>
-          <p class="eyebrow">
-            <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="7.5" rx="9" ry="3.2" pathLength="1" /><circle cx="12" cy="16" r="4.2" /></svg>
-            {{ h.eyebrow }}
-          </p>
           <h1 id="hh-title">{{ h.title }}</h1>
           <p class="lede">{{ h.lede }}</p>
           <ul class="proof">
-            <li v-for="p in h.proof" :key="p.label"><b v-html="proofLabel(p.label)"></b><span>{{ p.text }}</span></li>
+            <li v-for="p in h.proof" :key="p.label"><b v-html="proofLabel(p.label)"></b><span v-html="inline(p.text)"></span></li>
           </ul>
 
           <div class="install" id="install">
@@ -230,7 +243,7 @@ onBeforeUnmount(() => {
             <a class="btn btn-primary press" href="/guide/quickstart">Quickstart
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M13 18l6 -6" /><path d="M13 6l6 6" /></svg></a>
             <a class="btn btn-ghost press" href="/playground">Playground</a>
-            <a class="quiet" href="#run">See a recorded run</a>
+            <button class="watch press" type="button" aria-haspopup="dialog" @click="openTrailer($event)"><span class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5z" fill="currentColor" /></svg></span>{{ h.trailer.label }}<span class="dur">{{ h.trailer.duration }}</span></button>
           </div>
         </div>
 
@@ -276,8 +289,38 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <p class="caption">{{ h.examplesCaption }}</p>
+          <p class="caption"><span class="about" v-html="inline(examples[tabs.ex.index]!.about)"></span> <span v-html="inline(h.examplesCaption)"></span></p>
         </div>
+      </div>
+    </section>
+
+    <!-- The words, for someone new to agents -->
+    <section class="sec terms-sec" id="terms" aria-labelledby="hh-terms">
+      <div class="wrap">
+        <p class="kicker">{{ h.terms.kicker }}</p>
+        <h2 id="hh-terms">{{ h.terms.title }}</h2>
+        <dl class="terms">
+          <div v-for="t in h.terms.items" :key="t.term"><dt>{{ t.term }}</dt><dd v-html="inline(t.text)"></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- What agents can do -->
+    <section class="sec" id="can" aria-labelledby="hh-can">
+      <div class="wrap">
+        <p class="kicker">{{ h.can.kicker }}</p>
+        <h2 id="hh-can">{{ h.can.title }}</h2>
+        <p class="can-body">{{ h.can.body }}</p>
+        <ul class="can">
+          <li v-for="c in h.can.items" :key="c.title">
+            <a :href="c.link" class="press">
+              <code>{{ c.code }}</code>
+              <b>{{ c.title }}</b>
+              <span>{{ c.text }}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M13 18l6 -6" /><path d="M13 6l6 6" /></svg>
+            </a>
+          </li>
+        </ul>
       </div>
     </section>
 
@@ -386,6 +429,7 @@ onBeforeUnmount(() => {
         <div class="video-frame">
           <video ref="loopEl" muted loop playsinline preload="metadata" :controls="loopControls" :poster="h.minute.poster" :src="h.minute.video" aria-label="A policy refusing a tool call, halo plan, and halo replay"></video>
         </div>
+        <button class="watch watch-lg press" type="button" aria-haspopup="dialog" @click="openTrailer($event)"><span class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5z" fill="currentColor" /></svg></span>{{ h.minute.more }}<span class="dur">{{ h.trailer.duration }}</span></button>
       </div>
     </section>
 
@@ -403,7 +447,7 @@ onBeforeUnmount(() => {
                 <svg class="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5l10 -10" /></svg>
               </button>
             </div>
-            <pre><template v-for="(c, k) in h.start.commands" :key="c.cmd"><span class="p">$ </span>{{ c.cmd }}<span v-if="c.comment" class="c">   # {{ c.comment }}</span>{{ k < h.start.commands.length - 1 ? "\n" : "" }}</template></pre>
+            <pre tabindex="0" aria-label="First commands"><template v-for="(c, k) in h.start.commands" :key="c.cmd"><span class="p">$ </span>{{ c.cmd }}<span v-if="c.comment" class="c">   # {{ c.comment }}</span>{{ k < h.start.commands.length - 1 ? "\n" : "" }}</template></pre>
           </div>
           <div class="ctas">
             <a class="btn btn-primary press" href="/guide/quickstart">Open the Quickstart
@@ -434,6 +478,19 @@ onBeforeUnmount(() => {
         </nav>
       </div>
     </footer>
+
+    <!-- The trailer: a modal over a dimmed page, opened only on request, so it plays with sound -->
+    <dialog ref="trailerEl" class="trailer" aria-labelledby="hh-trailer-title" @close="onTrailerClose" @click="onTrailerClick">
+      <div class="trailer-inner">
+        <div class="trailer-bar">
+          <h2 id="hh-trailer-title">{{ h.trailer.title }}</h2>
+          <button class="trailer-close press" type="button" aria-label="Close the trailer" @click="closeTrailer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <video ref="trailerVideo" controls playsinline preload="none" :poster="h.trailer.poster" :src="h.trailer.video" :aria-label="h.trailer.description"></video>
+      </div>
+    </dialog>
 
     <div class="sr" aria-live="polite">{{ announce }}</div>
   </div>
