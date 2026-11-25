@@ -1,0 +1,36 @@
+// A booking agent that pays with a card it can type but never read.
+//
+//   halo wallet add Card number      (and expiry, cvc, name: each at a hidden prompt, into the Keychain)
+//   halo wallet add Me full_name     (and email, phone)
+//   halo run examples/patterns/wallet-checkout.halo --arg trip="LHR to JFK, 3 March, one adult, economy"
+//
+// The card is typed only on the airline's checkout page and its payment provider's frame inside
+// it, after you approve, and you press Pay yourself (hand_over). See docs/stdlib/wallet.md.
+// Put a virtual card with a limit in the wallet, not your everyday one.
+
+tool Card : Vault(source: "keychain", kind: "card", fields: ["number", "expiry", "cvc", "name"],
+                  hosts: ["www.britishairways.com"], pay_via: ["js.stripe.com"])
+tool Me   : Vault(source: "keychain", fields: ["full_name", "email", "phone"],
+                  hosts: ["www.britishairways.com"], ask: false)
+
+tool Search : WebSearch(engine: "brave", apiKey: Env.BRAVE_API_KEY)
+tool Web    : Chrome(headless: false, allow: ["www.britishairways.com"], wallet: [Card, Me])
+
+policy Booking : AllowTools("Search.*", "Web.*", "Card.list", "Me.list")
+  & AllowWallet("Card", "Me")
+  & Redact(PII)
+  & MaxSpend(2.00)
+
+agent Booker [anthropic/claude-sonnet-4-5, temp: 0.0, max_steps: 60]
+  system """
+  Book the flight described on britishairways.com. Card.list and Me.list say what the wallet holds.
+  Type passenger and payment details with Web.fill_secrets, never ask for them in chat, and never
+  guess them. Card fields are usually in a payment frame: Web.frames lists them. When the card is
+  filled, call Web.hand_over so the person checks the booking and presses Pay. Report the booking
+  reference, or what stopped you.
+  """
+  equips Search, Web, Card, Me
+  requires Booking
+
+pipeline BookFlight(trip: String) -> Result:
+  trip |> Booker.book("Book this trip:", trip, tools: auto)

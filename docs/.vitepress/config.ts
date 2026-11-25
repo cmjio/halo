@@ -97,6 +97,7 @@ export default defineConfig({
         items: [
           { text: 'Built-in Tools', link: '/stdlib/tools' },
           { text: 'Chrome', link: '/stdlib/chrome' },
+          { text: 'The Wallet', link: '/stdlib/wallet' },
           { text: 'Local Tools', link: '/stdlib/local-tools' },
           { text: 'SQLite', link: '/stdlib/sqlite' },
           { text: 'Utility Tools', link: '/stdlib/utility-tools' },

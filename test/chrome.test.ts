@@ -161,7 +161,7 @@ test("CHROME_INFO describes every method, and evaluate only with allowScript", a
   const methods = CHROME_INFO.methods as (ctx: any, s: any) => Promise<ToolMethod[]>;
   const ctx = (allowScript?: boolean) => ({ tool: {}, config: (k: string) => (k === "allowScript" ? allowScript : undefined), signal: new AbortController().signal });
   const plain = await methods(ctx(), {});
-  expect(plain.map((m) => m.name)).toEqual(["open", "click", "fill", "press", "select", "text", "html", "links", "wait", "screenshot", "back"]);
+  expect(plain.map((m) => m.name)).toEqual(["open", "click", "fill", "press", "select", "text", "html", "links", "frames", "wait", "screenshot", "back"]);
   expect(plain.find((m) => m.name === "click")!.effect).toBe("external");
   expect(plain.find((m) => m.name === "open")!.effect).toBe("read");
   for (const m of plain) expect(m.description.length).toBeGreaterThan(20);

@@ -54,20 +54,49 @@ function unknownMethod(call: ToolCall, methods: string[]): never {
 
 // ── Bash ──
 
+/** What every Bash command sees from Halo's own environment: enough to run tools, nothing that is a key. */
+export const BASH_BASE_ENV = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ", "TERM"] as const;
+
+/**
+ * The environment a Bash declaration's commands run with: BASH_BASE_ENV from Halo's process,
+ * plus what `env:` passes on. A list names variables, read from the runtime's environment
+ * (RuntimeConfig.env, else Halo's) as Env.NAME is; an object gives values. Before 1.7.0 a
+ * command inherited all of Halo's environment, every API key included.
+ */
+export function bashEnv(call: Pick<ToolCall, "tool" | "config">, environ: Record<string, string | undefined> = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of BASH_BASE_ENV) if (process.env[name] !== undefined) env[name] = process.env[name]!;
+  const pass = call.config("env");
+  if (Array.isArray(pass)) {
+    for (const name of pass) {
+      if (typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new HaloError(`Tool "${call.tool.name}": env: lists variable names in quotes, e.g. env: ["DATABASE_URL"]`, { code: "TOOL_CONFIG" });
+      }
+      if (environ[name] !== undefined) env[name] = environ[name]!;
+    }
+  } else if (pass && typeof pass === "object") {
+    for (const [k, v] of Object.entries(pass)) if (v !== undefined && v !== null) env[k] = typeof v === "string" ? v : JSON.stringify(v);
+  } else if (pass !== undefined && pass !== null) {
+    throw new HaloError(`Tool "${call.tool.name}": env: must be a list of variable names, e.g. env: ["DATABASE_URL"]`, { code: "TOOL_CONFIG" });
+  }
+  return env;
+}
+
 /**
  * Runs `command:` with bash in the current directory. Values inserted into the
  * command with {{...}} are shell-quoted by the runtime, so model output or user
  * input can't inject commands. A failing command is not an error: check
  * `exitCode` (e.g. with `|<> loop`). When stdout is JSON, it is also returned
- * parsed as `json`.
+ * parsed as `json`. The command sees only BASH_BASE_ENV and what `env:` passes on.
  */
-export const bash: ToolProvider = async (call) => {
+export const bash: ToolProvider = async (call, services) => {
   const command = call.named.command;
   if (typeof command !== "string" || !command.trim()) {
     throw new HaloError(`${call.tool.name}.${call.method} needs command: "...", e.g. ${call.tool.name}.run(command: "bun test")`, { code: "TOOL_ARGUMENT" });
   }
   const timeoutMs = Number(call.named.timeout_ms ?? call.config("timeout_ms") ?? 120_000);
-  const proc = Bun.spawn(["bash", "-c", command], { cwd: (call.config("cwd") as string | undefined) ?? process.cwd(), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const env = bashEnv(call, services?.env ?? process.env);
+  const proc = Bun.spawn(["bash", "-c", command], { cwd: (call.config("cwd") as string | undefined) ?? process.cwd(), env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const kill = () => proc.kill();
   call.signal.addEventListener("abort", kill, { once: true });
   const timer = setTimeout(kill, timeoutMs);

@@ -25,7 +25,7 @@ export interface Violation {
   escalated?: boolean;
 }
 
-export type ToolEffectName = "read" | "write" | "external";
+export type ToolEffectName = "read" | "write" | "external" | "wallet";
 
 /** `Repo`, `Repo.create_pr`, `Repo.*`, `*.delete`, `*`: a tool pattern, matched against "Tool.method". */
 export function toolMatches(pattern: string, target: string): boolean {

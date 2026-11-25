@@ -45,6 +45,23 @@ import { sandboxChoice, sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
 import { splitToolPath } from "../linker/names.js";
+import { WALLET_PATTERN, walletItemProblems, walletNames, walletUnsafeTool } from "../runtime/wallet-rules.js";
+
+/** The calls a stage makes (a fan-out's, an each's, every branch arm's). */
+function stageCalls(st: PipelineStage): CallStage[] {
+  switch (st.kind) {
+    case "call":
+      return [st];
+    case "fanout":
+      return st.stages;
+    case "each":
+      return [st.call];
+    case "branch":
+      return st.arms.map((a) => a.call);
+    default:
+      return [];
+  }
+}
 
 export interface Diagnostic {
   severity: "error" | "warning";
@@ -109,11 +126,13 @@ class Validator {
       if (!known) this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
       if (t.provider === "SQLite") this.checkSqliteTool(t);
       if (t.provider === "Remote") this.checkRemoteSecrets(t);
+      if (t.provider === "Bash") this.checkBashEnv(t);
       this.checkArgRules(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
     for (const sc of this.ast.schemas) this.checkSchema(sc);
     for (const s of this.ast.pipelines) this.checkPipeline(s);
+    this.checkWallet();
     const seen = new Set<string>();
     this.diags = this.diags.filter((d) => {
       const key = `${d.severity}|${d.file ?? ""}|${d.line}|${d.message}`;
@@ -187,6 +206,12 @@ class Validator {
           if (!SECRET_NAME.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}) should be an environment variable name, like STRIPE_TEST_KEY`, g.loc);
           else if (RESERVED_SECRET.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}): ${n} can't be a secret; it changes how the sandbox or Docker itself runs`, g.loc);
         }
+      } else if (rule.name === "AllowWallet" || rule.name === "ApproveWallet") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": ${rule.name}(...) names wallet items or fields, e.g. ${rule.name}("Card", "Me.email")`, g.loc);
+        for (const p of rule.args) {
+          if (!WALLET_PATTERN.test(p)) this.add("error", `Policy "${g.name}": ${rule.name}(${p}) should name a Vault, or a Vault's field: "Card", "Card.number" or "Card.*"`, g.loc);
+          else if (p !== "*" && this.tools.get(p.split(".")[0]!)?.provider !== "Vault") this.add("warning", `Policy "${g.name}": ${rule.name}(${p}): ${p.split(".")[0]} is not a Vault tool declared here`, g.loc);
+        }
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
@@ -204,6 +229,108 @@ class Validator {
       if (v.kind !== "string") this.add("error", `Tool "${t.name}": secrets: lists names in quotes, like secrets: ["STRIPE_TEST_KEY"]; ${v.kind === "ref" && v.path[0] === "Env" ? `Env.${v.path.slice(1).join(".")} is the value, not the name` : "each entry is a string"}`, t.loc);
       else if (!SECRET_NAME.test(v.value)) this.add("error", `Tool "${t.name}": secrets: "${v.value}" should be an environment variable name, like STRIPE_TEST_KEY`, t.loc);
       else if (RESERVED_SECRET.test(v.value)) this.add("error", `Tool "${t.name}": secrets: ${v.value} can't be a secret; it changes how the sandbox or Docker itself runs`, t.loc);
+    }
+  }
+
+  /**
+   * The wallet: each Vault's settings; each browser's wallet: (Vaults only, no page scripts); a program
+   * with a wallet has no tool that runs commands or code as you; and no wallet use where it would run
+   * more than once (a fan-out, each, a loop's re-run, @retry).
+   */
+  private checkWallet() {
+    const tools = [...this.tools.values()];
+    const vaults = new Set(tools.filter((t) => t.provider === "Vault").map((t) => t.name));
+    for (const t of tools) {
+      for (const a of t.argList) {
+        for (const v of a.value.kind === "list" ? a.value.items : [a.value]) {
+          const env = v.kind === "ref" && v.path[0] === "Env" ? v.path.slice(1).join(".") : v.kind === "string" && /^Env\.\w+$/.test(v.value) ? v.value.slice(4) : undefined;
+          if (env?.startsWith("HALO_WALLET_")) this.add("error", `Tool "${t.name}": Env.${env} can't be read: HALO_WALLET_ variables move into the wallet when Halo starts, and only a browser with that wallet can type them`, t.loc);
+          if (env !== undefined && t.provider === "Vault") this.add("error", `Tool "${t.name}": a Vault holds names, not values (Env.${env} would be a value); its values stay in its source`, t.loc);
+        }
+      }
+      if (t.provider === "Vault") this.checkVault(t);
+      const names = walletNames(t);
+      if (names) {
+        if (!names.length) this.add("error", `Tool "${t.name}": wallet: lists Vault tools, e.g. wallet: [Card]`, t.loc);
+        for (const n of names) if (!vaults.has(n)) this.add("error", `Tool "${t.name}": wallet: ${n} is not a Vault tool${this.tools.has(n) ? "" : " declared here"}`, t.loc);
+        const script = t.argList.find((a) => a.name === "allowScript")?.value;
+        if (script?.kind === "bool" && script.value) this.add("error", `Tool "${t.name}": a browser with a wallet can't run page scripts (allowScript: true): a script could read what was typed`, t.loc);
+      }
+    }
+    const walletTools = new Set(tools.filter((t) => walletNames(t)).map((t) => t.name));
+    if (!walletTools.size) {
+      if (vaults.size) this.add("warning", `Vault ${[...vaults].join(", ")} ${vaults.size === 1 ? "is" : "are"} in no browser's wallet: (declare one with Chrome(wallet: [${[...vaults][0]}]))`, tools.find((t) => vaults.has(t.name))?.loc);
+      return;
+    }
+    const browser = [...walletTools][0]!;
+    for (const t of tools) {
+      const why = walletUnsafeTool(t);
+      if (why) this.add("error", `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser} has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file`, t.loc);
+    }
+    // Where a wallet is used: a call to the browser, an agent that equips it, or a pipeline that does either.
+    const walletAgents = new Set(this.ast.agents.filter((a) => (a.equips ?? []).some((e) => walletTools.has(e))).map((a) => a.name));
+    for (const a of this.ast.agents) {
+      if (walletAgents.has(a.name) && a.directives?.some((d) => d.name === "retry")) {
+        this.add("error", `Agent "${a.name}" equips a browser with a wallet, so it can't have @retry: a retry could type and pay again`, a.loc);
+      }
+    }
+    const usesPipeline = new Map<string, boolean>();
+    const callUses = (c: CallStage, seen: Set<string>): boolean => walletTools.has(c.callee) || walletAgents.has(c.callee) || pipelineUses(c.callee, seen);
+    const pipelineUses = (name: string, seen = new Set<string>()): boolean => {
+      if (usesPipeline.has(name)) return usesPipeline.get(name)!;
+      const p = this.pipelines.get(name);
+      if (!p || seen.has(name)) return false;
+      seen.add(name);
+      const r = p.pipeline.some((st) => stageCalls(st).some((c) => callUses(c, seen)));
+      usesPipeline.set(name, r);
+      return r;
+    };
+    for (const s of this.ast.pipelines) {
+      const uses = (c: CallStage) => callUses(c, new Set([s.name]));
+      if (s.directives?.some((d) => d.name === "retry") && s.pipeline.some((st) => stageCalls(st).some(uses))) {
+        this.add("error", `Pipeline "${s.name}" uses a wallet, so it can't have @retry: a retry could type and pay again`, s.loc);
+      }
+      s.pipeline.forEach((st, i) => {
+        if (st.kind === "fanout" || st.kind === "each") {
+          const hit = stageCalls(st).find(uses);
+          if (hit) this.add("error", `Pipeline "${s.name}": ${hit.callee} uses a wallet inside ${st.kind === "each" ? "|* each" : "a fan-out (|*)"}, where every branch would type it again (and a person couldn't be asked)`, st.loc ?? hit.loc);
+        }
+        if (st.kind === "branch") {
+          const hit = stageCalls(st).find(uses);
+          if (hit) this.add("warning", `Pipeline "${s.name}": ${hit.callee} uses a wallet inside a branch arm, which can't pause for a person's approval; it works only where Halo can ask at once (halo run in a terminal, or runtime.onInterrupt)`, hit.loc);
+        }
+        if (st.kind === "loop") {
+          const to = s.pipeline.findLastIndex((x, j) => j < i && x.kind === "call" && x.callee === st.target);
+          const hit = s.pipeline.slice(Math.max(0, to), i).flatMap(stageCalls).find(uses);
+          if (hit) this.add("error", `Pipeline "${s.name}": loop(${st.target}, ...) runs ${hit.callee} again, which uses a wallet: it could type and pay again. Move the wallet step after the loop`, st.loc);
+        }
+      });
+    }
+  }
+
+  /** A Vault's settings, read from the declaration as written. */
+  private checkVault(t: ParseResult["tools"][number]) {
+    const KNOWN = ["source", "kind", "fields", "secret", "hosts", "pay_via", "ask", "hint", "serve", "item", "vault"];
+    const literal = (v: Value | undefined): unknown =>
+      v === undefined ? undefined : v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map((i) => literal(i)) : v.kind === "null" ? null : { kind: v.kind };
+    for (const a of t.argList) {
+      if (!a.name) this.add("error", `Tool "${t.name}": Vault takes named settings, like Vault(source: "keychain", fields: [...], hosts: [...])`, t.loc);
+      else if (!KNOWN.includes(a.name)) this.add("warning", `Tool "${t.name}": Vault has no setting "${a.name}" (it has ${KNOWN.join(", ")})`, t.loc);
+    }
+    for (const p of walletItemProblems(t.name, (k) => literal(t.argList.find((a) => a.name === k)?.value))) this.add("error", `Tool "${t.name}" (Vault): ${p}`, t.loc);
+  }
+
+  /** A Bash env: list names variables to pass on; Env.X there would be the value, not a name. */
+  private checkBashEnv(t: ParseResult["tools"][number]) {
+    const arg = t.argList.find((a) => a.name === "env");
+    if (!arg || arg.value.kind !== "list") return;
+    for (const v of arg.value.items) {
+      if (v.kind !== "string") {
+        const why = v.kind === "ref" && v.path[0] === "Env" ? `Env.${v.path.slice(1).join(".")} is the value, not the name` : "each entry is a string";
+        this.add("error", `Tool "${t.name}": env: lists names in quotes, like env: ["DATABASE_URL"]; ${why}`, t.loc);
+      } else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.value)) {
+        this.add("error", `Tool "${t.name}": env: "${v.value}" should be an environment variable name, like DATABASE_URL`, t.loc);
+      }
     }
   }
 

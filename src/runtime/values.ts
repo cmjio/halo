@@ -160,3 +160,19 @@ export function answerToEvent(answer: string): unknown {
   const word = parsed.trim();
   return { action: word, status: word, reaction: word, text: word, approved: /^(?:approved?|yes|y|ok|lgtm|merged)$/i.test(word) };
 }
+
+/** Why a person declined, when they said: `{ reason }`, or what they typed beyond a plain "no". */
+export function declineReason(answer: unknown): string {
+  const said = isPlainObject(answer) ? (answer.reason ?? answer.comment ?? answer.text) : answer;
+  if (typeof said !== "string") return "";
+  const text = said.trim();
+  return text && !/^(?:n|no|nope|reject|rejected|deny|denied|decline|declined)$/i.test(text) ? `: ${text.slice(0, 500)}` : "";
+}
+
+/** A person's answer that approves something: "approve", "yes", `{ approved: true }`, ... */
+export function isApproval(answer: unknown): boolean {
+  if (answer === true) return true;
+  if (typeof answer === "string") return /^\s*(?:y|yes|approve|approved|allow|ok|okay)\s*$/i.test(answer);
+  if (isPlainObject(answer)) return answer.approved === true || answer.action === "approve" || answer.status === "approved";
+  return false;
+}

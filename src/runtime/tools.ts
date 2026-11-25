@@ -13,6 +13,7 @@ import { INTEGRATIONS } from "./integrations.js";
 import { mcpProvider } from "./mcp.js";
 import { LOCAL_PROVIDERS } from "./providers/index.js";
 import { chromeProvider } from "./providers/chrome.js";
+import { vaultProvider, type WalletItem, type WalletLimits } from "./wallet.js";
 
 export interface ToolCall {
   tool: ToolDeclaration;
@@ -41,6 +42,39 @@ export interface ToolCall {
    * (or the key the run was started with), the step, the method and the arguments.
    */
   idempotencyKey?: string;
+  /**
+   * Set when an agent chose the call: what its policies let it do with a wallet (AllowWallet,
+   * ApproveWallet), and the policy that wants the call approved, which a provider that asks a
+   * person itself (Chrome with a wallet) folds into its own question.
+   */
+  wallet?: WalletLimits;
+}
+
+/** A question a provider puts to a person before it acts (see ToolServices.approve). */
+export interface ToolApprovalRequest {
+  /**
+   * What exactly is being approved, so an answer given to a paused run only ever releases the
+   * same request when the call runs again (a different page or element is a different key).
+   */
+  key: string;
+  /** The question, built from what the provider checked, never from text a page chose. */
+  message: string;
+  /** Extra fields for handlers and approval pages; never values from a wallet. */
+  named: Record<string, unknown>;
+  /** A wallet approval. Automatic approvers (--auto-approve, halo test) answer it only for the mock source. */
+  wallet?: { mock: boolean };
+}
+
+/** A wallet event, for the audit log and telemetry. Never holds a value. */
+export interface WalletEvent {
+  tool: string;
+  method: string;
+  refs: string[];
+  /** The page and frames, top first. */
+  chain: Array<{ host: string; url: string }>;
+  outcome: "typed" | "refused" | "declined" | "incident" | "submit_approved" | "submit_declined" | "handed_over";
+  detail?: string;
+  agent?: string;
 }
 
 /** JSON Schema for a method's named arguments (the subset providers need). */
@@ -59,8 +93,9 @@ export interface JsonSchema {
  *   - read: looks things up, changes nothing
  *   - write: changes local state (files, a local database)
  *   - external: acts on the world outside (sends, posts, pays, deploys)
+ *   - wallet: types a value from a wallet into a page (Chrome's fill_secrets)
  */
-export type ToolEffect = "read" | "write" | "external";
+export type ToolEffect = "read" | "write" | "external" | "wallet";
 
 /** A method an agent can call, described for the model and for `halo plan`. */
 export interface ToolMethod {
@@ -82,6 +117,8 @@ export interface ProviderInfo {
   description?: string;
   /** The methods a tool of this provider has. A function for providers that ask a server (MCP). */
   methods?: ToolMethod[] | ((ctx: ToolInfoContext, services: ToolServices) => Promise<ToolMethod[]>);
+  /** The methods for a declaration's settings as written, without asking anything (for `halo plan`, when `methods` depends on them). */
+  methodsFor?(config: (name: string) => unknown): ToolMethod[];
 }
 
 export interface ToolServices {
@@ -94,6 +131,18 @@ export interface ToolServices {
   media?(ref: { sha256: string }): Promise<Uint8Array>;
   /** Add what a call cost (USD) to the run's cost, for a tool that pays per use (transcription). */
   spend?(usd: number): void;
+  /** The wallet items (Vault declarations) a tool's `wallet:` names, resolved and checked. */
+  wallet?(names: string[]): WalletItem[];
+  /**
+   * Ask a person, through the run's approval path: an answer already given to this request when the
+   * run paused, onInterrupt, or a pause (the call then runs again when it's answered). Resolves to
+   * the answer; use isApproval() on it.
+   */
+  approve?(request: ToolApprovalRequest): Promise<unknown>;
+  /** Write a wallet event to the audit log and telemetry. */
+  walletEvent?(event: WalletEvent): void;
+  /** Whether this runtime serves pipelines to others (halo serve, halo mcp). */
+  serving?: boolean;
 }
 
 export type ToolProvider = (call: ToolCall, services: ToolServices) => Promise<unknown>;
@@ -313,6 +362,7 @@ export const BUILTIN_PROVIDERS: Record<string, ToolProvider> = {
   SQL: postgres,
   MCP: mcpProvider,
   Chrome: chromeProvider,
+  Vault: vaultProvider,
   ...LOCAL_PROVIDERS,
   ...INTEGRATIONS,
 };

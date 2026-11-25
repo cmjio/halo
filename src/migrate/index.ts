@@ -22,6 +22,7 @@ import { readProjectConfig, writeProjectConfig } from "../registry/config.js";
 import { HALO_VERSION, installProject } from "../registry/install.js";
 import { readAnyLock } from "../registry/lockfile.js";
 import { compare, parseRange, parseVersion, satisfies } from "../registry/semver.js";
+import { BASH_BASE_ENV } from "../runtime/integrations.js";
 import { argRules } from "../runtime/tool-rules.js";
 
 export interface ProjectFile {
@@ -113,6 +114,35 @@ export const MIGRATIONS: Migration[] = [
         const lines = readFileSync(join(project.root, file.path), "utf8").split("\n");
         for (const [i, line] of lines.entries()) {
           if (/\.base64\b|\bmimeType\b/.test(line.replace(/\/\/.*$/, ""))) out.push({ file: file.path, line: i + 1, message: "reads a screenshot's base64 or mimeType" });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "bash-clean-env",
+    since: "1.7.0",
+    title: "Bash commands no longer see Halo's whole environment",
+    detail:
+      'A Bash command used to inherit every variable Halo was started with, API keys included, so an agent with a shell could print them. It now sees only PATH, HOME, USER, LOGNAME, SHELL, LANG, LC_ALL, LC_CTYPE, TMPDIR, TZ and TERM. Pass on what its commands need by name: Bash(env: ["DATABASE_URL"]). A variable read only by a script the command runs can\'t be found here, so check those too.',
+    find(project) {
+      const base = new Set<string>(BASH_BASE_ENV);
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        const tools = file.ast.tools.filter((t) => t.provider === "Bash" && !t.argList.some((a) => a.name === "env"));
+        if (!tools.length) continue;
+        const lines = readFileSync(join(project.root, file.path), "utf8").split("\n");
+        for (const tool of tools) {
+          // Variables named in the commands of this tool's calls, the ones a reader can see.
+          const call = new RegExp(`\\b${tool.name}\\.\\w+\\s*\\(`);
+          const used = new Set<string>();
+          for (const line of lines) {
+            if (!call.test(line)) continue;
+            for (const m of line.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (!base.has(m[1]!)) used.add(m[1]!);
+          }
+          const names = [...used].sort();
+          const message = names.length ? `tool ${tool.name} has no env:, and its commands read ${names.map((n) => `$${n}`).join(", ")}` : `tool ${tool.name} has no env:`;
+          out.push({ file: file.path, line: tool.loc?.line, message });
         }
       }
       return out;
