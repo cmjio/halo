@@ -145,8 +145,32 @@
   .hh .btn-primary:hover svg { transform: translateX(2px); }
   .hh .btn-ghost:hover { background: var(--bg-soft); }
 }
-.hh .ctas .quiet { font-size: 14px; color: var(--muted); padding: 0 6px; }
-@media (hover: hover) and (pointer: fine) { .hh .ctas .quiet:hover { color: var(--fg); } }
+/* "Watch the trailer": a quiet text button with a play disc, as Apple's "Watch the film" */
+.hh .watch { appearance: none; display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 10px 0 4px; border: 0; background: none; cursor: pointer; font: 500 15px/1 var(--sans); color: var(--fg); }
+.hh .watch .play { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--accent-wash); color: var(--accent); transition: background-color 160ms ease, transform 200ms var(--ease-out); }
+.hh .watch .play svg { width: 13px; height: 13px; margin-left: 2px; }
+.hh .watch .dur { font: 400 13px/1 var(--mono); color: var(--muted); }
+.hh .watch-lg { margin-top: 20px; }
+@media (hover: hover) and (pointer: fine) {
+  .hh .watch:hover .play { background: var(--accent); color: var(--bg); transform: scale(1.06); }
+}
+
+/* The trailer dialog. Centred, so it scales from its centre; exit is quicker than entry. */
+.hh .trailer { width: min(1120px, 100vw - 32px); max-width: none; max-height: none; padding: 0; border: 0; background: none; color: var(--fg); overflow: visible;
+  opacity: 1; transform: none;
+  transition: opacity 180ms ease, transform 180ms var(--ease-out), overlay 180ms allow-discrete, display 180ms allow-discrete; }
+.hh .trailer:not([open]) { opacity: 0; transform: scale(0.96); }
+.hh .trailer[open] { transition-duration: 250ms; }
+@starting-style { .hh .trailer[open] { opacity: 0; transform: scale(0.96); } }
+.hh .trailer::backdrop { background: rgb(8 9 11 / 0.78); backdrop-filter: blur(8px); opacity: 1; transition: opacity 250ms ease, overlay 250ms allow-discrete, display 250ms allow-discrete; }
+.hh .trailer:not([open])::backdrop { opacity: 0; }
+@starting-style { .hh .trailer[open]::backdrop { opacity: 0; } }
+.hh .trailer-bar { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.hh .trailer-bar h2 { font: 500 14px/1 var(--sans); letter-spacing: 0; margin: 0; color: #e4e7eb; }
+.hh .trailer-close { appearance: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; border: 1px solid rgb(255 255 255 / 0.16); background: rgb(255 255 255 / 0.06); color: #e4e7eb; cursor: pointer; }
+.hh .trailer-close svg { width: 16px; height: 16px; }
+@media (hover: hover) and (pointer: fine) { .hh .trailer-close:hover { background: rgb(255 255 255 / 0.14); } }
+.hh .trailer video { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; background: #000; box-shadow: 0 24px 80px -24px rgb(0 0 0 / 0.8); }
 
 /* ── Tabs: a copy of the row, clipped to the selected tab ── */
 .hh .tabs { position: relative; display: inline-flex; max-width: 100%; }
@@ -352,6 +376,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .hh .press:active { transform: none; }
+  .hh .trailer, .hh .trailer:not([open]) { transform: none; }
+  @starting-style { .hh .trailer[open] { transform: none; } }
   .hh .btn svg, .hh .more svg, .hh .next a svg { transition: none; }
   .hh .step { transition: opacity 200ms ease; transform: none !important; }
   .hh .tabs .tabs-overlay, .hh .replay-note { transition: none; }

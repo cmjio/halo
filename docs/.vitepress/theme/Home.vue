@@ -125,6 +125,23 @@ const loopEl = ref<HTMLVideoElement>();
 const loopControls = ref(true);
 let loopObserver: IntersectionObserver | undefined;
 
+// ── The trailer: opened by a press, so it may play with sound. Native <dialog> gives Esc,
+// the focus trap and focus return; a click on the backdrop (the dialog itself) closes it.
+const trailerEl = ref<HTMLDialogElement>();
+const trailerVideo = ref<HTMLVideoElement>();
+function openTrailer(ev: MouseEvent) {
+  const d = trailerEl.value;
+  if (!d || d.open) return;
+  d.showModal();
+  loopEl.value?.pause();
+  // A keyboard press (detail 0) leaves focus on the close button for the player's own controls.
+  trailerVideo.value?.play().catch(() => {});
+  if (ev.detail !== 0) trailerVideo.value?.focus();
+}
+const closeTrailer = () => trailerEl.value?.close();
+const onTrailerClose = () => trailerVideo.value?.pause();
+const onTrailerClick = (ev: MouseEvent) => { if (ev.target === trailerEl.value) closeTrailer(); };
+
 // Until hydration measures the tabs, the selected tab is styled directly.
 const ready = ref(false);
 let resize: ResizeObserver | undefined;
@@ -226,7 +243,7 @@ onBeforeUnmount(() => {
             <a class="btn btn-primary press" href="/guide/quickstart">Quickstart
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M13 18l6 -6" /><path d="M13 6l6 6" /></svg></a>
             <a class="btn btn-ghost press" href="/playground">Playground</a>
-            <a class="quiet" href="#run">See a recorded run</a>
+            <button class="watch press" type="button" aria-haspopup="dialog" @click="openTrailer($event)"><span class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5z" fill="currentColor" /></svg></span>{{ h.trailer.label }}<span class="dur">{{ h.trailer.duration }}</span></button>
           </div>
         </div>
 
@@ -410,8 +427,9 @@ onBeforeUnmount(() => {
         <h2 id="hh-min">{{ h.minute.title }}</h2>
         <p class="minute-body" v-html="inline(h.minute.body)"></p>
         <div class="video-frame">
-          <video ref="loopEl" muted loop playsinline preload="metadata" :controls="loopControls" :poster="h.minute.poster" :src="h.minute.video" aria-label="Halo's trailer: a policy refusing a tool call, halo plan, and halo replay"></video>
+          <video ref="loopEl" muted loop playsinline preload="metadata" :controls="loopControls" :poster="h.minute.poster" :src="h.minute.video" aria-label="A policy refusing a tool call, halo plan, and halo replay"></video>
         </div>
+        <button class="watch watch-lg press" type="button" aria-haspopup="dialog" @click="openTrailer($event)"><span class="play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5z" fill="currentColor" /></svg></span>{{ h.minute.more }}<span class="dur">{{ h.trailer.duration }}</span></button>
       </div>
     </section>
 
@@ -460,6 +478,19 @@ onBeforeUnmount(() => {
         </nav>
       </div>
     </footer>
+
+    <!-- The trailer: a modal over a dimmed page, opened only on request, so it plays with sound -->
+    <dialog ref="trailerEl" class="trailer" aria-labelledby="hh-trailer-title" @close="onTrailerClose" @click="onTrailerClick">
+      <div class="trailer-inner">
+        <div class="trailer-bar">
+          <h2 id="hh-trailer-title">{{ h.trailer.title }}</h2>
+          <button class="trailer-close press" type="button" aria-label="Close the trailer" @click="closeTrailer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <video ref="trailerVideo" controls playsinline preload="none" :poster="h.trailer.poster" :src="h.trailer.video" :aria-label="h.trailer.description"></video>
+      </div>
+    </dialog>
 
     <div class="sr" aria-live="polite">{{ announce }}</div>
   </div>

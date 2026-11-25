@@ -1,5 +1,31 @@
 # Videos
 
+## Trailer
+
+Halo's launch trailer: 54.6 seconds, 1920×1080 at 60 fps, with a soundtrack ([`trailer.html`](trailer.html), [`trailer.ts`](trailer.ts), [`trailer-audio.ts`](trailer-audio.ts)). The home page's "Watch the trailer" opens it.
+
+The character is the logo: an orb (the agent, with eyes) and the ring above it (the halo: the rules).
+
+1. **Wake**: a spark becomes the orb; it opens its eyes, looks around, hops. "Meet your agent."
+2. **Power**: tool chips spring out of it into an orbit, then dangerous ones join; the orbit speeds up, the spend counter races, the camera shakes. "Which is exactly the problem."
+3. **The halo**: time freezes, the ring drops and lands, a shockwave shatters the dangerous calls, the spend rolls back to $0, and the wordmark slides out from behind the orb
+4. **Rules**: an iris opens inside the ring onto the policy being typed; `Repo.read` passes the gate, `Repo.delete` is refused at it (the token it broke lights up)
+5. **Ask**: an approval card; the agent falls asleep while the clock spins from Tuesday to Thursday; a cursor approves; it wakes and posts
+6. **Plan**: a whip pan to the pipeline drawing itself and the cost meter filling to ≤ $0.1948 under MaxSpend $0.25
+7. **Replay**: the nodes shrink into the run's timeline; the orb rides the playhead through the run (19.8 s, $0.0852), rewinds, and replays it in 19 ms for $0
+8. **Montage**: one word a beat (Sandboxes, Real browsers, Schedules, Any model, Memory, Teams), each with the orb in it
+9. **Outro**: three orbs merge, the halo lands again, the wordmark, the tagline, the install command, a wink
+
+```bash
+cd video && bun install
+bun trailer.ts                 # ../docs/public/video/halo-trailer.mp4 and halo-trailer.jpg (the poster)
+bun trailer.ts --still 11.3 20 # out/trailer-11.3.png, out/trailer-20.png
+bun trailer.ts --fps 30        # a quicker draft
+bun trailer.ts --audio         # out/trailer.wav only
+```
+
+`trailer.html` is a pure function of time (`window.render(t)`) built from a small motion kit: eased tweens, damped springs, decaying wobbles for impacts, squash and stretch, seeded particles and noise, so a re-render is identical. It lists its sound cues in `window.AUDIO_EVENTS`; `trailer-audio.ts` synthesizes the score from them (a 120 BPM groove; silence on the freeze), so every sound lands on its frame. The policy is colored with the site's own `highlight()`; the plan, run and replay numbers are the ones the home page shows.
+
 ## Home page loop
 
 A silent 16-second, 1280×720 loop that plays muted on the home page ([`loop.html`](loop.html), [`loop.ts`](loop.ts)):

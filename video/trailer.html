@@ -1,0 +1,960 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Halo's launch trailer. A pure function of time: window.render(t) sets every element for
+     second t, so trailer.ts can screenshot it frame by frame. The character is the logo:
+     an orb (the agent) and the ring above it (the halo: the rules). -->
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=block" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #13161b; --line: #232830; --text: #e8eaee; --muted: #8e96a2;
+    --amber: #f3b44c; --amber-2: #ffcf7a; --green: #56d39a; --red: #ff7b72; --violet: #b9a3f0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--text); font-family: "IBM Plex Sans", sans-serif; -webkit-font-smoothing: antialiased; }
+  .mono { font-family: "IBM Plex Mono", monospace; font-variant-ligatures: none; }
+  .abs { position: absolute; left: 0; top: 0; }
+  .layer { position: absolute; inset: 0; }
+  #world { position: absolute; inset: 0; transform-origin: 960px 540px; }
+  #bg { position: absolute; inset: 0; background: radial-gradient(1200px 760px at 50% 46%, #141820, var(--bg) 70%); }
+  #tint { position: absolute; inset: 0; background: radial-gradient(900px 600px at 50% 52%, rgba(255,90,70,.55), transparent 70%); opacity: 0; mix-blend-mode: screen; }
+  #grid { position: absolute; inset: -80px; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 80px 80px; opacity: 0; -webkit-mask-image: radial-gradient(ellipse at center, #000 25%, transparent 70%); }
+  #grain { position: absolute; inset: -20%; opacity: .075; mix-blend-mode: overlay; pointer-events: none; }
+  #vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,.55)); pointer-events: none; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  #l4 { background: radial-gradient(1200px 760px at 50% 46%, #141820, #0b0d10 70%); }
+  #fill { position: absolute; inset: 0; background: var(--amber); opacity: 0; }
+  #black { position: absolute; inset: 0; background: #000; opacity: 0; }
+
+  /* the character */
+  .orb { position: absolute; left: 0; top: 0; width: 460px; height: 460px; overflow: visible; will-change: transform; }
+
+  /* kinetic headlines */
+  .headline { position: absolute; left: 0; right: 0; text-align: center; font-weight: 700; font-size: 68px; letter-spacing: -2.4px; line-height: 1.1; white-space: nowrap; }
+  .headline .w { display: inline-block; margin: 0 .13em; }
+  .headline .a { color: var(--amber); }
+  .headline .r { color: var(--red); }
+  .headline .g { color: var(--green); }
+  .sub { position: absolute; left: 0; right: 0; text-align: center; font-size: 30px; color: var(--muted); }
+
+  /* tool chips */
+  .chip { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-radius: 16px; background: rgba(21,24,30,.94); border: 1.5px solid #343b46; font: 500 26px/1 "IBM Plex Mono", monospace; white-space: nowrap; box-shadow: 0 18px 40px -18px rgba(0,0,0,.9); will-change: transform; }
+  .chip i { width: 12px; height: 12px; border-radius: 50%; background: currentColor; flex: none; }
+  .chip.read { color: var(--green); border-color: rgba(86,211,154,.45); }
+  .chip.write { color: var(--amber); border-color: rgba(243,180,76,.45); }
+  .chip.ext { color: var(--red); border-color: rgba(255,123,114,.5); }
+  .chip b { color: var(--text); font-weight: 500; }
+  .pt { position: absolute; left: 0; top: 0; width: 10px; height: 10px; border-radius: 2px; will-change: transform; }
+  .ring { position: absolute; left: 0; top: 0; border-radius: 50%; border: 3px solid #fff; }
+
+  /* counter */
+  #spend { position: absolute; right: 110px; bottom: 90px; text-align: right; }
+  #spend small { display: block; font: 500 20px/1 "IBM Plex Mono", monospace; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 10px; }
+  #spend b { font: 600 64px/1 "IBM Plex Mono", monospace; color: var(--red); letter-spacing: -1px; }
+
+  /* wordmark */
+  .wordmark { position: absolute; font-weight: 700; font-size: 220px; letter-spacing: -9px; line-height: 1; }
+  .tagline { position: absolute; left: 0; right: 0; text-align: center; font-size: 44px; font-weight: 500; color: #c6ccd4; letter-spacing: -.8px; }
+  .tagline .w { display: inline-block; margin: 0 .12em; }
+  .tagline .a { color: var(--amber); }
+
+  /* code */
+  .win { position: absolute; border: 1px solid #2a303a; border-radius: 22px; background: linear-gradient(#161a20, #111419); box-shadow: 0 50px 120px -40px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.04); overflow: hidden; }
+  .win-bar { height: 58px; display: flex; align-items: center; gap: 10px; padding: 0 24px; border-bottom: 1px solid #232830; font: 500 20px/1 "IBM Plex Mono", monospace; color: var(--muted); }
+  .win-bar i { width: 13px; height: 13px; border-radius: 50%; background: #2c323c; }
+  .win-bar span { margin-left: 14px; }
+  .code { position: relative; padding: 34px 40px; font: 400 30px/1.75 "IBM Plex Mono", monospace; }
+  .cl { position: relative; height: 1.75em; white-space: pre; }
+  .cl .tx { display: inline-block; overflow: hidden; vertical-align: top; }
+  .caret { position: absolute; top: .25em; width: 3px; height: 1.25em; background: var(--amber); }
+  .hl { position: absolute; border-radius: 8px; pointer-events: none; }
+  .t-kw { color: #c9a8ff; } .t-op { color: var(--amber); } .t-string { color: #9fe0b2; } .t-comment { color: #69727f; }
+  .t-number, .t-directive { color: #ffa98a; } .t-type { color: #8fb8ff; } .t-model { color: #8fdcff; } .t-ph { color: #ffd27a; } .t-decl { color: var(--text); font-weight: 600; }
+
+  .gate { position: absolute; width: 8px; border-radius: 8px; }
+  .stamp { position: absolute; padding: 14px 30px; border: 5px solid var(--red); border-radius: 14px; color: var(--red); font: 700 54px/1 "IBM Plex Sans", sans-serif; letter-spacing: 6px; background: rgba(40,14,14,.7); }
+  .note { position: absolute; font: 400 24px/1.4 "IBM Plex Mono", monospace; color: var(--muted); white-space: nowrap; }
+  .note b { color: var(--red); font-weight: 500; }
+
+  /* approval card */
+  .card { position: absolute; width: 640px; border-radius: 24px; background: #171b22; border: 1px solid #2b313b; box-shadow: 0 60px 120px -40px rgba(0,0,0,.95); padding: 30px 32px; }
+  .card .who { display: flex; align-items: center; gap: 16px; font-size: 26px; color: var(--text); font-weight: 600; }
+  .card .who small { font-weight: 400; color: var(--muted); font-size: 22px; }
+  .card .av { width: 46px; height: 46px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #ffd98f, #f3a43c 70%); box-shadow: 0 0 22px rgba(243,180,76,.5); }
+  .card .q { margin: 20px 0 24px; padding: 16px 20px; border-left: 4px solid #3a414c; background: #12151a; border-radius: 0 12px 12px 0; font-size: 24px; color: #c6ccd4; line-height: 1.45; }
+  .card .btns { display: flex; gap: 14px; }
+  .btn { position: relative; overflow: hidden; height: 64px; padding: 0 30px; border-radius: 14px; display: flex; align-items: center; gap: 12px; font-size: 26px; font-weight: 600; }
+  .btn.yes { background: var(--green); color: #07140d; }
+  .btn.no { border: 1.5px solid #39404b; color: var(--muted); }
+  .btn .rip { position: absolute; width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.55); }
+  .clock { position: absolute; padding: 12px 20px; border-radius: 12px; border: 1px solid #2b313b; background: #12151a; font: 500 26px/1 "IBM Plex Mono", monospace; color: var(--muted); white-space: nowrap; }
+  .clock b { color: var(--text); font-weight: 500; }
+  .z { position: absolute; font: 700 40px/1 "IBM Plex Sans", sans-serif; color: #c6ccd4; }
+  .cursor { position: absolute; width: 44px; height: 44px; }
+  .toast { position: absolute; padding: 16px 26px; border-radius: 14px; background: rgba(86,211,154,.12); border: 1.5px solid rgba(86,211,154,.5); color: var(--green); font: 500 26px/1 "IBM Plex Mono", monospace; white-space: nowrap; }
+
+  /* plan */
+  .term { position: absolute; font: 500 34px/1 "IBM Plex Mono", monospace; color: var(--text); white-space: pre; }
+  .term .p { color: var(--amber); }
+  .node { position: absolute; left: 0; top: 0; padding: 20px 26px; border-radius: 18px; background: #161a20; border: 1.5px solid #303741; font: 500 25px/1.2 "IBM Plex Mono", monospace; white-space: nowrap; text-align: center; }
+  .node small { display: block; font-size: 19px; margin-top: 8px; color: var(--muted); }
+  .node.read small { color: var(--green); } .node.ext small { color: var(--red); } .node.ag small { color: var(--amber); }
+  .meter { position: absolute; height: 22px; border-radius: 22px; background: #1b2028; overflow: visible; }
+  .meter .f { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 22px; background: linear-gradient(90deg, #b9770e, var(--amber)); box-shadow: 0 0 30px rgba(243,180,76,.45); }
+  .meter .lim { position: absolute; top: -18px; bottom: -18px; width: 4px; border-radius: 4px; background: var(--red); }
+  .big-num { position: absolute; font: 600 64px/1 "IBM Plex Mono", monospace; letter-spacing: -1.5px; white-space: nowrap; }
+  .lbl { position: absolute; font: 500 22px/1 "IBM Plex Mono", monospace; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+
+  /* replay */
+  .track { position: absolute; height: 6px; border-radius: 6px; background: #252b34; }
+  .track .done { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; background: var(--amber); }
+  .dot { position: absolute; left: 0; top: 0; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: #2b313b; border: 3px solid #0b0d10; }
+
+  /* montage */
+  .slam { position: absolute; left: 0; right: 0; text-align: center; font-weight: 700; font-size: 190px; letter-spacing: -8px; line-height: 1; white-space: nowrap; }
+  .browser { position: absolute; width: 620px; height: 400px; border-radius: 22px; border: 2px solid #2f3640; background: #12151a; overflow: hidden; }
+  .browser .bar { height: 54px; border-bottom: 2px solid #2f3640; display: flex; align-items: center; gap: 10px; padding: 0 20px; }
+  .browser .bar i { width: 12px; height: 12px; border-radius: 50%; background: #2f3640; }
+  .browser .bar span { margin-left: 14px; padding: 8px 18px; border-radius: 10px; background: #1b2028; font: 400 19px/1 "IBM Plex Mono", monospace; color: var(--muted); }
+  .bubble { position: absolute; padding: 16px 24px; border-radius: 22px; background: #1b2028; border: 1.5px solid #2f3640; font-size: 26px; color: #c6ccd4; white-space: nowrap; }
+  .models { position: absolute; left: 0; right: 0; height: 90px; overflow: hidden; text-align: center; font: 600 64px/90px "IBM Plex Mono", monospace; color: var(--amber); }
+  .install { position: absolute; padding: 22px 34px; border-radius: 18px; border: 1.5px solid #2f3640; background: #12151a; font: 500 32px/1 "IBM Plex Mono", monospace; white-space: pre; }
+  .install .p { color: var(--amber); }
+  .url { position: absolute; left: 0; right: 0; text-align: center; font: 600 40px/1 "IBM Plex Mono", monospace; color: var(--amber); letter-spacing: -.5px; }
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="grid"></div>
+<div id="tint"></div>
+<div id="world"></div>
+<div id="fill"></div>
+<div id="flash"></div>
+<canvas id="grain" width="512" height="512"></canvas>
+<div id="vignette"></div>
+<div id="black"></div>
+<script>
+// ───────────────────────────── motion toolkit ─────────────────────────────
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const E = {
+  lin: (p) => p,
+  outCubic: (p) => 1 - (1 - p) ** 3,
+  outQuart: (p) => 1 - (1 - p) ** 4,
+  outExpo: (p) => (p >= 1 ? 1 : 1 - 2 ** (-10 * p)),
+  inCubic: (p) => p * p * p,
+  inQuad: (p) => p * p,
+  inExpo: (p) => (p <= 0 ? 0 : 2 ** (10 * p - 10)),
+  inOutCubic: (p) => (p < 0.5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2),
+  inOutQuint: (p) => (p < 0.5 ? 16 * p ** 5 : 1 - (-2 * p + 2) ** 5 / 2),
+  inOutSine: (p) => -(Math.cos(Math.PI * p) - 1) / 2,
+  outBack: (p, s = 1.70158) => 1 + (s + 1) * (p - 1) ** 3 + s * (p - 1) ** 2,
+};
+// progress of a tween that starts at t0 and lasts d, eased
+const P = (t, t0, d, e = E.outCubic) => e(clamp((t - t0) / d));
+// a damped spring from 0 to 1, x seconds after it was released (w: stiffness, z: damping ratio)
+function spring(x, w = 16, z = 0.42) {
+  if (x <= 0) return 0;
+  const wd = w * Math.sqrt(1 - z * z);
+  return 1 - Math.exp(-z * w * x) * (Math.cos(wd * x) + (z * w / wd) * Math.sin(wd * x));
+}
+// the wobble left after an impact: a decaying sine, x seconds after it
+const wobble = (x, f = 9, d = 5) => (x <= 0 ? 0 : Math.sin(x * f * Math.PI * 2) * Math.exp(-x * d));
+// smooth deterministic noise in [-1, 1]
+const noise = (x, s = 0) => (Math.sin(x * 1.31 + s) * 0.5 + Math.sin(x * 2.73 + s * 1.7) * 0.3 + Math.sin(x * 5.17 + s * 2.3) * 0.2);
+const hash = (i) => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+// a window: 0 before a, ramps in over ai, holds, ramps out over ao ending at b
+const win = (t, a, b, ai = 0.3, ao = 0.3) => Math.min(P(t, a, ai, E.outCubic), 1 - P(t, b - ao, ao, E.inOutCubic));
+
+const W = 1920, H = 1080, CX = 960, CY = 540;
+const world = document.getElementById("world");
+const D = window.SCENE_DATA || { code: [], install: "" };
+function el(tag, cls, parent = world, html = "") {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html) e.innerHTML = html;
+  parent.appendChild(e);
+  return e;
+}
+const layer = (id) => { const e = el("div", "layer"); e.id = id; return e; };
+// place an element by its centre
+function put(e, x, y, s = 1, r = 0, o = 1, blur = 0, extra = "") {
+  e.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) rotate(${r}deg) scale(${s})${extra}`;
+  e.style.opacity = o;
+  e.style.filter = blur > 0.05 ? `blur(${blur}px)` : "";
+}
+const show = (e, on) => (e.style.visibility = on ? "visible" : "hidden");
+
+// ───────────────────────────── the character ─────────────────────────────
+let orbN = 0;
+function makeOrb(parent) {
+  const id = `o${orbN++}`;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "orb");
+  svg.setAttribute("viewBox", "-230 -230 460 460");
+  svg.innerHTML = `
+    <defs>
+      <radialGradient id="${id}g" r="0.5"><stop offset="0" stop-color="#ffc35c" stop-opacity=".55"/><stop offset=".45" stop-color="#f3a43c" stop-opacity=".16"/><stop offset="1" stop-color="#f3a43c" stop-opacity="0"/></radialGradient>
+      <radialGradient id="${id}b" cx=".38" cy=".32" r=".75"><stop offset="0" stop-color="#ffe3a6"/><stop offset=".45" stop-color="#ffbe55"/><stop offset="1" stop-color="#e48a1c"/></radialGradient>
+      <filter id="${id}f" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <circle class="glow" r="170" fill="url(#${id}g)"/>
+    <g class="body">
+      <circle r="62" fill="url(#${id}b)"/>
+      <ellipse cx="-20" cy="-30" rx="17" ry="10" fill="#fff" opacity=".42" transform="rotate(-28 -20 -30)"/>
+      <g class="eyes">
+        <g class="eL"><rect x="-6" y="-14" width="12" height="28" rx="6" fill="#241505"/></g>
+        <g class="eR"><rect x="-6" y="-14" width="12" height="28" rx="6" fill="#241505"/></g>
+      </g>
+      <g class="happy" fill="none" stroke="#241505" stroke-width="7" stroke-linecap="round">
+        <path d="M-30 2 Q-21 -12 -12 2"/><path d="M12 2 Q21 -12 30 2"/>
+      </g>
+      <g class="sleep" fill="none" stroke="#241505" stroke-width="7" stroke-linecap="round">
+        <path d="M-30 0 Q-21 7 -12 0"/><path d="M12 0 Q21 7 30 0"/>
+      </g>
+      <g class="ouch" fill="none" stroke="#241505" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-30 -8 L-14 0 L-30 8"/><path d="M30 -8 L14 0 L30 8"/>
+      </g>
+    </g>
+    <g class="halo"><ellipse rx="64" ry="17" fill="none" stroke="#fff" stroke-width="8" filter="url(#${id}f)"/></g>`;
+  parent.appendChild(svg);
+  const q = (s) => svg.querySelector(s);
+  return { svg, glow: q(".glow"), body: q(".body"), eyes: q(".eyes"), eL: q(".eL"), eR: q(".eR"), happy: q(".happy"), sleep: q(".sleep"), ouch: q(".ouch"), halo: q(".halo"), ring: q(".halo ellipse") };
+}
+// s: x, y, scale, rot, sq (squash +, stretch -), lookX/lookY (-1..1), blink, wink, eye (size), happy, sleep, ouch,
+//    halo (0..1 shown), haloY (offset from rest), haloWob, haloTilt, haloColor, glow, opacity, blur
+function orb(o, s) {
+  const sc = s.scale ?? 1, sq = s.sq ?? 0;
+  put(o.svg, s.x ?? CX, s.y ?? CY, sc, s.rot ?? 0, s.opacity ?? 1, s.blur ?? 0);
+  const sx = 1 + sq * 0.28, sy = 1 - sq * 0.28;
+  o.body.setAttribute("transform", `translate(0 62) scale(${sx} ${sy}) translate(0 -62)`);
+  o.glow.setAttribute("opacity", s.glow ?? 1);
+  const ey = s.eye ?? 1, blink = clamp(s.blink ?? 0), wink = clamp(s.wink ?? 0);
+  const lx = (s.lookX ?? 0) * 10, ly = (s.lookY ?? 0) * 8;
+  const moods = clamp((s.happy ?? 0) + (s.sleep ?? 0) + (s.ouch ?? 0));
+  o.eyes.setAttribute("opacity", 1 - moods);
+  o.eL.setAttribute("transform", `translate(${-21 + lx} ${-4 + ly}) scale(${ey} ${ey * Math.max(0.08, 1 - blink)})`);
+  o.eR.setAttribute("transform", `translate(${21 + lx} ${-4 + ly}) scale(${ey} ${ey * Math.max(0.08, 1 - Math.max(blink, wink))})`);
+  o.happy.setAttribute("opacity", s.happy ?? 0);
+  o.happy.setAttribute("transform", `translate(${lx * 0.5} ${ly * 0.5})`);
+  o.sleep.setAttribute("opacity", s.sleep ?? 0);
+  o.ouch.setAttribute("opacity", s.ouch ?? 0);
+  const h = s.halo ?? 0;
+  const top = -62 * sy * 2 + 62 - 34; // above the squashed body
+  const wob = s.haloWob ?? 0;
+  o.halo.setAttribute("opacity", h);
+  o.halo.setAttribute("transform", `translate(0 ${top + (s.haloY ?? 0)}) rotate(${s.haloTilt ?? 0}) scale(${1 + wob * 0.12} ${1 - wob * 0.25})`);
+  o.ring.setAttribute("stroke", s.haloColor ?? "#fff");
+}
+
+// ───────────────────────────── shared pieces ─────────────────────────────
+function headline(parts, y, parent, size) {
+  const h = el("div", "headline", parent);
+  h.style.top = `${y}px`;
+  if (size) h.style.fontSize = `${size}px`;
+  h.innerHTML = parts.map(([w, c]) => `<span class="w ${c || ""}">${w}</span>`).join("");
+  return { el: h, words: [...h.children] };
+}
+// words rise in as a wave (gaps shrink), and leave together, faster
+function wave(hd, t, tin, tout = 1e9, opts = {}) {
+  const dist = opts.dist ?? 46, dur = opts.dur ?? 0.62;
+  const out = P(t, tout, 0.26, E.inCubic);
+  show(hd.el, t >= tin - 0.01 && out < 1);
+  hd.words.forEach((w, i) => {
+    const delay = 0.075 * i ** 0.82;
+    const p = P(t, tin + delay, dur, E.outExpo);
+    w.style.transform = `translateY(${(1 - p) * dist - out * 26}px) rotate(${(1 - p) * 3}deg)`;
+    w.style.opacity = p * (1 - out);
+    const b = (1 - p) * 10 + out * 6;
+    w.style.filter = b > 0.05 ? `blur(${b}px)` : "";
+  });
+}
+function chip(label, kind, parent) { return el("div", `chip ${kind}`, parent, `<i></i><b>${label}</b>`); }
+// particles: a fixed pool, handed out to shatters by index
+const POOL = [];
+const pl = layer("particles");
+for (let i = 0; i < 260; i++) POOL.push(el("div", "pt", pl));
+let poolUsed = 0;
+const shatters = [];
+function shatter(t0, x, y, color, n, spread = 1) {
+  const s = { t0, x, y, color, from: poolUsed, n, spread };
+  poolUsed += n;
+  shatters.push(s);
+  return s;
+}
+function drawShatters(t) {
+  for (const p of POOL) p.style.opacity = 0;
+  for (const s of shatters) {
+    const x = t - s.t0;
+    if (x < 0 || x > 1.4) continue;
+    for (let k = 0; k < s.n; k++) {
+      const i = s.from + k, p = POOL[i];
+      const a = hash(i) * Math.PI * 2, v = (260 + hash(i + 7) * 620) * s.spread;
+      const px = s.x + Math.cos(a) * v * x * (1 - x * 0.35);
+      const py = s.y + Math.sin(a) * v * x * (1 - x * 0.35) + 520 * x * x;
+      const size = 6 + hash(i + 3) * 14;
+      p.style.width = p.style.height = `${size}px`;
+      p.style.background = s.color;
+      p.style.opacity = clamp(1 - x / 1.1);
+      p.style.transform = `translate(${px}px, ${py}px) rotate(${hash(i + 5) * 720 * x}deg)`;
+    }
+  }
+}
+function shock(parent) { return el("div", "ring", parent); }
+function drawShock(r, t, t0, x, y, max = 1300, color = "#fff", dur = 0.8) {
+  const p = P(t, t0, dur, E.outExpo);
+  const on = t >= t0 && p < 1;
+  show(r, on);
+  if (!on) return;
+  const d = lerp(40, max, p);
+  r.style.width = r.style.height = `${d}px`;
+  r.style.borderColor = color;
+  r.style.borderWidth = `${lerp(14, 1, p)}px`;
+  r.style.transform = `translate(${x - d / 2}px, ${y - d / 2}px)`;
+  r.style.opacity = 1 - p;
+}
+// count with a rolling feel: eased value, fixed decimals
+const money = (v, dp = 2) => `$${v.toFixed(dp)}`;
+
+// ───────────────────────────── cues for the soundtrack ─────────────────────────────
+const CUES = [];
+const cue = (t, type, extra = {}) => CUES.push({ t, type, ...extra });
+
+// Scene windows (seconds). The groove is 120 BPM: a beat is 0.5 s, a bar 2 s.
+const S = { wake: 0, power: 4.6, freeze: 10.6, land: 11.15, logo: 12.6, rules: 15.4, ask: 23.6, plan: 30.4, replay: 36.6, montage: 41.8, outro: 47.8, end: 54.6 };
+
+// ═════════════════════════ 1 + 2 + 3: wake, power, the halo ═════════════════════════
+const L1 = layer("l1");
+const hero = makeOrb(L1);
+const hMeet = headline([["Meet"], ["your"], ["agent.", "a"]], 790, L1, 60);
+const hAny = headline([["It"], ["can"], ["use"], ["anything."]], 150, L1);
+const hProb = headline([["Which"], ["is"], ["exactly"], ["the"], ["problem.", "r"]], 150, L1);
+const GOOD = [["GitHub", "read"], ["Slack", "ext"], ["Files", "write"], ["Browser", "ext"], ["Email", "ext"], ["SQL", "write"]];
+const BAD = [["rm -rf ./", "ext"], ["DROP TABLE users", "ext"], ["git push --force", "ext"], ["POST #general", "ext"], ["refund all", "ext"], ["curl … | sh", "ext"]];
+const good = GOOD.map(([l, k]) => chip(l, k, L1));
+const bad = BAD.map(([l, k]) => chip(l, k, L1));
+const spend = el("div", "", L1, `<small>spend</small><b>$0.00</b>`);
+spend.id = "spend";
+const spendB = spend.querySelector("b");
+const shock1 = shock(L1);
+const word = el("div", "wordmark", L1, "Halo");
+const tagline = el("div", "tagline", L1, ["AI", "agents", "that", "do", "real", "work,"].map((w) => `<span class="w">${w}</span>`).join("") + "<br>" + [["inside", ""], ["rules", "a"], ["you", "a"], ["write.", "a"]].map(([w, c]) => `<span class="w ${c}">${w}</span>`).join(""));
+tagline.style.top = "720px";
+const tagWords = [...tagline.querySelectorAll(".w")];
+const badShatter = bad.map((_, i) => shatter(S.land + 0.02 + i * 0.035, 0, 0, "#ff7b72", 16));
+
+cue(0.18, "spark"); cue(0.6, "pop", { pitch: 0 }); cue(1.3, "blink"); cue(1.8, "look"); cue(2.3, "look");
+cue(3.2, "blink"); cue(3.3, "chirp"); cue(4.0, "thud");
+GOOD.forEach((_, i) => cue(4.8 + 0.09 * i ** 0.9, "pop", { pitch: 2 + i * 2 }));
+BAD.forEach((_, i) => cue(7.2 + 0.11 * i ** 0.85, "pop", { pitch: -3 + i, harsh: true }));
+cue(10.75, "fall"); cue(S.land, "boom"); BAD.forEach((_, i) => cue(S.land + 0.02 + i * 0.035, "glass", { soft: i > 0 }));
+cue(11.4, "chirp", { happy: true }); cue(11.25, "rollback"); cue(S.logo, "hit"); cue(14.6, "whoosh", { long: true });
+
+// orbit angle: slow, then accelerating (an integral, so it never jumps)
+const orbitA = (t) => { const x = Math.max(0, Math.min(t, S.freeze) - 4.8); const y = Math.max(0, Math.min(t, S.freeze) - 7.3); return x * 0.55 + y * y * 0.42 + y * y * y * 0.05; };
+
+function scene1(t) {
+  const on = t < S.rules + 0.4;
+  show(L1, on);
+  if (!on) return;
+  const frozen = t >= S.freeze && t < S.land;
+  const tt = frozen ? S.freeze : t; // time for things that stop during the freeze
+  const after = t >= S.land;
+
+  // ---- the orb ----
+  const born = spring(t - 0.6, 15, 0.34);
+  const spark = t < 0.6 ? clamp(t / 0.5) * (0.6 + 0.4 * noise(t * 30)) : 0;
+  let x = CX, y = 560, sq = 0, lookX = 0, lookY = 0, blink = 1 - P(t, 1.3, 0.16, E.outCubic), eye = 1;
+  // looks around
+  lookX = -P(t, 1.8, 0.22, E.outQuart) + 2 * P(t, 2.3, 0.22, E.outQuart) - P(t, 2.9, 0.25, E.outQuart);
+  blink = Math.max(blink, Math.sin(clamp((t - 3.2) / 0.16) * Math.PI));
+  // the hop: anticipation squash, stretch on the way up, land, settle
+  const hop = clamp((t - 3.4) / 0.6);
+  y -= Math.sin(hop * Math.PI) * 110;
+  sq += P(t, 3.25, 0.15) * (1 - P(t, 3.4, 0.08)) * 0.5;               // crouch
+  sq -= Math.sin(clamp((t - 3.4) / 0.25) * Math.PI) * 0.35;           // stretch
+  sq += wobble(t - 4.0, 3.2, 6) * 0.45;                                // land
+  // power: eyes widen, jitter builds, eyes chase the chips
+  const hype = P(tt, 7.2, 0.3);
+  eye += hype * 0.35;
+  const jit = P(tt, 8.4, 2.2, E.inQuad);
+  x += noise(tt * 40, 1) * 10 * jit;
+  y += noise(tt * 40, 2) * 8 * jit + (P(t, 4.6, 0.6, E.inOutCubic) * 20);
+  lookX += Math.sin(orbitA(tt) * 1.3) * P(tt, 5.2, 0.5) * 0.9;
+  lookY += Math.cos(orbitA(tt) * 1.3) * P(tt, 5.2, 0.5) * 0.4;
+  // the halo lands
+  const ringFall = P(t, 10.75, 0.4, E.inCubic);
+  const land = t - S.land;
+  if (after) { sq += wobble(land, 2.6, 5.5) * 0.5; eye = lerp(eye, 1, P(t, S.land, 0.2)); lookX *= 1 - P(t, S.land, 0.2); lookY *= 1 - P(t, S.land, 0.2); }
+  const happy = P(t, 11.35, 0.18);
+  // logo: the orb steps left so the wordmark can come out from behind it
+  const toLogo = P(t, S.logo, 0.8, E.inOutQuint);
+  x = lerp(x, 600, toLogo); y = lerp(y, 455, toLogo);
+  // into the ring for the iris wipe
+  const dive = P(t, 14.6, 0.8, E.inOutQuint);
+  orb(hero, {
+    x, y, scale: (t < 0.6 ? 0.06 + spark * 0.05 : 0.15 + born * 0.85) * lerp(1, 0.86, toLogo),
+    sq, lookX, lookY, blink: t < 1.3 ? 1 : blink, eye, happy: happy * (1 - P(t, 14.5, 0.2)),
+    halo: t < 10.75 ? 0 : 1, haloY: (1 - ringFall) * -520, haloWob: after ? wobble(land, 4.5, 4) : 0, haloTilt: after ? wobble(land - 0.05, 3, 4) * 8 : 0,
+    glow: t < 0.6 ? spark : 1 + jit * 0.5 + (after ? Math.exp(-land * 3) * 1.5 : 0),
+    opacity: t < 0.6 ? spark : 1,
+  });
+  hero.svg.style.filter = frozen ? "grayscale(.7) brightness(.75)" : "";
+  // the camera pushes into the ring for the iris
+  L1.style.transform = `translate(${dive * (CX - 600)}px, ${dive * (CY - 372)}px) scale(${1 + dive * dive * 5})`;
+  L1.style.transformOrigin = `600px 372px`;
+
+  // ---- chips ----
+  const A = orbitA(tt);
+  const leave = P(t, S.logo - 0.2, 0.3, E.inCubic);
+  good.forEach((c, i) => {
+    const pop = spring(tt - (4.8 + 0.09 * i ** 0.9), 13, 0.45);
+    const a = A + (i / good.length) * Math.PI * 2;
+    const z = Math.sin(a);
+    const r = pop;
+    let cx = CX + Math.cos(a) * 470 * r, cy = 580 + z * 170 * r;
+    let s = (0.82 + z * 0.22) * clamp(pop * 1.2);
+    let o = clamp((tt - 4.8 - 0.09 * i) * 6) * (1 - leave);
+    if (after) { // settle into a calm row under the orb
+      const p = P(t, S.land + 0.15, 0.7, E.outExpo);
+      cx = lerp(cx, CX + (i - 2.5) * 250, p); cy = lerp(cy, 840, p); s = lerp(s, 0.86, p);
+    }
+    c.style.zIndex = z > 0 ? 3 : 1;
+    put(c, cx, cy + leave * 40, s, 0, o, (1 - P(t, 4.8 + 0.09 * i, 0.3)) * 6 + (frozen ? 0 : P(tt, 8.6, 2) * Math.abs(Math.cos(a)) * 3));
+    c.style.filter += frozen ? " grayscale(.8) brightness(.7)" : "";
+  });
+  const B = -A * 1.35;
+  bad.forEach((c, i) => {
+    const t0 = 7.2 + 0.11 * i ** 0.85;
+    const pop = spring(tt - t0, 12, 0.4);
+    const a = B + (i / bad.length) * Math.PI * 2 + 0.4;
+    const z = Math.sin(a);
+    const cx = CX + Math.cos(a) * 640 * pop, cy = 580 + z * 250 * pop;
+    c.style.zIndex = z > 0 ? 4 : 0;
+    const gone = after;
+    if (i < badShatter.length) { badShatter[i].x = cx; badShatter[i].y = cy; }
+    put(c, cx, cy, (0.8 + z * 0.25) * clamp(pop * 1.15), noise(tt * 12, i) * 6 * jit, gone ? 0 : clamp((tt - t0) * 6), frozen ? 0 : P(tt, 8.6, 2) * 4 * Math.abs(Math.cos(a)));
+    c.style.filter += frozen ? " grayscale(.8) brightness(.7)" : "";
+  });
+
+  // ---- the spend counter ----
+  const sp = P(tt, 7.4, 3.2, E.inExpo);
+  const back = P(t, S.land + 0.1, 0.6, E.inOutCubic);
+  spendB.textContent = money(lerp(sp * 847.2, 0, back));
+  spendB.style.color = back > 0.98 ? "#56d39a" : "";
+  put(spend, 0, 0, 1, 0, P(tt, 7.4, 0.3) * (1 - P(t, 12.2, 0.3)));
+  spend.style.transform = `translateY(${(1 - P(tt, 7.4, 0.5, E.outExpo)) * 30}px)`;
+
+  // ---- red tint + shake ----
+  if (dive === 0) L1.style.transformOrigin = "960px 540px";
+  document.getElementById("tint").style.opacity = after ? 0 : P(tt, 8.2, 2.4, E.inQuad) * 0.45;
+  if (!frozen && !after && t > 8.4) {
+    const k = P(t, 8.4, 2.2, E.inQuad);
+    L1.style.transform = `translate(${noise(t * 26, 3) * 14 * k}px, ${noise(t * 26, 4) * 10 * k}px) rotate(${noise(t * 18, 5) * 0.8 * k}deg)`;
+  } else if (frozen) L1.style.transform = `scale(${1 + (t - S.freeze) * 0.04})`;
+  else if (after && t < 14.6) L1.style.transform = `translate(${wobble(land, 7, 9) * 14}px, ${wobble(land - 0.02, 6, 8) * 18}px)`;
+
+  // ---- impact ----
+  drawShock(shock1, t, S.land, x, y - 70, 1500, "#fff", 0.9);
+  document.getElementById("flash").style.opacity = t >= S.land ? Math.exp(-(t - S.land) * 9) * 0.32 : 0;
+
+  // ---- headlines ----
+  wave(hMeet, t, 1.6, 4.3);
+  wave(hAny, t, 5.2, 7.95);
+  wave(hProb, t, 8.0, S.freeze - 0.001, { dur: 0.45 });
+  if (t >= S.freeze) show(hProb.el, false);
+
+  // ---- wordmark + tagline ----
+  const wm = P(t, S.logo + 0.15, 0.9, E.outExpo);
+  word.style.left = "735px"; word.style.top = "300px";
+  word.style.clipPath = `inset(-20% ${(1 - wm) * 100}% -20% 0)`;
+  word.style.transform = `translateX(${(1 - wm) * -120}px)`;
+  word.style.opacity = t > S.logo ? 1 : 0;
+  tagWords.forEach((w, i) => {
+    const p = P(t, 13.35 + 0.06 * i ** 0.85, 0.6, E.outExpo);
+    w.style.transform = `translateY(${(1 - p) * 30}px)`;
+    w.style.opacity = p;
+    w.style.filter = p < 1 ? `blur(${(1 - p) * 8}px)` : "";
+  });
+  const fadeLogo = 1 - P(t, 14.55, 0.3);
+  word.style.opacity = (t > S.logo ? 1 : 0) * fadeLogo;
+  tagline.style.opacity = fadeLogo;
+}
+
+// ═════════════════════════ 4 + 5: rules, and asking a person ═════════════════════════
+const L4 = layer("l4");
+const agent = makeOrb(L4);
+const codeWin = el("div", "win", L4, `<div class="win-bar"><i></i><i></i><i></i><span>triage.halo</span></div><div class="code"></div>`);
+codeWin.style.cssText += "left:120px;top:320px;width:1110px;";
+const codeBox = codeWin.querySelector(".code");
+const CODE_LINES = D.code || [];
+const lineEls = CODE_LINES.map((l) => {
+  const row = el("div", "cl", codeBox, `<span class="tx">${l.html || "&nbsp;"}</span>`);
+  return { row, tx: row.firstChild, len: l.len };
+});
+const caret = el("div", "caret", codeBox);
+const hlRead = el("div", "hl", codeBox), hlDel = el("div", "hl", codeBox);
+// typing schedule: [start, end] per line
+const TYPE = [[15.75, 16.75], [16.8, 17.35], [17.4, 17.75], [17.75, 17.75], [17.85, 18.45], [18.5, 18.75]];
+TYPE.forEach(([a, b], i) => { const n = CODE_LINES[i]?.len || 0; for (let k = 0; k < n; k += 3) cue(lerp(a, b, k / Math.max(1, n)), "key", { soft: k % 2 === 1 }); });
+const hRules = headline([["You"], ["write"], ["the"], ["rules.", "a"]], 120, L4);
+const hRefused = headline([["Refused", "r"], ["before"], ["it"], ["runs."]], 120, L4);
+const gate = el("div", "gate", L4);
+const cRead = chip("Repo.read", "read", L4), cDel = chip("Repo.delete", "ext", L4);
+const stamp = el("div", "stamp", L4, "REFUSED");
+const note = el("div", "note", L4, `<b>Repo.delete</b> isn't in AllowTools`);
+const delShatter = shatter(20.17, 0, 0, "#ff7b72", 22, 0.8);
+const passShock = shock(L4), gateShock = shock(L4);
+cue(18.85, "toss"); cue(19.15, "ding"); cue(19.6, "toss", { hard: true }); cue(19.95, "block"); cue(20.05, "stamp"); cue(20.17, "glass");
+cue(20.1, "ouch");
+
+// ask
+const hAsk = headline([["Some"], ["things"], ["need"], ["a"], ["yes.", "a"]], 120, L4);
+const hWait = headline([["It"], ["waits."], ["Days,"], ["if"], ["it"], ["has"], ["to."]], 120, L4);
+const hGo = headline([["Then"], ["picks"], ["up"], ["where"], ["it"], ["left"], ["off.", "g"]], 120, L4);
+const cCom = chip("Repo.comment", "ext", L4);
+const card = el("div", "card", L4, `<div class="who"><span class="av"></span><span>Triager <small>wants to post on #412</small></span></div>
+  <div class="q">“Thanks for the report. I've labelled this a bug and we're looking into it.”</div>
+  <div class="btns"><div class="btn yes"><span class="lab">Approve</span><span class="rip"></span></div><div class="btn no">Deny</div></div>`);
+const yesBtn = card.querySelector(".btn.yes"), yesLab = card.querySelector(".lab"), rip = card.querySelector(".rip");
+const clock = el("div", "clock", L4);
+const zs = [0, 1, 2].map(() => el("div", "z", L4, "z"));
+const cursor = el("div", "cursor", L4, `<svg viewBox="0 0 24 24" width="44" height="44"><path d="M4 2l16 9.5-7 1.6-3.6 6.9z" fill="#fff" stroke="#0b0d10" stroke-width="1.5" stroke-linejoin="round"/></svg>`);
+const toast = el("div", "toast", L4, "✓ posted on #412");
+cue(24.35, "card"); cue(25.0, "yawn"); cue(25.45, "snore"); for (let k = 0; k < 18; k++) cue(25.3 + 1.3 * (k / 18) ** 0.7, "tick", { soft: k % 2 === 1 });
+cue(27.55, "click"); cue(27.7, "chime"); cue(27.8, "boing"); cue(28.2, "toss"); cue(28.45, "ding");
+cue(29.6, "whip");
+
+const DAYS = ["Tue", "Wed", "Thu"];
+function clockText(p) { // Tue 09:14 → Thu 16:02, spinning
+  const start = 9 * 60 + 14, end = 2 * 1440 + 16 * 60 + 2;
+  const m = Math.round(lerp(start, end, p));
+  const d = DAYS[Math.min(2, Math.floor(m / 1440))], hh = Math.floor((m % 1440) / 60), mm = m % 60;
+  return `<b>${d} ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}</b>`;
+}
+
+function scene4(t) {
+  const on = t >= S.rules - 0.9 && t < S.plan + 0.6;
+  show(L4, on);
+  if (!on) return;
+  // the iris: this layer is revealed through a growing circle where the ring was
+  // the iris opens inside the halo ring as the camera pushes into it, then takes the frame
+  const dive = P(t, 14.6, 0.8, E.inOutQuint);
+  const ringR = 47 * (1 + 5 * dive * dive), open = P(t, 15.15, 0.6, E.inOutCubic);
+  const irx = t > 14.78 ? lerp(ringR * P(t, 14.78, 0.12), 1500, open) : 0;
+  const iry = t > 14.78 ? lerp(ringR * 0.22 * P(t, 14.78, 0.12), 1500, open) : 0;
+  
+  L4.style.clipPath = open < 1 ? `ellipse(${irx}px ${iry}px at ${600 + 360 * dive}px ${367 + 168 * dive}px)` : "";
+  document.getElementById("grid").style.opacity = 0.16 * open * (1 - P(t, S.plan, 0.4));
+  // whip to the plan
+  const whip = P(t, 29.6, 0.6, E.inOutQuint);
+  L4.style.transform = `translateX(${-whip * 1400}px)`;
+  L4.style.filter = whip > 0 && whip < 1 ? `blur(${Math.sin(whip * Math.PI) * 12}px)` : "";
+
+  // ---- code ----
+  const codeOut = P(t, 22.55, 0.45, E.inCubic);
+  put(codeWin, 0, 0, 1, 0, 1 - codeOut, codeOut * 10, "");
+  codeWin.style.transform = `translate(${-codeOut * 260}px, ${(1 - P(t, 15.4, 0.8, E.outExpo)) * 40}px)`;
+  let caretAt = null;
+  lineEls.forEach((l, i) => {
+    const [a, b] = TYPE[i] || [99, 99];
+    const n = Math.round(clamp((t - a) / Math.max(0.01, b - a)) * l.len);
+    l.tx.style.width = `${n}ch`;
+    if (t >= a && (t < b + 0.05 || i === lineEls.length - 1)) caretAt = { i, n };
+  });
+  show(caret, !!caretAt && Math.floor(t * 2.2) % 2 === 0 || (caretAt && t < 18.75));
+  if (caretAt) caret.style.transform = `translate(${40 + caretAt.n * 18}px, ${34 + caretAt.i * 52.5 + 8}px)`;
+  caret.style.left = "0"; caret.style.top = "0";
+  // highlight the token the verdict came from
+  const ch = 18, lh = 52.5;
+  const rd = P(t, 19.1, 0.25) * (1 - P(t, 19.6, 0.3));
+  hlRead.style.cssText = `left:${40 + 26 * ch - 6}px;top:${34 + 4}px;width:${11 * ch + 12}px;height:${lh - 8}px;background:rgba(86,211,154,${0.22 * rd});box-shadow:0 0 0 2px rgba(86,211,154,${0.7 * rd});`;
+  const dl = P(t, 19.95, 0.15) * (1 - P(t, 22.3, 0.3));
+  hlDel.style.cssText = `left:${40 + 15 * ch - 6}px;top:${34 + 4}px;width:${10 * ch + 12}px;height:${lh - 8}px;background:rgba(255,123,114,${0.2 * dl});box-shadow:0 0 0 2px rgba(255,123,114,${0.75 * dl});`;
+
+  // ---- the agent, the gate, and two calls ----
+  const GX = 1390, AX = 1665, AY = 670;
+  const enter = P(t, 15.3, 0.9, E.outExpo);
+  const toAsk = P(t, 22.6, 0.9, E.inOutQuint);
+  let ax = lerp(AX + 300 * (1 - enter), 640, toAsk), ay = lerp(AY, 700, toAsk);
+  // throws: a little wind-up and follow-through
+  const wind1 = Math.sin(clamp((t - 18.6) / 0.3) * Math.PI) * 0.4, wind2 = Math.sin(clamp((t - 19.35) / 0.3) * Math.PI) * 0.5;
+  const flinch = wobble(t - 19.97, 3.5, 6);
+  ax += flinch * 18;
+  // asleep while it waits
+  const sleep = P(t, 25.0, 0.5) * (1 - P(t, 27.75, 0.08));
+  const breathe = sleep * Math.sin(t * 3.2) * 0.06;
+  const wake = t - 27.8;
+  ay -= Math.max(0, Math.sin(clamp(wake / 0.45) * Math.PI)) * 70;
+  const ouch = P(t, 20.0, 0.08) * (1 - P(t, 20.7, 0.2));
+  orb(agent, {
+    x: ax, y: ay, scale: 0.82, sq: wind1 + wind2 * 0.8 - flinch * 0.4 + breathe - Math.sin(clamp(wake / 0.45) * Math.PI) * 0.3 + wobble(wake - 0.45, 3, 6) * 0.4,
+    lookX: -P(t, 18.4, 0.2) * (1 - P(t, 20.8, 0.3)) + P(t, 24.4, 0.3) * (1 - sleep) * 0.9 * (1 - P(t, 28.3, 0.3)),
+    lookY: 0, ouch, sleep: sleep * (1 - ouch), happy: P(t, 28.1, 0.15) * (1 - P(t, 29.5, 0.3)) + P(t, 19.2, 0.12) * (1 - P(t, 19.55, 0.1)),
+    eye: 1 + Math.exp(-Math.max(0, wake) * 4) * (wake > 0 ? 0.5 : 0), halo: 1, haloColor: t > 19.95 && t < 20.5 ? "#ff7b72" : "#fff",
+    haloWob: wobble(t - 19.95, 5, 5) + wobble(wake, 4, 5) * 0.6,
+    opacity: enter,
+  });
+  // gate: a soft light, flaring red on the refusal
+  const gOn = P(t, 18.3, 0.4) * (1 - P(t, 22.5, 0.4));
+  const flare = Math.exp(-Math.max(0, t - 19.95) * 4) * (t >= 19.95 ? 1 : 0);
+  const okFlare = Math.exp(-Math.max(0, t - 19.12) * 5) * (t >= 19.12 ? 1 : 0) * (t < 19.9 ? 1 : 0);
+  gate.style.cssText = `left:${GX}px;top:${430 - flare * 40}px;height:${480 + flare * 80}px;opacity:${gOn};
+    background:${flare > 0.05 ? `rgb(255,${123 + (1 - flare) * 80},${114 + (1 - flare) * 100})` : okFlare > 0.05 ? "#56d39a" : "#3a414c"};
+    box-shadow:0 0 ${20 + flare * 90}px ${flare * 18}px rgba(255,90,80,${0.2 + flare * 0.7}), 0 0 ${okFlare * 60}px rgba(86,211,154,${okFlare * 0.8});`;
+  // Repo.read: tossed over the gate, passes
+  const r0 = 18.85, rp = P(t, r0, 0.55, E.inOutCubic);
+  const rx = lerp(AX - 40, 920, rp), ry = lerp(AY - 170, 600, rp) - Math.sin(rp * Math.PI) * 160;
+  put(cRead, t < r0 ? AX - 40 : rx, t < r0 ? AY - 170 - P(t, 18.45, 0.3, E.outBack) * 10 : ry, P(t, 18.45, 0.35, E.outBack) * (1 - P(t, 19.5, 0.25)), rp * -8, P(t, 18.45, 0.2) * (1 - P(t, 19.5, 0.25)), t > r0 && t < r0 + 0.55 ? Math.sin(rp * Math.PI) * 3 : 0);
+  drawShock(passShock, t, 19.12, GX + 4, 630, 260, "#56d39a", 0.5);
+  // Repo.delete: thrown hard, stopped dead, bounces back and breaks
+  const d0 = 19.6, hit = 19.95;
+  const dp = P(t, d0, hit - d0, E.inCubic);
+  let dx = lerp(AX - 40, GX + 70, dp), dy = lerp(AY - 170, 610, dp) - Math.sin(dp * Math.PI) * 60, dr = 0, ds = P(t, 19.25, 0.3, E.outBack);
+  if (t > hit) { const b = P(t, hit, 0.22, E.outCubic); dx = GX + 70 + b * 120; dy = 610 - Math.sin(b * Math.PI) * 50; dr = b * 28; ds *= 1 + wobble(t - hit, 6, 10) * 0.15; }
+  delShatter.x = dx; delShatter.y = dy;
+  put(cDel, t < 19.25 ? AX - 40 : dx, dy, ds, dr, t < 20.17 ? P(t, 19.25, 0.15) : 0, t > d0 && t < hit ? dp * 6 : 0);
+  drawShock(gateShock, t, hit, GX + 4, 630, 520, "#ff7b72", 0.6);
+  // the stamp lands with the impact
+  const st = P(t, 20.05, 0.32, (p) => E.outBack(p, 2.4));
+  put(stamp, GX, 400, lerp(1.9, 1, st), lerp(-18, -7, st), st * (1 - P(t, 22.3, 0.3)), (1 - st) * 6);
+  const nt = P(t, 20.4, 0.5, E.outExpo);
+  put(note, GX, 945, 1, 0, nt * (1 - P(t, 22.3, 0.3)), (1 - nt) * 6, ` translateY(${(1 - nt) * 20}px)`);
+
+  // ---- asking ----
+  const cp = P(t, 23.5, 0.5, E.outBack);
+  const fly = P(t, 28.2, 0.5, E.inOutCubic);
+  const bob = Math.sin(t * 2.6) * 6 * (1 - sleep);
+  put(cCom, lerp(ax, 1720, fly), lerp(ay - 175 + bob, 360, fly) - Math.sin(fly * Math.PI) * 120, cp * (1 - P(t, 28.62, 0.1)), fly * 10, cp * (1 - P(t, 28.62, 0.1)), fly > 0 && fly < 1 ? Math.sin(fly * Math.PI) * 4 : 0);
+  const cs = spring(t - 24.35, 13, 0.55);
+  const cardOut = P(t, 29.35, 0.25, E.inCubic);
+  put(card, lerp(1700, 1290, cs), lerp(1200, 620, cs), 1, (1 - cs) * 8, clamp((t - 24.35) * 5) * (1 - cardOut));
+  const cl = P(t, 25.2, 1.4, E.inOutCubic);
+  clock.innerHTML = `waiting since ${clockText(0)} · now ${clockText(cl)}`;
+  put(clock, 1290, 330, 1, 0, P(t, 25.2, 0.3) * (1 - P(t, 27.8, 0.3)), 0, ` translateY(${(1 - P(t, 25.2, 0.5, E.outExpo)) * 16}px)`);
+  zs.forEach((z, i) => {
+    const ph = ((t - 25.45 - i * 0.55) / 1.65) % 1;
+    const on = t > 25.45 + i * 0.55 && sleep > 0.5;
+    put(z, ax + 95 + ph * 110 + Math.sin(ph * 6) * 12, ay - 30 - ph * 190, 0.6 + ph * 0.7, -12 + ph * 20, on ? Math.sin(ph * Math.PI) : 0);
+  });
+  // the cursor glides in on a curve and presses Approve
+  const cur = P(t, 26.85, 0.7, E.inOutCubic);
+  const bx = 1290 - 320 + 32 + 90, by = 620 + 120; // over Approve
+  const press = Math.sin(clamp((t - 27.5) / 0.2) * Math.PI);
+  put(cursor, lerp(1830, bx + 20, cur) - Math.sin(cur * Math.PI) * 120, lerp(1060, by + 18, cur), 1 - press * 0.12, 0, P(t, 26.85, 0.2) * (1 - P(t, 28.6, 0.3)));
+  yesBtn.style.transform = `scale(${1 - press * 0.04})`;
+  const ok = P(t, 27.7, 0.3);
+  yesLab.textContent = t > 27.7 ? "Approved ✓" : "Approve";
+  const rp2 = P(t, 27.55, 0.5, E.outCubic);
+  rip.style.cssText = `left:${90}px;top:${32}px;transform:translate(-50%,-50%) scale(${rp2 * 30});opacity:${(1 - rp2) * (t > 27.55 ? 1 : 0)}`;
+  const tp = P(t, 28.5, 0.45, E.outExpo);
+  put(toast, 1290, 300, 1, 0, tp * (1 - cardOut), (1 - tp) * 6, ` translateY(${(1 - tp) * 24}px)`);
+
+  wave(hRules, t, 15.6, 19.9);
+  wave(hRefused, t, 19.97, 22.5, { dur: 0.4, dist: 30 });
+  wave(hAsk, t, 23.8, 25.25);
+  wave(hWait, t, 25.35, 27.65);
+  wave(hGo, t, 27.95, 29.5);
+}
+
+// ═════════════════════════ 6 + 7: plan, then replay ═════════════════════════
+const L6 = layer("l6");
+const term = el("div", "term", L6);
+const NODES = [["issue #412", "", "ag0"], ["Triager", "haiku-4-5 · ≤ $0.1948", "ag"], ["Repo.read", "read", "read"], ["Repo.comment", "external · needs approval", "ext"]];
+const NX = [330, 780, 1240, 1640], NY = 560;
+const nodeEls = NODES.map(([a, b, k]) => el("div", `node ${k}`, L6, `${a}${b ? `<small>${b}</small>` : ""}`));
+const wire = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+wire.setAttribute("width", W); wire.setAttribute("height", H); wire.style.cssText = "position:absolute;left:0;top:0;overflow:visible";
+wire.innerHTML = `<path d="M ${NX[0]} ${NY} L ${NX[3]} ${NY}" stroke="#3a414c" stroke-width="5" stroke-linecap="round" fill="none" pathLength="1" stroke-dasharray="1 1"/>`;
+L6.insertBefore(wire, L6.firstChild);
+const wirePath = wire.querySelector("path");
+const planOrb = makeOrb(L6);
+const meter = el("div", "meter", L6, `<div class="f"></div><div class="lim"></div>`);
+const meterF = meter.querySelector(".f"), meterLim = meter.querySelector(".lim");
+const cost = el("div", "big-num", L6), costLbl = el("div", "lbl", L6, "worst case"), limLbl = el("div", "lbl", L6, "MaxSpend $0.25");
+const hPlan = headline([["Know"], ["what"], ["it"], ["could"], ["do."]], 120, L6);
+const hCost = headline([["And"], ["the"], ["most"], ["it"], ["could"], ["cost.", "a"]], 120, L6);
+const nothing = el("div", "sub", L6, "Nothing runs. No model is called.");
+for (let k = 0; k < 9; k++) cue(30.65 + k * 0.05, "key", { soft: true });
+NX.forEach((x, i) => cue(31.2 + ((x - NX[0]) / (NX[3] - NX[0])) * 1.2, "pop", { pitch: 4 + i * 3 }));
+cue(32.6, "sweep"); cue(33.85, "ding");
+
+// replay
+const track = el("div", "track", L6, `<div class="done"></div>`);
+const trackDone = track.querySelector(".done");
+const DOTS = [0, 0.09, 0.2, 0.33, 0.47, 0.6, 0.74, 0.88, 1];
+const dotEls = DOTS.map(() => el("div", "dot", L6));
+const runLbl = el("div", "lbl", L6), runNum = el("div", "big-num", L6), repLbl = el("div", "lbl", L6), repNum = el("div", "big-num", L6);
+const hRec = headline([["Every"], ["run"], ["is"], ["recorded."]], 120, L6);
+const hRep = headline([["Replay"], ["it"], ["exactly."], ["For"], ["$0.", "g"]], 120, L6);
+DOTS.forEach((d, i) => cue(36.85 + d * 1.35, "tick", { soft: i % 2 === 0 }));
+cue(38.35, "rewind"); cue(39.0, "zap"); cue(39.3, "ding", { high: true }); cue(40.7, "riser");
+const TL = { x0: 300, x1: 1620, y: 600 };
+
+function scene6(t) {
+  const on = t >= S.plan - 0.7 && t < S.montage + 0.1;
+  show(L6, on);
+  if (!on) return;
+  const enter = P(t, 29.7, 0.7, E.inOutQuint);
+  L6.style.transform = `translateX(${(1 - enter) * 1400}px)`;
+  L6.style.filter = enter > 0 && enter < 1 ? `blur(${Math.sin(enter * Math.PI) * 12}px)` : "";
+  const toReplay = P(t, 35.9, 0.7, E.inOutQuint);
+
+  // the command
+  const cmd = "halo plan triage.halo";
+  const n = Math.round(P(t, 30.6, 0.5, E.lin) * cmd.length);
+  term.innerHTML = `<span class="p">$</span> ${cmd.slice(0, n)}`;
+  put(term, 0, 0, 1, 0, P(t, 30.45, 0.2) * (1 - toReplay));
+  term.style.transform = "translate(290px, 290px)";
+
+  // the wire draws; each node pops as the line reaches it, then shrinks into a dot on the timeline
+  const wp = P(t, 31.2, 1.2, E.inOutCubic);
+  wirePath.setAttribute("stroke-dashoffset", 1 - wp);
+  wirePath.setAttribute("d", `M ${lerp(NX[0], TL.x0, toReplay)} ${lerp(NY, TL.y, toReplay)} L ${lerp(NX[3], TL.x1, toReplay)} ${lerp(NY, TL.y, toReplay)}`);
+  wire.style.opacity = 1 - P(t, 36.4, 0.3);
+  nodeEls.forEach((e, i) => {
+    const at = 31.2 + ((NX[i] - NX[0]) / (NX[3] - NX[0])) * 1.2 - 0.05;
+    const s = spring(t - at, 15, 0.5);
+    const shrink = P(t, 35.9, 0.55, E.inOutQuint);
+    const tx = lerp(TL.x0, TL.x1, DOTS[[0, 2, 5, 8][i]]);
+    put(e, lerp(NX[i], tx, shrink), lerp(NY, TL.y, shrink), s * lerp(1, 0.05, shrink), 0, clamp((t - at) * 8) * (1 - P(t, 36.2, 0.2)));
+  });
+  // the agent rides the Triager node, then becomes the playhead
+  const ride = spring(t - 31.65, 12, 0.5);
+  const rec = P(t, 36.85, 1.35, E.inOutSine);
+  const rew = P(t, 38.35, 0.45, E.inOutQuint);
+  const rep = P(t, 39.0, 0.22, E.inExpo);
+  let head = rec * (1 - rew) + rep;
+  const onTrack = P(t, 36.0, 0.6, E.inOutQuint);
+  let px = lerp(NX[1], lerp(TL.x0, TL.x1, head), onTrack), py = lerp(NY - 112, TL.y - 76, onTrack);
+  const zoom = P(t, 40.9, 0.9, E.inExpo);
+  const zipping = (t > 38.35 && t < 38.8) || (t > 39.0 && t < 39.22);
+  orb(planOrb, {
+    x: lerp(px, CX, zoom), y: lerp(py, CY, zoom), scale: (0.52 * ride + zoom * 30) * (zipping ? 1 : 1),
+    sq: zipping ? -0.3 : wobble(t - 31.65, 3, 6) * 0.4 + wobble(t - 39.25, 3, 6) * 0.5, rot: zipping ? (t < 38.8 ? 14 : -14) : 0,
+    lookX: zipping ? (t < 38.8 ? -1 : 1) : 0.6, happy: P(t, 39.3, 0.15), halo: 1, opacity: clamp((t - 31.65) * 6),
+    blur: zipping ? 6 : zoom * 10,
+  });
+
+  // cost meter
+  const mp = P(t, 32.6, 1.25, E.outQuart);
+  const MX = 560, MW = 800, MY = 820;
+  const mOn = P(t, 32.4, 0.3) * (1 - toReplay);
+  meter.style.cssText = `left:${MX}px;top:${MY}px;width:${MW}px;opacity:${mOn}`;
+  meterF.style.width = `${(0.1948 / 0.25) * mp * 100}%`;
+  meterLim.style.left = `${MW - 2}px`;
+  cost.textContent = `≤ ${money(0.1948 * mp, 4)}`;
+  put(cost, MX, MY - 70, 1, 0, mOn);
+  cost.style.transform = `translate(${MX}px, ${MY - 100}px)`;
+  costLbl.style.cssText = `transform:translate(${MX}px, ${MY + 52}px);opacity:${mOn}`;
+  limLbl.style.cssText = `transform:translate(${MX + MW - 206}px, ${MY + 52}px);opacity:${mOn};color:#ff7b72`;
+  const nt = P(t, 34.1, 0.5, E.outExpo);
+  nothing.style.top = "960px";
+  nothing.style.opacity = nt * (1 - toReplay);
+  nothing.style.transform = `translateY(${(1 - nt) * 16}px)`;
+
+  // replay track
+  const tr = P(t, 36.2, 0.4);
+  track.style.cssText = `left:${TL.x0}px;top:${TL.y - 3}px;width:${TL.x1 - TL.x0}px;opacity:${tr * (1 - zoom)}`;
+  trackDone.style.width = `${head * 100}%`;
+  trackDone.style.background = t > 38.35 ? "#56d39a" : "";
+  dotEls.forEach((d, i) => {
+    const lit = head >= DOTS[i] - 0.001;
+    put(d, lerp(TL.x0, TL.x1, DOTS[i]), TL.y, lit ? 1.15 : 1, 0, tr * (1 - zoom));
+    d.style.background = lit ? (t > 38.35 ? "#56d39a" : "#f3b44c") : "";
+  });
+  const r1 = P(t, 36.85, 1.35, E.inOutSine);
+  runLbl.textContent = "halo run";
+  runNum.textContent = `${(19.8 * r1).toFixed(1)} s · ${money(0.0852 * r1, 4)}`;
+  const r2 = P(t, 39.0, 0.22, E.lin);
+  repLbl.textContent = "halo replay";
+  repNum.textContent = t < 39.0 ? "—" : `${Math.round(19 * r2)} ms · $0`;
+  const lo = tr * (1 - zoom);
+  runLbl.style.cssText = `transform:translate(${TL.x0}px, 740px);opacity:${lo}`;
+  runNum.style.cssText = `transform:translate(${TL.x0}px, 780px);opacity:${lo}`;
+  repLbl.style.cssText = `transform:translate(1150px, 740px);opacity:${lo * P(t, 38.4, 0.3)};color:#56d39a`;
+  repNum.style.cssText = `transform:translate(1150px, 780px) scale(${1 + wobble(t - 39.25, 4, 6) * 0.06});transform-origin:left;opacity:${lo * P(t, 38.4, 0.3)};color:#56d39a`;
+
+  wave(hPlan, t, 30.85, 32.5);
+  wave(hCost, t, 32.6, 35.8);
+  wave(hRec, t, 36.5, 38.3);
+  wave(hRep, t, 38.4, 40.8);
+}
+
+// ═════════════════════════ 8: montage ═════════════════════════
+const L8 = layer("l8");
+const BEATS = [
+  ["Sandboxes.", "cube"], ["Real browsers.", "browser"], ["Schedules.", "clock"], ["Any model.", "models"], ["Memory.", "memory"], ["Teams.", "team"],
+];
+const beatAt = (i) => S.montage + i * 1.0;
+BEATS.forEach((_, i) => cue(beatAt(i), "slam", { i }));
+const slams = BEATS.map(([w], i) => { const e = el("div", "slam", L8, w); e.style.top = "640px"; return e; });
+const cube = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+cube.setAttribute("width", 520); cube.setAttribute("height", 520); cube.setAttribute("viewBox", "-260 -260 520 520");
+cube.style.cssText = "position:absolute;left:0;top:0;overflow:visible";
+cube.innerHTML = `<path fill="none" stroke="#f3b44c" stroke-width="4" stroke-linejoin="round" opacity=".9"/>`;
+L8.appendChild(cube);
+const cubeP = cube.querySelector("path");
+const mOrbs = [makeOrb(L8), makeOrb(L8), makeOrb(L8)];
+const browser = el("div", "browser", L8, `<div class="bar"><i></i><i></i><i></i><span>example.com/checkout</span></div>`);
+const mCursor = el("div", "cursor", L8, cursor.innerHTML);
+const clockSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+clockSvg.setAttribute("width", 300); clockSvg.setAttribute("height", 300); clockSvg.setAttribute("viewBox", "-150 -150 300 300");
+clockSvg.style.cssText = "position:absolute;left:0;top:0";
+clockSvg.innerHTML = `<circle r="130" fill="#12151a" stroke="#2f3640" stroke-width="6"/>${Array.from({ length: 12 }, (_, i) => `<line x1="0" y1="-112" x2="0" y2="-98" stroke="#4a525e" stroke-width="5" stroke-linecap="round" transform="rotate(${i * 30})"/>`).join("")}<line class="hh" x1="0" y1="0" x2="0" y2="-62" stroke="#e8eaee" stroke-width="9" stroke-linecap="round"/><line class="mm" x1="0" y1="0" x2="0" y2="-96" stroke="#f3b44c" stroke-width="6" stroke-linecap="round"/><circle r="9" fill="#f3b44c"/>`;
+L8.appendChild(clockSvg);
+const hh = clockSvg.querySelector(".hh"), mm = clockSvg.querySelector(".mm");
+const bubbles = ["It's Ada again.", "Last time: the Pro plan.", "Prefers email."].map((s) => el("div", "bubble", L8, s));
+const models = el("div", "models", L8, `<div class="reel">${["anthropic/claude", "openai/gpt", "google/gemini", "ollama/llama", "openrouter/…", "anthropic/claude"].map((m) => `<div>${m}</div>`).join("")}</div>`);
+models.style.top = "285px";
+const reel = models.firstChild;
+
+function project([x, y, z], ay, ax) {
+  const c = Math.cos(ay), s = Math.sin(ay); [x, z] = [x * c + z * s, -x * s + z * c];
+  const c2 = Math.cos(ax), s2 = Math.sin(ax); [y, z] = [y * c2 - z * s2, y * s2 + z * c2];
+  const k = 900 / (900 + z);
+  return [x * k, y * k];
+}
+const CV = [-1, 1].flatMap((x) => [-1, 1].flatMap((y) => [-1, 1].map((z) => [x * 130, y * 130, z * 130])));
+const CE = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+
+function scene8(t) {
+  const on = t >= S.montage - 0.05;
+  show(L8, on);
+  if (!on) return;
+  const idx = Math.min(BEATS.length - 1, Math.floor((t - S.montage) / 1.0));
+  const local = t - beatAt(idx);
+  // amber and dark alternate on the beat
+  const amber = idx === 1 || idx === 3;
+  document.getElementById("bg").style.background = t < S.outro && t >= S.montage ? (amber ? "#f3b44c" : "radial-gradient(1200px 760px at 50% 46%, #141820, #0b0d10 70%)") : "";
+  slams.forEach((s, i) => {
+    const vis = i === idx && t < S.outro;
+    const p = P(local, 0, 0.32, E.outExpo);
+    s.style.color = amber ? "#0b0d10" : "#e8eaee";
+    put(s, CX, 0, lerp(1.28, 1, p), 0, vis ? 1 : 0, (1 - p) * 14);
+    s.style.transform = `translate(0, 0) scale(${lerp(1.28, 1, p)})`;
+    s.style.top = "620px";
+  });
+  const kick = Math.exp(-local * 9) * 0.06; // everything breathes on the hit
+  const vs = 1 + kick;
+  const showIf = (e, i) => show(e, idx === i && t < S.outro);
+  // 0: an orb in a sandbox, the box turning
+  showIf(cube, 0);
+  if (idx === 0) {
+    const ay = local * 1.4 + 0.6, ax = -0.42;
+    const pts = CV.map((v) => project(v, ay, ax));
+    cubeP.setAttribute("d", CE.map(([a, b]) => `M${pts[a][0].toFixed(1)} ${pts[a][1].toFixed(1)}L${pts[b][0].toFixed(1)} ${pts[b][1].toFixed(1)}`).join(""));
+    put(cube, CX, 330, vs * spring(local, 16, 0.5));
+  }
+  // 1: a browser, the orb clicking around it
+  showIf(browser, 1); showIf(mCursor, 1);
+  if (idx === 1) { put(browser, CX, 320, vs * spring(local, 16, 0.5)); const cx = lerp(820, 1080, E.inOutCubic(clamp(local / 0.6))); put(mCursor, cx, 380 + Math.sin(local * 6) * 20, 1 - Math.exp(-Math.max(0, local - 0.6) * 20) * 0.2); }
+  // 2: a clock, its hands spinning to a time
+  showIf(clockSvg, 2);
+  if (idx === 2) { const sp = E.outCubic(clamp(local / 0.8)); mm.setAttribute("transform", `rotate(${sp * 1080})`); hh.setAttribute("transform", `rotate(${sp * 90 + 30})`); put(clockSvg, CX, 330, vs * spring(local, 16, 0.5)); }
+  // 4: memory, messages stacking up
+  bubbles.forEach((b, i) => { show(b, idx === 4 && t < S.outro); if (idx === 4) { const p = spring(local - i * 0.12, 15, 0.5); put(b, CX + 120 + (i % 2 ? 60 : -40), 200 + i * 92, p, 0, clamp((local - i * 0.12) * 8)); b.style.background = "#13161b"; } });
+  // 3: models on a reel
+  show(models, idx === 3 && t < S.outro);
+  if (idx === 3) { const r = E.inOutCubic(clamp(local / 0.75)); reel.style.transform = `translateY(${-r * 5 * 90}px)`; models.style.color = "#0b0d10"; reel.style.filter = `blur(${Math.sin(r * Math.PI) * 6}px)`; }
+  // orbs: one in the sandbox / browser / memory, three in Teams, merging in the outro
+  mOrbs.forEach((o, i) => {
+    const merge = P(t, S.outro, 0.75, E.inOutQuint);
+    let vis = 0, x = CX, y = 330, sc = 0.6, sq = 0, happy = 0;
+    if (idx === 0 && i === 0) { vis = 1; sc = 0.5 * spring(local - 0.05, 14, 0.4); y = 330 + Math.sin(local * 7) * 10; }
+    if (idx === 1 && i === 0) { vis = 1; sc = 0.42 * spring(local - 0.05, 14, 0.4); x = 760; y = 380; }
+    if (idx === 4 && i === 0) { vis = 1; sc = 0.5 * spring(local - 0.05, 14, 0.4); x = 640; y = 300; happy = 1; }
+    if (idx === 5 || t >= S.outro) {
+      vis = 1;
+      const tl = t - beatAt(5);
+      const hop = Math.max(0, Math.sin(clamp((tl - 0.1 - i * 0.12) / 0.42) * Math.PI));
+      x = lerp(CX + (i - 1) * 230, CX, merge); y = 330 - hop * 90 + merge * 210; sc = 0.6 * spring(tl - i * 0.07, 14, 0.4) * lerp(1, 1.1, merge);
+      sq = -hop * 0.3 + wobble(tl - 0.52 - i * 0.12, 3, 7) * 0.4; happy = P(tl, 0.55 + i * 0.12, 0.12) * (1 - merge);
+      x += Math.cos(merge * 8 + i * 2.1) * 140 * Math.sin(merge * Math.PI);
+      y += Math.sin(merge * 8 + i * 2.1) * 70 * Math.sin(merge * Math.PI);
+      if (merge >= 1 && i > 0) vis = 0;
+    }
+    orb(o, { x, y, scale: sc, sq, happy, opacity: vis, lookX: idx === 1 ? 0.8 : 0, halo: t >= 48.9 && i === 0 ? 1 : 0, haloY: -520 * (1 - P(t, 48.6, 0.3, E.inCubic)), haloWob: wobble(t - 48.9, 4.5, 4) });
+    o.svg.style.zIndex = 5;
+  });
+}
+
+// ═════════════════════════ 9: outro ═════════════════════════
+const L9 = layer("l9");
+const shock9 = shock(L9);
+const word9 = el("div", "wordmark", L9, "Halo");
+const tag9 = el("div", "tagline", L9, ["AI", "agents", "that", "do", "real", "work,"].map((w) => `<span class="w">${w}</span>`).join("") + "<br>" + [["inside", ""], ["rules", "a"], ["you", "a"], ["write.", "a"]].map(([w, c]) => `<span class="w ${c}">${w}</span>`).join(""));
+const tag9w = [...tag9.querySelectorAll(".w")];
+const install = el("div", "install", L9);
+const url = el("div", "url", L9, "halolang.com");
+const INSTALL = D.install || "curl -fsSL https://halolang.com/install.sh | sh";
+cue(48.55, "merge"); cue(48.9, "boom", { light: true }); cue(49.4, "whoosh"); for (let k = 0; k < INSTALL.length; k += 3) cue(50.9 + (k / INSTALL.length) * 0.9, "key", { soft: k % 2 === 0 });
+cue(52.2, "chord"); cue(52.95, "wink");
+
+function scene9(t) {
+  const on = t >= S.outro - 0.1;
+  show(L9, on);
+  if (!on) return;
+  const o = mOrbs[0];
+  const toSide = P(t, 49.4, 0.85, E.inOutQuint);
+  const wink = Math.sin(clamp((t - 52.95) / 0.32) * Math.PI);
+  const hop = Math.max(0, Math.sin(clamp((t - 53.0) / 0.4) * Math.PI));
+  orb(o, {
+    x: lerp(CX, 600, toSide), y: lerp(540, 395, toSide) - hop * 30, scale: lerp(0.66, 0.86, toSide),
+    sq: wobble(t - 48.55, 3, 6) * 0.5 + wobble(t - 48.9, 2.6, 5.5) * 0.45 - hop * 0.2,
+    happy: P(t, 49.1, 0.15) * (1 - P(t, 50.4, 0.2)), wink, lookX: P(t, 52.6, 0.25) * 0.5,
+    halo: t >= 48.6 ? 1 : 0, haloY: -520 * (1 - P(t, 48.6, 0.3, E.inCubic)), haloWob: wobble(t - 48.9, 4.5, 4), haloTilt: wobble(t - 48.95, 3, 4) * 8,
+    glow: 1 + Math.exp(-Math.max(0, t - 48.9) * 3) * (t > 48.9 ? 1.4 : 0),
+  });
+  drawShock(shock9, t, 48.9, CX, 540 - 70, 1300, "#fff", 0.9);
+  if (t >= 48.9) document.getElementById("flash").style.opacity = Math.exp(-(t - 48.9) * 9) * 0.25;
+  const wm = P(t, 49.55, 0.9, E.outExpo);
+  word9.style.left = "735px"; word9.style.top = "240px";
+  word9.style.clipPath = `inset(-20% ${(1 - wm) * 100}% -20% 0)`;
+  word9.style.transform = `translateX(${(1 - wm) * -120}px)`;
+  tag9.style.top = "560px";
+  tag9w.forEach((w, i) => {
+    const p = P(t, 50.0 + 0.055 * i ** 0.85, 0.6, E.outExpo);
+    w.style.transform = `translateY(${(1 - p) * 30}px)`; w.style.opacity = p; w.style.filter = p < 1 ? `blur(${(1 - p) * 8}px)` : "";
+  });
+  const ip = P(t, 50.7, 0.5, E.outExpo);
+  const k = Math.round(P(t, 50.9, 0.9, E.lin) * INSTALL.length);
+  install.innerHTML = `<span class="p">$</span> ${INSTALL.slice(0, k)}${Math.floor(t * 2.4) % 2 === 0 || t < 51.8 ? '<span style="color:#f3b44c">▍</span>' : " "}`;
+  put(install, CX, 790, 1, 0, ip, (1 - ip) * 6, ` translateY(${(1 - ip) * 20}px)`);
+  const up = P(t, 52.2, 0.6, E.outExpo);
+  url.style.top = "905px"; url.style.opacity = up; url.style.transform = `translateY(${(1 - up) * 16}px)`;
+  url.style.letterSpacing = `${lerp(8, -0.5, up)}px`;
+  document.getElementById("black").style.opacity = P(t, S.end - 0.9, 0.9, E.inOutCubic);
+}
+
+// ───────────────────────────── grain ─────────────────────────────
+const gc = document.getElementById("grain").getContext("2d");
+const gimg = gc.createImageData(512, 512);
+for (let i = 0; i < gimg.data.length; i += 4) { const v = Math.floor(hash(i * 0.37) * 255); gimg.data[i] = gimg.data[i + 1] = gimg.data[i + 2] = v; gimg.data[i + 3] = 255; }
+gc.putImageData(gimg, 0, 0);
+const grain = document.getElementById("grain");
+grain.style.width = "2304px"; grain.style.height = "1296px";
+grain.style.imageRendering = "pixelated";
+
+world.appendChild(pl);
+window.DURATION = S.end;
+window.render = (t) => {
+  world.style.transform = ""; world.style.transformOrigin = "960px 540px";
+  // global overlays are reset every frame, so no scene's last value leaks into the next
+  for (const id of ["flash", "tint", "grid", "black"]) document.getElementById(id).style.opacity = 0;
+  document.getElementById("bg").style.background = "";
+  // the orb fills the screen: an amber flash into the montage
+  document.getElementById("fill").style.opacity = P(t, 41.45, 0.35, E.inCubic) * (1 - P(t, S.montage + 0.05, 0.3));
+  scene1(t); scene4(t); scene6(t); scene8(t); scene9(t);
+  drawShatters(t);
+  const f = Math.floor(t * 24);
+  grain.style.transform = `translate(${-hash(f) * 380}px, ${-hash(f + 9) * 210}px)`;
+};
+CUES.sort((a, b) => a.t - b.t);
+window.AUDIO_EVENTS = CUES;
+window.AUDIO_SECTIONS = S;
+window.render(0);
+</script>
+</body>
+</html>
