@@ -1,7 +1,7 @@
 ---
 layout: page
 title: Halo
-titleTemplate: a language for AI pipelines
+titleTemplate: a language for AI agents with rules
 sidebar: false
 aside: false
 ---

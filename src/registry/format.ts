@@ -11,7 +11,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { Glob } from "bun";
 import {
   checkPackageManifest,
   hostedInterfaceProblems,
@@ -72,7 +71,7 @@ export function packageKind(dir: string): 1 | 2 | undefined {
 function collect(dir: string, exclude: RegExp[]): Record<string, string> {
   const files: Record<string, string> = {};
   let total = 0;
-  for (const path of [...new Glob("**/*").scanSync({ cwd: dir, dot: false, onlyFiles: true })].sort()) {
+  for (const path of [...new Bun.Glob("**/*").scanSync({ cwd: dir, dot: false, onlyFiles: true })].sort()) {
     const rel = path.split("\\").join("/");
     if (exclude.some((re) => re.test(rel))) continue;
     const data = readFileSync(join(dir, rel));
