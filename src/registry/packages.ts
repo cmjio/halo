@@ -24,7 +24,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { Glob } from "bun";
 import { checkManifest, MANIFEST_FILE, ManifestError, permissionsOf, safeRelative, type Permissions, type ToolManifest } from "./manifest.js";
 import { httpProvider, mcpPackageProvider, moduleProvider, type BuiltProvider } from "./providers.js";
 
@@ -35,7 +34,7 @@ export const TOOLS_DIR = ".halo/tools";
 export const TRUST_FILE = ".halo/trust.json";
 /** The public registry of first-party packages, published with the site. */
 export const HOSTED_REGISTRY = "https://halolang.com/registry/index.json";
-const BUNDLED_REGISTRY = resolve(import.meta.dir, "../../registry/index.json");
+const BUNDLED_REGISTRY = resolve(import.meta.dirname, "../../registry/index.json"); // dirname, not dir: the editor bundles this for Node
 /**
  * The registry Halo uses by default: the copy in a checkout of Halo, or the hosted one for
  * an installed `halo` binary (which carries no registry files).
@@ -91,7 +90,7 @@ export function pack(dir: string): { bytes: Uint8Array; manifest: ToolManifest; 
   const manifest = checkManifest(JSON.parse(readFileSync(manifestPath, "utf8")));
   const files: Record<string, string> = {};
   let total = 0;
-  for (const path of new Glob("**/*").scanSync({ cwd: dir, dot: false, onlyFiles: true })) {
+  for (const path of new Bun.Glob("**/*").scanSync({ cwd: dir, dot: false, onlyFiles: true })) {
     const rel = path.split("\\").join("/");
     if (rel.startsWith("node_modules/") || rel.endsWith(".halotool")) continue;
     const data = readFileSync(join(dir, rel));
