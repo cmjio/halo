@@ -146,6 +146,20 @@ export function runSteps(data: Pick<SiteData, "fixerRun" | "providers">): RunSum
   };
 }
 
+/** The recorded run as HTML, for the home page's RecordedRun component. */
+export function runHtml(data: Pick<SiteData, "fixerRun" | "providers">): string {
+  const run = runSteps(data);
+  const steps = run.steps.map((s) => {
+    if (s.answer !== undefined) return `<li class="step" data-n="${s.n}"><div class="who">model → answer</div><div class="answer">${escapeHtml(s.answer)}</div></li>`;
+    const who = s.who === "pipeline" ? "pipeline" : `model → ${s.calls.length} tool call${s.calls.length > 1 ? "s" : ""}`;
+    const parts = s.calls.map((c) => `<div class="call"><span class="effect ${c.effect}">${c.effect}</span><span class="target">${c.target}</span><span class="args">(${escapeHtml(c.args)})</span></div>${c.result ? `<div class="result${c.ok ? " ok" : ""}">${escapeHtml(c.result)}</div>` : ""}`);
+    return `<li class="step" data-n="${s.n}"><div class="who">${who}</div>${parts.join("")}</li>`;
+  });
+  return `<div class="run-head"><span>$ ${run.command}</span><span>${run.model}</span></div>
+    <ol>${steps.join("")}</ol>
+    <div class="run-foot"><span>${run.seconds}s · ${run.modelCalls} model calls · ${run.toolCalls} tool calls · $${run.cost}</span><span class="ok">${run.tally}</span></div>`;
+}
+
 // ── Providers ──
 
 export function providerRows(data: SiteData) {

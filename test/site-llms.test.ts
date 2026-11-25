@@ -44,6 +44,31 @@ describe("cleanPage", () => {
     const root = docs({ "index.md": '---\nlayout: home\ntitle: Halo\nhero:\n  name: "halo"\n  text: "A language"\n  tagline: "It does things."\n---\n\n## Install\n' });
     expect(cleanPage(join(root, "docs/index.md"))).toStartWith("# Halo\n\n**A language.** It does things.\n\n## Install");
   });
+
+  test("reads a page written in HTML: headings, lists, terms, links and values", () => {
+    const root = docs({
+      "index.md": [
+        "<script setup>\nimport data from './data.json'\n</script>",
+        '<section class="hero">',
+        '<h1 class="t"><svg viewBox="0 0 2 2"><circle r="1"/></svg>halo</h1>',
+        "</section>",
+        '<nav aria-label="On this page">',
+        '  <a href="#plan">Static planning</a>',
+        "</nav>",
+        '<h2 class="h">Policies</h2>',
+        "<ol>",
+        "  <li><code>policy</code><span>A list of <b>rules</b>.</span></li>",
+        "</ol>",
+        "<dl>",
+        '  <div><dt><span class="e">read</span></dt><dd>Changes nothing.</dd></div>',
+        "</dl>",
+        "<p>{{ data.counts.examples }} examples; strings use <code v-pre>{{name}}</code>.</p>",
+      ].join("\n"),
+    });
+    expect(cleanPage(join(root, "docs/index.md"), {}, { "data.counts.examples": "70" })).toBe(
+      "# halo\n\n- [Static planning](#plan)\n\n## Policies\n\n- `policy`: A list of **rules**.\n\n- read: Changes nothing.\n\n70 examples; strings use `{{name}}`.\n",
+    );
+  });
 });
 
 test("summary is the first paragraph of prose, without code or links", () => {

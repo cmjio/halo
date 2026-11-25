@@ -34,6 +34,8 @@ export interface LlmsInput {
   examples: SidebarItem[];
   /** Markdown that stands in for a Vue component, by component name. Others are dropped. */
   components?: Record<string, string>;
+  /** What a page's `{{ expression }}` shows, by expression (`data.counts.examples`). */
+  values?: Record<string, string>;
 }
 
 /** Interactive pages, with nothing to read as text. */
@@ -67,7 +69,11 @@ function prose(line: string, page: string): string {
   return decode(
     line
       .replace(/<a\s[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/g, "[$2]($1)")
-      .replace(/<\/?(?:span|p|div|code|strong|em|br|video|img|ClientOnly)\b[^>]*>/g, (tag) => (/^<\/?code/.test(tag) ? "`" : /^<\/?strong/.test(tag) ? "**" : /^<\/?em/.test(tag) ? "_" : "")),
+      // A term then its description (<code>x</code><span>…</span>, <dt>x</dt><dd>…</dd>): "x: …".
+      .replace(/(<\/(?:code|strong|b)>|<\/dt>)(<span\b[^>]*>|<dd>)/g, "$1: $2")
+      // Inline elements set side by side in the HTML keep a space between them.
+      .replace(/(<\/(?:b|strong|span|code)>)(<(?:b|strong|code)\b)/g, "$1 $2")
+      .replace(/<\/?(?:span|p|div|code|strong|b|em|br|video|img|li|dt|dd|ClientOnly)\b[^>]*>/g, (tag) => (/^<\/?code/.test(tag) ? "`" : /^<\/?(?:strong|b)\b/.test(tag) ? "**" : /^<\/?em/.test(tag) ? "_" : "")),
   ).replace(/\]\(([^)\s]+)\)/g, (_, href: string) => `](${absolute(href, page)})`);
 }
 
@@ -75,7 +81,7 @@ function prose(line: string, page: string): string {
  * A docs page as plain Markdown: front matter, components and HTML gone, includes inlined,
  * code-group labels turned into a line of text above each block.
  */
-export function cleanPage(file: string, components: Record<string, string> = {}): string {
+export function cleanPage(file: string, components: Record<string, string> = {}, values: Record<string, string> = {}): string {
   // The page's path in the site, which relative links resolve against: docs/guide/x.md → /guide/x.md.
   const page = `/${file.replace(/\\/g, "/").split("/docs/").pop()}`;
   let text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
@@ -91,6 +97,8 @@ export function cleanPage(file: string, components: Record<string, string> = {})
     return existsSync(inc) ? readFileSync(inc, "utf8") : "";
   });
   text = text.replace(/<!--[\s\S]*?-->/g, "");
+  // A page's own script and style, and drawings, have nothing to read.
+  text = text.replace(/^<(script|style)\b[^>]*>[\s\S]*?^<\/\1>\n?/gm, "").replace(/<svg\b[^>]*>[\s\S]*?<\/svg>[ \t]*/g, "");
 
   const out: string[] = [];
   let fence: string | undefined;
@@ -111,17 +119,32 @@ export function cleanPage(file: string, components: Record<string, string> = {})
     const component = /^\s*<([A-Z]\w*)[^>]*\/?>\s*$/.exec(line);
     if (component) {
       const stand = components[component[1]!];
-      if (stand) out.push(stand.trimEnd());
+      if (stand) out.push("", stand.trimEnd(), "");
       continue;
     }
-    if (/^\s*<\/?(?:[A-Z]\w*|div|video)\b[^>]*>\s*$/.test(line)) continue;
+    // A block's own tags go; the blank line keeps what was inside it a block of its own.
+    if (/^\s*<\/?(?:[A-Z]\w*|div|video|section|nav|ol|ul|dl)\b[^>]*>\s*$/.test(line)) {
+      out.push("");
+      continue;
+    }
+    const prosed = () => prose(line.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (all, key: string) => values[key] ?? all), page);
+    // An HTML heading, list item, or a line that is only a link: their Markdown.
+    const heading = /^\s*<h([1-6])\b[^>]*>(.*)<\/h\1>\s*$/.exec(line);
+    if (heading) {
+      out.push("", `${"#".repeat(Number(heading[1]))} ${prose(heading[2]!, page).trim()}`, "");
+      continue;
+    }
+    if (/^\s*(?:<li\b|<div><dt\b|<a\s[^>]*>.*<\/a>\s*$)/.test(line)) {
+      out.push(`- ${prosed().trim()}`);
+      continue;
+    }
     // ::: tip Title  →  **Title**; a bare ::: (or ::: code-group) goes.
     const container = /^\s*:::\s*(\S+)?\s*(.*)$/.exec(line);
     if (container) {
       if (container[2]) out.push(`**${prose(container[2], page)}**`);
       continue;
     }
-    out.push(prose(line, page));
+    out.push(prosed());
   }
   let body = out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   if (!/^#\s/m.test(body) && title) body = `# ${title}\n\n${body}`;
@@ -152,7 +175,7 @@ function clip(text: string, max = 220): string {
 const linksOf = (items: SidebarItem[]): SidebarItem[] => items.flatMap((i) => [...(i.link ? [i] : []), ...linksOf(i.items ?? [])]);
 
 /** llms.txt, llms-full.txt and a .md per page, by path in the site. */
-export function buildLlms({ root, version, sidebar, examples, components = {} }: LlmsInput): Record<string, string> {
+export function buildLlms({ root, version, sidebar, examples, components = {}, values = {} }: LlmsInput): Record<string, string> {
   const files: Record<string, string> = {};
   const pages = new Map<string, string>();
   const page = (link: string): string | undefined => {
@@ -160,7 +183,7 @@ export function buildLlms({ root, version, sidebar, examples, components = {} }:
     if (!pages.has(link)) {
       const src = sourceOf(root, link);
       if (!existsSync(src)) return undefined;
-      const md = cleanPage(src, components);
+      const md = cleanPage(src, components, values);
       pages.set(link, md);
       files[mdPath(link)] = md;
     }

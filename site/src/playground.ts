@@ -101,19 +101,19 @@ const MARKUP = `
       </div>
     </div>
     <div class="pg-out">
-      <div class="tabs" role="tablist">
-        <button role="tab" aria-selected="true" data-tab="plan">plan</button>
-        <button role="tab" aria-selected="false" data-tab="problems">problems <span class="badge" data-pg-count></span></button>
-        <button role="tab" aria-selected="false" data-tab="cheats">cheat sheet</button>
-        <button role="tab" aria-selected="false" data-tab="ast">ast</button>
+      <div class="tabs" role="tablist" aria-label="Output">
+        <button role="tab" id="pg-tab-plan" aria-controls="pg-pane-plan" aria-selected="true" data-tab="plan">plan</button>
+        <button role="tab" id="pg-tab-problems" aria-controls="pg-pane-problems" aria-selected="false" tabindex="-1" data-tab="problems">problems <span class="badge" data-pg-count></span></button>
+        <button role="tab" id="pg-tab-cheats" aria-controls="pg-pane-cheats" aria-selected="false" tabindex="-1" data-tab="cheats">cheat sheet</button>
+        <button role="tab" id="pg-tab-ast" aria-controls="pg-pane-ast" aria-selected="false" tabindex="-1" data-tab="ast">ast</button>
       </div>
-      <div class="tab-body" data-pane="plan"><div data-pg-plan></div></div>
-      <div class="tab-body" data-pane="problems" hidden><ul class="problems" data-pg-problems></ul></div>
-      <div class="tab-body" data-pane="cheats" hidden>
+      <div class="tab-body" role="tabpanel" id="pg-pane-plan" aria-labelledby="pg-tab-plan" tabindex="0" data-pane="plan"><div data-pg-plan></div></div>
+      <div class="tab-body" role="tabpanel" id="pg-pane-problems" aria-labelledby="pg-tab-problems" tabindex="0" data-pane="problems" hidden><ul class="problems" data-pg-problems></ul></div>
+      <div class="tab-body" role="tabpanel" id="pg-pane-cheats" aria-labelledby="pg-tab-cheats" tabindex="0" data-pane="cheats" hidden>
         <p class="pg-tip">Click a card to add it below the line your cursor is on. <kbd>Tab</kbd> indents, <kbd>⌘/</kbd> comments a line, <kbd>⌘Z</kbd> undoes anything, and ${icon("keyboard")} Shortcuts lists the rest.</p>
         <div class="cheats" data-pg-cheats></div>
       </div>
-      <div class="tab-body" data-pane="ast" hidden><pre class="ast" data-pg-ast></pre></div>
+      <div class="tab-body" role="tabpanel" id="pg-pane-ast" aria-labelledby="pg-tab-ast" tabindex="0" data-pane="ast" hidden><pre class="ast" data-pg-ast></pre></div>
     </div>
   </div>
   <div class="pg-toast" data-pg-toast role="status" aria-live="polite" hidden></div>
@@ -354,11 +354,28 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
 
   // ── Tabs, problems, and the cheat sheet ──
 
+  // WAI-ARIA tabs: only the selected tab is in the Tab order; arrow keys, Home and End move between tabs.
   function showTab(name: string) {
-    for (const t of $$("[data-tab]")) t.setAttribute("aria-selected", String(t.dataset.tab === name));
+    for (const t of $$("[data-tab]")) {
+      const on = t.dataset.tab === name;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+    }
     for (const p of $$("[data-pane]")) p.hidden = p.dataset.pane !== name;
   }
-  for (const tab of $$<HTMLButtonElement>("[data-tab]")) tab.addEventListener("click", () => showTab(tab.dataset.tab!));
+  const tabButtons = [...$$<HTMLButtonElement>("[data-tab]")];
+  for (const tab of tabButtons) {
+    tab.addEventListener("click", () => showTab(tab.dataset.tab!));
+    tab.addEventListener("keydown", (ev) => {
+      const i = tabButtons.indexOf(tab);
+      const next = ({ ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabButtons.length - 1 } as Record<string, number>)[ev.key];
+      if (next === undefined) return;
+      ev.preventDefault();
+      const target = tabButtons[(next + tabButtons.length) % tabButtons.length]!;
+      showTab(target.dataset.tab!);
+      target.focus();
+    });
+  }
 
   $("[data-pg-problems]").addEventListener("click", (ev) => {
     const li = (ev.target as HTMLElement).closest<HTMLElement>("[data-line]");
@@ -510,7 +527,8 @@ export function mountPlayground(root: HTMLElement, data: SiteData, start: Playgr
     toastTimer = setTimeout(() => (t.hidden = true), 2600);
   }
 
-  const COLORS = ["#ffcb6b", "#c3e88d", "#82aaff", "#f78c6c", "#c792ea", "#89ddff"];
+  // The colours of the words in a .halo file (docs/.vitepress/palette.ts).
+  const COLORS = ["#ff8f3f", "#5ac2fe", "#d1a6ff", "#a9d94c", "#e5b572"];
   function burst(x: number, y: number, count: number, spread: number) {
     if (reducedMotion) return;
     const box = pg.getBoundingClientRect();
