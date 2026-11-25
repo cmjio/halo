@@ -31,7 +31,7 @@
   --sans: var(--vp-font-family-base);
   --mono: var(--vp-font-family-mono);
   --gutter: 16px;
-  --max: 1200px;
+  --max: var(--vp-layout-max-width, 1440px); /* the nav bar's width, so the edges line up */
   --top: calc(var(--vp-nav-height, 64px) + 8px);
 
   background: var(--bg);
@@ -98,16 +98,6 @@
 @media (min-width: 1040px) {
   .hh .hero-grid { grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: 56px; align-items: start; }
 }
-.hh .eyebrow { display: inline-flex; align-items: center; gap: 8px; font: 500 12.5px/1 var(--mono); color: var(--muted); letter-spacing: 0.01em; margin: 0 0 20px; }
-.hh .eyebrow .mark { width: 18px; height: 18px; overflow: visible; }
-.hh .eyebrow .mark ellipse { fill: none; stroke: var(--fg); stroke-width: 1.6; stroke-dasharray: 1; }
-.hh .eyebrow .mark circle { fill: var(--accent-2); }
-@media (prefers-reduced-motion: no-preference) {
-  .hh .eyebrow .mark ellipse { animation: hh-draw 900ms var(--ease-in-out) 150ms both; }
-  .hh .eyebrow .mark circle { animation: hh-settle 600ms var(--ease-out) 100ms both; transform-origin: 12px 16px; transform-box: view-box; }
-}
-@keyframes hh-draw { from { stroke-dashoffset: 1; } }
-@keyframes hh-settle { from { opacity: 0; transform: translateY(-3px) scale(0.9); } }
 .hh h1 {
   font-size: clamp(2.35rem, 1.5rem + 3.2vw, 3.6rem); line-height: 1.04; letter-spacing: -0.032em;
   font-weight: 600; margin: 0 0 20px; text-wrap: balance;

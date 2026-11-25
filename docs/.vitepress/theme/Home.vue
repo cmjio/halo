@@ -173,10 +173,6 @@ onBeforeUnmount(() => {
     <section class="hero" aria-labelledby="hh-title">
       <div class="wrap hero-grid">
         <div>
-          <p class="eyebrow">
-            <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="7.5" rx="9" ry="3.2" pathLength="1" /><circle cx="12" cy="16" r="4.2" /></svg>
-            {{ h.eyebrow }}
-          </p>
           <h1 id="hh-title">{{ h.title }}</h1>
           <p class="lede">{{ h.lede }}</p>
           <ul class="proof">
@@ -414,7 +410,7 @@ onBeforeUnmount(() => {
         <h2 id="hh-min">{{ h.minute.title }}</h2>
         <p class="minute-body" v-html="inline(h.minute.body)"></p>
         <div class="video-frame">
-          <video ref="loopEl" muted loop playsinline preload="metadata" :controls="loopControls" :poster="h.minute.poster" :src="h.minute.video" aria-label="A policy refusing a tool call, halo plan, and halo replay"></video>
+          <video ref="loopEl" muted loop playsinline preload="metadata" :controls="loopControls" :poster="h.minute.poster" :src="h.minute.video" aria-label="Halo's trailer: a policy refusing a tool call, halo plan, and halo replay"></video>
         </div>
       </div>
     </section>

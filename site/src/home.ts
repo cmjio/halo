@@ -27,7 +27,6 @@ export interface HomeData {
 }
 
 export const HOME = {
-  eyebrow: "open source · MIT · macOS, Linux, Windows",
   title: "AI agents that do real work, inside rules you write",
   lede: "Halo is a small programming language for building AI agents: programs where a model such as Claude, GPT or Gemini decides what to do and uses tools like GitHub, Slack, your files or a browser. You write down what each agent may do, and Halo checks every action against those rules before it happens.",
   proof: [
@@ -97,9 +96,9 @@ export const HOME = {
     more: { text: "Plan and replay", link: "/guide/plan-and-replay" },
   },
   minute: {
-    kicker: "in 16 seconds",
+    kicker: "the trailer",
     title: "Refused before it runs. Planned before it starts. Replayed for $0.",
-    body: "Everything in it is real: the bug-fixing agent's rules from [example 74](/examples/software-team), Halo refusing two edits the rules don't allow, `halo plan` for that program, and its recorded run played back.",
+    body: "Halo, in 16 seconds. Every frame is the real thing: an agent's rules refusing two edits, `halo plan` pricing the run before it starts, and its recording played back for nothing.",
     video: "/video/halo-loop.mp4",
     poster: "/video/halo-loop.jpg",
   },
@@ -244,7 +243,7 @@ export function homeMarkdown(d: HomeData, origin = ""): string {
     fence("txt", `$ ${d.plan.cmd}\n${d.plan.text}`),
     `${h.plan.replay} [${h.plan.more.text}](${h.plan.more.link})`,
     `## ${h.minute.title}`,
-    `${h.minute.body} [Watch the video](${h.minute.video}).`,
+    `${h.minute.body} [Watch the trailer](${h.minute.video}).`,
     `## ${h.start.title}`,
     h.start.body,
     fence("bash", h.start.commands.map((c) => `${c.cmd}${c.comment ? `   # ${c.comment}` : ""}`).join("\n")),
