@@ -13,7 +13,7 @@ import { escapeHtml } from "../../../site/src/highlight.ts";
 const site = data as unknown as SiteData & { home: { examples: HomeExample[]; plan: { cmd: string; text: string } } };
 const h = HOME;
 const run = runSteps(site);
-const examples = site.home.examples.map((e) => ({ ...e, sourceHtml: haloHtml(e.source), outputHtml: outputHtml(e.output) }));
+const examples = site.home.examples.map((e) => ({ ...e, about: h.examplesAbout[e.file] ?? "", sourceHtml: haloHtml(e.source), outputHtml: outputHtml(e.output) }));
 const plan = planHtml(site.home.plan.text);
 const planSum = planSummary(site.home.plan.text);
 const proofLabel = (label: string) => (label.startsWith("$ ") ? `<span>$</span> ${escapeHtml(label.slice(2))}` : escapeHtml(label));
@@ -180,7 +180,7 @@ onBeforeUnmount(() => {
           <h1 id="hh-title">{{ h.title }}</h1>
           <p class="lede">{{ h.lede }}</p>
           <ul class="proof">
-            <li v-for="p in h.proof" :key="p.label"><b v-html="proofLabel(p.label)"></b><span>{{ p.text }}</span></li>
+            <li v-for="p in h.proof" :key="p.label"><b v-html="proofLabel(p.label)"></b><span v-html="inline(p.text)"></span></li>
           </ul>
 
           <div class="install" id="install">
@@ -276,8 +276,38 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <p class="caption">{{ h.examplesCaption }}</p>
+          <p class="caption"><span class="about" v-html="inline(examples[tabs.ex.index]!.about)"></span> <span v-html="inline(h.examplesCaption)"></span></p>
         </div>
+      </div>
+    </section>
+
+    <!-- The words, for someone new to agents -->
+    <section class="sec terms-sec" id="terms" aria-labelledby="hh-terms">
+      <div class="wrap">
+        <p class="kicker">{{ h.terms.kicker }}</p>
+        <h2 id="hh-terms">{{ h.terms.title }}</h2>
+        <dl class="terms">
+          <div v-for="t in h.terms.items" :key="t.term"><dt>{{ t.term }}</dt><dd v-html="inline(t.text)"></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- What agents can do -->
+    <section class="sec" id="can" aria-labelledby="hh-can">
+      <div class="wrap">
+        <p class="kicker">{{ h.can.kicker }}</p>
+        <h2 id="hh-can">{{ h.can.title }}</h2>
+        <p class="can-body">{{ h.can.body }}</p>
+        <ul class="can">
+          <li v-for="c in h.can.items" :key="c.title">
+            <a :href="c.link" class="press">
+              <code>{{ c.code }}</code>
+              <b>{{ c.title }}</b>
+              <span>{{ c.text }}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M13 18l6 -6" /><path d="M13 6l6 6" /></svg>
+            </a>
+          </li>
+        </ul>
       </div>
     </section>
 
@@ -403,7 +433,7 @@ onBeforeUnmount(() => {
                 <svg class="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5l10 -10" /></svg>
               </button>
             </div>
-            <pre><template v-for="(c, k) in h.start.commands" :key="c.cmd"><span class="p">$ </span>{{ c.cmd }}<span v-if="c.comment" class="c">   # {{ c.comment }}</span>{{ k < h.start.commands.length - 1 ? "\n" : "" }}</template></pre>
+            <pre tabindex="0" aria-label="First commands"><template v-for="(c, k) in h.start.commands" :key="c.cmd"><span class="p">$ </span>{{ c.cmd }}<span v-if="c.comment" class="c">   # {{ c.comment }}</span>{{ k < h.start.commands.length - 1 ? "\n" : "" }}</template></pre>
           </div>
           <div class="ctas">
             <a class="btn btn-primary press" href="/guide/quickstart">Open the Quickstart

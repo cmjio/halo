@@ -10,7 +10,7 @@
   --fg: #16181c;
   --fg-2: #3b4048;
   --muted: #646a73;
-  --faint: #81868e;
+  --faint: #686d75;
   --line: #e5e3de;
   --line-2: #d6d3cc;
   --accent: var(--vp-c-brand-1);
@@ -47,7 +47,7 @@
   --fg: #e4e7eb;
   --fg-2: #c3c8cf;
   --muted: #9198a2;
-  --faint: #737a84;
+  --faint: #8a919b;
   --line: #232830;
   --line-2: #2f353e;
   --accent-wash: rgb(243 180 76 / 0.1);
@@ -116,8 +116,8 @@
 
 .hh .proof { list-style: none; margin: 0 0 32px; padding: 0; border-top: 1px solid var(--line); }
 .hh .proof li { display: grid; grid-template-columns: 1fr; gap: 2px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; color: var(--fg-2); line-height: 1.5; }
-@media (min-width: 520px) { .hh .proof li { grid-template-columns: 128px 1fr; gap: 16px; } }
-.hh .proof b { font: 500 13px/1.6 var(--mono); color: var(--fg); padding-top: 1px; }
+@media (min-width: 520px) { .hh .proof li { grid-template-columns: 150px 1fr; gap: 16px; } }
+.hh .proof b { font-weight: 600; font-size: 15px; color: var(--fg); }
 .hh .proof b span { color: var(--accent); }
 
 /* Install */
@@ -217,6 +217,30 @@
 .hh .o-dim { color: var(--faint); }
 
 .hh .caption { font-size: 13px; color: var(--muted); margin: 12px 2px 0; line-height: 1.5; }
+.hh .caption .about { color: var(--fg-2); font-size: 14px; }
+
+/* What agents can do: a grid of cards, each a link to its guide */
+.hh .can-body { max-width: 640px; font-size: 17px; color: var(--fg-2); margin: 0; }
+.hh .can { list-style: none; margin: 40px 0 0; padding: 0; display: grid; gap: 12px; }
+@media (min-width: 720px) { .hh .can { grid-template-columns: repeat(2, 1fr); gap: 16px; } }
+.hh .can li { margin: 0; display: flex; }
+.hh .can a { position: relative; display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 20px 48px 20px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-raise); color: inherit; text-decoration: none; transition: border-color 160ms ease, background-color 160ms ease; }
+.hh .can code { align-self: flex-start; font: 500 12.5px/1.4 var(--mono); color: var(--accent); background: var(--accent-wash); padding: 3px 8px; border-radius: 6px; margin-bottom: 6px; overflow-wrap: anywhere; }
+.hh .can b { font-weight: 600; font-size: 17px; color: var(--fg); line-height: 1.3; }
+.hh .can span { font-size: 15px; color: var(--fg-2); line-height: 1.55; }
+.hh .can svg { position: absolute; top: 22px; right: 18px; width: 16px; height: 16px; color: var(--faint); transition: transform 200ms var(--ease-out), color 160ms ease; }
+@media (hover: hover) and (pointer: fine) {
+  .hh .can a:hover { border-color: var(--line-2); background: var(--bg-soft); }
+  .hh .can a:hover svg { transform: translateX(3px); color: var(--accent); }
+}
+
+/* The glossary: five words for someone new to agents */
+.hh .terms { margin: 32px 0 0; padding: 0; display: grid; gap: 0 32px; border-top: 1px solid var(--line); }
+@media (min-width: 720px) { .hh .terms { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1040px) { .hh .terms { grid-template-columns: repeat(3, 1fr); } }
+.hh .terms div { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.hh .terms dt { font-weight: 600; font-size: 16px; color: var(--fg); margin-bottom: 4px; }
+.hh .terms dd { margin: 0; font-size: 15px; color: var(--fg-2); line-height: 1.55; }
 
 /* ── Sections ── */
 .hh .sec { padding: 72px 0; border-top: 1px solid var(--line); }

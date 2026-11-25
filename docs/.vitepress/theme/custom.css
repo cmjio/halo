@@ -3,7 +3,9 @@
 :root {
   --vp-font-family-base: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --vp-font-family-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --vp-c-brand-1: #a3650a;
+  --vp-c-brand-1: #8f5808;
+  --vp-c-text-3: #67676e;
+  --vp-code-lang-color: #67676e;
   --vp-c-brand-2: #b9770e;
   --vp-c-brand-3: #c98a1f;
   --vp-c-brand-soft: rgb(185 119 14 / 0.14);
@@ -26,6 +28,8 @@
   --vp-c-brand-2: #e5a53a;
   --vp-c-brand-3: #d39428;
   --vp-c-brand-soft: rgb(243 180 76 / 0.14);
+  --vp-c-text-3: #8b8b93;
+  --vp-code-lang-color: #8b8b93;
   --halo-read: #56d39a;
   --halo-write: #f3b44c;
   --halo-external: #ff7b72;
