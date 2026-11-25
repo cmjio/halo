@@ -50,95 +50,100 @@ export class HaloParser extends antlr.Parser {
     public static readonly T__36 = 37;
     public static readonly T__37 = 38;
     public static readonly T__38 = 39;
-    public static readonly WS = 40;
-    public static readonly NL = 41;
-    public static readonly LINE_COMMENT = 42;
-    public static readonly BLOCK_COMMENT = 43;
-    public static readonly LOOP = 44;
-    public static readonly FANOUT = 45;
-    public static readonly INTERRUPT = 46;
-    public static readonly GATE = 47;
-    public static readonly LISTEN = 48;
-    public static readonly PIPE = 49;
-    public static readonly BOOL = 50;
-    public static readonly NULL = 51;
-    public static readonly DURATION = 52;
-    public static readonly NUMBER = 53;
-    public static readonly MODEL_REF = 54;
-    public static readonly IDENTIFIER = 55;
-    public static readonly TRIPLE_STRING = 56;
-    public static readonly STRING = 57;
+    public static readonly T__39 = 40;
+    public static readonly T__40 = 41;
+    public static readonly WS = 42;
+    public static readonly NL = 43;
+    public static readonly LINE_COMMENT = 44;
+    public static readonly BLOCK_COMMENT = 45;
+    public static readonly LOOP = 46;
+    public static readonly FANOUT = 47;
+    public static readonly INTERRUPT = 48;
+    public static readonly GATE = 49;
+    public static readonly LISTEN = 50;
+    public static readonly PIPE = 51;
+    public static readonly BOOL = 52;
+    public static readonly NULL = 53;
+    public static readonly DURATION = 54;
+    public static readonly NUMBER = 55;
+    public static readonly MODEL_REF = 56;
+    public static readonly IDENTIFIER = 57;
+    public static readonly TRIPLE_STRING = 58;
+    public static readonly STRING = 59;
     public static readonly RULE_program = 0;
     public static readonly RULE_declaration = 1;
     public static readonly RULE_name = 2;
     public static readonly RULE_dottedId = 3;
     public static readonly RULE_pathPart = 4;
-    public static readonly RULE_policyDecl = 5;
-    public static readonly RULE_policyRule = 6;
-    public static readonly RULE_toolDecl = 7;
-    public static readonly RULE_storeDecl = 8;
-    public static readonly RULE_schemaDecl = 9;
-    public static readonly RULE_schemaField = 10;
-    public static readonly RULE_agentDecl = 11;
-    public static readonly RULE_modelRef = 12;
-    public static readonly RULE_modelParam = 13;
-    public static readonly RULE_agentModifier = 14;
-    public static readonly RULE_directive = 15;
-    public static readonly RULE_directiveArg = 16;
-    public static readonly RULE_pipelineDecl = 17;
-    public static readonly RULE_paramList = 18;
-    public static readonly RULE_param = 19;
-    public static readonly RULE_typeRef = 20;
-    public static readonly RULE_pipeline = 21;
-    public static readonly RULE_pipelineOp = 22;
-    public static readonly RULE_binding = 23;
-    public static readonly RULE_branchArm = 24;
-    public static readonly RULE_fanoutItem = 25;
-    public static readonly RULE_callExpr = 26;
-    public static readonly RULE_callArgs = 27;
-    public static readonly RULE_callArg = 28;
-    public static readonly RULE_callValue = 29;
-    public static readonly RULE_listValue = 30;
-    public static readonly RULE_value = 31;
-    public static readonly RULE_literal = 32;
-    public static readonly RULE_expression = 33;
-    public static readonly RULE_contextRef = 34;
-    public static readonly RULE_condExpr = 35;
-    public static readonly RULE_orExpr = 36;
-    public static readonly RULE_andExpr = 37;
-    public static readonly RULE_notExpr = 38;
-    public static readonly RULE_comparison = 39;
-    public static readonly RULE_compOp = 40;
-    public static readonly RULE_operand = 41;
+    public static readonly RULE_useDecl = 5;
+    public static readonly RULE_useItem = 6;
+    public static readonly RULE_modelBinding = 7;
+    public static readonly RULE_policyDecl = 8;
+    public static readonly RULE_policyRule = 9;
+    public static readonly RULE_toolDecl = 10;
+    public static readonly RULE_storeDecl = 11;
+    public static readonly RULE_schemaDecl = 12;
+    public static readonly RULE_schemaField = 13;
+    public static readonly RULE_agentDecl = 14;
+    public static readonly RULE_modelRef = 15;
+    public static readonly RULE_modelParam = 16;
+    public static readonly RULE_agentModifier = 17;
+    public static readonly RULE_directive = 18;
+    public static readonly RULE_directiveArg = 19;
+    public static readonly RULE_pipelineDecl = 20;
+    public static readonly RULE_paramList = 21;
+    public static readonly RULE_param = 22;
+    public static readonly RULE_typeRef = 23;
+    public static readonly RULE_pipeline = 24;
+    public static readonly RULE_pipelineOp = 25;
+    public static readonly RULE_binding = 26;
+    public static readonly RULE_branchArm = 27;
+    public static readonly RULE_fanoutItem = 28;
+    public static readonly RULE_callExpr = 29;
+    public static readonly RULE_callArgs = 30;
+    public static readonly RULE_callArg = 31;
+    public static readonly RULE_callValue = 32;
+    public static readonly RULE_listValue = 33;
+    public static readonly RULE_value = 34;
+    public static readonly RULE_literal = 35;
+    public static readonly RULE_expression = 36;
+    public static readonly RULE_contextRef = 37;
+    public static readonly RULE_condExpr = 38;
+    public static readonly RULE_orExpr = 39;
+    public static readonly RULE_andExpr = 40;
+    public static readonly RULE_notExpr = 41;
+    public static readonly RULE_comparison = 42;
+    public static readonly RULE_compOp = 43;
+    public static readonly RULE_operand = 44;
 
     public static readonly literalNames = [
         null, "'policy'", "'tool'", "'store'", "'schema'", "'agent'", "'pipeline'", 
         "'equips'", "'requires'", "'system'", "'context'", "'yield'", "'listen'", 
-        "'loop'", "'as'", "'each'", "'in'", "'else'", "'.'", "':'", "'&'", 
-        "'('", "')'", "'{'", "','", "'}'", "'['", "']'", "'@'", "'->'", 
-        "'<'", "'>'", "'=>'", "'||'", "'&&'", "'!'", "'=='", "'!='", "'>='", 
-        "'<='", null, null, null, null, "'|<>'", "'|*'", "'|!'", "'|?'", 
-        "'~>'", "'|>'", null, "'null'"
+        "'loop'", "'as'", "'each'", "'in'", "'else'", "'use'", "'with'", 
+        "'.'", "'{'", "','", "'}'", "'('", "')'", "':'", "'&'", "'['", "']'", 
+        "'@'", "'->'", "'<'", "'>'", "'=>'", "'||'", "'&&'", "'!'", "'=='", 
+        "'!='", "'>='", "'<='", null, null, null, null, "'|<>'", "'|*'", 
+        "'|!'", "'|?'", "'~>'", "'|>'", null, "'null'"
     ];
 
     public static readonly symbolicNames = [
         null, null, null, null, null, null, null, null, null, null, null, 
         null, null, null, null, null, null, null, null, null, null, null, 
         null, null, null, null, null, null, null, null, null, null, null, 
-        null, null, null, null, null, null, null, "WS", "NL", "LINE_COMMENT", 
-        "BLOCK_COMMENT", "LOOP", "FANOUT", "INTERRUPT", "GATE", "LISTEN", 
-        "PIPE", "BOOL", "NULL", "DURATION", "NUMBER", "MODEL_REF", "IDENTIFIER", 
-        "TRIPLE_STRING", "STRING"
+        null, null, null, null, null, null, null, null, null, "WS", "NL", 
+        "LINE_COMMENT", "BLOCK_COMMENT", "LOOP", "FANOUT", "INTERRUPT", 
+        "GATE", "LISTEN", "PIPE", "BOOL", "NULL", "DURATION", "NUMBER", 
+        "MODEL_REF", "IDENTIFIER", "TRIPLE_STRING", "STRING"
     ];
     public static readonly ruleNames = [
-        "program", "declaration", "name", "dottedId", "pathPart", "policyDecl", 
-        "policyRule", "toolDecl", "storeDecl", "schemaDecl", "schemaField", 
-        "agentDecl", "modelRef", "modelParam", "agentModifier", "directive", 
-        "directiveArg", "pipelineDecl", "paramList", "param", "typeRef", 
-        "pipeline", "pipelineOp", "binding", "branchArm", "fanoutItem", 
-        "callExpr", "callArgs", "callArg", "callValue", "listValue", "value", 
-        "literal", "expression", "contextRef", "condExpr", "orExpr", "andExpr", 
-        "notExpr", "comparison", "compOp", "operand",
+        "program", "declaration", "name", "dottedId", "pathPart", "useDecl", 
+        "useItem", "modelBinding", "policyDecl", "policyRule", "toolDecl", 
+        "storeDecl", "schemaDecl", "schemaField", "agentDecl", "modelRef", 
+        "modelParam", "agentModifier", "directive", "directiveArg", "pipelineDecl", 
+        "paramList", "param", "typeRef", "pipeline", "pipelineOp", "binding", 
+        "branchArm", "fanoutItem", "callExpr", "callArgs", "callArg", "callValue", 
+        "listValue", "value", "literal", "expression", "contextRef", "condExpr", 
+        "orExpr", "andExpr", "notExpr", "comparison", "compOp", "operand",
     ];
 
     public get grammarFileName(): string { return "Halo.g4"; }
@@ -162,21 +167,21 @@ export class HaloParser extends antlr.Parser {
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 87;
+            this.state = 93;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while ((((_la) & ~0x1F) === 0 && ((1 << _la) & 268435582) !== 0)) {
+            while ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1074004094) !== 0)) {
                 {
                 {
-                this.state = 84;
+                this.state = 90;
                 this.declaration();
                 }
                 }
-                this.state = 89;
+                this.state = 95;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
-            this.state = 90;
+            this.state = 96;
             this.match(HaloParser.EOF);
             }
         }
@@ -197,48 +202,55 @@ export class HaloParser extends antlr.Parser {
         let localContext = new DeclarationContext(this.context, this.state);
         this.enterRule(localContext, 2, HaloParser.RULE_declaration);
         try {
-            this.state = 98;
+            this.state = 105;
             this.errorHandler.sync(this);
             switch (this.interpreter.adaptivePredict(this.tokenStream, 1, this.context) ) {
             case 1:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 92;
-                this.policyDecl();
+                this.state = 98;
+                this.useDecl();
                 }
                 break;
             case 2:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 93;
-                this.toolDecl();
+                this.state = 99;
+                this.policyDecl();
                 }
                 break;
             case 3:
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 94;
-                this.storeDecl();
+                this.state = 100;
+                this.toolDecl();
                 }
                 break;
             case 4:
                 this.enterOuterAlt(localContext, 4);
                 {
-                this.state = 95;
-                this.schemaDecl();
+                this.state = 101;
+                this.storeDecl();
                 }
                 break;
             case 5:
                 this.enterOuterAlt(localContext, 5);
                 {
-                this.state = 96;
-                this.agentDecl();
+                this.state = 102;
+                this.schemaDecl();
                 }
                 break;
             case 6:
                 this.enterOuterAlt(localContext, 6);
                 {
-                this.state = 97;
+                this.state = 103;
+                this.agentDecl();
+                }
+                break;
+            case 7:
+                this.enterOuterAlt(localContext, 7);
+                {
+                this.state = 104;
                 this.pipelineDecl();
                 }
                 break;
@@ -264,9 +276,9 @@ export class HaloParser extends antlr.Parser {
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 100;
+            this.state = 107;
             _la = this.tokenStream.LA(1);
-            if(!((((_la) & ~0x1F) === 0 && ((1 << _la) & 262142) !== 0) || _la === 55)) {
+            if(!((((_la) & ~0x1F) === 0 && ((1 << _la) & 1048574) !== 0) || _la === 57)) {
             this.errorHandler.recoverInline(this);
             }
             else {
@@ -295,21 +307,21 @@ export class HaloParser extends antlr.Parser {
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 102;
+            this.state = 109;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 107;
+            this.state = 114;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 18) {
+            while (_la === 20) {
                 {
                 {
-                this.state = 103;
-                this.match(HaloParser.T__17);
-                this.state = 104;
+                this.state = 110;
+                this.match(HaloParser.T__19);
+                this.state = 111;
                 this.pathPart();
                 }
                 }
-                this.state = 109;
+                this.state = 116;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
@@ -332,7 +344,7 @@ export class HaloParser extends antlr.Parser {
         let localContext = new PathPartContext(this.context, this.state);
         this.enterRule(localContext, 8, HaloParser.RULE_pathPart);
         try {
-            this.state = 112;
+            this.state = 119;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.T__0:
@@ -352,17 +364,19 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.T__14:
             case HaloParser.T__15:
             case HaloParser.T__16:
+            case HaloParser.T__17:
+            case HaloParser.T__18:
             case HaloParser.IDENTIFIER:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 110;
+                this.state = 117;
                 this.name();
                 }
                 break;
             case HaloParser.NUMBER:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 111;
+                this.state = 118;
                 this.match(HaloParser.NUMBER);
                 }
                 break;
@@ -383,34 +397,220 @@ export class HaloParser extends antlr.Parser {
         }
         return localContext;
     }
-    public policyDecl(): PolicyDeclContext {
-        let localContext = new PolicyDeclContext(this.context, this.state);
-        this.enterRule(localContext, 10, HaloParser.RULE_policyDecl);
+    public useDecl(): UseDeclContext {
+        let localContext = new UseDeclContext(this.context, this.state);
+        this.enterRule(localContext, 10, HaloParser.RULE_useDecl);
+        let _la: number;
+        try {
+            let alternative: number;
+            this.enterOuterAlt(localContext, 1);
+            {
+            this.state = 121;
+            this.match(HaloParser.T__17);
+            this.state = 122;
+            this.match(HaloParser.STRING);
+            this.state = 138;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 21) {
+                {
+                this.state = 123;
+                this.match(HaloParser.T__20);
+                this.state = 135;
+                this.errorHandler.sync(this);
+                _la = this.tokenStream.LA(1);
+                if (_la === 57) {
+                    {
+                    this.state = 124;
+                    this.useItem();
+                    this.state = 129;
+                    this.errorHandler.sync(this);
+                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 4, this.context);
+                    while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
+                        if (alternative === 1) {
+                            {
+                            {
+                            this.state = 125;
+                            this.match(HaloParser.T__21);
+                            this.state = 126;
+                            this.useItem();
+                            }
+                            }
+                        }
+                        this.state = 131;
+                        this.errorHandler.sync(this);
+                        alternative = this.interpreter.adaptivePredict(this.tokenStream, 4, this.context);
+                    }
+                    this.state = 133;
+                    this.errorHandler.sync(this);
+                    _la = this.tokenStream.LA(1);
+                    if (_la === 22) {
+                        {
+                        this.state = 132;
+                        this.match(HaloParser.T__21);
+                        }
+                    }
+
+                    }
+                }
+
+                this.state = 137;
+                this.match(HaloParser.T__22);
+                }
+            }
+
+            this.state = 156;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            if (_la === 19) {
+                {
+                this.state = 140;
+                this.match(HaloParser.T__18);
+                this.state = 141;
+                this.match(HaloParser.IDENTIFIER);
+                this.state = 142;
+                this.match(HaloParser.T__23);
+                this.state = 143;
+                this.modelBinding();
+                this.state = 148;
+                this.errorHandler.sync(this);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 8, this.context);
+                while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
+                    if (alternative === 1) {
+                        {
+                        {
+                        this.state = 144;
+                        this.match(HaloParser.T__21);
+                        this.state = 145;
+                        this.modelBinding();
+                        }
+                        }
+                    }
+                    this.state = 150;
+                    this.errorHandler.sync(this);
+                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 8, this.context);
+                }
+                this.state = 152;
+                this.errorHandler.sync(this);
+                _la = this.tokenStream.LA(1);
+                if (_la === 22) {
+                    {
+                    this.state = 151;
+                    this.match(HaloParser.T__21);
+                    }
+                }
+
+                this.state = 154;
+                this.match(HaloParser.T__24);
+                }
+            }
+
+            }
+        }
+        catch (re) {
+            if (re instanceof antlr.RecognitionException) {
+                this.errorHandler.reportError(this, re);
+                this.errorHandler.recover(this, re);
+            } else {
+                throw re;
+            }
+        }
+        finally {
+            this.exitRule();
+        }
+        return localContext;
+    }
+    public useItem(): UseItemContext {
+        let localContext = new UseItemContext(this.context, this.state);
+        this.enterRule(localContext, 12, HaloParser.RULE_useItem);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 114;
-            this.match(HaloParser.T__0);
-            this.state = 115;
+            this.state = 158;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 116;
-            this.match(HaloParser.T__18);
-            this.state = 117;
-            this.policyRule();
-            this.state = 122;
+            this.state = 161;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 20) {
+            if (_la === 14) {
+                {
+                this.state = 159;
+                this.match(HaloParser.T__13);
+                this.state = 160;
+                this.match(HaloParser.IDENTIFIER);
+                }
+            }
+
+            }
+        }
+        catch (re) {
+            if (re instanceof antlr.RecognitionException) {
+                this.errorHandler.reportError(this, re);
+                this.errorHandler.recover(this, re);
+            } else {
+                throw re;
+            }
+        }
+        finally {
+            this.exitRule();
+        }
+        return localContext;
+    }
+    public modelBinding(): ModelBindingContext {
+        let localContext = new ModelBindingContext(this.context, this.state);
+        this.enterRule(localContext, 14, HaloParser.RULE_modelBinding);
+        try {
+            this.enterOuterAlt(localContext, 1);
+            {
+            this.state = 163;
+            this.name();
+            this.state = 164;
+            this.match(HaloParser.T__25);
+            this.state = 165;
+            this.modelRef();
+            }
+        }
+        catch (re) {
+            if (re instanceof antlr.RecognitionException) {
+                this.errorHandler.reportError(this, re);
+                this.errorHandler.recover(this, re);
+            } else {
+                throw re;
+            }
+        }
+        finally {
+            this.exitRule();
+        }
+        return localContext;
+    }
+    public policyDecl(): PolicyDeclContext {
+        let localContext = new PolicyDeclContext(this.context, this.state);
+        this.enterRule(localContext, 16, HaloParser.RULE_policyDecl);
+        let _la: number;
+        try {
+            this.enterOuterAlt(localContext, 1);
+            {
+            this.state = 167;
+            this.match(HaloParser.T__0);
+            this.state = 168;
+            this.match(HaloParser.IDENTIFIER);
+            this.state = 169;
+            this.match(HaloParser.T__25);
+            this.state = 170;
+            this.policyRule();
+            this.state = 175;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            while (_la === 27) {
                 {
                 {
-                this.state = 118;
-                this.match(HaloParser.T__19);
-                this.state = 119;
+                this.state = 171;
+                this.match(HaloParser.T__26);
+                this.state = 172;
                 this.policyRule();
                 }
                 }
-                this.state = 124;
+                this.state = 177;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
@@ -431,27 +631,27 @@ export class HaloParser extends antlr.Parser {
     }
     public policyRule(): PolicyRuleContext {
         let localContext = new PolicyRuleContext(this.context, this.state);
-        this.enterRule(localContext, 12, HaloParser.RULE_policyRule);
+        this.enterRule(localContext, 18, HaloParser.RULE_policyRule);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 125;
+            this.state = 178;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 126;
-            this.match(HaloParser.T__20);
-            this.state = 128;
+            this.state = 179;
+            this.match(HaloParser.T__23);
+            this.state = 181;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 67371006) !== 0) || ((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 269484030) !== 0) || ((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                 {
-                this.state = 127;
+                this.state = 180;
                 this.callArgs();
                 }
             }
 
-            this.state = 130;
-            this.match(HaloParser.T__21);
+            this.state = 183;
+            this.match(HaloParser.T__24);
             }
         }
         catch (re) {
@@ -469,33 +669,49 @@ export class HaloParser extends antlr.Parser {
     }
     public toolDecl(): ToolDeclContext {
         let localContext = new ToolDeclContext(this.context, this.state);
-        this.enterRule(localContext, 14, HaloParser.RULE_toolDecl);
+        this.enterRule(localContext, 20, HaloParser.RULE_toolDecl);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 132;
+            this.state = 185;
             this.match(HaloParser.T__1);
-            this.state = 133;
+            this.state = 186;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 134;
-            this.match(HaloParser.T__18);
-            this.state = 135;
+            this.state = 187;
+            this.match(HaloParser.T__25);
+            this.state = 188;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 136;
-            this.match(HaloParser.T__20);
-            this.state = 138;
+            this.state = 189;
+            this.match(HaloParser.T__23);
+            this.state = 191;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 67371006) !== 0) || ((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 269484030) !== 0) || ((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                 {
-                this.state = 137;
+                this.state = 190;
                 this.callArgs();
                 }
             }
 
-            this.state = 140;
-            this.match(HaloParser.T__21);
+            this.state = 193;
+            this.match(HaloParser.T__24);
+            this.state = 198;
+            this.errorHandler.sync(this);
+            _la = this.tokenStream.LA(1);
+            while (_la === 27) {
+                {
+                {
+                this.state = 194;
+                this.match(HaloParser.T__26);
+                this.state = 195;
+                this.policyRule();
+                }
+                }
+                this.state = 200;
+                this.errorHandler.sync(this);
+                _la = this.tokenStream.LA(1);
+            }
             }
         }
         catch (re) {
@@ -513,33 +729,33 @@ export class HaloParser extends antlr.Parser {
     }
     public storeDecl(): StoreDeclContext {
         let localContext = new StoreDeclContext(this.context, this.state);
-        this.enterRule(localContext, 16, HaloParser.RULE_storeDecl);
+        this.enterRule(localContext, 22, HaloParser.RULE_storeDecl);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 142;
+            this.state = 201;
             this.match(HaloParser.T__2);
-            this.state = 143;
+            this.state = 202;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 144;
-            this.match(HaloParser.T__18);
-            this.state = 145;
+            this.state = 203;
+            this.match(HaloParser.T__25);
+            this.state = 204;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 146;
-            this.match(HaloParser.T__20);
-            this.state = 148;
+            this.state = 205;
+            this.match(HaloParser.T__23);
+            this.state = 207;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 67371006) !== 0) || ((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 269484030) !== 0) || ((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                 {
-                this.state = 147;
+                this.state = 206;
                 this.callArgs();
                 }
             }
 
-            this.state = 150;
-            this.match(HaloParser.T__21);
+            this.state = 209;
+            this.match(HaloParser.T__24);
             }
         }
         catch (re) {
@@ -557,43 +773,43 @@ export class HaloParser extends antlr.Parser {
     }
     public schemaDecl(): SchemaDeclContext {
         let localContext = new SchemaDeclContext(this.context, this.state);
-        this.enterRule(localContext, 18, HaloParser.RULE_schemaDecl);
+        this.enterRule(localContext, 24, HaloParser.RULE_schemaDecl);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 152;
+            this.state = 211;
             this.match(HaloParser.T__3);
-            this.state = 153;
+            this.state = 212;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 154;
-            this.match(HaloParser.T__22);
-            this.state = 161;
+            this.state = 213;
+            this.match(HaloParser.T__20);
+            this.state = 220;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while ((((_la) & ~0x1F) === 0 && ((1 << _la) & 262142) !== 0) || _la === 55) {
+            while ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1048574) !== 0) || _la === 57) {
                 {
                 {
-                this.state = 155;
+                this.state = 214;
                 this.schemaField();
-                this.state = 157;
+                this.state = 216;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 24) {
+                if (_la === 22) {
                     {
-                    this.state = 156;
-                    this.match(HaloParser.T__23);
+                    this.state = 215;
+                    this.match(HaloParser.T__21);
                     }
                 }
 
                 }
                 }
-                this.state = 163;
+                this.state = 222;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
-            this.state = 164;
-            this.match(HaloParser.T__24);
+            this.state = 223;
+            this.match(HaloParser.T__22);
             }
         }
         catch (re) {
@@ -611,15 +827,15 @@ export class HaloParser extends antlr.Parser {
     }
     public schemaField(): SchemaFieldContext {
         let localContext = new SchemaFieldContext(this.context, this.state);
-        this.enterRule(localContext, 20, HaloParser.RULE_schemaField);
+        this.enterRule(localContext, 26, HaloParser.RULE_schemaField);
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 166;
+            this.state = 225;
             this.name();
-            this.state = 167;
-            this.match(HaloParser.T__18);
-            this.state = 168;
+            this.state = 226;
+            this.match(HaloParser.T__25);
+            this.state = 227;
             this.typeRef();
             }
         }
@@ -638,75 +854,75 @@ export class HaloParser extends antlr.Parser {
     }
     public agentDecl(): AgentDeclContext {
         let localContext = new AgentDeclContext(this.context, this.state);
-        this.enterRule(localContext, 22, HaloParser.RULE_agentDecl);
+        this.enterRule(localContext, 28, HaloParser.RULE_agentDecl);
         let _la: number;
         try {
             let alternative: number;
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 173;
+            this.state = 232;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 28) {
+            while (_la === 30) {
                 {
                 {
-                this.state = 170;
+                this.state = 229;
                 this.directive();
                 }
                 }
-                this.state = 175;
+                this.state = 234;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
-            this.state = 176;
+            this.state = 235;
             this.match(HaloParser.T__4);
-            this.state = 177;
+            this.state = 236;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 178;
-            this.match(HaloParser.T__25);
-            this.state = 179;
+            this.state = 237;
+            this.match(HaloParser.T__27);
+            this.state = 238;
             this.modelRef();
-            this.state = 184;
+            this.state = 243;
             this.errorHandler.sync(this);
-            alternative = this.interpreter.adaptivePredict(this.tokenStream, 11, this.context);
+            alternative = this.interpreter.adaptivePredict(this.tokenStream, 20, this.context);
             while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
                 if (alternative === 1) {
                     {
                     {
-                    this.state = 180;
-                    this.match(HaloParser.T__23);
-                    this.state = 181;
+                    this.state = 239;
+                    this.match(HaloParser.T__21);
+                    this.state = 240;
                     this.modelParam();
                     }
                     }
                 }
-                this.state = 186;
+                this.state = 245;
                 this.errorHandler.sync(this);
-                alternative = this.interpreter.adaptivePredict(this.tokenStream, 11, this.context);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 20, this.context);
             }
-            this.state = 188;
+            this.state = 247;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 24) {
+            if (_la === 22) {
                 {
-                this.state = 187;
-                this.match(HaloParser.T__23);
+                this.state = 246;
+                this.match(HaloParser.T__21);
                 }
             }
 
-            this.state = 190;
-            this.match(HaloParser.T__26);
-            this.state = 194;
+            this.state = 249;
+            this.match(HaloParser.T__28);
+            this.state = 253;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
             while ((((_la) & ~0x1F) === 0 && ((1 << _la) & 896) !== 0)) {
                 {
                 {
-                this.state = 191;
+                this.state = 250;
                 this.agentModifier();
                 }
                 }
-                this.state = 196;
+                this.state = 255;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
@@ -727,29 +943,29 @@ export class HaloParser extends antlr.Parser {
     }
     public modelRef(): ModelRefContext {
         let localContext = new ModelRefContext(this.context, this.state);
-        this.enterRule(localContext, 24, HaloParser.RULE_modelRef);
+        this.enterRule(localContext, 30, HaloParser.RULE_modelRef);
         try {
-            this.state = 200;
+            this.state = 259;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.MODEL_REF:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 197;
+                this.state = 256;
                 this.match(HaloParser.MODEL_REF);
                 }
                 break;
             case HaloParser.STRING:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 198;
+                this.state = 257;
                 this.match(HaloParser.STRING);
                 }
                 break;
             case HaloParser.IDENTIFIER:
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 199;
+                this.state = 258;
                 this.dottedId();
                 }
                 break;
@@ -772,15 +988,15 @@ export class HaloParser extends antlr.Parser {
     }
     public modelParam(): ModelParamContext {
         let localContext = new ModelParamContext(this.context, this.state);
-        this.enterRule(localContext, 26, HaloParser.RULE_modelParam);
+        this.enterRule(localContext, 32, HaloParser.RULE_modelParam);
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 202;
+            this.state = 261;
             this.name();
-            this.state = 203;
-            this.match(HaloParser.T__18);
-            this.state = 204;
+            this.state = 262;
+            this.match(HaloParser.T__25);
+            this.state = 263;
             this.value();
             }
         }
@@ -799,33 +1015,33 @@ export class HaloParser extends antlr.Parser {
     }
     public agentModifier(): AgentModifierContext {
         let localContext = new AgentModifierContext(this.context, this.state);
-        this.enterRule(localContext, 28, HaloParser.RULE_agentModifier);
+        this.enterRule(localContext, 34, HaloParser.RULE_agentModifier);
         let _la: number;
         try {
-            this.state = 226;
+            this.state = 285;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.T__6:
                 localContext = new EquipsModifierContext(localContext);
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 206;
+                this.state = 265;
                 this.match(HaloParser.T__6);
-                this.state = 207;
+                this.state = 266;
                 this.match(HaloParser.IDENTIFIER);
-                this.state = 212;
+                this.state = 271;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                while (_la === 24) {
+                while (_la === 22) {
                     {
                     {
-                    this.state = 208;
-                    this.match(HaloParser.T__23);
-                    this.state = 209;
+                    this.state = 267;
+                    this.match(HaloParser.T__21);
+                    this.state = 268;
                     this.match(HaloParser.IDENTIFIER);
                     }
                     }
-                    this.state = 214;
+                    this.state = 273;
                     this.errorHandler.sync(this);
                     _la = this.tokenStream.LA(1);
                 }
@@ -835,23 +1051,23 @@ export class HaloParser extends antlr.Parser {
                 localContext = new RequiresModifierContext(localContext);
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 215;
+                this.state = 274;
                 this.match(HaloParser.T__7);
-                this.state = 216;
+                this.state = 275;
                 this.match(HaloParser.IDENTIFIER);
-                this.state = 221;
+                this.state = 280;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                while (_la === 24) {
+                while (_la === 22) {
                     {
                     {
-                    this.state = 217;
-                    this.match(HaloParser.T__23);
-                    this.state = 218;
+                    this.state = 276;
+                    this.match(HaloParser.T__21);
+                    this.state = 277;
                     this.match(HaloParser.IDENTIFIER);
                     }
                     }
-                    this.state = 223;
+                    this.state = 282;
                     this.errorHandler.sync(this);
                     _la = this.tokenStream.LA(1);
                 }
@@ -861,11 +1077,11 @@ export class HaloParser extends antlr.Parser {
                 localContext = new SystemModifierContext(localContext);
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 224;
+                this.state = 283;
                 this.match(HaloParser.T__8);
-                this.state = 225;
+                this.state = 284;
                 _la = this.tokenStream.LA(1);
-                if(!(_la === 56 || _la === 57)) {
+                if(!(_la === 58 || _la === 59)) {
                 this.errorHandler.recoverInline(this);
                 }
                 else {
@@ -893,50 +1109,50 @@ export class HaloParser extends antlr.Parser {
     }
     public directive(): DirectiveContext {
         let localContext = new DirectiveContext(this.context, this.state);
-        this.enterRule(localContext, 30, HaloParser.RULE_directive);
+        this.enterRule(localContext, 36, HaloParser.RULE_directive);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 228;
-            this.match(HaloParser.T__27);
-            this.state = 229;
+            this.state = 287;
+            this.match(HaloParser.T__29);
+            this.state = 288;
             this.name();
-            this.state = 242;
+            this.state = 301;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 21) {
+            if (_la === 24) {
                 {
-                this.state = 230;
-                this.match(HaloParser.T__20);
-                this.state = 239;
+                this.state = 289;
+                this.match(HaloParser.T__23);
+                this.state = 298;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+                if (((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                     {
-                    this.state = 231;
+                    this.state = 290;
                     this.directiveArg();
-                    this.state = 236;
+                    this.state = 295;
                     this.errorHandler.sync(this);
                     _la = this.tokenStream.LA(1);
-                    while (_la === 24) {
+                    while (_la === 22) {
                         {
                         {
-                        this.state = 232;
-                        this.match(HaloParser.T__23);
-                        this.state = 233;
+                        this.state = 291;
+                        this.match(HaloParser.T__21);
+                        this.state = 292;
                         this.directiveArg();
                         }
                         }
-                        this.state = 238;
+                        this.state = 297;
                         this.errorHandler.sync(this);
                         _la = this.tokenStream.LA(1);
                     }
                     }
                 }
 
-                this.state = 241;
-                this.match(HaloParser.T__21);
+                this.state = 300;
+                this.match(HaloParser.T__24);
                 }
             }
 
@@ -957,9 +1173,9 @@ export class HaloParser extends antlr.Parser {
     }
     public directiveArg(): DirectiveArgContext {
         let localContext = new DirectiveArgContext(this.context, this.state);
-        this.enterRule(localContext, 32, HaloParser.RULE_directiveArg);
+        this.enterRule(localContext, 38, HaloParser.RULE_directiveArg);
         try {
-            this.state = 247;
+            this.state = 306;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.BOOL:
@@ -970,21 +1186,21 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.STRING:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 244;
+                this.state = 303;
                 this.literal();
                 }
                 break;
             case HaloParser.MODEL_REF:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 245;
+                this.state = 304;
                 this.match(HaloParser.MODEL_REF);
                 }
                 break;
             case HaloParser.IDENTIFIER:
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 246;
+                this.state = 305;
                 this.dottedId();
                 }
                 break;
@@ -1007,58 +1223,58 @@ export class HaloParser extends antlr.Parser {
     }
     public pipelineDecl(): PipelineDeclContext {
         let localContext = new PipelineDeclContext(this.context, this.state);
-        this.enterRule(localContext, 34, HaloParser.RULE_pipelineDecl);
+        this.enterRule(localContext, 40, HaloParser.RULE_pipelineDecl);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 252;
+            this.state = 311;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 28) {
+            while (_la === 30) {
                 {
                 {
-                this.state = 249;
+                this.state = 308;
                 this.directive();
                 }
                 }
-                this.state = 254;
+                this.state = 313;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
-            this.state = 255;
+            this.state = 314;
             this.match(HaloParser.T__5);
-            this.state = 256;
+            this.state = 315;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 257;
-            this.match(HaloParser.T__20);
-            this.state = 259;
+            this.state = 316;
+            this.match(HaloParser.T__23);
+            this.state = 318;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 55) {
+            if (_la === 57) {
                 {
-                this.state = 258;
+                this.state = 317;
                 this.paramList();
                 }
             }
 
-            this.state = 261;
-            this.match(HaloParser.T__21);
-            this.state = 264;
+            this.state = 320;
+            this.match(HaloParser.T__24);
+            this.state = 323;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 29) {
+            if (_la === 31) {
                 {
-                this.state = 262;
-                this.match(HaloParser.T__28);
-                this.state = 263;
+                this.state = 321;
+                this.match(HaloParser.T__30);
+                this.state = 322;
                 this.typeRef();
                 }
             }
 
-            this.state = 266;
-            this.match(HaloParser.T__18);
-            this.state = 267;
+            this.state = 325;
+            this.match(HaloParser.T__25);
+            this.state = 326;
             this.pipeline();
             }
         }
@@ -1077,39 +1293,39 @@ export class HaloParser extends antlr.Parser {
     }
     public paramList(): ParamListContext {
         let localContext = new ParamListContext(this.context, this.state);
-        this.enterRule(localContext, 36, HaloParser.RULE_paramList);
+        this.enterRule(localContext, 42, HaloParser.RULE_paramList);
         let _la: number;
         try {
             let alternative: number;
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 269;
+            this.state = 328;
             this.param();
-            this.state = 274;
+            this.state = 333;
             this.errorHandler.sync(this);
-            alternative = this.interpreter.adaptivePredict(this.tokenStream, 25, this.context);
+            alternative = this.interpreter.adaptivePredict(this.tokenStream, 34, this.context);
             while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
                 if (alternative === 1) {
                     {
                     {
-                    this.state = 270;
-                    this.match(HaloParser.T__23);
-                    this.state = 271;
+                    this.state = 329;
+                    this.match(HaloParser.T__21);
+                    this.state = 330;
                     this.param();
                     }
                     }
                 }
-                this.state = 276;
+                this.state = 335;
                 this.errorHandler.sync(this);
-                alternative = this.interpreter.adaptivePredict(this.tokenStream, 25, this.context);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 34, this.context);
             }
-            this.state = 278;
+            this.state = 337;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 24) {
+            if (_la === 22) {
                 {
-                this.state = 277;
-                this.match(HaloParser.T__23);
+                this.state = 336;
+                this.match(HaloParser.T__21);
                 }
             }
 
@@ -1130,15 +1346,15 @@ export class HaloParser extends antlr.Parser {
     }
     public param(): ParamContext {
         let localContext = new ParamContext(this.context, this.state);
-        this.enterRule(localContext, 38, HaloParser.RULE_param);
+        this.enterRule(localContext, 44, HaloParser.RULE_param);
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 280;
+            this.state = 339;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 281;
-            this.match(HaloParser.T__18);
-            this.state = 282;
+            this.state = 340;
+            this.match(HaloParser.T__25);
+            this.state = 341;
             this.typeRef();
             }
         }
@@ -1157,40 +1373,40 @@ export class HaloParser extends antlr.Parser {
     }
     public typeRef(): TypeRefContext {
         let localContext = new TypeRefContext(this.context, this.state);
-        this.enterRule(localContext, 40, HaloParser.RULE_typeRef);
+        this.enterRule(localContext, 46, HaloParser.RULE_typeRef);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 284;
+            this.state = 343;
             this.dottedId();
-            this.state = 296;
+            this.state = 355;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 30) {
+            if (_la === 32) {
                 {
-                this.state = 285;
-                this.match(HaloParser.T__29);
-                this.state = 286;
+                this.state = 344;
+                this.match(HaloParser.T__31);
+                this.state = 345;
                 this.typeRef();
-                this.state = 291;
+                this.state = 350;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                while (_la === 24) {
+                while (_la === 22) {
                     {
                     {
-                    this.state = 287;
-                    this.match(HaloParser.T__23);
-                    this.state = 288;
+                    this.state = 346;
+                    this.match(HaloParser.T__21);
+                    this.state = 347;
                     this.typeRef();
                     }
                     }
-                    this.state = 293;
+                    this.state = 352;
                     this.errorHandler.sync(this);
                     _la = this.tokenStream.LA(1);
                 }
-                this.state = 294;
-                this.match(HaloParser.T__30);
+                this.state = 353;
+                this.match(HaloParser.T__32);
                 }
             }
 
@@ -1211,10 +1427,10 @@ export class HaloParser extends antlr.Parser {
     }
     public pipeline(): PipelineContext {
         let localContext = new PipelineContext(this.context, this.state);
-        this.enterRule(localContext, 42, HaloParser.RULE_pipeline);
+        this.enterRule(localContext, 48, HaloParser.RULE_pipeline);
         let _la: number;
         try {
-            this.state = 310;
+            this.state = 369;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.T__9:
@@ -1227,19 +1443,19 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.STRING:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 298;
+                this.state = 357;
                 this.expression();
-                this.state = 302;
+                this.state = 361;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                while (((((_la - 44)) & ~0x1F) === 0 && ((1 << (_la - 44)) & 63) !== 0)) {
+                while (((((_la - 46)) & ~0x1F) === 0 && ((1 << (_la - 46)) & 63) !== 0)) {
                     {
                     {
-                    this.state = 299;
+                    this.state = 358;
                     this.pipelineOp();
                     }
                     }
-                    this.state = 304;
+                    this.state = 363;
                     this.errorHandler.sync(this);
                     _la = this.tokenStream.LA(1);
                 }
@@ -1253,20 +1469,20 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.PIPE:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 306;
+                this.state = 365;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 do {
                     {
                     {
-                    this.state = 305;
+                    this.state = 364;
                     this.pipelineOp();
                     }
                     }
-                    this.state = 308;
+                    this.state = 367;
                     this.errorHandler.sync(this);
                     _la = this.tokenStream.LA(1);
-                } while (((((_la - 44)) & ~0x1F) === 0 && ((1 << (_la - 44)) & 63) !== 0));
+                } while (((((_la - 46)) & ~0x1F) === 0 && ((1 << (_la - 46)) & 63) !== 0));
                 }
                 break;
             default:
@@ -1288,27 +1504,27 @@ export class HaloParser extends antlr.Parser {
     }
     public pipelineOp(): PipelineOpContext {
         let localContext = new PipelineOpContext(this.context, this.state);
-        this.enterRule(localContext, 44, HaloParser.RULE_pipelineOp);
+        this.enterRule(localContext, 50, HaloParser.RULE_pipelineOp);
         let _la: number;
         try {
             let alternative: number;
-            this.state = 406;
+            this.state = 465;
             this.errorHandler.sync(this);
-            switch (this.interpreter.adaptivePredict(this.tokenStream, 47, this.context) ) {
+            switch (this.interpreter.adaptivePredict(this.tokenStream, 56, this.context) ) {
             case 1:
                 localContext = new PipeOpContext(localContext);
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 312;
+                this.state = 371;
                 this.match(HaloParser.PIPE);
-                this.state = 313;
+                this.state = 372;
                 this.callExpr();
-                this.state = 315;
+                this.state = 374;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 314;
+                    this.state = 373;
                     this.binding();
                     }
                 }
@@ -1319,21 +1535,21 @@ export class HaloParser extends antlr.Parser {
                 localContext = new GateOpContext(localContext);
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 317;
+                this.state = 376;
                 this.match(HaloParser.GATE);
-                this.state = 318;
-                this.match(HaloParser.T__20);
-                this.state = 319;
+                this.state = 377;
+                this.match(HaloParser.T__23);
+                this.state = 378;
                 this.condExpr();
-                this.state = 320;
-                this.match(HaloParser.T__21);
-                this.state = 322;
+                this.state = 379;
+                this.match(HaloParser.T__24);
+                this.state = 381;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 32) {
+                if (_la === 34) {
                     {
-                    this.state = 321;
-                    this.match(HaloParser.T__31);
+                    this.state = 380;
+                    this.match(HaloParser.T__33);
                     }
                 }
 
@@ -1343,48 +1559,48 @@ export class HaloParser extends antlr.Parser {
                 localContext = new BranchOpContext(localContext);
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 324;
+                this.state = 383;
                 this.match(HaloParser.GATE);
-                this.state = 325;
-                this.match(HaloParser.T__22);
-                this.state = 326;
+                this.state = 384;
+                this.match(HaloParser.T__20);
+                this.state = 385;
                 this.branchArm();
-                this.state = 331;
+                this.state = 390;
                 this.errorHandler.sync(this);
-                alternative = this.interpreter.adaptivePredict(this.tokenStream, 34, this.context);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 43, this.context);
                 while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
                     if (alternative === 1) {
                         {
                         {
-                        this.state = 327;
-                        this.match(HaloParser.T__23);
-                        this.state = 328;
+                        this.state = 386;
+                        this.match(HaloParser.T__21);
+                        this.state = 387;
                         this.branchArm();
                         }
                         }
                     }
-                    this.state = 333;
+                    this.state = 392;
                     this.errorHandler.sync(this);
-                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 34, this.context);
+                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 43, this.context);
                 }
-                this.state = 335;
+                this.state = 394;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 24) {
+                if (_la === 22) {
                     {
-                    this.state = 334;
-                    this.match(HaloParser.T__23);
+                    this.state = 393;
+                    this.match(HaloParser.T__21);
                     }
                 }
 
-                this.state = 337;
-                this.match(HaloParser.T__24);
-                this.state = 339;
+                this.state = 396;
+                this.match(HaloParser.T__22);
+                this.state = 398;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 338;
+                    this.state = 397;
                     this.binding();
                     }
                 }
@@ -1395,30 +1611,30 @@ export class HaloParser extends antlr.Parser {
                 localContext = new InterruptOpContext(localContext);
                 this.enterOuterAlt(localContext, 4);
                 {
-                this.state = 341;
+                this.state = 400;
                 this.match(HaloParser.INTERRUPT);
-                this.state = 342;
+                this.state = 401;
                 this.match(HaloParser.T__10);
-                this.state = 343;
-                this.match(HaloParser.T__20);
-                this.state = 345;
+                this.state = 402;
+                this.match(HaloParser.T__23);
+                this.state = 404;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 67371006) !== 0) || ((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 269484030) !== 0) || ((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                     {
-                    this.state = 344;
+                    this.state = 403;
                     this.callArgs();
                     }
                 }
 
-                this.state = 347;
-                this.match(HaloParser.T__21);
-                this.state = 349;
+                this.state = 406;
+                this.match(HaloParser.T__24);
+                this.state = 408;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 348;
+                    this.state = 407;
                     this.binding();
                     }
                 }
@@ -1429,48 +1645,48 @@ export class HaloParser extends antlr.Parser {
                 localContext = new FanoutOpContext(localContext);
                 this.enterOuterAlt(localContext, 5);
                 {
-                this.state = 351;
+                this.state = 410;
                 this.match(HaloParser.FANOUT);
-                this.state = 352;
-                this.match(HaloParser.T__22);
-                this.state = 353;
+                this.state = 411;
+                this.match(HaloParser.T__20);
+                this.state = 412;
                 this.fanoutItem();
-                this.state = 358;
+                this.state = 417;
                 this.errorHandler.sync(this);
-                alternative = this.interpreter.adaptivePredict(this.tokenStream, 39, this.context);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 48, this.context);
                 while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
                     if (alternative === 1) {
                         {
                         {
-                        this.state = 354;
-                        this.match(HaloParser.T__23);
-                        this.state = 355;
+                        this.state = 413;
+                        this.match(HaloParser.T__21);
+                        this.state = 414;
                         this.fanoutItem();
                         }
                         }
                     }
-                    this.state = 360;
+                    this.state = 419;
                     this.errorHandler.sync(this);
-                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 39, this.context);
+                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 48, this.context);
                 }
-                this.state = 362;
+                this.state = 421;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 24) {
+                if (_la === 22) {
                     {
-                    this.state = 361;
-                    this.match(HaloParser.T__23);
+                    this.state = 420;
+                    this.match(HaloParser.T__21);
                     }
                 }
 
-                this.state = 364;
-                this.match(HaloParser.T__24);
-                this.state = 366;
+                this.state = 423;
+                this.match(HaloParser.T__22);
+                this.state = 425;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 365;
+                    this.state = 424;
                     this.binding();
                     }
                 }
@@ -1481,42 +1697,42 @@ export class HaloParser extends antlr.Parser {
                 localContext = new EachOpContext(localContext);
                 this.enterOuterAlt(localContext, 6);
                 {
-                this.state = 368;
+                this.state = 427;
                 this.match(HaloParser.FANOUT);
-                this.state = 369;
+                this.state = 428;
                 this.match(HaloParser.T__14);
-                this.state = 370;
-                this.match(HaloParser.T__20);
-                this.state = 371;
+                this.state = 429;
+                this.match(HaloParser.T__23);
+                this.state = 430;
                 this.match(HaloParser.IDENTIFIER);
-                this.state = 372;
+                this.state = 431;
                 this.match(HaloParser.T__15);
-                this.state = 373;
+                this.state = 432;
                 this.callValue();
-                this.state = 376;
+                this.state = 435;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 24) {
+                if (_la === 22) {
                     {
-                    this.state = 374;
-                    this.match(HaloParser.T__23);
-                    this.state = 375;
+                    this.state = 433;
+                    this.match(HaloParser.T__21);
+                    this.state = 434;
                     this.callArgs();
                     }
                 }
 
-                this.state = 378;
-                this.match(HaloParser.T__21);
-                this.state = 379;
-                this.match(HaloParser.T__31);
-                this.state = 380;
+                this.state = 437;
+                this.match(HaloParser.T__24);
+                this.state = 438;
+                this.match(HaloParser.T__33);
+                this.state = 439;
                 this.callExpr();
-                this.state = 382;
+                this.state = 441;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 381;
+                    this.state = 440;
                     this.binding();
                     }
                 }
@@ -1527,22 +1743,22 @@ export class HaloParser extends antlr.Parser {
                 localContext = new ListenOpContext(localContext);
                 this.enterOuterAlt(localContext, 7);
                 {
-                this.state = 384;
+                this.state = 443;
                 this.match(HaloParser.LISTEN);
-                this.state = 385;
+                this.state = 444;
                 this.match(HaloParser.T__11);
-                this.state = 386;
-                this.match(HaloParser.T__20);
-                this.state = 387;
+                this.state = 445;
+                this.match(HaloParser.T__23);
+                this.state = 446;
                 this.callValue();
-                this.state = 388;
-                this.match(HaloParser.T__21);
-                this.state = 390;
+                this.state = 447;
+                this.match(HaloParser.T__24);
+                this.state = 449;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 389;
+                    this.state = 448;
                     this.binding();
                     }
                 }
@@ -1553,45 +1769,45 @@ export class HaloParser extends antlr.Parser {
                 localContext = new LoopOpContext(localContext);
                 this.enterOuterAlt(localContext, 8);
                 {
-                this.state = 392;
+                this.state = 451;
                 this.match(HaloParser.LOOP);
-                this.state = 393;
+                this.state = 452;
                 this.match(HaloParser.T__12);
-                this.state = 394;
-                this.match(HaloParser.T__20);
-                this.state = 395;
-                this.match(HaloParser.IDENTIFIER);
-                this.state = 396;
+                this.state = 453;
                 this.match(HaloParser.T__23);
-                this.state = 397;
+                this.state = 454;
+                this.match(HaloParser.IDENTIFIER);
+                this.state = 455;
+                this.match(HaloParser.T__21);
+                this.state = 456;
                 _la = this.tokenStream.LA(1);
-                if(!(_la === 56 || _la === 57)) {
+                if(!(_la === 58 || _la === 59)) {
                 this.errorHandler.recoverInline(this);
                 }
                 else {
                     this.errorHandler.reportMatch(this);
                     this.consume();
                 }
-                this.state = 400;
+                this.state = 459;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 24) {
+                if (_la === 22) {
                     {
-                    this.state = 398;
-                    this.match(HaloParser.T__23);
-                    this.state = 399;
+                    this.state = 457;
+                    this.match(HaloParser.T__21);
+                    this.state = 458;
                     this.callArgs();
                     }
                 }
 
-                this.state = 402;
-                this.match(HaloParser.T__21);
-                this.state = 404;
+                this.state = 461;
+                this.match(HaloParser.T__24);
+                this.state = 463;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 403;
+                    this.state = 462;
                     this.binding();
                     }
                 }
@@ -1615,13 +1831,13 @@ export class HaloParser extends antlr.Parser {
     }
     public binding(): BindingContext {
         let localContext = new BindingContext(this.context, this.state);
-        this.enterRule(localContext, 46, HaloParser.RULE_binding);
+        this.enterRule(localContext, 52, HaloParser.RULE_binding);
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 408;
+            this.state = 467;
             this.match(HaloParser.T__13);
-            this.state = 409;
+            this.state = 468;
             this.name();
             }
         }
@@ -1640,24 +1856,24 @@ export class HaloParser extends antlr.Parser {
     }
     public branchArm(): BranchArmContext {
         let localContext = new BranchArmContext(this.context, this.state);
-        this.enterRule(localContext, 48, HaloParser.RULE_branchArm);
+        this.enterRule(localContext, 54, HaloParser.RULE_branchArm);
         try {
-            this.state = 420;
+            this.state = 479;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
-            case HaloParser.T__20:
+            case HaloParser.T__23:
                 localContext = new CondArmContext(localContext);
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 411;
-                this.match(HaloParser.T__20);
-                this.state = 412;
+                this.state = 470;
+                this.match(HaloParser.T__23);
+                this.state = 471;
                 this.condExpr();
-                this.state = 413;
-                this.match(HaloParser.T__21);
-                this.state = 414;
-                this.match(HaloParser.T__31);
-                this.state = 415;
+                this.state = 472;
+                this.match(HaloParser.T__24);
+                this.state = 473;
+                this.match(HaloParser.T__33);
+                this.state = 474;
                 this.callExpr();
                 }
                 break;
@@ -1665,11 +1881,11 @@ export class HaloParser extends antlr.Parser {
                 localContext = new ElseArmContext(localContext);
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 417;
+                this.state = 476;
                 this.match(HaloParser.T__16);
-                this.state = 418;
-                this.match(HaloParser.T__31);
-                this.state = 419;
+                this.state = 477;
+                this.match(HaloParser.T__33);
+                this.state = 478;
                 this.callExpr();
                 }
                 break;
@@ -1692,23 +1908,23 @@ export class HaloParser extends antlr.Parser {
     }
     public fanoutItem(): FanoutItemContext {
         let localContext = new FanoutItemContext(this.context, this.state);
-        this.enterRule(localContext, 50, HaloParser.RULE_fanoutItem);
+        this.enterRule(localContext, 56, HaloParser.RULE_fanoutItem);
         let _la: number;
         try {
-            this.state = 430;
+            this.state = 489;
             this.errorHandler.sync(this);
-            switch (this.interpreter.adaptivePredict(this.tokenStream, 51, this.context) ) {
+            switch (this.interpreter.adaptivePredict(this.tokenStream, 60, this.context) ) {
             case 1:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 422;
+                this.state = 481;
                 this.callExpr();
-                this.state = 424;
+                this.state = 483;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 423;
+                    this.state = 482;
                     this.binding();
                     }
                 }
@@ -1718,14 +1934,14 @@ export class HaloParser extends antlr.Parser {
             case 2:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 426;
+                this.state = 485;
                 this.match(HaloParser.IDENTIFIER);
-                this.state = 428;
+                this.state = 487;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 14) {
                     {
-                    this.state = 427;
+                    this.state = 486;
                     this.binding();
                     }
                 }
@@ -1749,39 +1965,39 @@ export class HaloParser extends antlr.Parser {
     }
     public callExpr(): CallExprContext {
         let localContext = new CallExprContext(this.context, this.state);
-        this.enterRule(localContext, 52, HaloParser.RULE_callExpr);
+        this.enterRule(localContext, 58, HaloParser.RULE_callExpr);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 432;
+            this.state = 491;
             this.match(HaloParser.IDENTIFIER);
-            this.state = 435;
+            this.state = 494;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 18) {
+            if (_la === 20) {
                 {
-                this.state = 433;
-                this.match(HaloParser.T__17);
-                this.state = 434;
+                this.state = 492;
+                this.match(HaloParser.T__19);
+                this.state = 493;
                 this.name();
                 }
             }
 
-            this.state = 437;
-            this.match(HaloParser.T__20);
-            this.state = 439;
+            this.state = 496;
+            this.match(HaloParser.T__23);
+            this.state = 498;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 67371006) !== 0) || ((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 269484030) !== 0) || ((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                 {
-                this.state = 438;
+                this.state = 497;
                 this.callArgs();
                 }
             }
 
-            this.state = 441;
-            this.match(HaloParser.T__21);
+            this.state = 500;
+            this.match(HaloParser.T__24);
             }
         }
         catch (re) {
@@ -1799,39 +2015,39 @@ export class HaloParser extends antlr.Parser {
     }
     public callArgs(): CallArgsContext {
         let localContext = new CallArgsContext(this.context, this.state);
-        this.enterRule(localContext, 54, HaloParser.RULE_callArgs);
+        this.enterRule(localContext, 60, HaloParser.RULE_callArgs);
         let _la: number;
         try {
             let alternative: number;
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 443;
+            this.state = 502;
             this.callArg();
-            this.state = 448;
+            this.state = 507;
             this.errorHandler.sync(this);
-            alternative = this.interpreter.adaptivePredict(this.tokenStream, 54, this.context);
+            alternative = this.interpreter.adaptivePredict(this.tokenStream, 63, this.context);
             while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
                 if (alternative === 1) {
                     {
                     {
-                    this.state = 444;
-                    this.match(HaloParser.T__23);
-                    this.state = 445;
+                    this.state = 503;
+                    this.match(HaloParser.T__21);
+                    this.state = 504;
                     this.callArg();
                     }
                     }
                 }
-                this.state = 450;
+                this.state = 509;
                 this.errorHandler.sync(this);
-                alternative = this.interpreter.adaptivePredict(this.tokenStream, 54, this.context);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 63, this.context);
             }
-            this.state = 452;
+            this.state = 511;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 24) {
+            if (_la === 22) {
                 {
-                this.state = 451;
-                this.match(HaloParser.T__23);
+                this.state = 510;
+                this.match(HaloParser.T__21);
                 }
             }
 
@@ -1852,20 +2068,20 @@ export class HaloParser extends antlr.Parser {
     }
     public callArg(): CallArgContext {
         let localContext = new CallArgContext(this.context, this.state);
-        this.enterRule(localContext, 56, HaloParser.RULE_callArg);
+        this.enterRule(localContext, 62, HaloParser.RULE_callArg);
         try {
-            this.state = 459;
+            this.state = 518;
             this.errorHandler.sync(this);
-            switch (this.interpreter.adaptivePredict(this.tokenStream, 56, this.context) ) {
+            switch (this.interpreter.adaptivePredict(this.tokenStream, 65, this.context) ) {
             case 1:
                 localContext = new NamedArgContext(localContext);
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 454;
+                this.state = 513;
                 this.name();
-                this.state = 455;
-                this.match(HaloParser.T__18);
-                this.state = 456;
+                this.state = 514;
+                this.match(HaloParser.T__25);
+                this.state = 515;
                 this.callValue();
                 }
                 break;
@@ -1873,7 +2089,7 @@ export class HaloParser extends antlr.Parser {
                 localContext = new PositionalArgContext(localContext);
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 458;
+                this.state = 517;
                 this.callValue();
                 }
                 break;
@@ -1894,9 +2110,9 @@ export class HaloParser extends antlr.Parser {
     }
     public callValue(): CallValueContext {
         let localContext = new CallValueContext(this.context, this.state);
-        this.enterRule(localContext, 58, HaloParser.RULE_callValue);
+        this.enterRule(localContext, 64, HaloParser.RULE_callValue);
         try {
-            this.state = 466;
+            this.state = 525;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.BOOL:
@@ -1907,35 +2123,35 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.STRING:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 461;
+                this.state = 520;
                 this.literal();
                 }
                 break;
             case HaloParser.MODEL_REF:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 462;
+                this.state = 521;
                 this.match(HaloParser.MODEL_REF);
                 }
                 break;
             case HaloParser.T__9:
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 463;
+                this.state = 522;
                 this.contextRef();
                 }
                 break;
-            case HaloParser.T__25:
+            case HaloParser.T__27:
                 this.enterOuterAlt(localContext, 4);
                 {
-                this.state = 464;
+                this.state = 523;
                 this.listValue();
                 }
                 break;
             case HaloParser.IDENTIFIER:
                 this.enterOuterAlt(localContext, 5);
                 {
-                this.state = 465;
+                this.state = 524;
                 this.dottedId();
                 }
                 break;
@@ -1958,54 +2174,54 @@ export class HaloParser extends antlr.Parser {
     }
     public listValue(): ListValueContext {
         let localContext = new ListValueContext(this.context, this.state);
-        this.enterRule(localContext, 60, HaloParser.RULE_listValue);
+        this.enterRule(localContext, 66, HaloParser.RULE_listValue);
         let _la: number;
         try {
             let alternative: number;
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 468;
-            this.match(HaloParser.T__25);
-            this.state = 480;
+            this.state = 527;
+            this.match(HaloParser.T__27);
+            this.state = 539;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (_la === 10 || _la === 26 || ((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 255) !== 0)) {
+            if (_la === 10 || _la === 28 || ((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 255) !== 0)) {
                 {
-                this.state = 469;
+                this.state = 528;
                 this.callValue();
-                this.state = 474;
+                this.state = 533;
                 this.errorHandler.sync(this);
-                alternative = this.interpreter.adaptivePredict(this.tokenStream, 58, this.context);
+                alternative = this.interpreter.adaptivePredict(this.tokenStream, 67, this.context);
                 while (alternative !== 2 && alternative !== antlr.ATN.INVALID_ALT_NUMBER) {
                     if (alternative === 1) {
                         {
                         {
-                        this.state = 470;
-                        this.match(HaloParser.T__23);
-                        this.state = 471;
+                        this.state = 529;
+                        this.match(HaloParser.T__21);
+                        this.state = 530;
                         this.callValue();
                         }
                         }
                     }
-                    this.state = 476;
+                    this.state = 535;
                     this.errorHandler.sync(this);
-                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 58, this.context);
+                    alternative = this.interpreter.adaptivePredict(this.tokenStream, 67, this.context);
                 }
-                this.state = 478;
+                this.state = 537;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if (_la === 24) {
+                if (_la === 22) {
                     {
-                    this.state = 477;
-                    this.match(HaloParser.T__23);
+                    this.state = 536;
+                    this.match(HaloParser.T__21);
                     }
                 }
 
                 }
             }
 
-            this.state = 482;
-            this.match(HaloParser.T__26);
+            this.state = 541;
+            this.match(HaloParser.T__28);
             }
         }
         catch (re) {
@@ -2023,9 +2239,9 @@ export class HaloParser extends antlr.Parser {
     }
     public value(): ValueContext {
         let localContext = new ValueContext(this.context, this.state);
-        this.enterRule(localContext, 62, HaloParser.RULE_value);
+        this.enterRule(localContext, 68, HaloParser.RULE_value);
         try {
-            this.state = 487;
+            this.state = 546;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.BOOL:
@@ -2036,21 +2252,21 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.STRING:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 484;
+                this.state = 543;
                 this.literal();
                 }
                 break;
             case HaloParser.MODEL_REF:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 485;
+                this.state = 544;
                 this.match(HaloParser.MODEL_REF);
                 }
                 break;
             case HaloParser.IDENTIFIER:
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 486;
+                this.state = 545;
                 this.dottedId();
                 }
                 break;
@@ -2073,14 +2289,14 @@ export class HaloParser extends antlr.Parser {
     }
     public literal(): LiteralContext {
         let localContext = new LiteralContext(this.context, this.state);
-        this.enterRule(localContext, 64, HaloParser.RULE_literal);
+        this.enterRule(localContext, 70, HaloParser.RULE_literal);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 489;
+            this.state = 548;
             _la = this.tokenStream.LA(1);
-            if(!(((((_la - 50)) & ~0x1F) === 0 && ((1 << (_la - 50)) & 207) !== 0))) {
+            if(!(((((_la - 52)) & ~0x1F) === 0 && ((1 << (_la - 52)) & 207) !== 0))) {
             this.errorHandler.recoverInline(this);
             }
             else {
@@ -2104,9 +2320,9 @@ export class HaloParser extends antlr.Parser {
     }
     public expression(): ExpressionContext {
         let localContext = new ExpressionContext(this.context, this.state);
-        this.enterRule(localContext, 66, HaloParser.RULE_expression);
+        this.enterRule(localContext, 72, HaloParser.RULE_expression);
         try {
-            this.state = 494;
+            this.state = 553;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
             case HaloParser.BOOL:
@@ -2117,21 +2333,21 @@ export class HaloParser extends antlr.Parser {
             case HaloParser.STRING:
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 491;
+                this.state = 550;
                 this.literal();
                 }
                 break;
             case HaloParser.T__9:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 492;
+                this.state = 551;
                 this.contextRef();
                 }
                 break;
             case HaloParser.IDENTIFIER:
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 493;
+                this.state = 552;
                 this.dottedId();
                 }
                 break;
@@ -2154,26 +2370,26 @@ export class HaloParser extends antlr.Parser {
     }
     public contextRef(): ContextRefContext {
         let localContext = new ContextRefContext(this.context, this.state);
-        this.enterRule(localContext, 68, HaloParser.RULE_contextRef);
+        this.enterRule(localContext, 74, HaloParser.RULE_contextRef);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 496;
+            this.state = 555;
             this.match(HaloParser.T__9);
-            this.state = 501;
+            this.state = 560;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 18) {
+            while (_la === 20) {
                 {
                 {
-                this.state = 497;
-                this.match(HaloParser.T__17);
-                this.state = 498;
+                this.state = 556;
+                this.match(HaloParser.T__19);
+                this.state = 557;
                 this.pathPart();
                 }
                 }
-                this.state = 503;
+                this.state = 562;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
@@ -2194,11 +2410,11 @@ export class HaloParser extends antlr.Parser {
     }
     public condExpr(): CondExprContext {
         let localContext = new CondExprContext(this.context, this.state);
-        this.enterRule(localContext, 70, HaloParser.RULE_condExpr);
+        this.enterRule(localContext, 76, HaloParser.RULE_condExpr);
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 504;
+            this.state = 563;
             this.orExpr();
             }
         }
@@ -2217,26 +2433,26 @@ export class HaloParser extends antlr.Parser {
     }
     public orExpr(): OrExprContext {
         let localContext = new OrExprContext(this.context, this.state);
-        this.enterRule(localContext, 72, HaloParser.RULE_orExpr);
+        this.enterRule(localContext, 78, HaloParser.RULE_orExpr);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 506;
+            this.state = 565;
             this.andExpr();
-            this.state = 511;
+            this.state = 570;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 33) {
+            while (_la === 35) {
                 {
                 {
-                this.state = 507;
-                this.match(HaloParser.T__32);
-                this.state = 508;
+                this.state = 566;
+                this.match(HaloParser.T__34);
+                this.state = 567;
                 this.andExpr();
                 }
                 }
-                this.state = 513;
+                this.state = 572;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
@@ -2257,26 +2473,26 @@ export class HaloParser extends antlr.Parser {
     }
     public andExpr(): AndExprContext {
         let localContext = new AndExprContext(this.context, this.state);
-        this.enterRule(localContext, 74, HaloParser.RULE_andExpr);
+        this.enterRule(localContext, 80, HaloParser.RULE_andExpr);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 514;
+            this.state = 573;
             this.notExpr();
-            this.state = 519;
+            this.state = 578;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            while (_la === 34) {
+            while (_la === 36) {
                 {
                 {
-                this.state = 515;
-                this.match(HaloParser.T__33);
-                this.state = 516;
+                this.state = 574;
+                this.match(HaloParser.T__35);
+                this.state = 575;
                 this.notExpr();
                 }
                 }
-                this.state = 521;
+                this.state = 580;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
             }
@@ -2297,23 +2513,23 @@ export class HaloParser extends antlr.Parser {
     }
     public notExpr(): NotExprContext {
         let localContext = new NotExprContext(this.context, this.state);
-        this.enterRule(localContext, 76, HaloParser.RULE_notExpr);
+        this.enterRule(localContext, 82, HaloParser.RULE_notExpr);
         try {
-            this.state = 525;
+            this.state = 584;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
-            case HaloParser.T__34:
+            case HaloParser.T__36:
                 localContext = new NegationContext(localContext);
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 522;
-                this.match(HaloParser.T__34);
-                this.state = 523;
+                this.state = 581;
+                this.match(HaloParser.T__36);
+                this.state = 582;
                 this.notExpr();
                 }
                 break;
             case HaloParser.T__9:
-            case HaloParser.T__20:
+            case HaloParser.T__23:
             case HaloParser.BOOL:
             case HaloParser.NULL:
             case HaloParser.DURATION:
@@ -2324,7 +2540,7 @@ export class HaloParser extends antlr.Parser {
                 localContext = new ComparisonExprContext(localContext);
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 524;
+                this.state = 583;
                 this.comparison();
                 }
                 break;
@@ -2347,21 +2563,21 @@ export class HaloParser extends antlr.Parser {
     }
     public comparison(): ComparisonContext {
         let localContext = new ComparisonContext(this.context, this.state);
-        this.enterRule(localContext, 78, HaloParser.RULE_comparison);
+        this.enterRule(localContext, 84, HaloParser.RULE_comparison);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 527;
+            this.state = 586;
             this.operand();
-            this.state = 531;
+            this.state = 590;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (((((_la - 30)) & ~0x1F) === 0 && ((1 << (_la - 30)) & 963) !== 0)) {
+            if (((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 963) !== 0)) {
                 {
-                this.state = 528;
+                this.state = 587;
                 this.compOp();
-                this.state = 529;
+                this.state = 588;
                 this.operand();
                 }
             }
@@ -2383,14 +2599,14 @@ export class HaloParser extends antlr.Parser {
     }
     public compOp(): CompOpContext {
         let localContext = new CompOpContext(this.context, this.state);
-        this.enterRule(localContext, 80, HaloParser.RULE_compOp);
+        this.enterRule(localContext, 86, HaloParser.RULE_compOp);
         let _la: number;
         try {
             this.enterOuterAlt(localContext, 1);
             {
-            this.state = 533;
+            this.state = 592;
             _la = this.tokenStream.LA(1);
-            if(!(((((_la - 30)) & ~0x1F) === 0 && ((1 << (_la - 30)) & 963) !== 0))) {
+            if(!(((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 963) !== 0))) {
             this.errorHandler.recoverInline(this);
             }
             else {
@@ -2414,21 +2630,21 @@ export class HaloParser extends antlr.Parser {
     }
     public operand(): OperandContext {
         let localContext = new OperandContext(this.context, this.state);
-        this.enterRule(localContext, 82, HaloParser.RULE_operand);
+        this.enterRule(localContext, 88, HaloParser.RULE_operand);
         try {
-            this.state = 542;
+            this.state = 601;
             this.errorHandler.sync(this);
             switch (this.tokenStream.LA(1)) {
-            case HaloParser.T__20:
+            case HaloParser.T__23:
                 localContext = new ParenOperandContext(localContext);
                 this.enterOuterAlt(localContext, 1);
                 {
-                this.state = 535;
-                this.match(HaloParser.T__20);
-                this.state = 536;
+                this.state = 594;
+                this.match(HaloParser.T__23);
+                this.state = 595;
                 this.orExpr();
-                this.state = 537;
-                this.match(HaloParser.T__21);
+                this.state = 596;
+                this.match(HaloParser.T__24);
                 }
                 break;
             case HaloParser.BOOL:
@@ -2440,7 +2656,7 @@ export class HaloParser extends antlr.Parser {
                 localContext = new LiteralOperandContext(localContext);
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 539;
+                this.state = 598;
                 this.literal();
                 }
                 break;
@@ -2448,7 +2664,7 @@ export class HaloParser extends antlr.Parser {
                 localContext = new ContextOperandContext(localContext);
                 this.enterOuterAlt(localContext, 3);
                 {
-                this.state = 540;
+                this.state = 599;
                 this.contextRef();
                 }
                 break;
@@ -2456,7 +2672,7 @@ export class HaloParser extends antlr.Parser {
                 localContext = new RefOperandContext(localContext);
                 this.enterOuterAlt(localContext, 4);
                 {
-                this.state = 541;
+                this.state = 600;
                 this.dottedId();
                 }
                 break;
@@ -2479,208 +2695,231 @@ export class HaloParser extends antlr.Parser {
     }
 
     public static readonly _serializedATN: number[] = [
-        4,1,57,545,2,0,7,0,2,1,7,1,2,2,7,2,2,3,7,3,2,4,7,4,2,5,7,5,2,6,7,
+        4,1,59,604,2,0,7,0,2,1,7,1,2,2,7,2,2,3,7,3,2,4,7,4,2,5,7,5,2,6,7,
         6,2,7,7,7,2,8,7,8,2,9,7,9,2,10,7,10,2,11,7,11,2,12,7,12,2,13,7,13,
         2,14,7,14,2,15,7,15,2,16,7,16,2,17,7,17,2,18,7,18,2,19,7,19,2,20,
         7,20,2,21,7,21,2,22,7,22,2,23,7,23,2,24,7,24,2,25,7,25,2,26,7,26,
         2,27,7,27,2,28,7,28,2,29,7,29,2,30,7,30,2,31,7,31,2,32,7,32,2,33,
         7,33,2,34,7,34,2,35,7,35,2,36,7,36,2,37,7,37,2,38,7,38,2,39,7,39,
-        2,40,7,40,2,41,7,41,1,0,5,0,86,8,0,10,0,12,0,89,9,0,1,0,1,0,1,1,
-        1,1,1,1,1,1,1,1,1,1,3,1,99,8,1,1,2,1,2,1,3,1,3,1,3,5,3,106,8,3,10,
-        3,12,3,109,9,3,1,4,1,4,3,4,113,8,4,1,5,1,5,1,5,1,5,1,5,1,5,5,5,121,
-        8,5,10,5,12,5,124,9,5,1,6,1,6,1,6,3,6,129,8,6,1,6,1,6,1,7,1,7,1,
-        7,1,7,1,7,1,7,3,7,139,8,7,1,7,1,7,1,8,1,8,1,8,1,8,1,8,1,8,3,8,149,
-        8,8,1,8,1,8,1,9,1,9,1,9,1,9,1,9,3,9,158,8,9,5,9,160,8,9,10,9,12,
-        9,163,9,9,1,9,1,9,1,10,1,10,1,10,1,10,1,11,5,11,172,8,11,10,11,12,
-        11,175,9,11,1,11,1,11,1,11,1,11,1,11,1,11,5,11,183,8,11,10,11,12,
-        11,186,9,11,1,11,3,11,189,8,11,1,11,1,11,5,11,193,8,11,10,11,12,
-        11,196,9,11,1,12,1,12,1,12,3,12,201,8,12,1,13,1,13,1,13,1,13,1,14,
-        1,14,1,14,1,14,5,14,211,8,14,10,14,12,14,214,9,14,1,14,1,14,1,14,
-        1,14,5,14,220,8,14,10,14,12,14,223,9,14,1,14,1,14,3,14,227,8,14,
-        1,15,1,15,1,15,1,15,1,15,1,15,5,15,235,8,15,10,15,12,15,238,9,15,
-        3,15,240,8,15,1,15,3,15,243,8,15,1,16,1,16,1,16,3,16,248,8,16,1,
-        17,5,17,251,8,17,10,17,12,17,254,9,17,1,17,1,17,1,17,1,17,3,17,260,
-        8,17,1,17,1,17,1,17,3,17,265,8,17,1,17,1,17,1,17,1,18,1,18,1,18,
-        5,18,273,8,18,10,18,12,18,276,9,18,1,18,3,18,279,8,18,1,19,1,19,
-        1,19,1,19,1,20,1,20,1,20,1,20,1,20,5,20,290,8,20,10,20,12,20,293,
-        9,20,1,20,1,20,3,20,297,8,20,1,21,1,21,5,21,301,8,21,10,21,12,21,
-        304,9,21,1,21,4,21,307,8,21,11,21,12,21,308,3,21,311,8,21,1,22,1,
-        22,1,22,3,22,316,8,22,1,22,1,22,1,22,1,22,1,22,3,22,323,8,22,1,22,
-        1,22,1,22,1,22,1,22,5,22,330,8,22,10,22,12,22,333,9,22,1,22,3,22,
-        336,8,22,1,22,1,22,3,22,340,8,22,1,22,1,22,1,22,1,22,3,22,346,8,
-        22,1,22,1,22,3,22,350,8,22,1,22,1,22,1,22,1,22,1,22,5,22,357,8,22,
-        10,22,12,22,360,9,22,1,22,3,22,363,8,22,1,22,1,22,3,22,367,8,22,
-        1,22,1,22,1,22,1,22,1,22,1,22,1,22,1,22,3,22,377,8,22,1,22,1,22,
-        1,22,1,22,3,22,383,8,22,1,22,1,22,1,22,1,22,1,22,1,22,3,22,391,8,
-        22,1,22,1,22,1,22,1,22,1,22,1,22,1,22,1,22,3,22,401,8,22,1,22,1,
-        22,3,22,405,8,22,3,22,407,8,22,1,23,1,23,1,23,1,24,1,24,1,24,1,24,
-        1,24,1,24,1,24,1,24,1,24,3,24,421,8,24,1,25,1,25,3,25,425,8,25,1,
-        25,1,25,3,25,429,8,25,3,25,431,8,25,1,26,1,26,1,26,3,26,436,8,26,
-        1,26,1,26,3,26,440,8,26,1,26,1,26,1,27,1,27,1,27,5,27,447,8,27,10,
-        27,12,27,450,9,27,1,27,3,27,453,8,27,1,28,1,28,1,28,1,28,1,28,3,
-        28,460,8,28,1,29,1,29,1,29,1,29,1,29,3,29,467,8,29,1,30,1,30,1,30,
-        1,30,5,30,473,8,30,10,30,12,30,476,9,30,1,30,3,30,479,8,30,3,30,
-        481,8,30,1,30,1,30,1,31,1,31,1,31,3,31,488,8,31,1,32,1,32,1,33,1,
-        33,1,33,3,33,495,8,33,1,34,1,34,1,34,5,34,500,8,34,10,34,12,34,503,
-        9,34,1,35,1,35,1,36,1,36,1,36,5,36,510,8,36,10,36,12,36,513,9,36,
-        1,37,1,37,1,37,5,37,518,8,37,10,37,12,37,521,9,37,1,38,1,38,1,38,
-        3,38,526,8,38,1,39,1,39,1,39,1,39,3,39,532,8,39,1,40,1,40,1,41,1,
-        41,1,41,1,41,1,41,1,41,1,41,3,41,543,8,41,1,41,0,0,42,0,2,4,6,8,
-        10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,
-        54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,0,4,2,0,1,17,55,55,
-        1,0,56,57,2,0,50,53,56,57,2,0,30,31,36,39,591,0,87,1,0,0,0,2,98,
-        1,0,0,0,4,100,1,0,0,0,6,102,1,0,0,0,8,112,1,0,0,0,10,114,1,0,0,0,
-        12,125,1,0,0,0,14,132,1,0,0,0,16,142,1,0,0,0,18,152,1,0,0,0,20,166,
-        1,0,0,0,22,173,1,0,0,0,24,200,1,0,0,0,26,202,1,0,0,0,28,226,1,0,
-        0,0,30,228,1,0,0,0,32,247,1,0,0,0,34,252,1,0,0,0,36,269,1,0,0,0,
-        38,280,1,0,0,0,40,284,1,0,0,0,42,310,1,0,0,0,44,406,1,0,0,0,46,408,
-        1,0,0,0,48,420,1,0,0,0,50,430,1,0,0,0,52,432,1,0,0,0,54,443,1,0,
-        0,0,56,459,1,0,0,0,58,466,1,0,0,0,60,468,1,0,0,0,62,487,1,0,0,0,
-        64,489,1,0,0,0,66,494,1,0,0,0,68,496,1,0,0,0,70,504,1,0,0,0,72,506,
-        1,0,0,0,74,514,1,0,0,0,76,525,1,0,0,0,78,527,1,0,0,0,80,533,1,0,
-        0,0,82,542,1,0,0,0,84,86,3,2,1,0,85,84,1,0,0,0,86,89,1,0,0,0,87,
-        85,1,0,0,0,87,88,1,0,0,0,88,90,1,0,0,0,89,87,1,0,0,0,90,91,5,0,0,
-        1,91,1,1,0,0,0,92,99,3,10,5,0,93,99,3,14,7,0,94,99,3,16,8,0,95,99,
-        3,18,9,0,96,99,3,22,11,0,97,99,3,34,17,0,98,92,1,0,0,0,98,93,1,0,
-        0,0,98,94,1,0,0,0,98,95,1,0,0,0,98,96,1,0,0,0,98,97,1,0,0,0,99,3,
-        1,0,0,0,100,101,7,0,0,0,101,5,1,0,0,0,102,107,5,55,0,0,103,104,5,
-        18,0,0,104,106,3,8,4,0,105,103,1,0,0,0,106,109,1,0,0,0,107,105,1,
-        0,0,0,107,108,1,0,0,0,108,7,1,0,0,0,109,107,1,0,0,0,110,113,3,4,
-        2,0,111,113,5,53,0,0,112,110,1,0,0,0,112,111,1,0,0,0,113,9,1,0,0,
-        0,114,115,5,1,0,0,115,116,5,55,0,0,116,117,5,19,0,0,117,122,3,12,
-        6,0,118,119,5,20,0,0,119,121,3,12,6,0,120,118,1,0,0,0,121,124,1,
-        0,0,0,122,120,1,0,0,0,122,123,1,0,0,0,123,11,1,0,0,0,124,122,1,0,
-        0,0,125,126,5,55,0,0,126,128,5,21,0,0,127,129,3,54,27,0,128,127,
-        1,0,0,0,128,129,1,0,0,0,129,130,1,0,0,0,130,131,5,22,0,0,131,13,
-        1,0,0,0,132,133,5,2,0,0,133,134,5,55,0,0,134,135,5,19,0,0,135,136,
-        5,55,0,0,136,138,5,21,0,0,137,139,3,54,27,0,138,137,1,0,0,0,138,
-        139,1,0,0,0,139,140,1,0,0,0,140,141,5,22,0,0,141,15,1,0,0,0,142,
-        143,5,3,0,0,143,144,5,55,0,0,144,145,5,19,0,0,145,146,5,55,0,0,146,
-        148,5,21,0,0,147,149,3,54,27,0,148,147,1,0,0,0,148,149,1,0,0,0,149,
-        150,1,0,0,0,150,151,5,22,0,0,151,17,1,0,0,0,152,153,5,4,0,0,153,
-        154,5,55,0,0,154,161,5,23,0,0,155,157,3,20,10,0,156,158,5,24,0,0,
-        157,156,1,0,0,0,157,158,1,0,0,0,158,160,1,0,0,0,159,155,1,0,0,0,
-        160,163,1,0,0,0,161,159,1,0,0,0,161,162,1,0,0,0,162,164,1,0,0,0,
-        163,161,1,0,0,0,164,165,5,25,0,0,165,19,1,0,0,0,166,167,3,4,2,0,
-        167,168,5,19,0,0,168,169,3,40,20,0,169,21,1,0,0,0,170,172,3,30,15,
-        0,171,170,1,0,0,0,172,175,1,0,0,0,173,171,1,0,0,0,173,174,1,0,0,
-        0,174,176,1,0,0,0,175,173,1,0,0,0,176,177,5,5,0,0,177,178,5,55,0,
-        0,178,179,5,26,0,0,179,184,3,24,12,0,180,181,5,24,0,0,181,183,3,
-        26,13,0,182,180,1,0,0,0,183,186,1,0,0,0,184,182,1,0,0,0,184,185,
-        1,0,0,0,185,188,1,0,0,0,186,184,1,0,0,0,187,189,5,24,0,0,188,187,
-        1,0,0,0,188,189,1,0,0,0,189,190,1,0,0,0,190,194,5,27,0,0,191,193,
-        3,28,14,0,192,191,1,0,0,0,193,196,1,0,0,0,194,192,1,0,0,0,194,195,
-        1,0,0,0,195,23,1,0,0,0,196,194,1,0,0,0,197,201,5,54,0,0,198,201,
-        5,57,0,0,199,201,3,6,3,0,200,197,1,0,0,0,200,198,1,0,0,0,200,199,
-        1,0,0,0,201,25,1,0,0,0,202,203,3,4,2,0,203,204,5,19,0,0,204,205,
-        3,62,31,0,205,27,1,0,0,0,206,207,5,7,0,0,207,212,5,55,0,0,208,209,
-        5,24,0,0,209,211,5,55,0,0,210,208,1,0,0,0,211,214,1,0,0,0,212,210,
-        1,0,0,0,212,213,1,0,0,0,213,227,1,0,0,0,214,212,1,0,0,0,215,216,
-        5,8,0,0,216,221,5,55,0,0,217,218,5,24,0,0,218,220,5,55,0,0,219,217,
-        1,0,0,0,220,223,1,0,0,0,221,219,1,0,0,0,221,222,1,0,0,0,222,227,
-        1,0,0,0,223,221,1,0,0,0,224,225,5,9,0,0,225,227,7,1,0,0,226,206,
-        1,0,0,0,226,215,1,0,0,0,226,224,1,0,0,0,227,29,1,0,0,0,228,229,5,
-        28,0,0,229,242,3,4,2,0,230,239,5,21,0,0,231,236,3,32,16,0,232,233,
-        5,24,0,0,233,235,3,32,16,0,234,232,1,0,0,0,235,238,1,0,0,0,236,234,
-        1,0,0,0,236,237,1,0,0,0,237,240,1,0,0,0,238,236,1,0,0,0,239,231,
-        1,0,0,0,239,240,1,0,0,0,240,241,1,0,0,0,241,243,5,22,0,0,242,230,
-        1,0,0,0,242,243,1,0,0,0,243,31,1,0,0,0,244,248,3,64,32,0,245,248,
-        5,54,0,0,246,248,3,6,3,0,247,244,1,0,0,0,247,245,1,0,0,0,247,246,
-        1,0,0,0,248,33,1,0,0,0,249,251,3,30,15,0,250,249,1,0,0,0,251,254,
-        1,0,0,0,252,250,1,0,0,0,252,253,1,0,0,0,253,255,1,0,0,0,254,252,
-        1,0,0,0,255,256,5,6,0,0,256,257,5,55,0,0,257,259,5,21,0,0,258,260,
-        3,36,18,0,259,258,1,0,0,0,259,260,1,0,0,0,260,261,1,0,0,0,261,264,
-        5,22,0,0,262,263,5,29,0,0,263,265,3,40,20,0,264,262,1,0,0,0,264,
-        265,1,0,0,0,265,266,1,0,0,0,266,267,5,19,0,0,267,268,3,42,21,0,268,
-        35,1,0,0,0,269,274,3,38,19,0,270,271,5,24,0,0,271,273,3,38,19,0,
-        272,270,1,0,0,0,273,276,1,0,0,0,274,272,1,0,0,0,274,275,1,0,0,0,
-        275,278,1,0,0,0,276,274,1,0,0,0,277,279,5,24,0,0,278,277,1,0,0,0,
-        278,279,1,0,0,0,279,37,1,0,0,0,280,281,5,55,0,0,281,282,5,19,0,0,
-        282,283,3,40,20,0,283,39,1,0,0,0,284,296,3,6,3,0,285,286,5,30,0,
-        0,286,291,3,40,20,0,287,288,5,24,0,0,288,290,3,40,20,0,289,287,1,
-        0,0,0,290,293,1,0,0,0,291,289,1,0,0,0,291,292,1,0,0,0,292,294,1,
-        0,0,0,293,291,1,0,0,0,294,295,5,31,0,0,295,297,1,0,0,0,296,285,1,
-        0,0,0,296,297,1,0,0,0,297,41,1,0,0,0,298,302,3,66,33,0,299,301,3,
-        44,22,0,300,299,1,0,0,0,301,304,1,0,0,0,302,300,1,0,0,0,302,303,
-        1,0,0,0,303,311,1,0,0,0,304,302,1,0,0,0,305,307,3,44,22,0,306,305,
-        1,0,0,0,307,308,1,0,0,0,308,306,1,0,0,0,308,309,1,0,0,0,309,311,
-        1,0,0,0,310,298,1,0,0,0,310,306,1,0,0,0,311,43,1,0,0,0,312,313,5,
-        49,0,0,313,315,3,52,26,0,314,316,3,46,23,0,315,314,1,0,0,0,315,316,
-        1,0,0,0,316,407,1,0,0,0,317,318,5,47,0,0,318,319,5,21,0,0,319,320,
-        3,70,35,0,320,322,5,22,0,0,321,323,5,32,0,0,322,321,1,0,0,0,322,
-        323,1,0,0,0,323,407,1,0,0,0,324,325,5,47,0,0,325,326,5,23,0,0,326,
-        331,3,48,24,0,327,328,5,24,0,0,328,330,3,48,24,0,329,327,1,0,0,0,
-        330,333,1,0,0,0,331,329,1,0,0,0,331,332,1,0,0,0,332,335,1,0,0,0,
-        333,331,1,0,0,0,334,336,5,24,0,0,335,334,1,0,0,0,335,336,1,0,0,0,
-        336,337,1,0,0,0,337,339,5,25,0,0,338,340,3,46,23,0,339,338,1,0,0,
-        0,339,340,1,0,0,0,340,407,1,0,0,0,341,342,5,46,0,0,342,343,5,11,
-        0,0,343,345,5,21,0,0,344,346,3,54,27,0,345,344,1,0,0,0,345,346,1,
-        0,0,0,346,347,1,0,0,0,347,349,5,22,0,0,348,350,3,46,23,0,349,348,
-        1,0,0,0,349,350,1,0,0,0,350,407,1,0,0,0,351,352,5,45,0,0,352,353,
-        5,23,0,0,353,358,3,50,25,0,354,355,5,24,0,0,355,357,3,50,25,0,356,
-        354,1,0,0,0,357,360,1,0,0,0,358,356,1,0,0,0,358,359,1,0,0,0,359,
-        362,1,0,0,0,360,358,1,0,0,0,361,363,5,24,0,0,362,361,1,0,0,0,362,
-        363,1,0,0,0,363,364,1,0,0,0,364,366,5,25,0,0,365,367,3,46,23,0,366,
-        365,1,0,0,0,366,367,1,0,0,0,367,407,1,0,0,0,368,369,5,45,0,0,369,
-        370,5,15,0,0,370,371,5,21,0,0,371,372,5,55,0,0,372,373,5,16,0,0,
-        373,376,3,58,29,0,374,375,5,24,0,0,375,377,3,54,27,0,376,374,1,0,
-        0,0,376,377,1,0,0,0,377,378,1,0,0,0,378,379,5,22,0,0,379,380,5,32,
-        0,0,380,382,3,52,26,0,381,383,3,46,23,0,382,381,1,0,0,0,382,383,
-        1,0,0,0,383,407,1,0,0,0,384,385,5,48,0,0,385,386,5,12,0,0,386,387,
-        5,21,0,0,387,388,3,58,29,0,388,390,5,22,0,0,389,391,3,46,23,0,390,
-        389,1,0,0,0,390,391,1,0,0,0,391,407,1,0,0,0,392,393,5,44,0,0,393,
-        394,5,13,0,0,394,395,5,21,0,0,395,396,5,55,0,0,396,397,5,24,0,0,
-        397,400,7,1,0,0,398,399,5,24,0,0,399,401,3,54,27,0,400,398,1,0,0,
-        0,400,401,1,0,0,0,401,402,1,0,0,0,402,404,5,22,0,0,403,405,3,46,
-        23,0,404,403,1,0,0,0,404,405,1,0,0,0,405,407,1,0,0,0,406,312,1,0,
-        0,0,406,317,1,0,0,0,406,324,1,0,0,0,406,341,1,0,0,0,406,351,1,0,
-        0,0,406,368,1,0,0,0,406,384,1,0,0,0,406,392,1,0,0,0,407,45,1,0,0,
-        0,408,409,5,14,0,0,409,410,3,4,2,0,410,47,1,0,0,0,411,412,5,21,0,
-        0,412,413,3,70,35,0,413,414,5,22,0,0,414,415,5,32,0,0,415,416,3,
-        52,26,0,416,421,1,0,0,0,417,418,5,17,0,0,418,419,5,32,0,0,419,421,
-        3,52,26,0,420,411,1,0,0,0,420,417,1,0,0,0,421,49,1,0,0,0,422,424,
-        3,52,26,0,423,425,3,46,23,0,424,423,1,0,0,0,424,425,1,0,0,0,425,
-        431,1,0,0,0,426,428,5,55,0,0,427,429,3,46,23,0,428,427,1,0,0,0,428,
-        429,1,0,0,0,429,431,1,0,0,0,430,422,1,0,0,0,430,426,1,0,0,0,431,
-        51,1,0,0,0,432,435,5,55,0,0,433,434,5,18,0,0,434,436,3,4,2,0,435,
-        433,1,0,0,0,435,436,1,0,0,0,436,437,1,0,0,0,437,439,5,21,0,0,438,
-        440,3,54,27,0,439,438,1,0,0,0,439,440,1,0,0,0,440,441,1,0,0,0,441,
-        442,5,22,0,0,442,53,1,0,0,0,443,448,3,56,28,0,444,445,5,24,0,0,445,
-        447,3,56,28,0,446,444,1,0,0,0,447,450,1,0,0,0,448,446,1,0,0,0,448,
-        449,1,0,0,0,449,452,1,0,0,0,450,448,1,0,0,0,451,453,5,24,0,0,452,
-        451,1,0,0,0,452,453,1,0,0,0,453,55,1,0,0,0,454,455,3,4,2,0,455,456,
-        5,19,0,0,456,457,3,58,29,0,457,460,1,0,0,0,458,460,3,58,29,0,459,
-        454,1,0,0,0,459,458,1,0,0,0,460,57,1,0,0,0,461,467,3,64,32,0,462,
-        467,5,54,0,0,463,467,3,68,34,0,464,467,3,60,30,0,465,467,3,6,3,0,
-        466,461,1,0,0,0,466,462,1,0,0,0,466,463,1,0,0,0,466,464,1,0,0,0,
-        466,465,1,0,0,0,467,59,1,0,0,0,468,480,5,26,0,0,469,474,3,58,29,
-        0,470,471,5,24,0,0,471,473,3,58,29,0,472,470,1,0,0,0,473,476,1,0,
-        0,0,474,472,1,0,0,0,474,475,1,0,0,0,475,478,1,0,0,0,476,474,1,0,
-        0,0,477,479,5,24,0,0,478,477,1,0,0,0,478,479,1,0,0,0,479,481,1,0,
-        0,0,480,469,1,0,0,0,480,481,1,0,0,0,481,482,1,0,0,0,482,483,5,27,
-        0,0,483,61,1,0,0,0,484,488,3,64,32,0,485,488,5,54,0,0,486,488,3,
-        6,3,0,487,484,1,0,0,0,487,485,1,0,0,0,487,486,1,0,0,0,488,63,1,0,
-        0,0,489,490,7,2,0,0,490,65,1,0,0,0,491,495,3,64,32,0,492,495,3,68,
-        34,0,493,495,3,6,3,0,494,491,1,0,0,0,494,492,1,0,0,0,494,493,1,0,
-        0,0,495,67,1,0,0,0,496,501,5,10,0,0,497,498,5,18,0,0,498,500,3,8,
-        4,0,499,497,1,0,0,0,500,503,1,0,0,0,501,499,1,0,0,0,501,502,1,0,
-        0,0,502,69,1,0,0,0,503,501,1,0,0,0,504,505,3,72,36,0,505,71,1,0,
-        0,0,506,511,3,74,37,0,507,508,5,33,0,0,508,510,3,74,37,0,509,507,
-        1,0,0,0,510,513,1,0,0,0,511,509,1,0,0,0,511,512,1,0,0,0,512,73,1,
-        0,0,0,513,511,1,0,0,0,514,519,3,76,38,0,515,516,5,34,0,0,516,518,
-        3,76,38,0,517,515,1,0,0,0,518,521,1,0,0,0,519,517,1,0,0,0,519,520,
-        1,0,0,0,520,75,1,0,0,0,521,519,1,0,0,0,522,523,5,35,0,0,523,526,
-        3,76,38,0,524,526,3,78,39,0,525,522,1,0,0,0,525,524,1,0,0,0,526,
-        77,1,0,0,0,527,531,3,82,41,0,528,529,3,80,40,0,529,530,3,82,41,0,
-        530,532,1,0,0,0,531,528,1,0,0,0,531,532,1,0,0,0,532,79,1,0,0,0,533,
-        534,7,3,0,0,534,81,1,0,0,0,535,536,5,21,0,0,536,537,3,72,36,0,537,
-        538,5,22,0,0,538,543,1,0,0,0,539,543,3,64,32,0,540,543,3,68,34,0,
-        541,543,3,6,3,0,542,535,1,0,0,0,542,539,1,0,0,0,542,540,1,0,0,0,
-        542,541,1,0,0,0,543,83,1,0,0,0,69,87,98,107,112,122,128,138,148,
-        157,161,173,184,188,194,200,212,221,226,236,239,242,247,252,259,
-        264,274,278,291,296,302,308,310,315,322,331,335,339,345,349,358,
-        362,366,376,382,390,400,404,406,420,424,428,430,435,439,448,452,
-        459,466,474,478,480,487,494,501,511,519,525,531,542
+        2,40,7,40,2,41,7,41,2,42,7,42,2,43,7,43,2,44,7,44,1,0,5,0,92,8,0,
+        10,0,12,0,95,9,0,1,0,1,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,1,106,8,1,
+        1,2,1,2,1,3,1,3,1,3,5,3,113,8,3,10,3,12,3,116,9,3,1,4,1,4,3,4,120,
+        8,4,1,5,1,5,1,5,1,5,1,5,1,5,5,5,128,8,5,10,5,12,5,131,9,5,1,5,3,
+        5,134,8,5,3,5,136,8,5,1,5,3,5,139,8,5,1,5,1,5,1,5,1,5,1,5,1,5,5,
+        5,147,8,5,10,5,12,5,150,9,5,1,5,3,5,153,8,5,1,5,1,5,3,5,157,8,5,
+        1,6,1,6,1,6,3,6,162,8,6,1,7,1,7,1,7,1,7,1,8,1,8,1,8,1,8,1,8,1,8,
+        5,8,174,8,8,10,8,12,8,177,9,8,1,9,1,9,1,9,3,9,182,8,9,1,9,1,9,1,
+        10,1,10,1,10,1,10,1,10,1,10,3,10,192,8,10,1,10,1,10,1,10,5,10,197,
+        8,10,10,10,12,10,200,9,10,1,11,1,11,1,11,1,11,1,11,1,11,3,11,208,
+        8,11,1,11,1,11,1,12,1,12,1,12,1,12,1,12,3,12,217,8,12,5,12,219,8,
+        12,10,12,12,12,222,9,12,1,12,1,12,1,13,1,13,1,13,1,13,1,14,5,14,
+        231,8,14,10,14,12,14,234,9,14,1,14,1,14,1,14,1,14,1,14,1,14,5,14,
+        242,8,14,10,14,12,14,245,9,14,1,14,3,14,248,8,14,1,14,1,14,5,14,
+        252,8,14,10,14,12,14,255,9,14,1,15,1,15,1,15,3,15,260,8,15,1,16,
+        1,16,1,16,1,16,1,17,1,17,1,17,1,17,5,17,270,8,17,10,17,12,17,273,
+        9,17,1,17,1,17,1,17,1,17,5,17,279,8,17,10,17,12,17,282,9,17,1,17,
+        1,17,3,17,286,8,17,1,18,1,18,1,18,1,18,1,18,1,18,5,18,294,8,18,10,
+        18,12,18,297,9,18,3,18,299,8,18,1,18,3,18,302,8,18,1,19,1,19,1,19,
+        3,19,307,8,19,1,20,5,20,310,8,20,10,20,12,20,313,9,20,1,20,1,20,
+        1,20,1,20,3,20,319,8,20,1,20,1,20,1,20,3,20,324,8,20,1,20,1,20,1,
+        20,1,21,1,21,1,21,5,21,332,8,21,10,21,12,21,335,9,21,1,21,3,21,338,
+        8,21,1,22,1,22,1,22,1,22,1,23,1,23,1,23,1,23,1,23,5,23,349,8,23,
+        10,23,12,23,352,9,23,1,23,1,23,3,23,356,8,23,1,24,1,24,5,24,360,
+        8,24,10,24,12,24,363,9,24,1,24,4,24,366,8,24,11,24,12,24,367,3,24,
+        370,8,24,1,25,1,25,1,25,3,25,375,8,25,1,25,1,25,1,25,1,25,1,25,3,
+        25,382,8,25,1,25,1,25,1,25,1,25,1,25,5,25,389,8,25,10,25,12,25,392,
+        9,25,1,25,3,25,395,8,25,1,25,1,25,3,25,399,8,25,1,25,1,25,1,25,1,
+        25,3,25,405,8,25,1,25,1,25,3,25,409,8,25,1,25,1,25,1,25,1,25,1,25,
+        5,25,416,8,25,10,25,12,25,419,9,25,1,25,3,25,422,8,25,1,25,1,25,
+        3,25,426,8,25,1,25,1,25,1,25,1,25,1,25,1,25,1,25,1,25,3,25,436,8,
+        25,1,25,1,25,1,25,1,25,3,25,442,8,25,1,25,1,25,1,25,1,25,1,25,1,
+        25,3,25,450,8,25,1,25,1,25,1,25,1,25,1,25,1,25,1,25,1,25,3,25,460,
+        8,25,1,25,1,25,3,25,464,8,25,3,25,466,8,25,1,26,1,26,1,26,1,27,1,
+        27,1,27,1,27,1,27,1,27,1,27,1,27,1,27,3,27,480,8,27,1,28,1,28,3,
+        28,484,8,28,1,28,1,28,3,28,488,8,28,3,28,490,8,28,1,29,1,29,1,29,
+        3,29,495,8,29,1,29,1,29,3,29,499,8,29,1,29,1,29,1,30,1,30,1,30,5,
+        30,506,8,30,10,30,12,30,509,9,30,1,30,3,30,512,8,30,1,31,1,31,1,
+        31,1,31,1,31,3,31,519,8,31,1,32,1,32,1,32,1,32,1,32,3,32,526,8,32,
+        1,33,1,33,1,33,1,33,5,33,532,8,33,10,33,12,33,535,9,33,1,33,3,33,
+        538,8,33,3,33,540,8,33,1,33,1,33,1,34,1,34,1,34,3,34,547,8,34,1,
+        35,1,35,1,36,1,36,1,36,3,36,554,8,36,1,37,1,37,1,37,5,37,559,8,37,
+        10,37,12,37,562,9,37,1,38,1,38,1,39,1,39,1,39,5,39,569,8,39,10,39,
+        12,39,572,9,39,1,40,1,40,1,40,5,40,577,8,40,10,40,12,40,580,9,40,
+        1,41,1,41,1,41,3,41,585,8,41,1,42,1,42,1,42,1,42,3,42,591,8,42,1,
+        43,1,43,1,44,1,44,1,44,1,44,1,44,1,44,1,44,3,44,602,8,44,1,44,0,
+        0,45,0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,
+        44,46,48,50,52,54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,84,86,
+        88,0,4,2,0,1,19,57,57,1,0,58,59,2,0,52,55,58,59,2,0,32,33,38,41,
+        657,0,93,1,0,0,0,2,105,1,0,0,0,4,107,1,0,0,0,6,109,1,0,0,0,8,119,
+        1,0,0,0,10,121,1,0,0,0,12,158,1,0,0,0,14,163,1,0,0,0,16,167,1,0,
+        0,0,18,178,1,0,0,0,20,185,1,0,0,0,22,201,1,0,0,0,24,211,1,0,0,0,
+        26,225,1,0,0,0,28,232,1,0,0,0,30,259,1,0,0,0,32,261,1,0,0,0,34,285,
+        1,0,0,0,36,287,1,0,0,0,38,306,1,0,0,0,40,311,1,0,0,0,42,328,1,0,
+        0,0,44,339,1,0,0,0,46,343,1,0,0,0,48,369,1,0,0,0,50,465,1,0,0,0,
+        52,467,1,0,0,0,54,479,1,0,0,0,56,489,1,0,0,0,58,491,1,0,0,0,60,502,
+        1,0,0,0,62,518,1,0,0,0,64,525,1,0,0,0,66,527,1,0,0,0,68,546,1,0,
+        0,0,70,548,1,0,0,0,72,553,1,0,0,0,74,555,1,0,0,0,76,563,1,0,0,0,
+        78,565,1,0,0,0,80,573,1,0,0,0,82,584,1,0,0,0,84,586,1,0,0,0,86,592,
+        1,0,0,0,88,601,1,0,0,0,90,92,3,2,1,0,91,90,1,0,0,0,92,95,1,0,0,0,
+        93,91,1,0,0,0,93,94,1,0,0,0,94,96,1,0,0,0,95,93,1,0,0,0,96,97,5,
+        0,0,1,97,1,1,0,0,0,98,106,3,10,5,0,99,106,3,16,8,0,100,106,3,20,
+        10,0,101,106,3,22,11,0,102,106,3,24,12,0,103,106,3,28,14,0,104,106,
+        3,40,20,0,105,98,1,0,0,0,105,99,1,0,0,0,105,100,1,0,0,0,105,101,
+        1,0,0,0,105,102,1,0,0,0,105,103,1,0,0,0,105,104,1,0,0,0,106,3,1,
+        0,0,0,107,108,7,0,0,0,108,5,1,0,0,0,109,114,5,57,0,0,110,111,5,20,
+        0,0,111,113,3,8,4,0,112,110,1,0,0,0,113,116,1,0,0,0,114,112,1,0,
+        0,0,114,115,1,0,0,0,115,7,1,0,0,0,116,114,1,0,0,0,117,120,3,4,2,
+        0,118,120,5,55,0,0,119,117,1,0,0,0,119,118,1,0,0,0,120,9,1,0,0,0,
+        121,122,5,18,0,0,122,138,5,59,0,0,123,135,5,21,0,0,124,129,3,12,
+        6,0,125,126,5,22,0,0,126,128,3,12,6,0,127,125,1,0,0,0,128,131,1,
+        0,0,0,129,127,1,0,0,0,129,130,1,0,0,0,130,133,1,0,0,0,131,129,1,
+        0,0,0,132,134,5,22,0,0,133,132,1,0,0,0,133,134,1,0,0,0,134,136,1,
+        0,0,0,135,124,1,0,0,0,135,136,1,0,0,0,136,137,1,0,0,0,137,139,5,
+        23,0,0,138,123,1,0,0,0,138,139,1,0,0,0,139,156,1,0,0,0,140,141,5,
+        19,0,0,141,142,5,57,0,0,142,143,5,24,0,0,143,148,3,14,7,0,144,145,
+        5,22,0,0,145,147,3,14,7,0,146,144,1,0,0,0,147,150,1,0,0,0,148,146,
+        1,0,0,0,148,149,1,0,0,0,149,152,1,0,0,0,150,148,1,0,0,0,151,153,
+        5,22,0,0,152,151,1,0,0,0,152,153,1,0,0,0,153,154,1,0,0,0,154,155,
+        5,25,0,0,155,157,1,0,0,0,156,140,1,0,0,0,156,157,1,0,0,0,157,11,
+        1,0,0,0,158,161,5,57,0,0,159,160,5,14,0,0,160,162,5,57,0,0,161,159,
+        1,0,0,0,161,162,1,0,0,0,162,13,1,0,0,0,163,164,3,4,2,0,164,165,5,
+        26,0,0,165,166,3,30,15,0,166,15,1,0,0,0,167,168,5,1,0,0,168,169,
+        5,57,0,0,169,170,5,26,0,0,170,175,3,18,9,0,171,172,5,27,0,0,172,
+        174,3,18,9,0,173,171,1,0,0,0,174,177,1,0,0,0,175,173,1,0,0,0,175,
+        176,1,0,0,0,176,17,1,0,0,0,177,175,1,0,0,0,178,179,5,57,0,0,179,
+        181,5,24,0,0,180,182,3,60,30,0,181,180,1,0,0,0,181,182,1,0,0,0,182,
+        183,1,0,0,0,183,184,5,25,0,0,184,19,1,0,0,0,185,186,5,2,0,0,186,
+        187,5,57,0,0,187,188,5,26,0,0,188,189,5,57,0,0,189,191,5,24,0,0,
+        190,192,3,60,30,0,191,190,1,0,0,0,191,192,1,0,0,0,192,193,1,0,0,
+        0,193,198,5,25,0,0,194,195,5,27,0,0,195,197,3,18,9,0,196,194,1,0,
+        0,0,197,200,1,0,0,0,198,196,1,0,0,0,198,199,1,0,0,0,199,21,1,0,0,
+        0,200,198,1,0,0,0,201,202,5,3,0,0,202,203,5,57,0,0,203,204,5,26,
+        0,0,204,205,5,57,0,0,205,207,5,24,0,0,206,208,3,60,30,0,207,206,
+        1,0,0,0,207,208,1,0,0,0,208,209,1,0,0,0,209,210,5,25,0,0,210,23,
+        1,0,0,0,211,212,5,4,0,0,212,213,5,57,0,0,213,220,5,21,0,0,214,216,
+        3,26,13,0,215,217,5,22,0,0,216,215,1,0,0,0,216,217,1,0,0,0,217,219,
+        1,0,0,0,218,214,1,0,0,0,219,222,1,0,0,0,220,218,1,0,0,0,220,221,
+        1,0,0,0,221,223,1,0,0,0,222,220,1,0,0,0,223,224,5,23,0,0,224,25,
+        1,0,0,0,225,226,3,4,2,0,226,227,5,26,0,0,227,228,3,46,23,0,228,27,
+        1,0,0,0,229,231,3,36,18,0,230,229,1,0,0,0,231,234,1,0,0,0,232,230,
+        1,0,0,0,232,233,1,0,0,0,233,235,1,0,0,0,234,232,1,0,0,0,235,236,
+        5,5,0,0,236,237,5,57,0,0,237,238,5,28,0,0,238,243,3,30,15,0,239,
+        240,5,22,0,0,240,242,3,32,16,0,241,239,1,0,0,0,242,245,1,0,0,0,243,
+        241,1,0,0,0,243,244,1,0,0,0,244,247,1,0,0,0,245,243,1,0,0,0,246,
+        248,5,22,0,0,247,246,1,0,0,0,247,248,1,0,0,0,248,249,1,0,0,0,249,
+        253,5,29,0,0,250,252,3,34,17,0,251,250,1,0,0,0,252,255,1,0,0,0,253,
+        251,1,0,0,0,253,254,1,0,0,0,254,29,1,0,0,0,255,253,1,0,0,0,256,260,
+        5,56,0,0,257,260,5,59,0,0,258,260,3,6,3,0,259,256,1,0,0,0,259,257,
+        1,0,0,0,259,258,1,0,0,0,260,31,1,0,0,0,261,262,3,4,2,0,262,263,5,
+        26,0,0,263,264,3,68,34,0,264,33,1,0,0,0,265,266,5,7,0,0,266,271,
+        5,57,0,0,267,268,5,22,0,0,268,270,5,57,0,0,269,267,1,0,0,0,270,273,
+        1,0,0,0,271,269,1,0,0,0,271,272,1,0,0,0,272,286,1,0,0,0,273,271,
+        1,0,0,0,274,275,5,8,0,0,275,280,5,57,0,0,276,277,5,22,0,0,277,279,
+        5,57,0,0,278,276,1,0,0,0,279,282,1,0,0,0,280,278,1,0,0,0,280,281,
+        1,0,0,0,281,286,1,0,0,0,282,280,1,0,0,0,283,284,5,9,0,0,284,286,
+        7,1,0,0,285,265,1,0,0,0,285,274,1,0,0,0,285,283,1,0,0,0,286,35,1,
+        0,0,0,287,288,5,30,0,0,288,301,3,4,2,0,289,298,5,24,0,0,290,295,
+        3,38,19,0,291,292,5,22,0,0,292,294,3,38,19,0,293,291,1,0,0,0,294,
+        297,1,0,0,0,295,293,1,0,0,0,295,296,1,0,0,0,296,299,1,0,0,0,297,
+        295,1,0,0,0,298,290,1,0,0,0,298,299,1,0,0,0,299,300,1,0,0,0,300,
+        302,5,25,0,0,301,289,1,0,0,0,301,302,1,0,0,0,302,37,1,0,0,0,303,
+        307,3,70,35,0,304,307,5,56,0,0,305,307,3,6,3,0,306,303,1,0,0,0,306,
+        304,1,0,0,0,306,305,1,0,0,0,307,39,1,0,0,0,308,310,3,36,18,0,309,
+        308,1,0,0,0,310,313,1,0,0,0,311,309,1,0,0,0,311,312,1,0,0,0,312,
+        314,1,0,0,0,313,311,1,0,0,0,314,315,5,6,0,0,315,316,5,57,0,0,316,
+        318,5,24,0,0,317,319,3,42,21,0,318,317,1,0,0,0,318,319,1,0,0,0,319,
+        320,1,0,0,0,320,323,5,25,0,0,321,322,5,31,0,0,322,324,3,46,23,0,
+        323,321,1,0,0,0,323,324,1,0,0,0,324,325,1,0,0,0,325,326,5,26,0,0,
+        326,327,3,48,24,0,327,41,1,0,0,0,328,333,3,44,22,0,329,330,5,22,
+        0,0,330,332,3,44,22,0,331,329,1,0,0,0,332,335,1,0,0,0,333,331,1,
+        0,0,0,333,334,1,0,0,0,334,337,1,0,0,0,335,333,1,0,0,0,336,338,5,
+        22,0,0,337,336,1,0,0,0,337,338,1,0,0,0,338,43,1,0,0,0,339,340,5,
+        57,0,0,340,341,5,26,0,0,341,342,3,46,23,0,342,45,1,0,0,0,343,355,
+        3,6,3,0,344,345,5,32,0,0,345,350,3,46,23,0,346,347,5,22,0,0,347,
+        349,3,46,23,0,348,346,1,0,0,0,349,352,1,0,0,0,350,348,1,0,0,0,350,
+        351,1,0,0,0,351,353,1,0,0,0,352,350,1,0,0,0,353,354,5,33,0,0,354,
+        356,1,0,0,0,355,344,1,0,0,0,355,356,1,0,0,0,356,47,1,0,0,0,357,361,
+        3,72,36,0,358,360,3,50,25,0,359,358,1,0,0,0,360,363,1,0,0,0,361,
+        359,1,0,0,0,361,362,1,0,0,0,362,370,1,0,0,0,363,361,1,0,0,0,364,
+        366,3,50,25,0,365,364,1,0,0,0,366,367,1,0,0,0,367,365,1,0,0,0,367,
+        368,1,0,0,0,368,370,1,0,0,0,369,357,1,0,0,0,369,365,1,0,0,0,370,
+        49,1,0,0,0,371,372,5,51,0,0,372,374,3,58,29,0,373,375,3,52,26,0,
+        374,373,1,0,0,0,374,375,1,0,0,0,375,466,1,0,0,0,376,377,5,49,0,0,
+        377,378,5,24,0,0,378,379,3,76,38,0,379,381,5,25,0,0,380,382,5,34,
+        0,0,381,380,1,0,0,0,381,382,1,0,0,0,382,466,1,0,0,0,383,384,5,49,
+        0,0,384,385,5,21,0,0,385,390,3,54,27,0,386,387,5,22,0,0,387,389,
+        3,54,27,0,388,386,1,0,0,0,389,392,1,0,0,0,390,388,1,0,0,0,390,391,
+        1,0,0,0,391,394,1,0,0,0,392,390,1,0,0,0,393,395,5,22,0,0,394,393,
+        1,0,0,0,394,395,1,0,0,0,395,396,1,0,0,0,396,398,5,23,0,0,397,399,
+        3,52,26,0,398,397,1,0,0,0,398,399,1,0,0,0,399,466,1,0,0,0,400,401,
+        5,48,0,0,401,402,5,11,0,0,402,404,5,24,0,0,403,405,3,60,30,0,404,
+        403,1,0,0,0,404,405,1,0,0,0,405,406,1,0,0,0,406,408,5,25,0,0,407,
+        409,3,52,26,0,408,407,1,0,0,0,408,409,1,0,0,0,409,466,1,0,0,0,410,
+        411,5,47,0,0,411,412,5,21,0,0,412,417,3,56,28,0,413,414,5,22,0,0,
+        414,416,3,56,28,0,415,413,1,0,0,0,416,419,1,0,0,0,417,415,1,0,0,
+        0,417,418,1,0,0,0,418,421,1,0,0,0,419,417,1,0,0,0,420,422,5,22,0,
+        0,421,420,1,0,0,0,421,422,1,0,0,0,422,423,1,0,0,0,423,425,5,23,0,
+        0,424,426,3,52,26,0,425,424,1,0,0,0,425,426,1,0,0,0,426,466,1,0,
+        0,0,427,428,5,47,0,0,428,429,5,15,0,0,429,430,5,24,0,0,430,431,5,
+        57,0,0,431,432,5,16,0,0,432,435,3,64,32,0,433,434,5,22,0,0,434,436,
+        3,60,30,0,435,433,1,0,0,0,435,436,1,0,0,0,436,437,1,0,0,0,437,438,
+        5,25,0,0,438,439,5,34,0,0,439,441,3,58,29,0,440,442,3,52,26,0,441,
+        440,1,0,0,0,441,442,1,0,0,0,442,466,1,0,0,0,443,444,5,50,0,0,444,
+        445,5,12,0,0,445,446,5,24,0,0,446,447,3,64,32,0,447,449,5,25,0,0,
+        448,450,3,52,26,0,449,448,1,0,0,0,449,450,1,0,0,0,450,466,1,0,0,
+        0,451,452,5,46,0,0,452,453,5,13,0,0,453,454,5,24,0,0,454,455,5,57,
+        0,0,455,456,5,22,0,0,456,459,7,1,0,0,457,458,5,22,0,0,458,460,3,
+        60,30,0,459,457,1,0,0,0,459,460,1,0,0,0,460,461,1,0,0,0,461,463,
+        5,25,0,0,462,464,3,52,26,0,463,462,1,0,0,0,463,464,1,0,0,0,464,466,
+        1,0,0,0,465,371,1,0,0,0,465,376,1,0,0,0,465,383,1,0,0,0,465,400,
+        1,0,0,0,465,410,1,0,0,0,465,427,1,0,0,0,465,443,1,0,0,0,465,451,
+        1,0,0,0,466,51,1,0,0,0,467,468,5,14,0,0,468,469,3,4,2,0,469,53,1,
+        0,0,0,470,471,5,24,0,0,471,472,3,76,38,0,472,473,5,25,0,0,473,474,
+        5,34,0,0,474,475,3,58,29,0,475,480,1,0,0,0,476,477,5,17,0,0,477,
+        478,5,34,0,0,478,480,3,58,29,0,479,470,1,0,0,0,479,476,1,0,0,0,480,
+        55,1,0,0,0,481,483,3,58,29,0,482,484,3,52,26,0,483,482,1,0,0,0,483,
+        484,1,0,0,0,484,490,1,0,0,0,485,487,5,57,0,0,486,488,3,52,26,0,487,
+        486,1,0,0,0,487,488,1,0,0,0,488,490,1,0,0,0,489,481,1,0,0,0,489,
+        485,1,0,0,0,490,57,1,0,0,0,491,494,5,57,0,0,492,493,5,20,0,0,493,
+        495,3,4,2,0,494,492,1,0,0,0,494,495,1,0,0,0,495,496,1,0,0,0,496,
+        498,5,24,0,0,497,499,3,60,30,0,498,497,1,0,0,0,498,499,1,0,0,0,499,
+        500,1,0,0,0,500,501,5,25,0,0,501,59,1,0,0,0,502,507,3,62,31,0,503,
+        504,5,22,0,0,504,506,3,62,31,0,505,503,1,0,0,0,506,509,1,0,0,0,507,
+        505,1,0,0,0,507,508,1,0,0,0,508,511,1,0,0,0,509,507,1,0,0,0,510,
+        512,5,22,0,0,511,510,1,0,0,0,511,512,1,0,0,0,512,61,1,0,0,0,513,
+        514,3,4,2,0,514,515,5,26,0,0,515,516,3,64,32,0,516,519,1,0,0,0,517,
+        519,3,64,32,0,518,513,1,0,0,0,518,517,1,0,0,0,519,63,1,0,0,0,520,
+        526,3,70,35,0,521,526,5,56,0,0,522,526,3,74,37,0,523,526,3,66,33,
+        0,524,526,3,6,3,0,525,520,1,0,0,0,525,521,1,0,0,0,525,522,1,0,0,
+        0,525,523,1,0,0,0,525,524,1,0,0,0,526,65,1,0,0,0,527,539,5,28,0,
+        0,528,533,3,64,32,0,529,530,5,22,0,0,530,532,3,64,32,0,531,529,1,
+        0,0,0,532,535,1,0,0,0,533,531,1,0,0,0,533,534,1,0,0,0,534,537,1,
+        0,0,0,535,533,1,0,0,0,536,538,5,22,0,0,537,536,1,0,0,0,537,538,1,
+        0,0,0,538,540,1,0,0,0,539,528,1,0,0,0,539,540,1,0,0,0,540,541,1,
+        0,0,0,541,542,5,29,0,0,542,67,1,0,0,0,543,547,3,70,35,0,544,547,
+        5,56,0,0,545,547,3,6,3,0,546,543,1,0,0,0,546,544,1,0,0,0,546,545,
+        1,0,0,0,547,69,1,0,0,0,548,549,7,2,0,0,549,71,1,0,0,0,550,554,3,
+        70,35,0,551,554,3,74,37,0,552,554,3,6,3,0,553,550,1,0,0,0,553,551,
+        1,0,0,0,553,552,1,0,0,0,554,73,1,0,0,0,555,560,5,10,0,0,556,557,
+        5,20,0,0,557,559,3,8,4,0,558,556,1,0,0,0,559,562,1,0,0,0,560,558,
+        1,0,0,0,560,561,1,0,0,0,561,75,1,0,0,0,562,560,1,0,0,0,563,564,3,
+        78,39,0,564,77,1,0,0,0,565,570,3,80,40,0,566,567,5,35,0,0,567,569,
+        3,80,40,0,568,566,1,0,0,0,569,572,1,0,0,0,570,568,1,0,0,0,570,571,
+        1,0,0,0,571,79,1,0,0,0,572,570,1,0,0,0,573,578,3,82,41,0,574,575,
+        5,36,0,0,575,577,3,82,41,0,576,574,1,0,0,0,577,580,1,0,0,0,578,576,
+        1,0,0,0,578,579,1,0,0,0,579,81,1,0,0,0,580,578,1,0,0,0,581,582,5,
+        37,0,0,582,585,3,82,41,0,583,585,3,84,42,0,584,581,1,0,0,0,584,583,
+        1,0,0,0,585,83,1,0,0,0,586,590,3,88,44,0,587,588,3,86,43,0,588,589,
+        3,88,44,0,589,591,1,0,0,0,590,587,1,0,0,0,590,591,1,0,0,0,591,85,
+        1,0,0,0,592,593,7,3,0,0,593,87,1,0,0,0,594,595,5,24,0,0,595,596,
+        3,78,39,0,596,597,5,25,0,0,597,602,1,0,0,0,598,602,3,70,35,0,599,
+        602,3,74,37,0,600,602,3,6,3,0,601,594,1,0,0,0,601,598,1,0,0,0,601,
+        599,1,0,0,0,601,600,1,0,0,0,602,89,1,0,0,0,78,93,105,114,119,129,
+        133,135,138,148,152,156,161,175,181,191,198,207,216,220,232,243,
+        247,253,259,271,280,285,295,298,301,306,311,318,323,333,337,350,
+        355,361,367,369,374,381,390,394,398,404,408,417,421,425,435,441,
+        449,459,463,465,479,483,487,489,494,498,507,511,518,525,533,537,
+        539,546,553,560,570,578,584,590,601
     ];
 
     private static __ATN: antlr.ATN;
@@ -2734,6 +2973,9 @@ export class ProgramContext extends antlr.ParserRuleContext {
 export class DeclarationContext extends antlr.ParserRuleContext {
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
+    }
+    public useDecl(): UseDeclContext | null {
+        return this.getRuleContext(0, UseDeclContext);
     }
     public policyDecl(): PolicyDeclContext | null {
         return this.getRuleContext(0, PolicyDeclContext);
@@ -2838,6 +3080,96 @@ export class PathPartContext extends antlr.ParserRuleContext {
 }
 
 
+export class UseDeclContext extends antlr.ParserRuleContext {
+    public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
+        super(parent, invokingState);
+    }
+    public STRING(): antlr.TerminalNode {
+        return this.getToken(HaloParser.STRING, 0)!;
+    }
+    public IDENTIFIER(): antlr.TerminalNode | null {
+        return this.getToken(HaloParser.IDENTIFIER, 0);
+    }
+    public modelBinding(): ModelBindingContext[];
+    public modelBinding(i: number): ModelBindingContext | null;
+    public modelBinding(i?: number): ModelBindingContext[] | ModelBindingContext | null {
+        if (i === undefined) {
+            return this.getRuleContexts(ModelBindingContext);
+        }
+
+        return this.getRuleContext(i, ModelBindingContext);
+    }
+    public useItem(): UseItemContext[];
+    public useItem(i: number): UseItemContext | null;
+    public useItem(i?: number): UseItemContext[] | UseItemContext | null {
+        if (i === undefined) {
+            return this.getRuleContexts(UseItemContext);
+        }
+
+        return this.getRuleContext(i, UseItemContext);
+    }
+    public override get ruleIndex(): number {
+        return HaloParser.RULE_useDecl;
+    }
+    public override accept<Result>(visitor: HaloVisitor<Result>): Result | null {
+        if (visitor.visitUseDecl) {
+            return visitor.visitUseDecl(this);
+        } else {
+            return visitor.visitChildren(this);
+        }
+    }
+}
+
+
+export class UseItemContext extends antlr.ParserRuleContext {
+    public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
+        super(parent, invokingState);
+    }
+    public IDENTIFIER(): antlr.TerminalNode[];
+    public IDENTIFIER(i: number): antlr.TerminalNode | null;
+    public IDENTIFIER(i?: number): antlr.TerminalNode | null | antlr.TerminalNode[] {
+    	if (i === undefined) {
+    		return this.getTokens(HaloParser.IDENTIFIER);
+    	} else {
+    		return this.getToken(HaloParser.IDENTIFIER, i);
+    	}
+    }
+    public override get ruleIndex(): number {
+        return HaloParser.RULE_useItem;
+    }
+    public override accept<Result>(visitor: HaloVisitor<Result>): Result | null {
+        if (visitor.visitUseItem) {
+            return visitor.visitUseItem(this);
+        } else {
+            return visitor.visitChildren(this);
+        }
+    }
+}
+
+
+export class ModelBindingContext extends antlr.ParserRuleContext {
+    public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
+        super(parent, invokingState);
+    }
+    public name(): NameContext {
+        return this.getRuleContext(0, NameContext)!;
+    }
+    public modelRef(): ModelRefContext {
+        return this.getRuleContext(0, ModelRefContext)!;
+    }
+    public override get ruleIndex(): number {
+        return HaloParser.RULE_modelBinding;
+    }
+    public override accept<Result>(visitor: HaloVisitor<Result>): Result | null {
+        if (visitor.visitModelBinding) {
+            return visitor.visitModelBinding(this);
+        } else {
+            return visitor.visitChildren(this);
+        }
+    }
+}
+
+
 export class PolicyDeclContext extends antlr.ParserRuleContext {
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
@@ -2905,6 +3237,15 @@ export class ToolDeclContext extends antlr.ParserRuleContext {
     }
     public callArgs(): CallArgsContext | null {
         return this.getRuleContext(0, CallArgsContext);
+    }
+    public policyRule(): PolicyRuleContext[];
+    public policyRule(i: number): PolicyRuleContext | null;
+    public policyRule(i?: number): PolicyRuleContext[] | PolicyRuleContext | null {
+        if (i === undefined) {
+            return this.getRuleContexts(PolicyRuleContext);
+        }
+
+        return this.getRuleContext(i, PolicyRuleContext);
     }
     public override get ruleIndex(): number {
         return HaloParser.RULE_toolDecl;

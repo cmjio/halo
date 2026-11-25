@@ -6,8 +6,11 @@
 // ============================================================
 
 // --- Policies ---
-policy KYCPrivacy     : Redact(SSN) & Redact(DateOfBirth) & Redact(PassportNumber)
-policy BSACompliance  : Require(RegulatoryHold) & Block(SanctionedEntity)
+// Dates of birth and passport numbers have no detector, so the compliance
+// agent is never given them: it gets the verification results and the country.
+policy KYCPrivacy     : Redact(SSN, CreditCard, Email, Phone)
+// Application text is untrusted. A sanctions match is stopped by a gate, not a policy.
+policy BSACompliance  : Block(PromptInjection)
 policy CostGuard      : MaxSpend(2.00)
 
 // --- Tools ---
@@ -22,13 +25,14 @@ tool RiskProfiles  : VectorStore(Env.PINECONE_KEY, namespace: "customer-risk-pro
 tool RegPatterns   : VectorStore(Env.PINECONE_KEY, namespace: "regulatory-patterns")
 
 // --- Struct ---
-schema KYCResult {
-  customer_id    : String
-  identity_match : Boolean
-  sanctions_clear : Boolean
-  risk_tier      : String
-  credit_score   : Number
-  approved       : Boolean
+schema CustomerApplication {
+  customer_id   : String
+  full_name     : String
+  ssn           : String
+  ssn_last4     : String
+  date_of_birth : String
+  country       : String
+  consent_id    : String
 }
 
 // --- Agents ---
@@ -37,13 +41,14 @@ agent IdentityAgent [openai/gpt-4o-mini, temp: 0.0]
   requires KYCPrivacy, CostGuard
 
 agent ComplianceAgent [anthropic/claude-sonnet-4, temp: 0.0]
+  system "Assess AML risk. Answer with JSON: {\"risk_tier\": \"low\" | \"medium\" | \"high\", \"reasons\": [...]}"
   equips RiskProfiles, RegPatterns
   requires KYCPrivacy, BSACompliance, CostGuard
 
 // --- The Pipeline ---
 @timeout(5m)
 @retry(3, 10s)
-pipeline OnboardCustomer(application: CustomerApplication) -> KYCResult:
+pipeline OnboardCustomer(application: CustomerApplication) -> Result:
   application
     // Step 1: Parallel identity verification — hit all APIs at once
     |* {
@@ -65,38 +70,44 @@ pipeline OnboardCustomer(application: CustomerApplication) -> KYCResult:
          )
        }
 
-    // Step 2: Gate — immediate block if sanctions match
-    |? (context.data.screen_sanctions.match_found == true)
-    |> ComplianceLog.post(
-         event: "SANCTIONS_MATCH",
-         customer: context.data.application.full_name,
-         details: context.data.screen_sanctions
-       )
+    // Step 2: A sanctions match is logged, and onboarding stops. Only an
+    // explicit "no match" goes on, so a missing answer stops too.
+    |? {
+         (context.data.screen_sanctions.match_found == true) => ComplianceLog.post(
+           event: "SANCTIONS_MATCH",
+           customer: context.data.application.full_name,
+           details: context.data.screen_sanctions
+         ),
+       }
+    |? (context.data.screen_sanctions.match_found == false)
 
     // Step 3: Risk assessment — synthesize all signals
     |> ComplianceAgent.assess_risk(
          identity: context.data.verify_identity,
          sanctions: context.data.screen_sanctions,
          credit: context.data.pull_credit,
-         application: context.data.application
+         country: context.data.application.country
        )
 
-    // Step 4: Gate — auto-approve low-risk Tier 1 customers
-    |? (context.data.assess_risk.risk_tier != "low")
+    // Step 4: Low-risk (Tier 1) customers are approved automatically;
+    // a compliance officer approves medium and high risk
+    |? {
+         (context.data.assess_risk.risk_tier != "low") => ComplianceReview(context.data.assess_risk, context.data.verify_identity, context.data.screen_sanctions, context.data.pull_credit),
+         else => System.Value(context.data.assess_risk),
+       } as review
+    |? (context.data.assess_risk.risk_tier == "low" || context.data.review.approved == true)
 
-    // Step 5: Human review for medium/high risk
-    |! yield(
-         CompSlack,
-         context.data.assess_risk,
-         [context.data.verify_identity, context.data.screen_sanctions, context.data.pull_credit],
-         2h
-       )
-    ~> listen(CompSlack.Reaction)
-
-    // Step 6: Log final decision for regulatory audit
+    // Step 5: Log final decision for regulatory audit
     |> ComplianceLog.post(
          event: "KYC_COMPLETE",
          customer_id: context.data.application.customer_id,
          risk_tier: context.data.assess_risk.risk_tier,
          approved: true
        )
+
+// A compliance officer approves a medium- or high-risk customer.
+pipeline ComplianceReview(risk: JSON, identity: JSON, sanctions: JSON, credit: JSON) -> Result:
+  risk
+    |! yield(CompSlack, risk, [identity, sanctions, credit], 2h)
+    ~> listen(CompSlack.Reaction) as officer
+    |> System.Value(context.data.officer)

@@ -1,0 +1,19 @@
+// The public surface of @acme/support-kit: everything declared here is exported.
+use "@acme/zendesk" { Zendesk }
+use "./internal.halo" { Polite, Category }
+
+tool Desk : Zendesk(subdomain: Env.ZENDESK_SUBDOMAIN)
+
+schema Classification {
+  category: Category,
+  urgency: String,
+  summary: String,
+}
+
+agent Triager [models.fast, temp: 0]
+  equips Desk
+  requires Polite
+  system "You triage customer support tickets."
+
+pipeline Triage(ticket: String) -> Classification:
+  ticket |> Triager.classify("Classify this ticket: category, urgency, and a one-line summary.")

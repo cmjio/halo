@@ -22,6 +22,7 @@ pipeline Explain(topic: String) -> Result:
 
 ```bash
 curl -fsSL https://halolang.com/install.sh | sh     # macOS, Linux
+# or: brew install cmjio/halo/halolang
 # Windows (PowerShell): irm https://halolang.com/install.ps1 | iex
 
 halo init my-project && cd my-project
@@ -30,7 +31,7 @@ cp .env.example .env                           # add your API key
 halo run main.halo --arg topic="tide pools"    # for real
 ```
 
-The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it.
+The installer puts a standalone `halo` binary (Bun is built in) in `~/.halo/bin` and checks it against the release's checksums; `halo upgrade` updates it (with Homebrew, `brew upgrade halolang`). After an upgrade, `halo migrate` in a project shows what the new version changes for it, and `halo migrate --write` applies what it can. For prereleases or nightly builds of `main`, install with `HALO_VERSION=next` or `HALO_VERSION=nightly` (or `@halolang/halo@next`, `ghcr.io/cmjio/halo:nightly`).
 
 From 0.5.0 it also fits whatever you already run:
 
@@ -65,11 +66,16 @@ ANTHROPIC_API_KEY=... halo debug examples/engineering/github-triage.halo --arg r
 
 ### Start from a blueprint
 
-A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it.
+A blueprint is a complete app you can deploy: pipelines, `halo.json`, sample data, offline tests, a `Dockerfile` and `fly.toml`. [`support-inbox`](blueprints/support-inbox) answers customer email: a webhook receives each email, Halo drafts a reply from your help articles, and a person approves or edits it before Resend sends it. [`fix-issue`](blueprints/fix-issue) fixes GitHub issues: a coding agent works on a copy of your repository in a sandbox and runs the tests there, and the change becomes a pull request only after a person approves the diff.
 
 ```bash
 halo init my-inbox --template support-inbox && cd my-inbox
 halo test pipelines/support.halo -p HandleEmail --body samples/email.json --mocks samples/mocks.json
+```
+
+```bash
+halo init my-fixer --template fix-issue && cd my-fixer
+halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks.json
 ```
 
 ## The language
@@ -97,8 +103,9 @@ Directives: `@retry(3, 2s)`, `@timeout(5m)`, `@checkpoint` (snapshot every step,
 
 ### Built in: tools, agents, and skills
 
-- **Tools** that need no account: `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a cloud sandbox from E2B or Daytona that lasts one run), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
-- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` gives an agent its own cloud sandbox for the run, to run what it writes.
+- **Tools** that need no account: `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `Clock` (dates and timezones), `Calc` (exact arithmetic), `Data` (filter, group, aggregate, join, diff, CSV), and `Git` (read a repo; commit with `write: true`). Plus `WebSearch` (Brave, Tavily, Serper or Exa), `Remote` (a server over SSH, or a sandbox that lasts one run: E2B, Daytona, or a local Docker container that forks, rewinds, and reaches only the hosts you allow), `Browser`, `Chrome`, `REST`, `MCP` and service clients. `halo tools` lists them all.
+- **Files**: `pipeline Assess(photo: Image) -> Result: photo |> Inspector.assess()` sends the model the picture itself. `Image`, `Document` (PDF, Word, PowerPoint, email, CSV, text), `Audio` and `Video` (or a YouTube link) are types. A model gets a file as itself when it can take it, and otherwise as what it can read: a document's text, a recording's transcript, a video's transcript and frames. Files come from paths, URLs, uploads, email attachments, text messages (Twilio) and tools, and go to tools as uploads too. See [Files](docs/guide/files.md).
+- **Agent presets**: `agent R [anthropic/claude-sonnet-4-5, preset: CodeReviewer]` gives an agent a ready-made prompt, settings and skills. Thirteen ship: `Summarizer`, `Classifier`, `Extractor`, `Judge`, `Researcher`, `Writer`, `Editor`, `Planner`, `Coder`, `CodeReviewer`, `Translator`, `Triager`, `Evolver` (`halo agents`). The JSON ones say their fields, so gates can read `context.data.verdict.pass`. `sandbox: "e2b"` (or `"docker"`, a container on this machine) gives an agent its own sandbox for the run, to run what it writes.
 - **Skills**: instructions for one kind of task, in the Agent Skills `SKILL.md` format. `skills: "release-notes"` loads one into an agent's prompt; `tool Kit : Skills("./skills")` lets an agent pick and load its own. Seven ship (`code-review`, `write-tests`, `web-research`, `data-extraction`, `release-notes`, `incident-postmortem`, `bug-triage`); yours in `./skills` come first (`halo skills`).
 
 See [`examples/patterns/builtin-kit.halo`](examples/patterns/builtin-kit.halo), [Agent Presets](docs/stdlib/agent-presets.md), [Skills](docs/stdlib/skills.md), [Utility Tools](docs/stdlib/utility-tools.md) and [Remote Computers](docs/stdlib/remote.md).
@@ -112,7 +119,7 @@ See [`examples/patterns/builtin-kit.halo`](examples/patterns/builtin-kit.halo), 
 - An agent's prompt is built from the method name (as the task), its string arguments, the input, any `tool:` result, its named arguments, and context from what it `equips`: the closest entries of an equipped `VectorStore` and the recent conversation in an equipped `File` store. JSON answers are parsed, so gates can read `context.data.review.approved`.
 - A pipeline whose return type is a declared `schema` must produce matching output, or the run fails with a `SchemaValidationError`.
 - `|! yield` and `~> listen` ask your handler. With no handler, the run **pauses** (status `paused`) and `runtime.signal(runId, ...)` or `halo resume` continues it later.
-- `context.meta` records cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain over every stage.
+- `context.meta` records cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain over every stage and what its tool calls did.
 - In a `@thread(user_id)` pipeline, `context.thread` is state kept between runs for that user. `Thread.set`, `Thread.append` and `Thread.clear` change it, and the changes are saved when the run ends. See [Thread State](docs/guide/thread-state.md).
 
 ## CLI
@@ -124,7 +131,7 @@ halo test <file.halo> ...             # offline: --mock --auto-approve (--mocks 
 halo resume <file.halo> <runId> --payload approve   # continue a paused run
 halo validate <file.halo|dir ...> [--strict]
 halo parse <file.halo>                # the AST as JSON
-halo init [name] [--template support-inbox]   # a new project, or a deployable blueprint
+halo init [name] [--template support-inbox|fix-issue]   # a new project, or a deployable blueprint
 halo serve [files|dirs] [--port 8080] # run pipelines as a service (below)
 halo plan <file.halo>                 # what a run could do: model calls, worst-case cost, tool effects, approvals
 halo replay <file.halo> <runId>       # rerun a recorded run with the answers it got (--live-models, --live-changed, --live-tools)
@@ -151,7 +158,7 @@ In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a 
 
 `halo serve` turns a folder of pipelines into a service, in one Bun process:
 
-- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), cron schedules, and watches (a URL, file, or command's output changed)
+- **Triggers**: an HTTP API (`POST /api/pipelines/<name>/runs`), webhooks (`POST /hooks/<path>`, with a shared secret or GitHub signatures), cron schedules (in any time zone, safe across restarts and clock changes, with catch-up after downtime), and watches (a URL, file, or command's output changed)
 - **Approvals**: when a run pauses at `|! yield` or for a tool call, it gets a signed approve/reject link, logged and optionally posted to Slack, with Approve/Reject buttons when you give it your Slack app's signing secret. Paused runs survive restarts
 - **MCP** at `/mcp`: every pipeline as a tool for Claude, Cursor, and other MCP clients, behind the API token
 - **Halo Studio** at `/`: start runs, watch them, and approve paused ones
@@ -159,6 +166,7 @@ In a terminal, the CLI asks you at `|! yield` and `~> listen`. Elsewhere (CI, a 
 ```json
 // halo.json (optional)
 {
+  "timezone": "America/New_York",
   "schedules": [{ "pipeline": "TriageIssues", "cron": "0 9 * * 1-5", "args": { "repo": "acme/api", "limit": 10 } }],
   "webhooks": [{ "path": "github", "pipeline": "TriageIssues", "secret": "Env.GITHUB_WEBHOOK_SECRET" }],
   "notify": { "slack": "Env.SLACK_WEBHOOK_URL" },
@@ -236,7 +244,7 @@ Tokens can be `Env.NAME` or the string `"Env.NAME"`. An agent calls an equipped 
 
 Checked on every prompt (input) and answer (output) of agents that `requires` them:
 
-- `Block(...)`: Profanity, DestructiveOps, PromptInjection, PII, SSN, CreditCard (Luhn-checked), Email, Phone, APIKey, Markdown
+- `Block(...)`: Profanity, DestructiveOps, PromptInjection, PII, SSN, CreditCard (Luhn-checked), Email, Phone, APIKey, IPAddress, Markdown
 - `Redact(...)`: PII, SSN, CreditCard, Email, Phone, APIKey, IPAddress
 - `MaxWords(n)`, `MaxChars(n)`, `MaxTokens(n)`, `MaxSpend(usd)` (per run)
 - `Require(JSON | XML | Citation)` (`Enforce(JSON)` also works), `MatchRegex("...")`
@@ -281,6 +289,7 @@ grammars/Halo.g4        the grammar (source of truth); `bun run generate` rebuil
 src/parser/             generated parser, AST walker, validator
 src/runtime/            runtime, adapters, router, policies, schemas, tools, telemetry
 src/cli.ts, src/lsp/    CLI and language server
+src/migrate/            what each release changed for existing projects (`halo migrate`)
 editors/, studio/, docs/, examples/, test/
 ```
 
@@ -289,6 +298,10 @@ bun test              # parser, validator, runtime, adapters over HTTP, tools, C
 bunx tsc --noEmit
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+[MIT](LICENSE)

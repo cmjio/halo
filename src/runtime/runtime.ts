@@ -43,13 +43,15 @@ import { render } from "../parser/index.js";
 import { stageLabel } from "../parser/labels.js";
 export { stageLabel };
 import { producedKeys } from "../parser/validate.js";
-import { AdapterRegistry, type LLMMessage, type LLMRequest, type LLMToolCall, type LLMToolSpec, type ProviderAdapter } from "./adapter.js";
+import { displayText, isQualified } from "../linker/names.js";
+import { AdapterRegistry, type LLMMedia, type LLMMessage, type LLMRequest, type LLMToolCall, type LLMToolSpec, type ProviderAdapter } from "./adapter.js";
+import { adoptMedia, collectMedia, dataUriBytes, fetchMedia, filesFromLabels, isMediaRef, youtubeRef, MEDIA_TYPES, MediaBytes, MediaError, megabytes, mediaLabel, mediaTokens, MemoryBlobStore, mint, type BlobStore, type MediaKind, type MediaRef } from "./media.js";
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
 import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
 import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
-import { closeRemoteSessions } from "./providers/remote.js";
+import { closeRemoteSessions, endRemoteBranches, seedRemoteSessions, snapshotRemoteSessions, suspendRemoteSessions } from "./providers/remote.js";
 import { closeKvDatabases, closeSqliteDatabases } from "./providers/index.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "../parser/sql.js";
 import { LocalVectorStore } from "./vectors.js";
@@ -60,11 +62,16 @@ import { skillSources } from "./providers/skills.js";
 import { appendStep, readSteps, stateAt, stepsPathFor } from "./history.js";
 import { applyOps, threadKey, ThreadStore, type ThreadContext, type ThreadOp } from "./threads.js";
 import { deleteLog, logPathFor, readSnapshot, writeSnapshot } from "./snapshots.js";
+import { constrain, shownParams, ToolRuleViolation } from "./tool-rules.js";
 import { BUILTIN_PROVIDERS, declArgs, type ProviderInfo, type ToolMethod, type ToolProvider, type ToolServices } from "./tools.js";
+import { HOSTED_PROVIDER, HOSTED_PROVIDER_INFO, hostedProvider } from "./hosted.js";
+import { MEDIA_INFO, MEDIA_PROVIDER, MEDIA_TOOL, mediaProvider, type Transcriber } from "./providers/media-files.js";
+import { clock, isService, TRANSCRIBE_KEYS, TRANSCRIBE_SERVICES, transcriptionCost, transcriptText } from "./providers/transcribe.js";
+import { aKind, kinds } from "./media-ref.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
-import { asNumber, asText, formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
+import { asNumber, asText, compactJson, formatValue, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
 
 export * from "./errors.js";
 export type { Violation } from "./policies.js";
@@ -127,6 +134,8 @@ export interface MockRequest {
   tools?: string[];
   messages?: LLMMessage[];
   step?: number;
+  /** The images and documents sent with the prompt (in a tool conversation, each is on its message). */
+  media?: MediaRef[];
   /**
    * For an agent: the model asked for, and a hash of the whole request (model, prompt or conversation, settings).
    * For a tool: a hash of the call (target and arguments). Two calls with the same fingerprint asked the same thing.
@@ -188,6 +197,15 @@ export interface ShadowRecord {
 
 export interface RunMeta {
   runId: string;
+  /**
+   * What makes this run's tool calls safe to repeat: the key the run was started with, else its
+   * run id. Each call's own key is derived from it (see `ToolCall.idempotencyKey`).
+   */
+  idempotencyKey?: string;
+  /** A rehearsal: models and tools answered from mocks, so nothing was sent anywhere. */
+  dryRun?: boolean;
+  /** The images and documents this run was given or made: the only ones it may send to a model or a tool. */
+  media?: MediaRef[];
   pipeline: string;
   startedAt: string;
   finishedAt?: string;
@@ -197,6 +215,8 @@ export interface RunMeta {
   calls: CallRecord[];
   violations: Violation[];
   shadows: ShadowRecord[];
+  /** Each time `@cascade` moved a call up to a bigger model. */
+  escalations?: EscalationRecord[];
   halted?: { stage: number; condition: string };
   /** Set while the run waits at `|! yield` (`waitingFor: "yield"`) or `~> listen(T)` (`waitingFor: T`). */
   /** `id` is new for every pause, so an approval for one pause can't answer a later one. */
@@ -206,6 +226,8 @@ export interface RunMeta {
   checkpoint?: string;
   /** For a run started from an earlier step of another (`rewind`): that run and step. */
   rewoundFrom?: { runId: string; step: number };
+  /** How many times the run was picked up again after the process running it died. */
+  resumes?: number;
 }
 
 export interface TraceEntry {
@@ -215,6 +237,8 @@ export interface TraceEntry {
   at: string;
   /** SHA-256 of the stage's output value. */
   outputHash: string;
+  /** SHA-256 over what the stage's tool calls did (each call's target, arguments and result), when it made any. */
+  effectsHash?: string;
   /** SHA-256 over (prev, index, stage, label, at, outputHash). */
   hash: string;
   prev: string;
@@ -247,6 +271,8 @@ export interface RunSnapshot {
   sessions?: Record<number, AgentSession>;
   /** A `@thread` run's thread: what it loaded and the changes it hasn't saved yet. */
   thread?: ThreadContext;
+  /** Snapshots of the run's Docker sandboxes (tool → image), so rewind and resume start from the same files. */
+  sandboxes?: Record<string, string>;
 }
 
 /** Where an agent's tool conversation stopped to wait for approval: its turns so far and the calls still to run (the first is the one waiting). */
@@ -254,6 +280,17 @@ export interface AgentSession {
   messages: LLMMessage[];
   pending: LLMToolCall[];
   step: number;
+  /** Under `@cascade`, which model of the cascade was answering (0 is the agent's own). */
+  tier?: number;
+}
+
+/** `@cascade` moved an agent call up to the next model. */
+export interface EscalationRecord {
+  target: string;
+  from: string;
+  to: string;
+  /** What the lower model's call ran into: an error, a policy rejection, or a schema miss. */
+  error: string;
 }
 
 /** Where paused runs are kept until `signal()` resumes them. */
@@ -353,8 +390,8 @@ export class FileRunStore implements RunStore {
 export type RuntimeEvent =
   | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number }
   | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
-  | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean }
-  | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean }
+  | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; media?: MediaRef[]; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean }
+  | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean; sent?: MediaRef[] }
   /** A tool call an agent chose, and what happened to it: run, approved and run, declined by a person, refused by a policy, or failed. */
   | { type: "agent_tool"; pipeline: string; runId: string; agent: string; target: string; args: unknown; decision: "allowed" | "approved" | "declined" | "refused" | "error"; detail?: string }
   | { type: "retry"; runId: string; target: string; attempt: number; error: string; delayMs: number }
@@ -366,6 +403,8 @@ export type RuntimeEvent =
   | { type: "loop"; runId: string; pipeline: string; index: number; to: number; iteration: number; condition: string }
   /** An output policy rejected an agent's answer and `@correct` asked it to try again. */
   | { type: "correction"; runId: string; pipeline: string; target: string; attempt: number; error: string }
+  /** `@cascade`: the call failed or its answer was rejected on `from`, so it is asked again on `to`. */
+  | { type: "escalate"; runId: string; pipeline: string; target: string; from: string; to: string; error: string }
   /** Text from a model, in order (the whole answer as one chunk unless the adapter streams). */
   | { type: "token"; runId: string; pipeline: string; target: string; text: string }
   | { type: "paused"; pipeline: string; runId: string; index: number; waitingFor: string }
@@ -391,6 +430,20 @@ export interface RuntimeConfig {
   checkpointDir?: string;
   /** Where paused runs wait for `signal()`. Defaults to an in-memory store. */
   runStore?: RunStore;
+  /** Where the bytes of images and documents are kept, by hash. Defaults to an in-memory store. */
+  blobs?: BlobStore;
+  /**
+   * How the runtime turns files into what a model can read (halo.json "media"). `transcribe`:
+   * the service that transcribes audio sent to a model that can't take audio ("openai" or
+   * "gemini"; default whichever has a key), with `transcribeModel`, and `baseUrl` for a proxy.
+   */
+  media?: { transcribe?: string; transcribeModel?: string; baseUrl?: string };
+  /**
+   * Where each running run's state is kept after every stage, until the run ends or pauses.
+   * A run found there later was cut short (the process died); `continueRun` picks it up at
+   * the stage it was on. Unset, nothing is kept.
+   */
+  progressStore?: RunStore;
   onInterrupt?: InterruptHandler;
   onListen?: ListenHandler;
   /** Receives System.Publish / Distribute / ResolveIncident / TriggerWebhook / Notify. */
@@ -431,6 +484,10 @@ interface ExecutionContext {
   deadline?: number;
   /** A `@thread` run's thread (shared by the pipelines it calls). */
   thread?: ThreadContext;
+  /** Inside a fan-out: which branch ("3.0", "3.0/5.2"…), so each can fork its own sandbox. */
+  branch?: string;
+  /** Hashes of what the current stage's tool calls did, for its trace entry. */
+  effects?: string[];
 }
 
 /** Thrown inside a run to pause it at a yield/listen with no handler. */
@@ -442,7 +499,15 @@ interface LLMOptions {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  /** Images and documents sent with the prompt. */
+  media?: MediaRef[];
 }
+
+/** What an `Image` or `Document` argument may be, beyond its bytes or a `data:` URI (see `HaloRuntime.run`). */
+export type MediaTrust = "urls" | "trusted" | "files";
+
+/** What a call's images and documents add to its prompt, in tokens (a high estimate). */
+const mediaAllowance = (media: MediaRef[] | undefined) => (media ?? []).reduce((sum, m) => sum + mediaTokens(m), 0);
 
 /** One request in an agent's tool conversation. */
 interface Turn {
@@ -508,8 +573,17 @@ function sha256(...parts: string[]): string {
 /** A hash of everything a model request asks: the model, the prompt (or the conversation so far and the tools offered), and its settings. */
 function requestFingerprint(model: string, prompt: string, system: string | undefined, options: LLMOptions, turn?: Turn): string {
   // Tool call ids and the adapter's raw turns differ between a run and its replay, so they don't count.
-  const messages = turn?.messages.map((m) => (m.role === "assistant" ? { role: m.role, content: m.content, calls: m.toolCalls?.map((c) => [c.name, c.args]) } : m.role === "tool" ? { role: m.role, name: m.name, content: m.content } : m));
-  const asked = turn ? { messages, tools: turn.targets, toolChoice: turn.toolChoice } : { system, prompt };
+  const messages = turn?.messages.map((m) =>
+    m.role === "assistant"
+      ? { role: m.role, content: m.content, calls: m.toolCalls?.map((c) => [c.name, c.args]) }
+      : m.role === "tool"
+        ? { role: m.role, name: m.name, content: m.content, ...(m.media?.length ? { media: m.media.map((x) => x.sha256) } : {}) }
+        : m.role === "user" && m.media?.length
+          ? { role: m.role, content: m.content, media: m.media.map((x) => x.sha256) }
+          : m,
+  );
+  // A call with no media hashes exactly as it did before media existed, so old recordings still match.
+  const asked = turn ? { messages, tools: turn.targets, toolChoice: turn.toolChoice } : { system, prompt, ...(options.media?.length ? { media: options.media.map((m) => m.sha256) } : {}) };
   return sha256(safeJson({ model, ...asked, temperature: options.temperature, maxTokens: options.maxTokens, topP: options.topP }));
 }
 
@@ -607,7 +681,7 @@ function findDirective(list: Directive[] | undefined, name: string): Directive |
 export function verifyTrace(trace: TraceEntry[]): boolean {
   let prev = GENESIS;
   for (const t of trace) {
-    if (t.prev !== prev || t.hash !== sha256(t.prev, String(t.index), t.stage, t.label, t.at, t.outputHash)) return false;
+    if (t.prev !== prev || t.hash !== sha256(t.prev, String(t.index), t.stage, t.label, t.at, t.outputHash, ...(t.effectsHash ? [t.effectsHash] : []))) return false;
     prev = t.hash;
   }
   return true;
@@ -627,6 +701,8 @@ export class HaloRuntime {
   private guard = new PolicyEngine(this.policies);
   private shadowMinds = new Map<string, Agent[]>();
   private shadowModels = new Map<string, string[]>();
+  /** Qualified internal names (from the linker) → the names people see. */
+  private names: Record<string, string> = {};
 
   private config: RuntimeConfig;
   private mocks: Record<string, MockValue> | null = null;
@@ -643,17 +719,20 @@ export class HaloRuntime {
   private pipelineCalls = new WeakMap<RunMeta, number>();
   /** Model calls in flight per run, and calls waiting under MaxSpend for one of them to settle. */
   private inflight = new WeakMap<RunMeta, { calls: number; waiting: Array<() => void> }>();
-  private providers = new Map<string, ToolProvider>(Object.entries(BUILTIN_PROVIDERS));
-  private providerInfo = new Map<string, ProviderInfo>(Object.entries(BUILTIN_PROVIDER_INFO));
+  // Packages' hosted pipelines (the linker's stubs) call the publisher's server through halo#hosted.
+  private providers = new Map<string, ToolProvider>([...Object.entries(BUILTIN_PROVIDERS), [HOSTED_PROVIDER, hostedProvider], [MEDIA_PROVIDER, mediaProvider(() => this.transcriber())]]);
+  private providerInfo = new Map<string, ProviderInfo>([...Object.entries(BUILTIN_PROVIDER_INFO), [HOSTED_PROVIDER, HOSTED_PROVIDER_INFO], [MEDIA_PROVIDER, MEDIA_INFO]]);
   private systems = new Map<string, SystemHandler>();
   private vectorStore?: LocalVectorStore;
   private threadStore?: ThreadStore;
   private sqlPool = new Map<string, InstanceType<typeof Bun.SQL>>();
   private runStore: RunStore;
+  private blobs: BlobStore;
 
   constructor(config: RuntimeConfig = {}) {
     this.config = config;
     this.runStore = config.runStore ?? new MemoryRunStore();
+    this.blobs = config.blobs ?? new MemoryBlobStore();
     this.router = new LLMRouter(config.router);
     this.routerEnabled = config.router !== undefined;
   }
@@ -675,6 +754,7 @@ export class HaloRuntime {
   /** Load a parsed program into the runtime. */
   load(ast: ParseResult): this {
     if (ast.errors.length > 0) throw new HaloError(`Cannot load a program with parse errors:\n  ${ast.errors.join("\n  ")}`);
+    if (ast.names && Object.keys(ast.names).length) this.names = { ...this.names, ...ast.names };
     for (const s of ast.pipelines) {
       for (const stage of s.pipeline) {
         const unsafe = producedKeys(stage).find((k) => !isSafeKey(k));
@@ -693,7 +773,7 @@ export class HaloRuntime {
         throw new HaloError((err as Error).message, { code: "UNKNOWN_PRESET" });
       }
       try {
-        const sandboxed = withSandbox(agent, declared);
+        const sandboxed = withSandbox(agent, declared, this.policies);
         agent = sandboxed.agent;
         if (sandboxed.tool) this.tools.set(sandboxed.tool.name, sandboxed.tool);
       } catch (err) {
@@ -742,7 +822,8 @@ export class HaloRuntime {
 
   /** Names of every registered tool provider. */
   toolProviderNames(): string[] {
-    return [...this.providers.keys()];
+    // halo#hosted is internal: only the linker's hosted-pipeline stubs use it.
+    return [...this.providers.keys()].filter((n) => n !== HOSTED_PROVIDER);
   }
 
   /** Register a `System.<name>(...)` method. A non-undefined return value replaces the pipeline value. */
@@ -813,17 +894,219 @@ export class HaloRuntime {
   }
 
   /** Execute a named pipeline and return its output, status, and full context. */
-  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string } = {}): Promise<RunResult> {
+  /**
+   * `media` says what an `Image` or `Document` argument may be beyond its bytes, a Blob, or a
+   * `data:` URI: "urls" also fetches an https URL (from a public address only); "trusted" also
+   * accepts references a run made before (a replay of recorded arguments); "files" allows all
+   * of that and a path on this machine (the CLI: the person's own machine).
+   */
+  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string; idempotencyKey?: string; dryRun?: boolean; media?: MediaTrust } = {}): Promise<RunResult> {
     const pipeline = this.pipelines.get(pipelineName);
     if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
     const ctx = this.newContext(pipeline, args, 0, options.signal);
     if (options.runId) ctx.meta.runId = options.runId;
+    if (options.idempotencyKey) ctx.meta.idempotencyKey = options.idempotencyKey;
+    if (options.dryRun) ctx.meta.dryRun = true;
+    await this.adoptArgs(ctx, options.media);
     return this.runTop(ctx, 0);
   }
 
-  /** The pipelines this runtime has loaded. */
+  /** Store bytes as a media value of this run. */
+  private async mintFor(ctx: ExecutionContext, bytes: Uint8Array, info: { name?: string; want?: MediaKind } = {}): Promise<MediaRef> {
+    const ref = await mint(this.blobs, bytes, info);
+    this.admit(ctx, ref);
+    return ref;
+  }
+
+  private admit(ctx: ExecutionContext, ref: MediaRef) {
+    const known = (this.topMeta(ctx).media ??= []);
+    if (!known.some((m) => m.sha256 === ref.sha256)) known.push(ref);
+  }
+
+  /** Whether this run was given or made the file with this hash. */
+  private holds(ctx: ExecutionContext, sha256: string): boolean {
+    return !!this.topMeta(ctx).media?.some((m) => m.sha256 === sha256);
+  }
+
+  /** The kind of media a declared type holds (`Image`, `Array<Document>`), unless the program has its own schema of that name. */
+  private mediaKindOf(type: string): MediaKind | undefined {
+    const base = /^(?:Array|List)<\s*(\w+)\s*>$/.exec(type)?.[1] ?? type;
+    return this.schemas.has(base) ? undefined : MEDIA_TYPES[base];
+  }
+
+  /** Turn the arguments given for `Image` and `Document` parameters into media values. */
+  private async adoptArgs(ctx: ExecutionContext, trust?: MediaTrust): Promise<void> {
+    for (const p of ctx.pipeline.params) {
+      const kind = this.mediaKindOf(p.type);
+      if (!kind || !Object.hasOwn(ctx.input, p.name)) continue;
+      const given = ctx.input[p.name];
+      const what = `${this.displayName(ctx.pipeline.name)}: "${p.name}"`;
+      const many = /^(?:Array|List)</.test(p.type);
+      if (many && given !== undefined && given !== null && !Array.isArray(given)) throw new MediaError(`${what} takes a list of ${kind}s`, "MEDIA_INPUT");
+      const adopted = Array.isArray(given) && many ? await Promise.all(given.map((v) => this.adoptValue(v, kind, what, ctx, trust))) : await this.adoptValue(given, kind, what, ctx, trust);
+      if (ctx.current === given) ctx.current = adopted;
+      ctx.input[p.name] = adopted;
+      ctx.data[p.name] = adopted;
+    }
+    if (trust === "trusted" || trust === "files") for (const ref of collectMedia(ctx.input)) this.admit(ctx, ref);
+    // Files the host handed over as bytes (an email's attachments, say) become media values wherever they are.
+    for (const [k, v] of Object.entries(ctx.input)) {
+      const adopted = await adoptMedia(v, (bytes, name) => this.mintFor(ctx, bytes, { name }), { shapes: false });
+      if (adopted === v) continue;
+      if (ctx.current === v) ctx.current = adopted;
+      ctx.input[k] = adopted;
+      ctx.data[k] = adopted;
+    }
+  }
+
+  private async adoptValue(v: unknown, kind: MediaKind, what: string, ctx: ExecutionContext, trust?: MediaTrust): Promise<unknown> {
+    if (v === undefined || v === null) return v;
+    const a = aKind(kind);
+    if (v instanceof MediaBytes) return this.mintFor(ctx, v.bytes, { name: v.name, want: kind });
+    if (v instanceof Uint8Array || v instanceof ArrayBuffer) return this.mintFor(ctx, v instanceof Uint8Array ? v : new Uint8Array(v), { want: kind });
+    if (v instanceof Blob) return this.mintFor(ctx, new Uint8Array(await v.arrayBuffer()), { name: (v as Blob & { name?: string }).name, want: kind });
+    if (isMediaRef(v)) {
+      if (trust !== "trusted" && trust !== "files" && !this.holds(ctx, v.sha256)) throw new MediaError(`${what} was given a reference to a file, not the file. Send ${a} itself (its bytes, or a data: URI)`, "MEDIA_INPUT");
+      if (v.$media !== kind) throw new MediaError(`${what} takes ${a}, and was given ${mediaLabel(v)}`, "MEDIA_TYPE");
+      return v;
+    }
+    if (typeof v === "string") {
+      // A YouTube link is a video Gemini can watch from where it is: held as the link, not as bytes.
+      const youtube = kind === "video" ? youtubeRef(v) : undefined;
+      if (youtube) {
+        this.admit(ctx, youtube);
+        return youtube;
+      }
+      const inline = dataUriBytes(v);
+      if (inline) return this.mintFor(ctx, inline, { want: kind });
+      if ((trust === "urls" || trust === "files") && /^https?:\/\//i.test(v)) {
+        const got = await fetchMedia(v, { fetch: this.fetch, signal: ctx.signal });
+        return this.mintFor(ctx, got.bytes, { name: got.name, want: kind });
+      }
+      if (trust === "files") {
+        const file = Bun.file(v);
+        if (!(await file.exists())) throw new MediaError(`${what}: no file at ${v.slice(0, 200)}`, "MEDIA_INPUT");
+        if (file.size > 64 * 1024 * 1024) throw new MediaError(`${what}: ${v.slice(0, 200)} is ${megabytes(file.size)}, too large to send to a model`, "MEDIA_TOO_LARGE");
+        return this.mintFor(ctx, new Uint8Array(await file.arrayBuffer()), { name: v, want: kind });
+      }
+    }
+    throw new MediaError(`${what} takes ${a}: its bytes, or a data: URI${trust === "urls" || trust === "files" ? ", or an https URL" : ""}${trust === "files" ? ", or a path to a file" : ""}`, "MEDIA_INPUT");
+  }
+
+  /**
+   * The files a model call carries, and the documents it reads as text instead: each one a
+   * model can't take as a file is turned into its text by a recorded `Media.text` step (once per
+   * file per run). A deck's PDF (when LibreOffice made one) and an email's attachments go as files.
+   */
+  private async filesForPrompt(agent: Agent, target: string, ctx: ExecutionContext, ...values: unknown[]): Promise<{ media: MediaRef[]; documents: Array<{ source: string; label: string; text: string }> }> {
+    const media: MediaRef[] = [];
+    const documents: Array<{ source: string; label: string; text: string }> = [];
+    // A deck's PDF is sent only where every model the call may use reads PDFs, and the agent's policies allow it.
+    const takesPdf = this.cascadeTiers(agent).every((m) => this.adapterRegistry.findAdapter(m)?.input?.["application/pdf"] !== undefined);
+    const add = (m: MediaRef) => media.some((x) => x.sha256 === m.sha256) || media.push(m);
+    // Whether every model the call may use takes this file as it is.
+    const direct = (m: MediaRef) =>
+      this.cascadeTiers(agent).every((model) => {
+        const limit = this.adapterRegistry.findAdapter(model)?.input?.[m.type];
+        return limit !== undefined && m.size <= limit;
+      });
+    for (const m of this.mediaFor(ctx, target, ...values)) {
+      if (m.$media === "audio") {
+        if (direct(m)) {
+          add(m);
+          continue;
+        }
+        // A model that can't take audio gets its transcript: a recorded step, priced first against the agent's budget.
+        const cache = (this.documentTexts.get(this.topMeta(ctx)) ?? this.documentTexts.set(this.topMeta(ctx), new Map()).get(this.topMeta(ctx))!);
+        let heard = cache.get(m.sha256);
+        if (!heard) {
+          const t = this.transcriber();
+          const limit = this.guard.spendLimit(agent);
+          if (!("missing" in t) && limit !== undefined && this.spent(ctx) + transcriptionCost(m, t.model ?? "") > limit) this.guard.refuseOverBudget(agent, this.guardHooks(ctx));
+          cache.set(m.sha256, (heard = (await this.toolCall(MEDIA_TOOL, "transcript", [m], {}, ctx, false)) as { text?: unknown }));
+        }
+        documents.push({ source: mediaLabel(m), label: "The transcript", text: transcriptText(heard as { text?: unknown; segments?: unknown }) });
+        continue;
+      }
+      if (m.$media === "video") {
+        if (direct(m)) {
+          add(m);
+          continue;
+        }
+        if (m.url) throw new MediaError(`${target}: ${mediaLabel(m)} is a YouTube link, and only Gemini models watch those (Halo doesn't download YouTube videos). Give the agent a Gemini model`, "MEDIA_UNSUPPORTED");
+        // A model that can't watch video gets its transcript and a frame every few seconds: a recorded step.
+        const cache = (this.documentTexts.get(this.topMeta(ctx)) ?? this.documentTexts.set(this.topMeta(ctx), new Map()).get(this.topMeta(ctx))!);
+        let seen = cache.get(m.sha256) as { duration?: number; transcript?: { text?: unknown; segments?: unknown }; noTranscript?: string; frames?: Array<{ at: number; image: unknown }> } | undefined;
+        if (!seen) {
+          const t = this.transcriber();
+          const limit = this.guard.spendLimit(agent);
+          if (!("missing" in t) && limit !== undefined && this.spent(ctx) + transcriptionCost(m, t.model ?? "") > limit) this.guard.refuseOverBudget(agent, this.guardHooks(ctx));
+          seen = (await this.toolCall(MEDIA_TOOL, "digest", [m], {}, ctx, false)) as typeof seen;
+          cache.set(m.sha256, seen as never);
+        }
+        const frames = (seen?.frames ?? []).filter((f): f is { at: number; image: MediaRef } => isMediaRef(f.image));
+        const refused = frames.length ? this.guard.mediaRefusal(agent, [frames[0]!.image]) : undefined;
+        const lines = [
+          ...(seen?.duration ? [`It is ${clock(seen.duration)} long.`] : []),
+          seen?.transcript ? `What is said:\n${transcriptText(seen.transcript) || "(nothing)"}` : `No transcript: ${seen?.noTranscript ?? "none was made"}.`,
+          refused ? `Its frames were not shown: ${refused.message}` : `Frames:\n${frames.map((f) => `${mediaLabel(f.image)} at ${clock(f.at)}`).join("\n")}`,
+        ];
+        documents.push({ source: mediaLabel(m), label: "What the video shows", text: lines.join("\n\n") });
+        if (!refused) for (const f of frames) add(f.image);
+        continue;
+      }
+      if (m.$media !== "document" || !m.format || m.format === "pdf") {
+        add(m);
+        continue;
+      }
+      const cache = (this.documentTexts.get(this.topMeta(ctx)) ?? this.documentTexts.set(this.topMeta(ctx), new Map()).get(this.topMeta(ctx))!);
+      let read = cache.get(m.sha256);
+      if (!read) cache.set(m.sha256, (read = (await this.toolCall(MEDIA_TOOL, "text", [m], {}, ctx, false)) as { text?: unknown; rendition?: unknown; attachments?: unknown }));
+      documents.push({ source: mediaLabel(m), label: "The text", text: typeof read.text === "string" ? read.text : formatValue(read.text) });
+      if (isMediaRef(read.rendition) && takesPdf && !this.guard.mediaRefusal(agent, [read.rendition])) add(read.rendition);
+      // An email's images and PDFs go with it, unless the agent's policies don't allow them (then its text says so).
+      for (const a of Array.isArray(read.attachments) ? read.attachments.filter(isMediaRef) : []) {
+        if (a.$media === "document" && a.format && a.format !== "pdf") continue; // read as text only when passed on by itself
+        const refused = this.guard.mediaRefusal(agent, [a]);
+        if (refused) documents.at(-1)!.text += `\n${mediaLabel(a)} was not shown: ${refused.message}`;
+        else add(a);
+      }
+    }
+    return { media, documents };
+  }
+
+  /** The service that transcribes audio for a model that can't take it: the one configured, else whichever has a key. */
+  private transcriber(): Transcriber {
+    const asked = this.config.media?.transcribe;
+    if (asked !== undefined && !isService(asked)) return { missing: `media.transcribe is "${asked}"; use ${TRANSCRIBE_SERVICES.join(" or ")}` };
+    const keyOf = (s: "openai" | "gemini") => this.config.apiKeys?.[s === "gemini" ? "google" : s] ?? TRANSCRIBE_KEYS[s].map((k) => this.env[k]).find(Boolean);
+    const service = asked ?? TRANSCRIBE_SERVICES.find((s) => keyOf(s));
+    if (!service) return { missing: `Audio can't be sent to this model, so Halo transcribes it first, and that needs ${TRANSCRIBE_KEYS.openai.join("")} or ${TRANSCRIBE_KEYS.gemini.join(" or ")} (or "media": { "transcribe": ... } in halo.json). Or give the agent a Gemini model, which takes audio` };
+    const apiKey = keyOf(service);
+    if (!apiKey) return { missing: `media.transcribe is ${service}, and ${TRANSCRIBE_KEYS[service].join(" or ")} is not set` };
+    return { service, apiKey, model: this.config.media?.transcribeModel, baseUrl: this.config.media?.baseUrl };
+  }
+
+  /** The text each document a run holds was read as, by hash, so a run reads each once. */
+  private documentTexts = new WeakMap<RunMeta, Map<string, { text?: unknown; rendition?: unknown; attachments?: unknown }>>();
+
+  /** The media among `values` that a model call will carry. One this run never made is refused. */
+  private mediaFor(ctx: ExecutionContext, target: string, ...values: unknown[]): MediaRef[] {
+    const media = collectMedia(...values);
+    for (const m of media) {
+      if (!this.holds(ctx, m.sha256)) throw new MediaError(`${target}: ${mediaLabel(m)} is not a file this run was given or made, so it can't be sent to a model`, "MEDIA_UNKNOWN");
+    }
+    return media;
+  }
+
+  /** The pipelines this runtime has loaded, as entry points: not those a linked program imported (they're callable from these). */
   listPipelines(): PipelineDeclaration[] {
-    return [...this.pipelines.values()];
+    return [...this.pipelines.values()].filter((p) => !isQualified(p.name));
+  }
+
+  /** A name or message with the linker's internal names replaced by the names people see. */
+  displayName(text: string): string {
+    return displayText(this.names, text);
   }
 
   /**
@@ -834,6 +1117,7 @@ export class HaloRuntime {
     const pipeline = this.pipelines.get(pipelineName);
     if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
     const ctx = this.newContext(pipeline, args, 0);
+    await this.adoptArgs(ctx);
     const queue: Array<RuntimeEvent | { type: "done"; result: RunResult } | { type: "error"; error: Error }> = [];
     let wake: (() => void) | undefined;
     const push = (e: (typeof queue)[number]) => {
@@ -874,6 +1158,19 @@ export class HaloRuntime {
   }
 
   /**
+   * Pick up a run that was cut short, from the state `progressStore` last kept for it. The
+   * stage it was on runs again from its start: its tool calls carry the same idempotency
+   * keys as before, so a tool that honours them does nothing twice.
+   */
+  async continueRun(snapshot: RunSnapshot): Promise<RunResult> {
+    if (snapshot.waitingFor !== undefined) throw new HaloError(`Run ${snapshot.meta.runId} is paused, not cut short: answer it with signal()`);
+    if (snapshot.thread && this.threads().savedBy(snapshot.thread.name, snapshot.thread.key, snapshot.meta.runId)) snapshot.thread.saved = snapshot.thread.ops.length;
+    const ctx = this.restore(snapshot);
+    ctx.meta.resumes = (snapshot.meta.resumes ?? 0) + 1;
+    return this.runTop(ctx, snapshot.nextStage);
+  }
+
+  /**
    * Go back to a step of a @checkpoint run and continue from there, as a new run.
    * The new run starts with the state, trace, calls and cost the old one had after
    * that step (and, with @checkpoint, the history up to it). The old run is untouched.
@@ -906,6 +1203,8 @@ export class HaloRuntime {
         violations: [],
         shadows: [],
         rewoundFrom: { runId: cp.meta.runId, step: s.step },
+        // The same key as the run it came from, so a call it already made isn't made a second time.
+        idempotencyKey: cp.meta.idempotencyKey ?? cp.meta.runId,
       },
     };
     if (cp.thread) {
@@ -915,6 +1214,8 @@ export class HaloRuntime {
       snap.thread = { ...cp.thread, ops, state: applyOps(cp.thread.base, ops), saved };
     }
     const ctx = this.restore(snap);
+    // Its sandboxes start from the files they had after that step.
+    seedRemoteSessions(runId, at.sandboxes);
     // The new run's history begins with the steps it shares with the old one.
     const path = this.checkpointPath(ctx);
     if (path) {
@@ -972,7 +1273,7 @@ export class HaloRuntime {
       }
       if (stage?.kind !== "interrupt" && stage?.kind !== "listen") throw new SignalError(`Run ${runId} is not paused at a yield or listen`, "RUN_NOT_FOUND");
       ctx.stageIndex = snap.nextStage;
-      this.config.recorder?.({ kind: stage.kind === "interrupt" ? "yield" : "listen", target: snap.waitingFor, value: payload });
+      this.record({ kind: stage.kind === "interrupt" ? "yield" : "listen", target: snap.waitingFor, value: payload });
       this.deliver(stage, ctx, payload, snap.waitingFor);
       this.appendTrace(ctx, snap.nextStage, stage, stageLabel(stage));
       // The paused stage is done now that it has its response.
@@ -991,6 +1292,7 @@ export class HaloRuntime {
     const ctx = this.newContext(pipeline, snap.input, 0);
     Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback, sessions: snap.sessions, thread: snap.thread });
     ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
+    seedRemoteSessions(ctx.meta.runId, snap.sandboxes);
     return ctx;
   }
 
@@ -1000,7 +1302,12 @@ export class HaloRuntime {
     this.emit({ type: "run", ...base, status: "start" });
     try {
       ctx.thread ??= this.openThread(ctx);
+      // Files an earlier run kept in the thread are this run's to use.
+      if (ctx.thread) for (const ref of collectMedia(ctx.thread.state)) this.admit(ctx, ref);
+      await this.saveProgress(ctx, start);
       const result = await this.runFrom(ctx, start);
+      // Ended, or paused (and so in the run store): there is nothing left to pick up.
+      await this.config.progressStore?.delete(ctx.meta.runId);
       // A run that ended (not one that paused) saves what it changed in its thread.
       if (ctx.thread && result.status !== "paused") result.context.thread = this.saveThread(ctx.thread, ctx.meta.runId);
       // A browser or sandbox the run opened stays open only while the run may still need it.
@@ -1009,6 +1316,13 @@ export class HaloRuntime {
       return result;
     } catch (err) {
       await Promise.all([closeChromeSessions(ctx.meta.runId), closeRemoteSessions(ctx.meta.runId)]);
+      await Promise.resolve(this.config.progressStore?.delete(ctx.meta.runId)).catch(() => {});
+      // Errors name things as people know them, not by the linker's internal names.
+      if (err instanceof Error && err.message.includes("#")) {
+        try {
+          err.message = this.displayName(err.message);
+        } catch {}
+      }
       this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost });
       throw err;
     }
@@ -1135,7 +1449,11 @@ export class HaloRuntime {
       const i = ctx.stageIndex;
       ctx.meta.paused = { stage: i, waitingFor: err.waitingFor, message: err.message, id: crypto.randomUUID() };
       ctx.meta.pauses = (ctx.meta.pauses ?? 0) + 1;
-      await this.runStore.save(ctx.meta.runId, this.toSnapshot(ctx, i, err.waitingFor));
+      const snap = this.toSnapshot(ctx, i, err.waitingFor);
+      // A pause can last days: its Docker sandboxes are saved and stopped, and started again on resume.
+      const sandboxes = await suspendRemoteSessions(ctx.meta.runId);
+      if (Object.keys(sandboxes).length) snap.sandboxes = sandboxes;
+      await this.runStore.save(ctx.meta.runId, snap);
       this.emit({ type: "paused", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, index: i, waitingFor: err.waitingFor });
       return "paused";
     }
@@ -1173,6 +1491,8 @@ export class HaloRuntime {
       const label = stageLabel(stage);
       const t0 = performance.now();
       ctx.stageIndex = i;
+      // One list per stage, made before any branch copies the context, so every branch adds to it.
+      ctx.effects = [];
       this.emit({ type: "stage", pipeline: name, runId: ctx.meta.runId, index: i, kind: stage.kind, label, status: "start" });
 
       switch (stage.kind) {
@@ -1229,7 +1549,11 @@ export class HaloRuntime {
     const prev = ctx.trace.at(-1)?.hash ?? GENESIS;
     const at = new Date().toISOString();
     const outputHash = sha256(safeJson(ctx.current));
-    ctx.trace.push({ index, stage: stage.kind, label, at, outputHash, prev, hash: sha256(prev, String(index), stage.kind, label, at, outputHash) });
+    // What the stage's tool calls did is in the chain too, so a trace vouches for actions, not just answers.
+    const effects = ctx.effects?.length ? sha256(...[...ctx.effects].sort()) : undefined;
+    ctx.effects = [];
+    const hash = sha256(prev, String(index), stage.kind, label, at, outputHash, ...(effects ? [effects] : []));
+    ctx.trace.push({ index, stage: stage.kind, label, at, outputHash, ...(effects ? { effectsHash: effects } : {}), prev, hash });
   }
 
   /** Where a run's @checkpoint goes; undefined when it doesn't keep one. */
@@ -1238,12 +1562,22 @@ export class HaloRuntime {
     return `${this.config.checkpointDir ?? ".halo/checkpoints"}/${ctx.pipeline.name}-${ctx.meta.runId}.json`;
   }
 
+  /** Keep a top-level run's state as it is before `nextStage`, for `continueRun` after a restart. */
+  private async saveProgress(ctx: ExecutionContext, nextStage: number): Promise<void> {
+    if (ctx.depth > 0 || !this.config.progressStore) return;
+    await this.config.progressStore.save(ctx.meta.runId, this.toSnapshot(ctx, nextStage));
+  }
+
   private async writeCheckpoint(ctx: ExecutionContext, nextStage: number): Promise<void> {
+    await this.saveProgress(ctx, nextStage);
     const path = this.checkpointPath(ctx);
     if (!path) return;
     ctx.meta.checkpoint = path;
     // Appends to the checkpoint's log, so checkpointing every stage of a long run stays cheap.
     const snap = this.toSnapshot(ctx, nextStage);
+    // Sandboxes that changed are saved too, so `halo rewind` to this step gets their files back.
+    const sandboxes = await snapshotRemoteSessions(ctx.meta.runId);
+    if (Object.keys(sandboxes).length) snap.sandboxes = sandboxes;
     await writeSnapshot(path, snap);
     // And keeps every step, for halo history.
     await appendStep(path, snap);
@@ -1251,8 +1585,24 @@ export class HaloRuntime {
   }
 
   private emit(event: RuntimeEvent): void {
+    if (Object.keys(this.names).length) event = this.displayEvent(event);
     this.config.onEvent?.(event);
     for (const l of this.listeners) l(event);
+  }
+
+  /** An event with display names in the fields that name things (never in prompts or outputs). */
+  private displayEvent(event: RuntimeEvent): RuntimeEvent {
+    const out: Record<string, unknown> = { ...event };
+    for (const key of ["pipeline", "agent", "tool", "target", "label", "error", "policy", "primary", "shadow"]) {
+      if (typeof out[key] === "string") out[key] = this.displayName(out[key] as string);
+    }
+    if (out.record && typeof out.record === "object") out.record = this.displayEvent(out.record as RuntimeEvent);
+    return out as RuntimeEvent;
+  }
+
+  /** Record an answer from outside, under its display name. */
+  private record(entry: RecordedCall): void {
+    this.config.recorder?.({ ...entry, target: this.displayName(entry.target) });
   }
 
   /**
@@ -1403,7 +1753,8 @@ export class HaloRuntime {
 
   private async callStage(stage: CallStage, ctx: ExecutionContext): Promise<unknown> {
     const value = await this.dispatchCall(stage, ctx);
-    if (stage.callee !== "System" && !this.isThreadCall(stage.callee)) this.store(ctx, stage.callee, stage.method, value);
+    // Stored under the name the pipeline wrote (a linked program's callee may be an internal name).
+    if (stage.callee !== "System" && !this.isThreadCall(stage.callee)) this.store(ctx, stage.alias ?? stage.callee, stage.method, value);
     if (stage.bind) ctx.data[stage.bind] = value;
     return value;
   }
@@ -1456,7 +1807,8 @@ export class HaloRuntime {
   /** The mock installed for the first of `keys` that has one, as given to mockAll. */
   private rawMock(...keys: string[]): MockValue | undefined {
     if (!this.mocks) return undefined;
-    const key = keys.find((k) => Object.hasOwn(this.mocks!, k));
+    // Mocks name things as people see them ("Triager.classify"), or by their internal names.
+    const key = keys.flatMap((k) => [k, this.displayName(k)]).find((k) => Object.hasOwn(this.mocks!, k));
     return key === undefined ? undefined : this.mocks[key];
   }
 
@@ -1507,7 +1859,7 @@ export class HaloRuntime {
   /** The most a call can cost: its prompt plus a full reply. */
   private estimateCall(model: string, prompt: string, system: string | undefined, options: LLMOptions): number {
     const adapter = this.adapterRegistry.findAdapter(model);
-    return adapter?.estimateCost?.(model, estimateTokens(prompt + (system ?? "")), options.maxTokens ?? DEFAULT_MAX_TOKENS) ?? 0;
+    return adapter?.estimateCost?.(model, estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media), options.maxTokens ?? DEFAULT_MAX_TOKENS) ?? 0;
   }
 
   /**
@@ -1547,7 +1899,7 @@ export class HaloRuntime {
     const limit = this.guard.spendLimit(agent);
     const adapter = this.adapterRegistry.findAdapter(model);
     if (limit === undefined || !adapter?.estimateCost) return options;
-    const input = adapter.estimateCost(model, estimateTokens(prompt + (system ?? "")), 0);
+    const input = adapter.estimateCost(model, estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media), 0);
     const perToken = adapter.estimateCost(model, 0, 1_000_000) / 1_000_000;
     const wanted = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     const flight = this.flight(ctx);
@@ -1588,6 +1940,8 @@ export class HaloRuntime {
     const params: Record<string, unknown> = {};
     const callOptions: Record<string, unknown> = {};
     let templated = false;
+    // What the {{placeholders}} in the instructions resolved to: an image named there is sent with the prompt.
+    const placed: unknown[] = [];
     const toolArg = stage.argList.find((a) => a.name === "tool");
     const toolName = toolArg ? (toolArg.value.kind === "ref" ? toolArg.value.path.join(".") : String(this.resolveValue(toolArg.value, ctx))) : undefined;
     const shellArg = shellArgs(toolName === undefined ? undefined : this.tools.get(toolName)?.provider);
@@ -1598,7 +1952,7 @@ export class HaloRuntime {
       } else if (a.name && LLM_OPTION_KEYS.has(a.name)) {
         callOptions[a.name] = this.resolveValue(a.value, ctx);
       } else if (!a.name && a.value.kind === "string") {
-        const t = this.template(a.value.value, ctx);
+        const t = this.template(a.value.value, ctx, (v) => (placed.push(v), formatValue(v)));
         templated ||= t.used;
         instructions.push(t.text);
       } else if (a.name) {
@@ -1617,7 +1971,7 @@ export class HaloRuntime {
       if (!agent.equips?.includes(toolName)) throw new HaloError(`Agent "${agent.name}" is not equipped with tool "${toolName}" (add \`equips ${toolName}\`)`);
       this.checkSql(tool, stage, false);
       toolResult = await this.toolCall(tool, stage.method, inputs, params, ctx, true);
-      this.store(ctx, toolName, stage.method, toolResult);
+      this.store(ctx, this.displayName(toolName), stage.method, toolResult);
     }
 
     const parts: PromptParts = {
@@ -1639,13 +1993,21 @@ export class HaloRuntime {
           { source: "the check", label: `Attempt ${retry.iteration} was sent back because "${retry.condition}" held`, text: formatValue(retry.value) },
         ]
       : [];
-    const prompt = buildPrompt({ ...parts, context: [...feedback, ...memory.context] });
+    // Images and documents among what the prompt was built from go with it; the prompt names each by its label.
+    // A document a model can't take as a file (Word, a deck, an email, CSV, text) goes as its text, in the
+    // prompt, where the agent's Redact and Block rules read it.
+    const { media, documents } = await this.filesForPrompt(agent, target, ctx, parts.current, inputs, params, toolResult, placed, retry?.value);
+    const prompt = buildPrompt({ ...parts, context: [...feedback, ...documents, ...memory.context] });
     if (!prompt.trim()) throw new HaloError(`${target} has an empty prompt (its arguments and the pipeline value are all empty)`);
-    const system = this.withSkills(agent, String(callOptions.system ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined, callOptions, ctx);
-    const options = llmOptions(agent.params, callOptions);
-
     const hooks = this.guardHooks(ctx);
+    // A `system:` given on the call can carry pipeline data ("Reply to {{email}}"), so the input
+    // policies read it like the prompt. The agent's own `system` is the author's text and is sent as written.
+    const callSystem = callOptions.system === undefined ? undefined : this.guard.checkInput(agent, String(callOptions.system), hooks);
+    const system = this.withSkills(agent, String(callSystem ?? agent.system ?? agent.params.system ?? agent.params.role ?? "") || undefined, callOptions, ctx);
+    const options: LLMOptions = { ...llmOptions(agent.params, callOptions), ...(media.length ? { media } : {}) };
+
     this.guard.checkBudget(agent, hooks);
+    this.guard.checkMedia(agent, media, hooks);
     const user = this.guard.checkInput(agent, prompt, hooks);
 
     // An agent with tools holds a conversation: it calls tools until it answers. A run paused
@@ -1654,33 +2016,84 @@ export class HaloRuntime {
     const session = ctx.sessions?.[ctx.stageIndex];
     if (session) delete ctx.sessions![ctx.stageIndex];
     const kit = toolNames.length ? await this.toolKit(agent, toolNames, ctx) : undefined;
-    const conversation: LLMMessage[] | undefined = kit ? (session?.messages ?? [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user", content: user }]) : undefined;
-    const steps = { done: session?.step ?? 0, pending: session?.pending };
+    const opening = (): LLMMessage[] => [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user", content: user, ...(media.length ? { media } : {}) }];
+    let conversation: LLMMessage[] | undefined = kit ? (session?.messages ?? opening()) : undefined;
+    let steps: { done: number; pending?: LLMToolCall[] } = { done: session?.step ?? 0, pending: session?.pending };
 
     if (!session) this.startShadows(agent, stage.method, user, system, options, ctx);
     const corrections = this.correctLimit(ctx, agent);
-    let ask = user;
-    for (let attempt = 0; ; attempt++) {
-      const { value, tokens } = kit
-        ? await this.converse(agent, target, stage, ctx, kit, conversation!, steps, system, options, callOptions)
-        : await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], ask, system, options, stage, ctx);
+    // @cascade(m2, m3, ...): the agent's own model first, then each bigger one in turn when a call fails,
+    // an output policy rejects the answer (after any @correct tries), or the answer misses the pipeline's schema.
+    const tiers = this.cascadeTiers(agent);
+    // The answer becomes the pipeline's output: under a cascade, hold it to the declared `-> Type` here, while a bigger model can still try.
+    const last = ctx.pipeline.pipeline.at(-1) === stage;
+    for (let tier = Math.min(session?.tier ?? 0, tiers.length - 1); ; tier++) {
+      const model = tiers[tier]!;
+      // `Agent@model` (or `Agent.method@model`) mocks one model of the cascade; otherwise the agent's own mock answers.
+      const mockKeys = tier === 0 ? [target, agent.name, "*"] : [`${target}@${model}`, `${agent.name}@${model}`, target, agent.name, "*"];
+      let ask = user;
       try {
-        const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
-        await memory.remember?.(checked);
-        (ctx.answers ??= {})[ctx.stageIndex] = checked;
-        return checked;
+        for (let attempt = 0; ; attempt++) {
+          const { value, tokens } = kit
+            ? await this.converse(agent, model, mockKeys, target, stage, ctx, kit, conversation!, steps, system, options, callOptions)
+            : await this.complete(agent, model, target, mockKeys, ask, system, options, stage, ctx);
+          try {
+            const checked = this.guard.checkOutput(agent, value, hooks, { completionTokens: tokens?.completion });
+            if (last && tier < tiers.length - 1) this.checkSchema(ctx.pipeline, checked);
+            await memory.remember?.(checked);
+            (ctx.answers ??= {})[ctx.stageIndex] = checked;
+            return checked;
+          } catch (err) {
+            // @correct(n): show the model what the policy rejected and let it try again.
+            if (!(err instanceof PolicyViolation) || attempt >= corrections) throw err;
+            // The audit trail keeps the violation, marked as one the agent was asked to fix.
+            const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected);
+            if (v) v.corrected = true;
+            this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
+            // The rejected answer goes back as input: redacted, and withheld if a Block rule would stop it.
+            const previous = formatValue(this.guard.forLog(agent, value));
+            ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${previous}`;
+            // A conversation with tools continues: the agent keeps what its tools told it.
+            conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
+          }
+        }
       } catch (err) {
-        // @correct(n): show the model what the policy rejected and let it try again.
-        if (!(err instanceof PolicyViolation) || attempt >= corrections) throw err;
-        // The audit trail keeps the violation, marked as one the agent was asked to fix.
-        const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected);
-        if (v) v.corrected = true;
-        this.emit({ type: "correction", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, attempt: attempt + 1, error: err.message });
-        ask = `${user}\n\nYour previous answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.\n\nPrevious answer:\n${formatValue(value)}`;
-        // A conversation with tools continues: the agent keeps what its tools told it.
-        conversation?.push({ role: "user", content: `Your answer was rejected by policy "${err.policy}": ${err.message}\nAnswer again, fixing that problem.` });
+        // A run paused for approval mid-conversation resumes on the model that was answering.
+        if (err instanceof Pause) {
+          const paused = ctx.sessions?.[ctx.stageIndex];
+          if (paused && tier > 0) paused.tier = tier;
+          throw err;
+        }
+        if (tier >= tiers.length - 1 || !this.escalates(err, ctx)) throw err;
+        const next = tiers[tier + 1]!;
+        const error = err instanceof Error ? err.message : String(err);
+        if (err instanceof PolicyViolation) {
+          const v = ctx.meta.violations.findLast((x) => x.policy === err.policy && x.rule === err.rule && !x.corrected && !x.escalated);
+          if (v) v.escalated = true;
+        }
+        (ctx.meta.escalations ??= []).push({ target, from: model, to: next, error });
+        this.emit({ type: "escalate", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, from: model, to: next, error });
+        this.logger.log(`[Cascade] ${target}: ${model} -> ${next} (${error})`);
+        // The next model starts the conversation over: it sees the task, not the lower model's tool calls.
+        if (kit) {
+          conversation = opening();
+          steps = { done: 0, pending: undefined };
+        }
       }
     }
+  }
+
+  /** The models an agent's calls go through: its own, then each `@cascade` model, in order. */
+  private cascadeTiers(agent: Agent): string[] {
+    const more = directiveArgs(findDirective(agent.directives, "cascade")).filter(Boolean);
+    return [agent.modelId, ...more.map((m) => this.agents.get(m)?.modelId ?? m)];
+  }
+
+  /** Whether `@cascade` should try a bigger model after this failure. A spent budget, a stopped run, or a loop limit never moves up. */
+  private escalates(err: unknown, ctx: ExecutionContext): boolean {
+    if (ctx.signal.aborted || err instanceof Pause || err instanceof LoopLimitError) return false;
+    if (err instanceof PolicyViolation && err.rule === "MaxSpend") return false;
+    return true;
   }
 
   /**
@@ -1743,7 +2156,7 @@ export class HaloRuntime {
       const methods = Array.isArray(info?.methods)
         ? info.methods
         : info?.methods
-          ? await info.methods({ tool, config: this.toolConfig(tool, ctx).config, signal: ctx.signal }, this.toolServices())
+          ? await info.methods({ tool, config: this.toolConfig(tool, ctx).config, signal: ctx.signal }, this.toolServices(ctx))
           : undefined;
       if (!methods?.length) {
         throw new HaloError(`Tool "${name}" (${tool.provider}) doesn't describe its methods, so an agent can't choose to call it; register the provider with its info (registerToolProvider(name, provider, info))`, { code: "TOOL_CONFIG" });
@@ -1751,16 +2164,18 @@ export class HaloRuntime {
       for (const method of methods) {
         const target = `${name}.${method.name}`;
         // Function names allow letters, digits, _ and - (64 at most), so "Repo.create_pr" becomes "Repo__create_pr".
-        let fn = `${name}__${method.name}`.replace(/[^\w-]/g, "_").slice(0, 64);
+        const shown = this.displayName(name);
+        let fn = `${shown}__${method.name}`.replace(/[^\w-]/g, "_").slice(0, 64);
         for (let i = 2; kit.byName.has(fn); i++) fn = `${fn.slice(0, 60)}_${i}`;
         const entry = { tool, method, target };
         kit.byName.set(fn, entry);
         kit.byName.set(target, entry);
+        if (shown !== name) kit.byName.set(`${shown}.${method.name}`, entry);
         // A method its policies hide isn't offered; a model that calls it anyway is refused by checkToolCall.
         if (!this.guard.toolVisible(agent, target, method.effect)) continue;
-        kit.offered.push(target);
-        const about = info?.description ? `${name} (${info.description}): ${method.description}` : `${name}: ${method.description}`;
-        kit.specs.push({ name: fn, description: about.slice(0, 1024), parameters: method.params ?? { type: "object", properties: {} } });
+        kit.offered.push(this.displayName(target));
+        const about = info?.description ? `${shown} (${info.description}): ${method.description}` : `${shown}: ${method.description}`;
+        kit.specs.push({ name: fn, description: about.slice(0, 1024), parameters: shownParams(tool, method.params) });
       }
     }
     if (!kit.specs.length) throw new HaloError(`Agent "${agent.name}" has tools, but its policies allow none of their methods`, { code: "TOOL_CONFIG" });
@@ -1774,6 +2189,8 @@ export class HaloRuntime {
    */
   private async converse(
     agent: Agent,
+    model: string,
+    mockKeys: string[],
     target: string,
     stage: CallStage,
     ctx: ExecutionContext,
@@ -1801,7 +2218,9 @@ export class HaloRuntime {
       const shown = messages.slice(Math.max(0, shownFrom)).map((m) => (m.role === "tool" ? `[${m.name} result]\n${m.content}` : m.content)).join("\n\n");
       const turn: Turn = { messages, tools: kit.specs, toolChoice: last ? "none" : "auto", targets: kit.offered, step: steps.done + 1, shown };
       const estimate = messages.map((m) => m.content).join("\n") + JSON.stringify(kit.specs);
-      const r = await this.complete(agent, agent.modelId, target, [target, agent.name, "*"], estimate, system, options, stage, ctx, "agent", turn);
+      // Every image in the conversation is sent again with each request, so each counts toward its cost.
+      const carried = messages.flatMap((m) => (m.role === "user" || m.role === "tool" ? (m.media ?? []) : []));
+      const r = await this.complete(agent, model, target, mockKeys, estimate, system, { ...options, media: carried.length ? carried : undefined }, stage, ctx, "agent", turn);
       if (r.tokens) (tokens.prompt += r.tokens.prompt), (tokens.completion += r.tokens.completion);
       shownFrom = messages.length;
       if (!r.toolCalls?.length || last) {
@@ -1820,8 +2239,9 @@ export class HaloRuntime {
     for (let i = 0; i < calls.length; i++) {
       const call = calls[i]!;
       let content: string;
+      const media: MediaRef[] = [];
       try {
-        content = await this.agentTool(agent, kit, call, ctx, hooks, resultChars);
+        content = await this.agentTool(agent, kit, call, ctx, hooks, resultChars, media);
       } catch (err) {
         if (err instanceof Pause && err.waitingFor === "approval") {
           // Keep the conversation and the calls still to run, so approving picks up right here.
@@ -1829,12 +2249,12 @@ export class HaloRuntime {
         }
         throw err;
       }
-      messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
+      messages.push({ role: "tool", toolCallId: call.id, name: call.name, content, ...(media.length ? { media } : {}) });
     }
   }
 
   /** Run one tool call an agent asked for, and say what happened in words the model can act on. */
-  private async agentTool(agent: Agent, kit: ToolKit, call: LLMToolCall, ctx: ExecutionContext, hooks: PolicyHooks, resultChars: number): Promise<string> {
+  private async agentTool(agent: Agent, kit: ToolKit, call: LLMToolCall, ctx: ExecutionContext, hooks: PolicyHooks, resultChars: number, media: MediaRef[] = []): Promise<string> {
     const entry = kit.byName.get(call.name);
     const report = (decision: Extract<RuntimeEvent, { type: "agent_tool" }>["decision"], detail?: string) =>
       this.emit({ type: "agent_tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, target: entry?.target ?? call.name, args: this.guard.forLog(agent, call.args), decision, detail });
@@ -1843,16 +2263,38 @@ export class HaloRuntime {
       return `Error: there is no tool named "${call.name}". You can call: ${kit.specs.map((spec) => spec.name).join(", ")}.`;
     }
     let check: ReturnType<PolicyEngine["checkToolCall"]>;
+    let args: unknown;
     try {
       check = this.guard.checkToolCall(agent, entry.target, entry.method.effect, call.args, hooks);
+      // The call is part of the agent's answer: its Redact rules mask the arguments and its Block rules refuse them.
+      args = this.guard.checkToolArgs(agent, entry.target, call.args, hooks);
     } catch (err) {
       if (!(err instanceof PolicyViolation)) throw err;
       report("refused", err.message);
       return `Refused by policy "${err.policy}": ${err.message}. Don't try this call again.`;
     }
+    // A file the agent names by its label (or short id) is that file, if the run holds it.
+    try {
+      args = filesFromLabels(args, this.topMeta(ctx).media ?? []);
+    } catch (err) {
+      if (!(err instanceof MediaError)) throw err;
+      report("refused", err.message);
+      return `Refused: ${err.message}.`;
+    }
+    // The tool's own rules (Fixed, Match, Locked) hold whatever the agent's policies say.
+    try {
+      args = constrain(entry.tool, entry.method.name, isPlainObject(args) ? args : {}, true, (v) => this.resolveValue(v, ctx, { allowEnv: true, owner: entry.tool.name }));
+    } catch (err) {
+      if (!(err instanceof ToolRuleViolation)) throw err;
+      const v: Violation = { policy: entry.tool.name, rule: err.rule, message: err.message, phase: "tool" };
+      ctx.meta.violations.push(v);
+      this.emit({ type: "violation", runId: ctx.meta.runId, ...v });
+      report("refused", err.message);
+      return `Refused by the tool's rules: ${err.message}. Don't try this call again.`;
+    }
     let decision: "allowed" | "approved" = "allowed";
     if (check !== "allow") {
-      const answer = await this.approval(agent, entry.target, call.args, check.approve, ctx);
+      const answer = await this.approval(agent, entry.target, args, check.approve, ctx);
       if (!isApproval(answer)) {
         const reason = declineReason(answer);
         report("declined", reason.slice(2) || undefined);
@@ -1862,7 +2304,7 @@ export class HaloRuntime {
     }
     let result: unknown;
     try {
-      result = await this.toolCall(entry.tool, entry.method.name, [], call.args, ctx, true, agent.name);
+      result = await this.toolCall(entry.tool, entry.method.name, [], args as Record<string, unknown>, ctx, true, agent.name);
     } catch (err) {
       if (ctx.signal.aborted || err instanceof Pause) throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -1870,7 +2312,11 @@ export class HaloRuntime {
       return `Error: ${message}`;
     }
     report(decision);
-    const text = clip(typeof result === "string" ? result : (JSON.stringify(result) ?? "null"), resultChars);
+    // Images and documents in the result go to the model with it, if the agent's policies allow them.
+    const files = collectMedia(result).filter((m) => this.holds(ctx, m.sha256));
+    const refused = this.guard.mediaRefusal(agent, files);
+    if (!refused) media.push(...files);
+    const text = clip(typeof result === "string" ? result : compactJson(result), resultChars) + (refused ? `\n[not shown: ${refused.message}]` : "");
     // A tool result is input to the model: the agent's input policies redact or withhold it.
     try {
       return this.guard.checkInput(agent, text, hooks);
@@ -1890,12 +2336,12 @@ export class HaloRuntime {
     if (ctx.approvals && Object.hasOwn(ctx.approvals, ctx.stageIndex)) {
       const answer = ctx.approvals[ctx.stageIndex];
       delete ctx.approvals[ctx.stageIndex];
-      this.config.recorder?.({ kind: "approval", target, value: answer });
+      this.record({ kind: "approval", target, value: answer });
       return answer;
     }
     const mock = this.mockFor(target + "?", "approval");
     const req: InterruptRequest = { pipeline: ctx.pipeline.name, message, channel: "approval", attachments: [args], args: [], named: { target, args, policy, agent: agent.name }, current: ctx.current, context: this.snapshot(ctx) };
-    const recorded = (answer: unknown) => (this.config.recorder?.({ kind: "approval", target, value: answer }), answer);
+    const recorded = (answer: unknown) => (this.record({ kind: "approval", target, value: answer }), answer);
     if (mock) return recorded(await mock({ target, kind: "approval", prompt: message, args: [args], named: req.named, input: ctx.current }));
     if (this.config.onInterrupt) return recorded(await raceAbort(Promise.resolve(this.config.onInterrupt(req)), ctx.signal));
     // Only a top-level stage that is itself the agent call can stop and pick up again.
@@ -1971,6 +2417,7 @@ export class HaloRuntime {
       if (req) return req;
       const { positional, named } = stage ? this.resolveArgs(stage, ctx, { skip: LLM_OPTION_KEYS }) : { positional: [], named: {} };
       req = { target, kind: "agent", prompt: turn ? turn.shown : prompt, system, args: positional, named, input: ctx.current, model, fingerprint };
+      if (options.media?.length) req.media = options.media;
       if (turn) Object.assign(req, { tools: turn.targets, messages: turn.messages, step: turn.step });
       return req;
     };
@@ -2019,17 +2466,17 @@ export class HaloRuntime {
       ctx.meta.tokens.prompt += result.tokens.prompt;
       ctx.meta.tokens.completion += result.tokens.completion;
     }
-    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
+    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
     const toolCalls = result.toolCalls;
-    if (kind !== "shadow") this.config.recorder?.({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}), fingerprint, cost: result.cost });
+    if (kind !== "shadow") this.record({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}), fingerprint, cost: result.cost });
     if (kind !== "shadow") {
       // Telemetry keeps what the agent's policies let out: redacted, or withheld if blocked.
       const shown = this.guard.forLog(agent, value);
       const text = shown === value ? result.value : formatValue(shown);
       if (typeof result.value === "string" && result.value) this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: typeof text === "string" ? text : formatValue(text) });
       const output = toolCalls?.length ? { ...(result.value ? { text: shown } : {}), toolCalls: toolCalls.map((c) => ({ name: c.name, args: this.guard.forLog(agent, c.args) })) } : shown;
-      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt: turn ? turn.shown : prompt, output, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
+      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt: turn ? turn.shown : prompt, ...(options.media?.length ? { media: options.media } : {}), output, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
     }
     return { value, text: typeof result.value === "string" ? result.value : undefined, tokens: result.tokens, toolCalls, rawMessage: result.rawMessage };
   }
@@ -2042,7 +2489,11 @@ export class HaloRuntime {
     for (const run of runs) {
       const t0 = performance.now();
       const label = `${run.shadow}.${method}`;
-      const task = this.complete(run.agent, run.model, label, run.mockKeys, prompt, system, { ...llmOptions(run.agent.params, {}), ...options }, undefined, ctx, "shadow").then(
+      // A shadow agent also gets its own policies' redactions on top of the primary's.
+      const shadowPrompt = run.agent === primary ? prompt : this.guard.redactOnly(run.agent, prompt);
+      // A shadow agent with its own Block or Redact rules sees media only if its policies allow it.
+      const refused = run.agent !== primary && options.media?.length ? this.guard.mediaRefusal(run.agent, options.media) : undefined;
+      const task = (refused ? Promise.reject(new Error(refused.message)) : this.complete(run.agent, run.model, label, run.mockKeys, shadowPrompt, system, { ...llmOptions(run.agent.params, {}), ...options }, undefined, ctx, "shadow")).then(
         ({ value }) => ({ primary: primary.name, shadow: run.shadow, output: this.guard.forLog(primary, this.guard.forLog(run.agent, value)), latencyMs: Math.round(performance.now() - t0) }),
         (err: unknown) => ({ primary: primary.name, shadow: run.shadow, error: err instanceof Error ? err.message : String(err), latencyMs: Math.round(performance.now() - t0) }),
       );
@@ -2076,7 +2527,7 @@ export class HaloRuntime {
     let model = requestedModel;
     if (this.routerEnabled) {
       try {
-        const routed = await this.router.route(model, Math.ceil(prompt.length / 4), options.maxTokens ?? 1024, undefined, (id) => this.isModelAvailable(id));
+        const routed = await this.router.route(model, Math.ceil(prompt.length / 4) + mediaAllowance(options.media), options.maxTokens ?? 1024, undefined, (id) => this.isModelAvailable(id));
         model = routed.model;
         this.logger.log(`[Router] ${routed.reason}`);
       } catch (e) {
@@ -2097,7 +2548,7 @@ export class HaloRuntime {
     }
     const request: LLMRequest = {
       model,
-      messages: turn ? turn.messages : [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user" as const, content: prompt }],
+      messages: await this.withMedia(adapter, model, turn ? turn.messages : [...(system ? [{ role: "system" as const, content: system }] : []), { role: "user" as const, content: prompt, ...(options.media?.length ? { media: options.media } : {}) }], apiKey, signal),
       tools: turn?.tools,
       toolChoice: turn?.toolChoice,
       temperature: options.temperature,
@@ -2122,10 +2573,75 @@ export class HaloRuntime {
     return { text: parsed.text, model, cost, tokens, toolCalls: parsed.toolCalls, rawMessage: parsed.rawMessage };
   }
 
-  private toolServices(): ToolServices {
+  /**
+   * The messages with each image and document's bytes attached, for the request being built.
+   * This is the only place bytes are read: a mocked or replayed call never needs them.
+   */
+  /** Files uploaded to a provider's own store, by provider and hash, so a file goes up once (they are kept about two days). */
+  private uploads = new Map<string, { uri: string; at: number }>();
+
+  private async withMedia(adapter: ProviderAdapter, model: string, messages: LLMMessage[], apiKey?: string, signal?: AbortSignal): Promise<LLMMessage[]> {
+    if (!messages.some((m) => (m.role === "user" || m.role === "tool") && m.media?.length)) return messages;
+    // Most APIs take files only in user turns: a run of tool results is followed by one user turn with theirs.
+    const moved: LLMMessage[] = [];
+    for (const [i, m] of messages.entries()) {
+      moved.push(m.role === "tool" && m.media ? { ...m, media: undefined } : m);
+      if (m.role !== "tool" || messages[i + 1]?.role === "tool") continue;
+      let from = i;
+      while (messages[from - 1]?.role === "tool") from--;
+      const files = collectMedia(messages.slice(from, i + 1).map((x) => (x.role === "tool" ? x.media : undefined))) as LLMMedia[];
+      if (files.length) moved.push({ role: "user", content: `The tool results above refer to ${files.length === 1 ? "this file" : "these files"}.`, media: files });
+    }
+    messages = moved;
+    const loaded = new Map<string, string>();
+    const load = async (m: MediaRef): Promise<LLMMedia> => {
+      const kind = kinds(m.$media);
+      const limit = adapter.input?.[m.type];
+      if (limit === undefined) {
+        const reads = Object.keys(adapter.input ?? {});
+        throw new MediaError(`${adapter.id} models can't be sent ${reads.length ? `${m.type} ${kind}` : kind} (model "${model}", ${mediaLabel(m)})${reads.length ? `; it takes ${reads.join(", ")}` : ""}. Give this agent a model that reads them`, "MEDIA_UNSUPPORTED");
+      }
+      if (m.size > limit) throw new MediaError(`${mediaLabel(m)} is ${megabytes(m.size)}; ${adapter.id} takes ${kind} up to ${megabytes(limit)}`, "MEDIA_TOO_LARGE");
+      // A link (YouTube) is sent as it is.
+      if (m.url) return { ...m };
+      // Too large to send inline: uploaded to the provider's own store, once, and sent by reference.
+      if (adapter.upload && adapter.inlineLimit !== undefined && m.size > adapter.inlineLimit) {
+        const key = `${adapter.id}:${m.sha256}`;
+        const kept = this.uploads.get(key);
+        if (kept && Date.now() - kept.at < 40 * 3600_000) return { ...m, fileUri: kept.uri };
+        const bytes = await this.blobs.get(m.sha256);
+        if (!bytes) throw new MediaError(`The bytes of ${mediaLabel(m)} are not on this machine, so it can't be sent to ${model}`, "MEDIA_MISSING");
+        const uri = await adapter.upload(m, bytes, { apiKey: apiKey ?? "", fetch: this.fetch, signal });
+        this.uploads.set(key, { uri, at: Date.now() });
+        return { ...m, fileUri: uri };
+      }
+      let data = loaded.get(m.sha256);
+      if (data === undefined) {
+        const bytes = await this.blobs.get(m.sha256);
+        if (!bytes) throw new MediaError(`The bytes of ${mediaLabel(m)} are not on this machine, so it can't be sent to ${model}`, "MEDIA_MISSING");
+        loaded.set(m.sha256, (data = Buffer.from(bytes).toString("base64")));
+      }
+      return { ...m, data };
+    };
+    return Promise.all(messages.map(async (m) => (m.role === "user" && m.media?.length ? { ...m, media: await Promise.all(m.media.map(load)) } : m)));
+  }
+
+  private toolServices(ctx: ExecutionContext): ToolServices {
     return {
       fetch: this.fetch,
       env: this.env,
+      spend: (usd) => {
+        if (!(usd > 0)) return;
+        ctx.meta.cost += usd;
+        if (ctx.parent) this.unsettle(ctx, usd);
+      },
+      media: async (ref) => {
+        const label = isMediaRef(ref) ? mediaLabel(ref) : `#${String(ref.sha256).slice(0, 6)}`;
+        if (!this.holds(ctx, ref.sha256)) throw new MediaError(`${label} is not a file this run was given or made`, "MEDIA_UNKNOWN");
+        const bytes = await this.blobs.get(ref.sha256);
+        if (!bytes) throw new MediaError(`The bytes of ${label} are not on this machine`, "MEDIA_MISSING");
+        return bytes;
+      },
       vectors: () => (this.vectorStore ??= new LocalVectorStore(this.config.vectorPath ?? ".halo/vectors.sqlite")),
       sql: (url) => {
         let db = this.sqlPool.get(url);
@@ -2152,12 +2668,18 @@ export class HaloRuntime {
   /** Call a tool. `chosenBy` names the agent that chose the call: its arguments are all it gets (never the pipeline value). */
   private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean, chosenBy?: string): Promise<unknown> {
     const target = `${tool.name}.${method}`;
+    // A call an agent chose was checked against the tool's rules before anyone was asked to approve it.
+    if (chosenBy === undefined) named = constrain(tool, method, named, false, (v) => this.resolveValue(v, ctx, { allowEnv: true, owner: tool.name }));
     const implicitInput = chosenBy === undefined && !positional.length && ctx.current !== undefined;
     const args = implicitInput ? [ctx.current] : positional;
     const { config, template0 } = this.toolConfig(tool, ctx);
 
     const t0 = performance.now();
     const fingerprint = toolFingerprint(target, args, named);
+    const top = this.topMeta(ctx);
+    // The same call, with the same arguments, at the same step of the same run always gets the same key,
+    // whether it is a retry, a stage run again after a restart, or a model asking twice.
+    const idempotencyKey = `halo_${sha256(top.idempotencyKey ?? top.runId, ctx.pipeline.name, String(ctx.stageIndex), fingerprint).slice(0, 40)}`;
     const mock = this.mockFor(target, tool.name);
     const provider = this.providers.get(tool.provider);
     if (!mock && !provider) throw new HaloError(`Unknown tool provider "${tool.provider}" for tool "${tool.name}" (register it with runtime.registerToolProvider)`);
@@ -2165,16 +2687,32 @@ export class HaloRuntime {
     const { result, attempts } = await this.withPolicies(ctx, target, undefined, async (signal) =>
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current, fingerprint }), mocked: true }
-        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: this.topMeta(ctx).runId, pauses: this.topMeta(ctx).pauses ?? 0 }, this.toolServices()), mocked: false },
+        : { value: await provider!({ tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: top.runId, branch: ctx.branch, pauses: top.pauses ?? 0, idempotencyKey }, this.toolServices(ctx)), mocked: false },
     );
+    // Files in the result are stored and replaced by references, before anything records or hashes it.
+    result.value = await adoptMedia(result.value, (bytes, name) => this.mintFor(ctx, bytes, { name }));
+    // A mock (and a replay, which answers from a recording) is the author's own: its references are this run's.
+    if (result.mocked) for (const ref of collectMedia(result.value)) this.admit(ctx, ref);
+    (ctx.effects ??= []).push(sha256(target, fingerprint, safeJson(result.value)));
+    // A sandbox's egress allowlist refused hosts: a policy violation, like a refused tool call.
+    const blocked = tool.provider === "Remote" && isPlainObject(result.value) ? (result.value as { blocked?: unknown }).blocked : undefined;
+    if (Array.isArray(blocked)) {
+      for (const host of blocked) {
+        const v: Violation = { policy: tool.name, rule: "AllowHosts", message: `${tool.name} tried to reach ${String(host)}, which is not an allowed host`, phase: "tool" };
+        ctx.meta.violations.push(v);
+        this.emit({ type: "violation", runId: ctx.meta.runId, ...v });
+      }
+    }
 
     const latencyMs = Math.round(performance.now() - t0);
-    this.config.recorder?.({ kind: "tool", target, value: result.value, fingerprint });
-    ctx.meta.calls.push({ pipeline: ctx.pipeline.name, stage: ctx.stageIndex, target, kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: chosenBy } : {}) });
+    this.record({ kind: "tool", target, value: result.value, fingerprint });
+    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: this.displayName(chosenBy) } : {}) });
     // A result an agent chose to fetch is logged as its policies let it out (as the agent itself sees it).
     const chooser = chosenBy ? this.agents.get(chosenBy) : undefined;
     const output = chooser ? this.guard.forLog(chooser, result.value) : result.value;
-    this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output, latencyMs, mocked: result.mocked });
+    // The files the call sent, so Studio can show what left the run.
+    const sent = collectMedia(args, named);
+    this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output, latencyMs, mocked: result.mocked, ...(sent.length ? { sent } : {}) });
     return result.value;
   }
 
@@ -2255,6 +2793,7 @@ export class HaloRuntime {
     const child = this.newContext(target, args, ctx.depth + 1, ctx.signal);
     child.meta.runId = ctx.meta.runId;
     child.parent = ctx;
+    child.branch = ctx.branch;
     const result = await this.runFrom(child, 0);
     ctx.meta.cost += child.meta.cost;
     if (!ctx.parent) this.unsettle(ctx, -child.meta.cost);
@@ -2266,9 +2805,19 @@ export class HaloRuntime {
   }
 
   private async fanout(stage: FanOutStage, ctx: ExecutionContext): Promise<unknown[]> {
-    const results = await branches(ctx.signal, (signal) => stage.stages.map((sub) => this.callStage(sub, { ...ctx, signal })));
-    if (stage.bind) ctx.data[stage.bind] = results;
-    return results;
+    const keys = stage.stages.map((_, i) => this.branchKey(ctx, i));
+    try {
+      const results = await branches(ctx.signal, (signal) => stage.stages.map((sub, i) => this.callStage(sub, { ...ctx, signal, branch: keys[i] })));
+      if (stage.bind) ctx.data[stage.bind] = results;
+      return results;
+    } finally {
+      await endRemoteBranches(this.topMeta(ctx).runId, keys);
+    }
+  }
+
+  /** Branch `i` of the fan-out at the current stage: unique within the run, nested under the branch it's in. */
+  private branchKey(ctx: ExecutionContext, i: number): string {
+    return `${ctx.branch ? `${ctx.branch}/` : ""}${ctx.depth ? `${ctx.pipeline.name}:` : ""}${ctx.stageIndex}.${i}`;
   }
 
   private async branch(stage: BranchStage, ctx: ExecutionContext): Promise<unknown> {
@@ -2306,14 +2855,18 @@ export class HaloRuntime {
         const data: Record<string, unknown> = { ...ctx.data, [stage.item]: list[i], index: i };
         if (isPlainObject(data[callee])) data[callee] = { ...(data[callee] as object) };
         try {
-          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i], signal });
+          results[i] = await this.callStage(stage.call, { ...ctx, data, current: list[i], signal, branch: this.branchKey(ctx, i) });
         } catch (err) {
           failed = true;
           throw err;
         }
       }
     };
-    await branches(ctx.signal, (signal) => Array.from({ length: Math.min(concurrency, list.length) }, () => worker(signal)));
+    try {
+      await branches(ctx.signal, (signal) => Array.from({ length: Math.min(concurrency, list.length) }, () => worker(signal)));
+    } finally {
+      await endRemoteBranches(this.topMeta(ctx).runId, list.map((_, i) => this.branchKey(ctx, i)));
+    }
 
     if (callee !== "System" && !this.isThreadCall(callee)) this.store(ctx, callee, method, results);
     if (stage.bind) ctx.data[stage.bind] = results;
@@ -2360,7 +2913,7 @@ export class HaloRuntime {
       work = raceAbort(work, controller.signal).finally(() => (clearTimeout(timer), controller.abort(DONE)));
     }
     const answer = await work;
-    this.config.recorder?.({ kind: "yield", target: "yield", value: answer });
+    this.record({ kind: "yield", target: "yield", value: answer });
     this.deliver(stage, ctx, answer, "yield");
   }
 
@@ -2394,7 +2947,7 @@ export class HaloRuntime {
       throw new Pause(target);
     }
     const event = await raceAbort(Promise.resolve(handler({ pipeline: ctx.pipeline.name, target, current: ctx.current, context: this.snapshot(ctx) })), ctx.signal);
-    this.config.recorder?.({ kind: "listen", target, value: event });
+    this.record({ kind: "listen", target, value: event });
     this.deliver(stage, ctx, event, target);
   }
 }

@@ -6,7 +6,7 @@
  *   2. Write it where the docs read it: docs/.vitepress/generated/ (data for the theme's
  *      components, and code groups of real output to include) and docs/examples/ (a page
  *      per example).
- *   3. Build the docs, then add the package registry.
+ *   3. Build the docs, then add the package registry and llms.txt (site/llms.ts).
  *
  *   bun site/build.ts                 everything (runs the test suite first)
  *   bun site/build.ts --generate      only step 2 (bun run docs:dev runs this first)
@@ -19,9 +19,14 @@ import { parse } from "../src/parser/index.ts";
 import { formatPlan, plan } from "../src/plan.ts";
 import { BUILTIN_PROVIDER_INFO } from "../src/runtime/provider-info.ts";
 import { describePermissions } from "../src/registry/manifest.ts";
+import { packageDocPath } from "../src/registry/contract.ts";
+import { readPackage } from "../src/registry/format.ts";
 import pkg from "../package.json" with { type: "json" };
 import { SECTIONS, exampleFiles } from "../examples/catalog.ts";
 import { icon } from "./src/icons.ts";
+import { ORIGIN, buildLlms } from "./llms.ts";
+import { homeMarkdown, type HomeExample } from "./src/home.ts";
+import { runSteps } from "./src/render.ts";
 
 const root = resolve(import.meta.dir, "..");
 const site = import.meta.dir;
@@ -79,23 +84,25 @@ const examples = allExamples;
 /** Old example URLs (before the examples were grouped by domain) and the name each one has now. */
 const renamed: Record<string, string> = JSON.parse(readFileSync(join(site, "data/renamed-examples.json"), "utf8"));
 
-const registry = JSON.parse(readFileSync(join(root, "registry/index.json"), "utf8"));
-const packages = await Promise.all(Object.entries(registry.packages as Record<string, any>).map(async ([name, p]) => {
-  const manifest = JSON.parse(readFileSync(join(root, "registry/src", name, "halo-tool.json"), "utf8"));
-  const release = p.versions[p.latest];
+// The bundled registry (registry/v1): every first-party @halo package, read from its package file.
+const registryIndex = JSON.parse(readFileSync(join(root, "registry/v1/index.json"), "utf8")) as { name: string }[];
+const packages = await Promise.all(registryIndex.map(async ({ name }) => {
+  const doc = JSON.parse(readFileSync(join(root, "registry", packageDocPath(name)), "utf8"));
+  const release = doc.versions[doc.distTags.latest];
+  const pkg = readPackage(readFileSync(join(root, "registry", release.file)));
+  const short = name.replace(/^@halo\//, "");
   return {
     name,
-    version: p.latest,
-    description: p.description,
-    publisher: p.publisher,
-    homepage: p.homepage,
+    version: release.version,
+    description: doc.description,
+    homepage: doc.homepage,
     sha256: release.sha256,
     permissions: release.permissions,
     permissionLines: describePermissions(release.permissions),
     providers: await Promise.all(
-      Object.entries(manifest.providers as Record<string, any>).map(async ([provider, spec]) => {
+      Object.entries((pkg.manifest.providers ?? {}) as Record<string, any>).map(async ([provider, spec]) => {
         // A module's methods are in its code (our own first-party packages, so importing them here is fine).
-        const listed = spec.kind === "module" ? ((await import(join(root, "registry/src", name, spec.entry))).info?.methods ?? []) : (spec.methods ?? []);
+        const listed = spec.kind === "module" ? ((await import(join(root, "registry/src", short, spec.entry))).info?.methods ?? []) : (spec.methods ?? []);
         return { name: provider, kind: spec.kind, methods: listed.map((m: any) => ({ name: m.name, effect: m.effect, description: m.description })) };
       }),
     ),
@@ -223,13 +230,21 @@ rmSync(generated, { recursive: true, force: true });
 rmSync(examplesDir, { recursive: true, force: true });
 mkdirSync(generated, { recursive: true });
 mkdirSync(examplesDir, { recursive: true });
+// The home page's examples: a file, and what the CLI says about it (Home.vue, site/src/home.ts).
+const homeExamples: HomeExample[] = [
+  { file: "triage.halo", verb: "plan", run: runs.plan },
+  { file: "typo.halo", verb: "validate", run: runs.validate },
+  { file: "hello.halo", verb: "test", run: runs.hello },
+].map(({ file, verb, run }) => ({ file, verb, source: SNIPPETS[file]!, output: `$ ${run.cmd}\n${run.out}` }));
+const homePlan = { cmd: "halo plan examples/data-research/research-assistant.halo", text: data.plans.research };
 await Bun.write(join(generated, "data.json"), JSON.stringify(data));
 // Everything but the example sources, for the components on ordinary pages.
-await Bun.write(join(generated, "lite.json"), JSON.stringify({ ...data, examples: [], snippets: {}, runs: {}, docPages: [] }));
+await Bun.write(join(generated, "lite.json"), JSON.stringify({ ...data, examples: [], snippets: {}, runs: {}, docPages: [], home: { examples: homeExamples, plan: homePlan } }));
 
 /** Text that goes into markdown outside a code block: Vue reads {{ }} there, so escape it. */
 const md = (text: string) => text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]!).replace(/\{\{/g, "&#123;&#123;").replace(/\}\}/g, "&#125;&#125;");
 const fence = (lang: string, label: string, body: string) => `\`\`\`${lang}${label ? ` [${label}]` : ""}\n${body.replace(/\n+$/, "")}\n\`\`\`\n`;
+
 const shell = (r: { cmd: string; out: string }) => `$ ${r.cmd}\n${r.out}`;
 
 // The home page: a file beside what the CLI says about it, then the checks that run before anything else does.
@@ -240,7 +255,6 @@ await Bun.write(
   `::: code-group\n\n${fence("halo", "typo.halo", SNIPPETS["typo.halo"]!)}\n${fence("txt", "$ halo validate", shell(runs.validate))}\n${fence("halo", "hello.halo", SNIPPETS["hello.halo"]!)}\n${fence("txt", "$ halo test", shell(runs.hello))}\n:::\n`,
 );
 await Bun.write(join(generated, "help.md"), fence("txt", "", `$ halo --help\n${runs.help.out.trim()}`));
-await Bun.write(join(generated, "plan-research.md"), fence("txt", "", `$ halo plan examples/data-research/research-assistant.halo\n${data.plans.research}`));
 
 // A page per example, and the list of them.
 // File names are unique across folders, so /examples/software-team stays put whichever folder the file is in.
@@ -289,7 +303,35 @@ const docs = Bun.spawnSync(["bunx", "vitepress", "build", "docs"], { cwd: root, 
 if (docs.exitCode !== 0) process.exit(docs.exitCode ?? 1);
 rmSync(dist, { recursive: true, force: true });
 cpSync(join(root, "docs/.vitepress/dist"), dist, { recursive: true });
-// The package registry is served from the site: `halo add` in an installed binary reads it there.
+// The static registry is served from the site too (halolang.com/registry/v1/...). index.json and
+// packages/ are the frozen v1 registry that Halo 0.8 and older read.
+cpSync(join(root, "registry/v1"), join(dist, "registry/v1"), { recursive: true });
 cpSync(join(root, "registry/index.json"), join(dist, "registry/index.json"));
 cpSync(join(root, "registry/packages"), join(dist, "registry/packages"), { recursive: true });
+
+// llms.txt, llms-full.txt and each page as Markdown, from the docs' sources and sidebar.
+const config = (await import("../docs/.vitepress/config.ts")).default;
+const effects = (methods: { name: string; effect?: string }[]) =>
+  methods.length ? methods.map((m) => `\`${m.name}\`${m.effect ? ` (${m.effect})` : ""}`).join(", ") : "methods are listed at run time";
+const packageMd = packages
+  .map((p) => `- **${p.name}** ${p.version}: ${p.description}${p.providers.map((pr) => `\n  - \`${pr.name}\`: ${effects(pr.methods)}`).join("")}`)
+  .join("\n");
+const llms = buildLlms({
+  root,
+  version: pkg.version,
+  sidebar: (config.themeConfig?.sidebar as Record<string, any>)["/"],
+  examples: SECTIONS.map((s) => ({
+    text: s.title,
+    items: examples.filter((e) => e.section === s.folder).map((e) => ({ text: e.title || e.name, link: `/examples/${slug(e.file)}`, about: e.about })),
+  })),
+  components: {
+    ProvidersTable: `${Object.entries(providers)
+      .map(([name, p]) => `- \`${name}\`: ${(p.description ?? "").replace(/\.+$/, "")}. Methods: ${effects(p.methods ?? [])}`)
+      .join("\n")}\n\nFrom the package registry:\n\n${packageMd}`,
+    PackageList: packageMd,
+    Home: homeMarkdown({ version: pkg.version, examples: homeExamples, plan: homePlan, run: runSteps(data) }, ORIGIN),
+  },
+});
+for (const [path, text] of Object.entries(llms)) await Bun.write(join(dist, path), text);
+console.log(`llms.txt: ${Object.keys(llms).length - 2} pages as Markdown`);
 console.log(`built ${dist}`);

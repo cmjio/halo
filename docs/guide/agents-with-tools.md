@@ -26,6 +26,10 @@ pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
 
 The fixer runs the tests, reads files, edits them, and runs the tests again, choosing each step itself. The policy keeps it inside the project's files, away from the tests, and limits the shell to `bun test`. Both `DenyArgs` rules here use the three-argument form, which checks one named argument (`path`, `command`); `DenyArgs(tool, regex)` checks every argument value, each on its own. The pipeline then runs the tests itself and sends the fixer back if they still fail. This is `FixUntilGreen` in the repository's `examples/engineering/software-team.halo`.
 
+## Giving an agent a computer
+
+The fixer above runs commands on your machine, fenced by policies. To have an agent run code somewhere it can't reach your files at all, give it a sandbox instead: `sandbox: "auto"` in its brackets gives it a fresh Docker container or cloud sandbox for each run, with its own `Remote` tool. See [Coding Agents That Run Their Code](./coding-agents.md).
+
 ## Choosing the tools
 
 | Written | Offers |
@@ -44,7 +48,7 @@ The model sees each method as a function named `Tool__method` (for example `Code
 
 1. Halo sends the conversation (system prompt, the call's prompt, and every turn so far) with the offered tools.
 2. If the model answers without asking for tools, that answer is the call's result. Output policies, schemas and `@correct` apply to it as usual.
-3. Otherwise Halo runs the calls it asked for, in order. Each is checked against the agent's policies, may wait for a person's approval, and then runs. Its result becomes a tool message in the conversation.
+3. Otherwise Halo runs the calls it asked for, in order. Each is checked against the agent's policies (its tool rules, and its `Block` and `Redact` rules on the arguments, since a tool call is part of its answer), may wait for a person's approval, and then runs. Its result becomes a tool message in the conversation.
 4. Halo asks the model again. After `max_steps` requests that asked for tools, the next request tells the model it has used its steps and asks for an answer with tools turned off.
 
 | Setting | Where | Default |

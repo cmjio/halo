@@ -33,8 +33,10 @@ export default defineConfig({
     ['meta', { property: 'og:title', content: 'Halo · a language for AI pipelines' }],
     ['meta', { property: 'og:description', content: 'Agents, tools, and the policies the runtime enforces on every call. Plan a run before it starts; replay it after.' }],
     ['meta', { property: 'og:url', content: 'https://halolang.com/' }],
-    ['meta', { property: 'og:image', content: 'https://halolang.com/video/halo-showcase.jpg' }],
-    ['meta', { property: 'og:video', content: 'https://halolang.com/video/halo-showcase.mp4' }],
+    ['meta', { property: 'og:image', content: 'https://halolang.com/video/halo-loop.jpg' }],
+    ['meta', { property: 'og:video', content: 'https://halolang.com/video/halo-loop.mp4' }],
+    // Metrickle page analytics. The key is the site's public (mk_pub_) key, safe to ship.
+    ['script', { defer: '', src: 'https://app.metrickle.com/m.js', 'data-key': 'mk_pub_PoTEUPvgOlhEovx1iXsQqYRM' }],
   ],
   markdown: {
     theme: {
@@ -110,7 +112,11 @@ export default defineConfig({
         text: 'Agents & Tools',
         items: [
           { text: 'Agents with Tools', link: '/guide/agents-with-tools' },
-          { text: 'Tool Packages', link: '/guide/tool-packages' },
+          { text: 'Files', link: '/guide/files' },
+          { text: 'Coding Agents', link: '/guide/coding-agents' },
+          { text: 'Best of N', link: '/guide/best-of-n' },
+          { text: 'Packages', link: '/guide/tool-packages' },
+          { text: 'Hosted Packages', link: '/guide/hosted-packages' },
           { text: 'Package Registry', link: '/packages' },
           { text: 'Plan and Replay', link: '/guide/plan-and-replay' },
           { text: 'Thread State', link: '/guide/thread-state' },
@@ -137,6 +143,7 @@ export default defineConfig({
         items: [
           { text: 'Serving pipelines', link: '/guide/production/serving' },
           { text: 'Deploying', link: '/guide/production/deploying' },
+          { text: 'Upgrading', link: '/guide/production/upgrading' },
           { text: 'Blueprints', link: '/guide/production/blueprints' },
         ]
       },

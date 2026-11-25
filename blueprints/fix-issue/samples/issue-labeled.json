@@ -1,0 +1,12 @@
+{
+  "action": "labeled",
+  "label": { "name": "halo-fix" },
+  "issue": {
+    "number": 42,
+    "title": "paginate() drops the last item on every page",
+    "html_url": "https://github.com/acme/shop/issues/42",
+    "state": "open"
+  },
+  "repository": { "full_name": "acme/shop" },
+  "sender": { "login": "maintainer" }
+}

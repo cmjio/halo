@@ -10,6 +10,7 @@ import { SCHEMA_TYPES, includes } from "../parser/builtins.js";
 import type { SchemaDeclaration } from "../parser/types.js";
 import { SchemaValidationError } from "./errors.js";
 import { parseOutput } from "./values.js";
+import { isMediaRef, MEDIA_TYPES } from "./media-ref.js";
 
 type Lookup = (name: string) => SchemaDeclaration | undefined;
 
@@ -71,6 +72,9 @@ function check(value: unknown, type: string, path: string, lookup: Lookup): stri
       return undefined;
   }
   const schema = lookup(base);
+  // A file, unless the program has its own schema of that name.
+  const media = schema ? undefined : MEDIA_TYPES[base];
+  if (media) return isMediaRef(value) && value.$media === media ? undefined : `${path} should be ${media === "image" || media === "audio" ? "an" : "a"} ${base}, got ${describe(value)}`;
   if (!schema) return undefined; // unknown types are not checked (the validator warns about them)
   return checkObject(value, schema, path, lookup);
 }

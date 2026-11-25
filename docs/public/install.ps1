@@ -2,7 +2,8 @@
 #
 #   irm https://halolang.com/install.ps1 | iex
 #
-# Options: $env:HALO_VERSION = "0.1.0", $env:HALO_INSTALL = "$HOME\.halo",
+# Options: $env:HALO_VERSION = "0.1.0" (or a channel: "latest", the default, "next" or
+# "nightly"), $env:HALO_INSTALL = "$HOME\.halo",
 # $env:HALO_NO_MODIFY_PATH = "1". It downloads halo-windows-x64.exe from halolang.com/dl,
 # checks it against the release's SHA256SUMS, puts it in ~\.halo\bin, and adds that
 # folder to your user PATH. ARM64 Windows runs the x64 build.
@@ -17,8 +18,12 @@ $asset = 'halo-windows-x64.exe'
 
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Halo needs 64-bit Windows.' }
 
-$version = $env:HALO_VERSION
-if (-not $version) { $version = (Invoke-RestMethod "$base/latest.json").version }
+$version = if ($env:HALO_VERSION) { $env:HALO_VERSION } else { 'latest' }
+if ($version -in 'latest', 'next', 'nightly') {
+  $channel = $version
+  $version = (Invoke-RestMethod "$base/$channel.json").version
+  if (-not $version) { throw "Couldn't read the $channel version from $base/$channel.json" }
+}
 $version = $version.TrimStart('v')
 Write-Host "Installing halo $version ($asset)"
 
@@ -33,7 +38,9 @@ try {
   $expected = ($line -split '\s+')[0].ToLower()
 
   $exe = Join-Path $tmp 'halo.exe'
-  Invoke-WebRequest "$base/$version/$asset" -OutFile $exe -UseBasicParsing
+  # Tell halolang.com how this install came about, for its download counts (nothing else is sent).
+  $via = if ($env:HALO_INSTALLED_VIA) { $env:HALO_INSTALLED_VIA } elseif ($env:CI) { 'ci' } else { 'script' }
+  Invoke-WebRequest "$base/$version/${asset}?via=$via" -OutFile $exe -UseBasicParsing
   $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
   if ($actual -ne $expected) { throw "Checksum mismatch for $asset (expected $expected, got $actual). Not installing." }
 

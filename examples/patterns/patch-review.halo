@@ -1,0 +1,38 @@
+// Patch review: a coding agent works on a copy of your project in a sandbox, runs the tests
+// there, and nothing reaches your folder until you've read the diff and said yes.
+//
+//   halo test examples/patterns/patch-review.halo --arg task="Fix the off-by-one in pagination"
+//   halo run  examples/patterns/patch-review.halo --arg task="Fix the off-by-one in pagination"
+//
+// It needs Docker running, or E2B_API_KEY / DAYTONA_API_KEY ("auto" picks), plus a model key.
+// Run it from the project folder: from: "." is what gets copied in.
+
+policy Budget : MaxSpend(1.00)
+// The agent works inside the sandbox. Writing to your folder (apply, download) is the
+// pipeline's call, after you've said yes, so the agent isn't offered those methods.
+policy StayInside : DenyTools("Repo.apply", "Repo.download", "Repo.keep")
+
+// A fresh copy of this folder for each run. It can reach the package registries and nothing
+// else, so the agent can install dependencies but can't send your code anywhere.
+tool Repo : Remote("auto", from: ".", hosts: ["pypi.org", "*.pythonhosted.org", "registry.npmjs.org"])
+tool Git  : Git(".", write: true)
+
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: Repo]
+  requires Budget, StayInside
+
+pipeline Fix(task: String) -> Result:
+  task
+    // 1. The agent edits and tests in the sandbox, on its own copy
+    |> Dev.work("{{task}}. Run the project's tests until they pass, and say which command you ran.") as report
+
+    // 2. What it actually changed, measured from the files, not from what it says
+    |> Repo.diff() as changes
+    |? (context.data.changes.files.length > 0)
+
+    // 3. You read the patch; only a yes lets it out of the sandbox
+    |! yield(msg: "Apply this change to your folder and commit it?", [context.data.report, context.data.changes.patch]) as review
+    |? (context.data.review.approved == true)
+
+    // 4. Write the changes back and commit them
+    |> Repo.apply() as applied
+    |> Git.commit(message: "{{task}}", all: true)

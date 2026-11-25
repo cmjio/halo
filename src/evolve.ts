@@ -18,7 +18,9 @@
 
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { checkLinked } from "./linker/index.js";
+import { linkFile } from "./linker/node.js";
 import { parse } from "./parser/index.js";
 import type { ParseResult } from "./parser/types.js";
 import { validate, type ValidateOptions } from "./parser/validate.js";
@@ -90,9 +92,44 @@ export type EvolveEvent =
   | { type: "holdout"; variant: Variant }
   | { type: "budget"; spent: number };
 
+/** A version of the evolved file as a program, and what's wrong with it (parse, link and validation errors). */
+export type ProgramLoader = (source: string) => { ast: ParseResult; problems: string[] };
+
+/** The default loader: the file alone (no `use`), parsed and validated. */
+export function parseAndValidate(validateOptions?: ValidateOptions): ProgramLoader {
+  return (source) => {
+    const ast = parse(source);
+    const problems = ast.errors.length ? ast.errors : validate(ast, validateOptions).filter((d) => d.severity === "error").map((d) => `${d.line ? `line ${d.line}: ` : ""}${d.message}`);
+    return { ast, problems };
+  };
+}
+
+/**
+ * Load each version of the file at `path` in place of it, through the linker: its `use` lines
+ * (other project files, installed packages) resolve as the original's do.
+ */
+export function linkedLoader(path: string, validateOptions?: ValidateOptions): ProgramLoader {
+  return (source) => {
+    const linked = linkFile(path, { overrides: { [resolve(path)]: source } });
+    const problems = linked.program.errors.length
+      ? linked.program.errors
+      : checkLinked(linked, validateOptions)
+          .filter((d) => d.severity === "error")
+          .map((d) => `${d.file && d.file !== linked.entry ? `${d.file}: ` : ""}${d.line ? `line ${d.line}: ` : ""}${d.message}`);
+    return { ast: linked.program, problems };
+  };
+}
+
 export interface EvolveOptions {
   /** The .halo source to improve. */
   source: string;
+  /**
+   * Where the source lives. Given, every version is linked in its place (linkedLoader), so a
+   * file with `use` lines works; without it, versions are parsed alone.
+   */
+  path?: string;
+  /** Turns a version of the file into a program. Default: linkedLoader(path), or parseAndValidate without a path. */
+  load?: ProgramLoader;
   pipeline: string;
   /** Finished recorded runs of the pipeline. */
   recordings: Recording[];
@@ -263,7 +300,9 @@ function historyLine(v: Variant, scrub: (s: string) => string): string {
 
 export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
   const { pipeline, source } = options;
-  const original = parse(source);
+  const load = options.load ?? (options.path ? linkedLoader(options.path, options.validate) : parseAndValidate(options.validate));
+  const loaded = load(source);
+  const original = loaded.ast;
   if (original.errors.length) throw new Error(`The original doesn't parse: ${original.errors.join("; ")}`);
   if (!original.pipelines.some((p) => p.name === pipeline)) throw new Error(`No pipeline ${pipeline} in the original`);
   const seed = options.seed ?? 1;
@@ -313,8 +352,7 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
       const p = parseProposal(answer.text);
       if (!p.source) last = { rationale: p.rationale, problems: ["the answer had no ```halo block"] };
       else {
-        const ast = parse(p.source);
-        const errors = ast.errors.length ? ast.errors : validate(ast, options.validate).filter((d) => d.severity === "error").map((d) => `${d.line ? `line ${d.line}: ` : ""}${d.message}`);
+        const errors = load(p.source).problems;
         last = { source: p.source, rationale: p.rationale, problems: errors };
         if (!errors.length) break;
       }
@@ -350,7 +388,7 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
         continue;
       }
       seen.add(normalize(p.source));
-      const ast = parse(p.source);
+      const ast = load(p.source).ast;
       const fence = checkFence(original, ast, pipeline, options.fence);
       v.fence = fence.checks;
       if (!fence.inside) {
@@ -385,7 +423,7 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
 
   for (const v of front) {
     if (!split.holdout.length || left() <= 0) break;
-    const summary = await compareRuns({ original, variant: parse(v.source!), pipeline, recordings: split.holdout, runtime: options.runtime, judge: options.judge, criteria, budget: left(), seed: seed + 1000 });
+    const summary = await compareRuns({ original, variant: load(v.source!).ast, pipeline, recordings: split.holdout, runtime: options.runtime, judge: options.judge, criteria, budget: left(), seed: seed + 1000 });
     spent += summary.spent;
     v.holdout = summary;
     v.holdoutScore = scoreOf(summary);

@@ -45,7 +45,8 @@ export interface HttpProviderSpec {
   baseUrl: string;
   auth?: HttpAuth;
   /** How POST/PUT/PATCH send their arguments. Default json. */
-  body?: "json" | "form";
+  /** "multipart": multipart/form-data, each file a file part. In "json", a file goes inline as a data: URI. */
+  body?: "json" | "form" | "multipart";
   /** Fixed headers sent with every request, e.g. an API version. */
   headers?: Record<string, string>;
   methods: HttpMethodSpec[];
@@ -113,9 +114,16 @@ export function checkManifest(raw: unknown, reserved: Iterable<string> = []): To
   if (typeof m.name !== "string" || !NAME.test(m.name)) bad(`name must be lowercase letters, digits and dashes (got ${JSON.stringify(m.name)})`);
   if (typeof m.version !== "string" || !VERSION.test(m.version)) bad(`version must look like 1.2.3 (got ${JSON.stringify(m.version)})`);
   if (typeof m.description !== "string" || !m.description.trim()) bad("description is required");
+  checkProviders(m.providers, reserved, bad);
+  if (problems.length) throw new ManifestError(`Invalid ${MANIFEST_FILE}${typeof m.name === "string" ? ` for "${m.name}"` : ""}:\n  - ${problems.join("\n  - ")}`);
+  return m;
+}
+
+/** Check a manifest's `providers` block (shared by halo-tool.json and v2 halo.json packages). */
+export function checkProviders(providersBlock: unknown, reserved: Iterable<string>, bad: (m: string) => void, options: { required?: boolean } = {}) {
   const taken = new Set(reserved);
-  const providers = m.providers && typeof m.providers === "object" ? Object.entries(m.providers) : [];
-  if (!providers.length) bad("providers must declare at least one provider");
+  const providers = providersBlock && typeof providersBlock === "object" ? Object.entries(providersBlock as Record<string, ProviderSpec>) : [];
+  if (!providers.length && options.required !== false) bad("providers must declare at least one provider");
   for (const [name, p] of providers) {
     const at = `providers.${name}`;
     if (!PROVIDER.test(name)) bad(`${at}: provider names start with a capital letter and use letters and digits`);
@@ -134,8 +142,6 @@ export function checkManifest(raw: unknown, reserved: Iterable<string> = []): To
       if (typeof p.entry !== "string" || !safeRelative(p.entry)) bad(`${at}.entry must be a path inside the package`);
     } else bad(`${at}.kind must be http, mcp, or module`);
   }
-  if (problems.length) throw new ManifestError(`Invalid ${MANIFEST_FILE}${typeof m.name === "string" ? ` for "${m.name}"` : ""}:\n  - ${problems.join("\n  - ")}`);
-  return m;
 }
 
 function checkHttp(p: HttpProviderSpec, at: string, bad: (m: string) => void) {
@@ -148,7 +154,7 @@ function checkHttp(p: HttpProviderSpec, at: string, bad: (m: string) => void) {
     if ((auth.type === "header" || auth.type === "query") && !auth.name) bad(`${at}.auth.name is required for ${auth.type} auth`);
     if (auth.type === "basic" && (!Array.isArray(auth.env) || auth.env.length !== 2)) bad(`${at}.auth.env must name two variables (user, password) for basic auth`);
   }
-  if (p.body !== undefined && p.body !== "json" && p.body !== "form") bad(`${at}.body must be json or form`);
+  if (p.body !== undefined && p.body !== "json" && p.body !== "form" && p.body !== "multipart") bad(`${at}.body must be json, form or multipart`);
   if (!Array.isArray(p.methods) || !p.methods.length) return bad(`${at}.methods must list at least one method`);
   const seen = new Set<string>();
   for (const [i, method] of p.methods.entries()) {

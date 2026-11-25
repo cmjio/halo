@@ -6,7 +6,7 @@ Start with **`learn/`**, which teaches one idea per file and is numbered so you 
 
 | Folder | What's in it |
 |---|---|
-| [`learn/`](learn/) | Start here. One idea per file, in order: agents, pipes, policies, tools, gates, stores, directives. |
+| [`learn/`](learn/) | Start here. One idea per file, in order: agents, pipes, policies, tools, gates, stores, directives, sandboxes. |
 | [`patterns/`](patterns/) | Features in context: people in the loop, schemas, memory, model routing, thread state, built-in tools, remote sandboxes. |
 | [`engineering/`](engineering/) | Code review, CI, incidents, migrations, and agents that write code until the tests pass. |
 | [`product/`](product/) | A day's work for a founder, a PM, a designer, and a researcher. |

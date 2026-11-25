@@ -113,7 +113,7 @@ describe("validator: Halo checks", () => {
     ]);
     expect(messages(src, "error")[0]).toBe(`Schema "S": field "b": "Strng" is not a type; did you mean "String"?`);
     expect(messages(src, "warning")).toEqual([
-      `Schema "S": field "c": "Widget" is not a declared schema, so it isn't checked (declare \`schema Widget { ... }\`, or use String, Number, Integer, Boolean, Array, List, Object, Map, JSON, Any, Result)`,
+      `Schema "S": field "c": "Widget" is not a declared schema, so it isn't checked (declare \`schema Widget { ... }\`, or use String, Number, Integer, Boolean, Array, List, Object, Map, JSON, Any, Result, Image, Document, Audio, Video)`,
       `Pipeline "P": loop(...) has no option "tries" (only max: n)`,
     ]);
   });

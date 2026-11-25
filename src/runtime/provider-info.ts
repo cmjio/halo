@@ -27,11 +27,11 @@ const rest: ProviderInfo = {
 };
 
 const post: ProviderInfo = {
-  description: "HTTP POST with a JSON body to the tool's URL",
+  description: "HTTP POST to the tool's URL: a JSON body, or form or multipart (body:)",
   methods: [
     {
       name: "post",
-      description: "POST the arguments (except path) as a JSON body.",
+      description: "POST the arguments (except path). To send a file you were shown, pass its label, e.g. \"[image: dent.jpg #3fa2c1]\", or its id, \"#3fa2c1\".",
       params: { type: "object", properties: { path: text("Path under the base URL") }, additionalProperties: true },
       effect: "external",
     },
@@ -104,12 +104,53 @@ const slack: ProviderInfo = {
 };
 
 const email: ProviderInfo = {
-  description: "Sends email",
+  description: "Email: sends mail, and reads a mailbox when the tool is set up for one",
   methods: [
     {
       name: "send",
       description: "Send an email.",
-      params: obj({ to: { type: ["string", "array"], description: "Recipient address(es)" }, subject: text("Subject line"), body: text("Plain-text body") }, ["subject", "body"]),
+      params: obj(
+        {
+          to: { type: ["string", "array"], description: "Recipient address(es)" },
+          subject: text("Subject line"),
+          body: text("Plain-text body"),
+          html: text("HTML body, as well as or instead of the plain-text one"),
+          cc: { type: ["string", "array"], description: "Copy to" },
+          bcc: { type: ["string", "array"], description: "Blind copy to" },
+          reply_to: text("Where replies go"),
+          in_reply_to: text("The messageId of the message this answers, to keep the thread"),
+        },
+        ["subject", "body"],
+      ),
+      effect: "external",
+    },
+    {
+      name: "list",
+      description: "List messages in the mailbox, newest first, without their bodies. Works with imap, gmail and outlook tools.",
+      params: obj({
+        unread: { type: "boolean", description: "Only unread messages" },
+        from: text("Only from this sender"),
+        subject: text("Only with this in the subject"),
+        text: text("Only containing this"),
+        since: text('Only since a date ("2026-11-01") or this far back ("24h", "7d")'),
+        limit: num("Most to return (default 10, at most 50)"),
+        folder: text("Folder (default the inbox)"),
+        full: { type: "boolean", description: "Include each message's body" },
+      }),
+      effect: "read",
+    },
+    { name: "read", description: "Read one message: its text, HTML and attachments (an image or PDF attachment's file is sent to a model the message reaches).", params: obj({ id: text("The message's id, from list"), folder: text("Folder it is in (default the inbox)") }, ["id"]), effect: "read" },
+    { name: "mark", description: "Mark a message read (or unread, with read: false).", params: obj({ id: text("The message's id, from list"), read: { type: "boolean", description: "false marks it unread" } }, ["id"]), effect: "external" },
+  ],
+};
+
+const handoff: ProviderInfo = {
+  description: "Hands something to the app that hosts this pipeline, to act on",
+  methods: [
+    {
+      name: "send",
+      description: "Hand an item to the app. The other arguments are the item's data.",
+      params: { type: "object", properties: { kind: text("What this is, e.g. winner_note") }, required: ["kind"], additionalProperties: true },
       effect: "external",
     },
   ],
@@ -159,6 +200,7 @@ export const BUILTIN_PROVIDER_INFO: Record<string, ProviderInfo> = {
   VectorStore: vectorStore,
   Slack: slack,
   Email: email,
+  Handoff: handoff,
   GitHub: github,
   Linear: linear,
   Figma: figma,

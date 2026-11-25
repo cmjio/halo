@@ -13,12 +13,19 @@
  * runtime checks a pipeline's output against its return type.
  */
 
-import type { Agent, Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, Value } from "./types.js";
+import type { Agent, Arg, CallStage, CondExpr, Loc, ParseResult, PipelineStage, PipelineDeclaration, SchemaDeclaration, ToolDeclaration, Value } from "./types.js";
 import {
   BLOCK_CATEGORIES,
   CONTEXT_NAMESPACES,
   DIRECTIVES,
   ENFORCED_RULES,
+  MEDIA_FIELDS,
+  MEDIA_NAMES,
+  MEDIA_TYPE_NAMES,
+  HOST_PATTERN,
+  RESERVED_SECRET,
+  SECRET_NAME,
+  scopePath,
   REDACT_CATEGORIES,
   REQUIRE_CHECKS,
   SCHEMA_TYPES,
@@ -33,9 +40,11 @@ import {
   parseDuration,
 } from "./builtins.js";
 import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
-import { sandboxProblem } from "../runtime/sandbox-agents.js";
+import { DEFAULT_LOCKED, TOOL_ARG_RULES } from "../runtime/tool-rules.js";
+import { sandboxChoice, sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
+import { splitToolPath } from "../linker/names.js";
 
 export interface Diagnostic {
   severity: "error" | "warning";
@@ -44,6 +53,8 @@ export interface Diagnostic {
   column?: number;
   /** The text the problem is about (a type or field name), on or after `line`, so editors can underline it. */
   token?: string;
+  /** The file it's in, for a linked program (from the declaration's `loc.file`). */
+  file?: string;
 }
 
 export interface ValidateOptions {
@@ -73,14 +84,21 @@ class Validator {
     this.policies = new Map(ast.policies.map((g) => [g.name, g]));
     this.pipelines = new Map(ast.pipelines.map((s) => [s.name, s]));
     this.schemas = new Map(ast.schemas.map((sc) => [sc.name, sc]));
+    // `sandbox: "docker"` (etc.) makes a tool named <Agent>Sandbox, which policies may name.
+    for (const a of ast.agents) {
+      const choice = sandboxChoice(a);
+      if (choice.kind === "service") this.sandboxTools.add(choice.tool);
+    }
   }
+
+  private sandboxTools = new Set<string>();
 
   private isDeclaredName(name: string): boolean {
     return this.agents.has(name) || this.tools.has(name) || this.policies.has(name) || this.pipelines.has(name);
   }
 
   private add(severity: Diagnostic["severity"], message: string, loc?: Loc, token?: string) {
-    this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}), ...(token ? { token } : {}) });
+    this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}), ...(token ? { token } : {}), ...(loc?.file ? { file: loc.file } : {}) });
   }
 
   run(): Diagnostic[] {
@@ -90,13 +108,15 @@ class Validator {
       const known = includes(TOOL_PROVIDERS, t.provider) || this.options.toolProviders?.includes(t.provider);
       if (!known) this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
       if (t.provider === "SQLite") this.checkSqliteTool(t);
+      if (t.provider === "Remote") this.checkRemoteSecrets(t);
+      this.checkArgRules(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
     for (const sc of this.ast.schemas) this.checkSchema(sc);
     for (const s of this.ast.pipelines) this.checkPipeline(s);
     const seen = new Set<string>();
     this.diags = this.diags.filter((d) => {
-      const key = `${d.severity}|${d.line}|${d.message}`;
+      const key = `${d.severity}|${d.file ?? ""}|${d.line}|${d.message}`;
       return !seen.has(key) && !!seen.add(key);
     });
     return this.diags.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
@@ -152,11 +172,38 @@ class Validator {
         this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
       } else if (rule.name === "MatchRegex" && !validRegex(rule.args[0] ?? "")) {
         this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
+      } else if (rule.name === "AllowHosts") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowHosts(...) needs at least one host, e.g. AllowHosts("pypi.org", "*.pythonhosted.org")`, g.loc);
+        for (const h of rule.args) if (!HOST_PATTERN.test(h)) this.add("error", `Policy "${g.name}": AllowHosts(${h}) is not a host name like "pypi.org" or "*.pythonhosted.org"`, g.loc);
+      } else if (rule.name === "AllowMedia") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowMedia(...) needs at least one kind, e.g. AllowMedia(image, pdf)`, g.loc);
+        for (const m of rule.args) if (!includes(MEDIA_NAMES, m.toLowerCase())) this.add("error", `Policy "${g.name}": AllowMedia(${m}) is not a kind of media; use ${MEDIA_NAMES.join(", ")}`, g.loc);
+      } else if (rule.name === "AllowFiles") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowFiles(...) needs at least one folder or file, e.g. AllowFiles("src/billing", "test/billing")`, g.loc);
+        for (const f of rule.args) if (scopePath(f) === undefined) this.add("error", `Policy "${g.name}": AllowFiles(${f}) should be a path inside the project, like "src/billing" (no leading /, no ..)`, g.loc);
+      } else if (rule.name === "AllowSecrets") {
+        if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowSecrets(...) needs at least one name, e.g. AllowSecrets("STRIPE_TEST_KEY")`, g.loc);
+        for (const n of rule.args) {
+          if (!SECRET_NAME.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}) should be an environment variable name, like STRIPE_TEST_KEY`, g.loc);
+          else if (RESERVED_SECRET.test(n)) this.add("error", `Policy "${g.name}": AllowSecrets(${n}): ${n} can't be a secret; it changes how the sandbox or Docker itself runs`, g.loc);
+        }
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
       } else if ((rule.name === "MaxWords" || rule.name === "MaxChars" || rule.name === "MaxTokens" || rule.name === "MaxSpend") && !(Number(rule.args[0]) >= 0)) {
         this.add("error", `Policy "${g.name}": ${rule.name} needs a numeric limit`, g.loc);
       }
+    }
+  }
+
+  /** A Remote's secrets: names environment variables; Env.X there would hand over the value itself. */
+  private checkRemoteSecrets(t: ParseResult["tools"][number]) {
+    const arg = t.argList.find((a) => a.name === "secrets");
+    if (!arg) return;
+    const items = arg.value.kind === "list" ? arg.value.items : [arg.value];
+    for (const v of items) {
+      if (v.kind !== "string") this.add("error", `Tool "${t.name}": secrets: lists names in quotes, like secrets: ["STRIPE_TEST_KEY"]; ${v.kind === "ref" && v.path[0] === "Env" ? `Env.${v.path.slice(1).join(".")} is the value, not the name` : "each entry is a string"}`, t.loc);
+      else if (!SECRET_NAME.test(v.value)) this.add("error", `Tool "${t.name}": secrets: "${v.value}" should be an environment variable name, like STRIPE_TEST_KEY`, t.loc);
+      else if (RESERVED_SECRET.test(v.value)) this.add("error", `Tool "${t.name}": secrets: ${v.value} can't be a secret; it changes how the sandbox or Docker itself runs`, t.loc);
     }
   }
 
@@ -174,8 +221,41 @@ class Validator {
     }
     const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
     for (const pattern of patterns) {
-      const tool = pattern.split(".")[0]!;
-      if (tool !== "*" && !this.tools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
+      const tool = splitToolPath(pattern).tool;
+      if (tool !== "*" && !this.tools.has(tool) && !this.sandboxTools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
+    }
+  }
+
+  /** `& Fixed(...) & Match(...) & Locked(...) & Unlocked(...)` on a tool declaration. */
+  private checkArgRules(t: ToolDeclaration) {
+    const name = (v: Value | undefined) => (v?.kind === "string" && v.value ? v.value : undefined);
+    const fixed = new Set<string>();
+    for (const rule of t.rules ?? []) {
+      const where = `Tool "${t.name}": ${rule.name}`;
+      if (!includes(TOOL_ARG_RULES, rule.name)) {
+        this.add("error", `${where} is not a rule a tool can have (use ${TOOL_ARG_RULES.join(", ")}; policies go on agents with \`requires\`)`, t.loc);
+      } else if (rule.name === "Fixed") {
+        const arg = name(rule.args[0]);
+        if (rule.args.length !== 2 || !arg) this.add("error", `${where} needs an argument name and its value, e.g. Fixed("currency", "USD")`, t.loc);
+        else if (rule.args[1]!.kind === "context") this.add("error", `${where}("${arg}", …): a fixed value is the same for every run, so it can't read context`, t.loc);
+        else if (fixed.has(arg)) this.add("error", `${where}("${arg}", …) is written twice`, t.loc);
+        else fixed.add(arg);
+      } else if (rule.name === "Match") {
+        const pattern = rule.args[1];
+        if (rule.args.length !== 2 || !name(rule.args[0]) || pattern?.kind !== "string") this.add("error", `${where} needs an argument name and a regular expression for its whole value, e.g. Match("amount", "\\\\d+")`, t.loc);
+        else if (!validRegex(pattern.value)) this.add("error", `${where}("${name(rule.args[0])}", ${JSON.stringify(pattern.value)}) is not a valid regular expression`, t.loc);
+      } else {
+        if (!rule.args.length || rule.args.some((a) => !name(a))) this.add("error", `${where} needs argument names, e.g. ${rule.name}("path")`, t.loc);
+        if (rule.name === "Unlocked") {
+          const defaults = DEFAULT_LOCKED[t.provider] ?? [];
+          const locked = new Set((t.rules ?? []).filter((r) => r.name === "Locked").flatMap((r) => r.args.map(name)));
+          for (const a of rule.args) {
+            const arg = name(a);
+            if (arg && locked.has(arg)) this.add("error", `Tool "${t.name}": "${arg}" is both Locked and Unlocked`, t.loc);
+            else if (arg && !defaults.includes(arg)) this.add("warning", `Tool "${t.name}": Unlocked("${arg}") changes nothing: a ${t.provider} tool doesn't lock "${arg}"`, t.loc);
+          }
+        }
+      }
     }
   }
 
@@ -186,7 +266,7 @@ class Validator {
     for (const e of m.equips ?? []) {
       if (!this.tools.has(e)) this.add("error", `Agent "${m.name}" equips undefined tool "${e}"`, m.loc);
     }
-    const sandbox = sandboxProblem(m, this.tools);
+    const sandbox = sandboxProblem(m, this.tools, this.policies);
     if (sandbox) this.add("error", sandbox, m.loc);
     if (m.params.preset !== undefined && !findPreset(m.params.preset)) {
       this.add("error", `Agent "${m.name}": unknown preset "${m.params.preset}" (use ${PRESET_NAMES.join(", ")})`, m.loc);
@@ -201,6 +281,20 @@ class Validator {
         if (target === m.name) this.add("error", `Agent "${m.name}" cannot shadow itself`, m.loc);
         else if (!this.agents.has(target) && !/[-/]/.test(target)) {
           this.add("warning", `@shadow(${target}) on "${m.name}": "${target}" is not a defined agent or model, so it will never run`, m.loc);
+        }
+      }
+      if (d.name === "cascade") {
+        const seen = new Set([m.modelId]);
+        for (const target of d.value ? d.value.split(/\s*,\s*/).filter(Boolean) : []) {
+          const model = this.agents.get(target)?.modelId ?? target;
+          if (!this.agents.has(target) && !/[-/]/.test(target)) {
+            this.add("error", `@cascade(${d.value}) on "${m.name}": "${target}" is not a model id or a defined agent`, m.loc);
+          } else if (seen.has(model)) {
+            this.add("warning", `@cascade on "${m.name}": "${model}" is already ${model === m.modelId ? "the agent's own model" : "earlier in the cascade"}, so it adds nothing`, m.loc);
+          } else if (this.options.canHandleModel && !this.options.canHandleModel(model)) {
+            this.add("warning", `@cascade on "${m.name}": no adapter handles model "${model}"`, m.loc);
+          }
+          seen.add(model);
         }
       }
     }
@@ -223,6 +317,8 @@ class Validator {
     }
     if (d.name === "shadow" && args.length !== 1) this.add("error", `@shadow needs exactly one target`, loc);
     if (d.name === "shadow" && on === "pipeline") this.add("warning", `@shadow only applies to agents`, loc);
+    if (d.name === "cascade" && !args.length) this.add("error", `@cascade needs at least one model to move up to, e.g. @cascade(anthropic/claude-opus-4-5)`, loc);
+    if (d.name === "cascade" && on === "pipeline") this.add("warning", `@cascade only applies to agents`, loc);
     if (d.name === "checkpoint" && on === "agent") this.add("warning", `@checkpoint only applies to pipelines`, loc);
     if (d.name === "thread" && on === "agent") this.add("warning", `@thread only applies to pipelines`, loc);
     if (d.name === "expect") {
@@ -237,6 +333,7 @@ class Validator {
   }
 
   private checkSchema(sc: SchemaDeclaration) {
+    if (includes(MEDIA_TYPE_NAMES, sc.name)) this.add("warning", `Schema "${sc.name}" replaces the built-in ${sc.name} type in this program: a value of it is an object with these fields, not a file`, sc.loc);
     const names = new Set<string>();
     for (const f of sc.fields) {
       if (names.has(f.name)) this.add("error", `Schema "${sc.name}": duplicate field "${f.name}"`, sc.loc);
@@ -269,6 +366,17 @@ class Validator {
     let type = param.type;
     for (const [i, field] of path.slice(1).entries()) {
       const schema = this.schemas.get(baseType(type));
+      if (!schema && kindOf(baseType(type), this.schemas) === "media" && !/[<]/.test(type)) {
+        // A file's fields are fixed.
+        const known = MEDIA_FIELDS[field];
+        if (!known && report) {
+          const read = path.slice(0, i + 2).join(".");
+          this.add("error", `Pipeline "${s.name}": ${read}: "${field}" is not something ${article(baseType(type))} has (it has ${Object.keys(MEDIA_FIELDS).join(", ")})`, loc, read);
+        }
+        if (!known) return "";
+        type = known;
+        continue;
+      }
       if (!schema) return ""; // not a schema (Object, Any, ...): fields aren't known
       const f = schema.fields.find((x) => x.name === field);
       if (!f) {
@@ -321,7 +429,7 @@ class Validator {
     const a = kindOf(baseType(from), this.schemas);
     const b = kindOf(baseType(to), this.schemas);
     if (a === "any" || b === "any") return true;
-    if (a === b) return a !== "schema" || baseType(from) === baseType(to);
+    if (a === b) return (a !== "schema" && a !== "media") || baseType(from) === baseType(to);
     // A Number may hold a whole number; only a written 1.5 is known not to (see checkCallTypes).
     if ((a === "integer" && b === "number") || (a === "number" && b === "integer")) return true;
     if (a === "schema" && b === "object") return true;
@@ -635,7 +743,7 @@ export function producedKeys(stage: PipelineStage): string[] {
     case "each":
       return [...callKeys(stage.call), ...(stage.bind ? [stage.bind] : [])];
     case "loop":
-      return [stage.target, ...(stage.bind ? [stage.bind] : [])];
+      return [stage.alias ?? stage.target, ...(stage.bind ? [stage.bind] : [])];
     case "listen":
       return [stage.target.split(".")[0]!, ...(stage.bind ? [stage.bind] : [])];
     case "interrupt":
@@ -654,7 +762,8 @@ function boundNames(stage: PipelineStage): string[] {
 /** A call's result is stored at `context.data.<Callee>.<method>` and `context.data.<method>`. */
 function callKeys(call: CallStage): string[] {
   if (call.callee === "System" || (call.callee === "Thread" && includes(THREAD_METHODS, call.method))) return [];
-  return call.method ? [call.callee, call.method] : [call.callee];
+  const callee = call.alias ?? call.callee;
+  return call.method ? [callee, call.method] : [callee];
 }
 
 const UNSAFE_NAMES = new Set(["__proto__", "prototype", "constructor"]);
@@ -665,7 +774,7 @@ function baseType(type: string): string {
   return (lt < 0 ? type : type.slice(0, lt)).trim();
 }
 
-type Kind = "string" | "number" | "integer" | "boolean" | "list" | "object" | "schema" | "any";
+type Kind = "string" | "number" | "integer" | "boolean" | "list" | "object" | "schema" | "media" | "any";
 
 /** What a type name accepts, folding aliases (List = Array, JSON = Map = Object). Unknown and unchecked types are "any". */
 function kindOf(base: string, schemas: Map<string, SchemaDeclaration>): Kind {
@@ -686,7 +795,8 @@ function kindOf(base: string, schemas: Map<string, SchemaDeclaration>): Kind {
     case "Map":
       return "object";
   }
-  return schemas.has(base) ? "schema" : "any";
+  if (schemas.has(base)) return "schema";
+  return includes(MEDIA_TYPE_NAMES, base) ? "media" : "any";
 }
 
 /** A likely typo: the same name in another case, or within an edit or two (one for short names). */

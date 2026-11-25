@@ -4,7 +4,9 @@
 //          test detection with CI/CD pipeline integration
 // ============================================================
 
-policy TestSafety : Block(ProductionWrite)
+// Generated tests only ever run against staging: the pipeline fixes env to
+// "staging", and the PR diff the architect reads can't steer it.
+policy TestSafety : Block(PromptInjection)
 policy QABudget   : MaxSpend(8.00)
 
 // --- Tools ---
@@ -12,12 +14,24 @@ tool GitHub         : POST("api.github.com/repos", apiKey: Env.GH_TOKEN)
 tool TestRunner     : POST("api.playwright.dev/run", apiKey: Env.PW_KEY)
 tool SlackQA        : POST("hooks.slack.com/services/qa-team")
 tool JiraAPI        : POST("api.atlassian.com/jira", apiKey: Env.JIRA_KEY)
+// A throwaway machine with Playwright, to check generated tests against the PR's
+// code before they cost a staging run. It reaches GitHub and npm, nothing else.
+tool Sandbox        : Remote("docker", image: "mcr.microsoft.com/playwright:v1.48.2-jammy", hosts: ["github.com", "codeload.github.com", "registry.npmjs.org"])
 
 // --- Store ---
 tool TestHistory    : VectorStore(Env.PINECONE_KEY, namespace: "test-results")
 tool FlakyPatterns  : VectorStore(Env.PINECONE_KEY, namespace: "flaky-test-dna")
 
 // --- Agents ---
+// A candidate model for the architect role: it answers every TestArchitect
+// call alongside it, and its answers are recorded for comparison, never used.
+agent Architect_V2 [openai/gpt-4o, temp: 0.3]
+  system """
+    You are a test automation architect. Generate comprehensive
+    test cases from PR diffs. Output Playwright-compatible specs.
+  """
+  requires TestSafety, QABudget
+
 // The test architect generates test cases from requirements
 @shadow(Architect_V2)
 agent TestArchitect [anthropic/claude-sonnet-4, temp: 0.3]
@@ -42,13 +56,26 @@ agent FlakyDetector [openai/gpt-4o-mini, temp: 0.0]
   requires QABudget
 
 // --- The Pipeline ---
-pipeline AutoTest(pr: GitHub.PullRequest) -> Report:
+schema PullRequest {
+  diff     : String
+  repo     : String
+  head_sha : String
+}
+
+pipeline AutoTest(pr: PullRequest) -> Result:
   pr
     // Step 1: Generate test cases from PR diff
     |> TestArchitect.generate_tests(
         diff: context.data.pr.diff,
         framework: "playwright"
       )
+
+    // Step 1b: Do the generated tests even load? Check them against the PR's
+    // head in the sandbox (--list compiles them without running anything)
+    |> Sandbox.run(command: "git clone --quiet https://github.com/{{pr.repo}}.git app && cd app && git checkout --quiet {{pr.head_sha}} && npm ci --ignore-scripts --silent", timeout_ms: 600000) as checkout
+    |> Sandbox.write(path: "app/tests/generated.spec.ts", content: context.data.TestArchitect.generate_tests) as saved
+    |> Sandbox.run(command: "cd app && npx playwright test tests/generated.spec.ts --list") as compiled
+    |? (context.data.compiled.exitCode == 0)
 
     // Step 2: Run tests in CI
     |> TestRunner.execute(

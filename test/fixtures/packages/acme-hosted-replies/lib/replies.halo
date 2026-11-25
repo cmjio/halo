@@ -1,0 +1,13 @@
+// The local half of @acme/hosted-replies: "exports" lists this file, so it ships, and it runs
+// on the consumer's machine with the model the consumer picks for the "fast" slot.
+
+schema Reply {
+  text: String,
+  tone: String,
+}
+
+agent Tagger [models.fast, temperature: 0]
+  system "You tag support tickets with one topic word."
+
+pipeline Tag(ticket: String) -> Result:
+  ticket |> Tagger.tag("One topic word for this ticket: {{ticket}}")

@@ -17,6 +17,8 @@
  */
 
 import { HaloError, TimeoutError } from "./errors.js";
+import { inlineFiles } from "./media.js";
+import pkg from "../../package.json" with { type: "json" };
 import type { JsonSchema, ProviderInfo, ToolCall, ToolEffect, ToolInfoContext, ToolMethod, ToolProvider, ToolServices } from "./tools.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -24,7 +26,7 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_SUPPORTED_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const CLIENT_INFO = { name: "halo", version: "0.7.1" };
+const CLIENT_INFO = { name: "halo", version: pkg.version };
 
 /** Methods every MCP tool has, in addition to the server's own tools. */
 const BUILTIN_METHODS = new Set(["list_tools", "list_resources", "read_resource"]);
@@ -629,7 +631,12 @@ export const mcpProvider: ToolProvider = async (call, services) => {
     const names = [...tools.map((t) => t.name), ...BUILTIN_METHODS];
     throw new HaloError(`MCP tool "${call.tool.name}" has no method "${call.method}" (use ${names.join(", ")})`, { code: "TOOL_METHOD" });
   }
-  const result = await client.request("tools/call", { name: tool.name, arguments: toolArguments(call, tool) }, signal);
+  // A file goes to the server inline, as a data: URI string.
+  const args = await inlineFiles(toolArguments(call, tool), (ref) => {
+    if (!services.media) throw new HaloError(`${call.tool.name}: this runtime can't read the files its runs hold, so it can't send them`, { code: "TOOL_CONFIG" });
+    return services.media(ref);
+  });
+  const result = await client.request("tools/call", { name: tool.name, arguments: args }, signal);
   if (result?.isError) throw new HaloError(`${call.tool.name}.${call.method}: ${errorText(result)}`, { code: "TOOL_FAILED" });
   return mcpResultValue(result);
 };

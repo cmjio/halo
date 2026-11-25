@@ -4,9 +4,13 @@
 #   curl -fsSL https://halolang.com/install.sh | sh
 #
 # Options, as environment variables:
-#   HALO_VERSION=0.1.0       a version instead of the latest
+#   HALO_VERSION=0.1.0       a version instead of the latest; or a channel: latest (the
+#                            default), next (the newest prerelease) or nightly (built from
+#                            main every night):  curl -fsSL …/install.sh | HALO_VERSION=next sh
 #   HALO_INSTALL=~/.halo     where to install (the binary goes in $HALO_INSTALL/bin)
 #   HALO_NO_MODIFY_PATH=1    don't add it to your shell's PATH
+#   HALO_INSTALLED_VIA=…     how this install came about, sent as ?via= for halolang.com's
+#                            download counts (default: "ci" under $CI, else "script")
 #
 # It downloads the binary for this machine from halolang.com/dl, checks it against the
 # release's SHA256SUMS, and puts it in ~/.halo/bin. To uninstall: rm -rf ~/.halo/bin
@@ -72,11 +76,14 @@ if [ "$os" = linux ]; then
 fi
 
 # ── Which version ──
-version="${HALO_VERSION:-}"
-if [ -z "$version" ]; then
-  version=$(fetch_text "$BASE/latest.json" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
-  [ -n "$version" ] || fail "Couldn't read the latest version from $BASE/latest.json"
-fi
+version="${HALO_VERSION:-latest}"
+case "$version" in
+  latest | next | nightly)
+    channel="$version"
+    version=$(fetch_text "$BASE/$channel.json" | sed -n 's/.*"version" *: *"\([^"]*\)".*/\1/p')
+    [ -n "$version" ] || fail "Couldn't read the $channel version from $BASE/$channel.json"
+    ;;
+esac
 version="${version#v}"
 
 say "${bold}Installing halo $version${reset} ${dim}($asset)${reset}"
@@ -89,7 +96,11 @@ fetch "$BASE/$version/SHA256SUMS" "$tmp/SHA256SUMS" || fail "Halo $version isn't
 expected=$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/SHA256SUMS")
 [ -n "$expected" ] || fail "Halo $version has no $asset build."
 
-fetch "$BASE/$version/$asset" "$tmp/halo" || fail "Couldn't download $BASE/$version/$asset"
+# Tell halolang.com how this install came about, for its download counts (nothing else is sent):
+# HALO_INSTALLED_VIA (halo upgrade and the GitHub Action set it), else "ci" under CI, else "script".
+via="${HALO_INSTALLED_VIA:-}"
+[ -n "$via" ] || { [ -n "${CI:-}" ] && via=ci || via=script; }
+fetch "$BASE/$version/$asset?via=$via" "$tmp/halo" || fail "Couldn't download $BASE/$version/$asset"
 
 if command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$tmp/halo" | awk '{ print $1 }')

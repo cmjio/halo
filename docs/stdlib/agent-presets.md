@@ -57,6 +57,6 @@ agent Reviewer [anthropic/claude-sonnet-4-5, preset: CodeReviewer, tools: auto]
   equips Repo
 ```
 
-`Coder` is best given a computer to work on: `[..., preset: Coder, sandbox: "e2b"]` gives it a fresh cloud sandbox for each run (see [Remote Computers](./remote.md#sandbox-agents)).
+`Coder` is best given a computer to work on: `[..., preset: Coder, sandbox: "e2b"]` gives it a fresh cloud sandbox for each run, and `sandbox: "docker"` a container on this machine (see [Remote Computers](./remote.md#sandbox-agents)).
 
 Presets that answer JSON tell the model the exact fields, and Halo parses JSON answers, so gates can read them directly: `|? (context.data.verdict.pass == true)`. To make a pipeline fail when the shape is wrong, give it a `schema` return type.

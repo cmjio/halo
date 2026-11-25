@@ -82,7 +82,7 @@ See [Pipe Operators](../reference/operators.md) for all of them.
 
 ## Run results
 
-A run returns `{ output, status, runId, context }`. `context.meta` has the cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain of the stages. `verifyTrace(trace)` checks that the chain is unbroken.
+A run returns `{ output, status, runId, context }`. `context.meta` has the cost, tokens, every call, policy violations, and shadow results. `context.trace` is a SHA-256 hash chain of the stages, and of what each stage's tool calls did. `verifyTrace(trace)` checks that the chain is unbroken.
 
 ## State that lasts
 

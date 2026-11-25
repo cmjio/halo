@@ -1,0 +1,141 @@
+{
+  "name": "@halo/jira",
+  "version": "1.0.0",
+  "description": "Jira Cloud issues: search with JQL, read, create, comment, and transition",
+  "license": "MIT",
+  "homepage": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/",
+  "keywords": [
+    "jira",
+    "issues",
+    "atlassian"
+  ],
+  "providers": {
+    "Jira": {
+      "kind": "http",
+      "description": "Jira Cloud (declare it with your site: Jira(site: \"acme\") for acme.atlassian.net)",
+      "baseUrl": "https://{{site}}.atlassian.net/rest/api/3",
+      "auth": {
+        "type": "basic",
+        "env": [
+          "JIRA_EMAIL",
+          "JIRA_API_TOKEN"
+        ]
+      },
+      "methods": [
+        {
+          "name": "search",
+          "description": "Search issues with JQL, e.g. project = ENG AND status = \"In Progress\".",
+          "effect": "read",
+          "http": {
+            "method": "GET",
+            "path": "/search/jql"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "jql": {
+                "type": "string"
+              },
+              "maxResults": {
+                "type": "integer"
+              },
+              "fields": {
+                "type": "string",
+                "description": "Comma-separated, e.g. summary,status,assignee"
+              }
+            },
+            "required": [
+              "jql"
+            ]
+          }
+        },
+        {
+          "name": "get_issue",
+          "description": "Get an issue by key, e.g. ENG-123.",
+          "effect": "read",
+          "http": {
+            "method": "GET",
+            "path": "/issue/{key}"
+          }
+        },
+        {
+          "name": "create_issue",
+          "description": "Create an issue. fields needs project ({\"key\": ...}), summary, and issuetype ({\"name\": \"Task\"}).",
+          "effect": "external",
+          "http": {
+            "method": "POST",
+            "path": "/issue"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "fields": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "fields"
+            ]
+          }
+        },
+        {
+          "name": "add_comment",
+          "description": "Comment on an issue. body is Atlassian Document Format: {\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"...\"}]}]}.",
+          "effect": "external",
+          "http": {
+            "method": "POST",
+            "path": "/issue/{key}/comment"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "body": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "key",
+              "body"
+            ]
+          }
+        },
+        {
+          "name": "list_transitions",
+          "description": "List the transitions (status changes) an issue can make now.",
+          "effect": "read",
+          "http": {
+            "method": "GET",
+            "path": "/issue/{key}/transitions"
+          }
+        },
+        {
+          "name": "transition",
+          "description": "Move an issue to another status: transition is {\"id\": ...} from list_transitions.",
+          "effect": "external",
+          "http": {
+            "method": "POST",
+            "path": "/issue/{key}/transitions"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "transition": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "key",
+              "transition"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

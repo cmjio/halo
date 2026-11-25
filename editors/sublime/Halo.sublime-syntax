@@ -175,6 +175,11 @@ contexts:
       push: block-comment-body
     - match: '\b(as)\b'
       scope: keyword.other.binding.halo
+    - match: '^\s*(use)\b'
+      captures:
+        1: keyword.control.import.halo
+    - match: '\b(with)(?=\s+models\s*\()'
+      scope: keyword.control.import.halo
     - match: '\b(policy|tool|store|schema|equips|requires|system)\b'
       scope: storage.type.halo
     - match: '\b(each|in|else)\b'

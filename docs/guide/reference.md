@@ -29,7 +29,7 @@ agent Name [model, param: value, ...]
 - **system**: the system prompt.
 - **equips**: tools and stores the agent may use with `tool:` or `tools:`. Equipped `VectorStore`s and `File` stores also add context automatically (see [Stores](../stdlib/stores.md)).
 - **requires**: policies checked on every call (see [Policies](../stdlib/policies.md)).
-- **directives**: `@timeout`, `@retry`, `@shadow`, `@correct` (see [Directives](../reference/compiler-directives.md)).
+- **directives**: `@timeout`, `@retry`, `@shadow`, `@correct`, `@cascade` (see [Directives](../reference/compiler-directives.md)).
 
 ## `tool` and `store`
 
@@ -38,7 +38,7 @@ tool  Name : Provider(args...)
 store Name : Provider(args...)
 ```
 
-`tool` and `store` mean the same thing. Use `store` for things that hold data. The providers are `REST`/`GET`, `POST`, `PostgreSQL`/`SQL`, `VectorStore`, `File`, `Bash`, `Browser`, `Chrome`, `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `MCP`, `Slack`, `Email`, `GitHub`, `Linear`, and `Figma` (see [Built-in Tools](../stdlib/tools.md)). You can add more with [tool packages](./tool-packages.md) or `runtime.registerToolProvider`.
+`tool` and `store` mean the same thing. Use `store` for things that hold data. The providers are `REST`/`GET`, `POST`, `PostgreSQL`/`SQL`, `VectorStore`, `File`, `Bash`, `Browser`, `Chrome`, `Workspace`, `KV`, `SQLite`, `Code`, `Documents`, `MCP`, `Slack`, `Email`, `GitHub`, `Linear`, and `Figma` (see [Built-in Tools](../stdlib/tools.md)). You can add more with [packages](./tool-packages.md) or `runtime.registerToolProvider`.
 
 `Env.NAME` reads an environment variable. It works **only in tool and store declarations**, written either bare (`Env.GITHUB_TOKEN`) or as a string (`"Env.GITHUB_TOKEN"`). In a pipeline it is an error, and `{{Env.X}}` is never filled in, so secrets can't reach prompts.
 

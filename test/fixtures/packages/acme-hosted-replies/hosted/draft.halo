@@ -1,0 +1,20 @@
+// The hosted half: "exports" doesn't list this file and lib/replies.halo doesn't use it, so
+// halo publish leaves it out of the package. It runs on Acme's `halo serve --package`, on
+// Acme's models and keys. Consumers get only DraftReply's interface.
+use "../lib/replies.halo" { Reply }
+
+schema Draft {
+  reply: Reply,
+  confidence: Number,
+}
+
+agent Drafter [anthropic/claude-sonnet-4-5, temperature: 0.3]
+  system "You draft short, kind replies to customer support tickets."
+
+// Drafts a reply to a support ticket in the tone you ask for.
+pipeline DraftReply(ticket: String, tone: String) -> Draft:
+  ticket |> Drafter.draft("Draft a {{tone}} reply to this ticket: {{ticket}}")
+
+// Not in hosted.exports: halo serve --package doesn't expose it.
+pipeline Internal(note: String) -> Result:
+  note |> Drafter.draft("Summarise: {{note}}")

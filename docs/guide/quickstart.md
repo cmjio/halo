@@ -14,15 +14,18 @@ On Windows, in PowerShell:
 irm https://halolang.com/install.ps1 | iex
 ```
 
-This installs `halo`, a single standalone binary with Bun built in, so nothing else needs to be installed. The script picks the build for your OS and CPU (Intel or ARM; glibc or musl on Linux), checks it against the release's `SHA256SUMS`, puts it in `~/.halo/bin`, and adds that folder to your shell's `PATH`. Check it with `halo --version`; update with `halo upgrade`.
+This installs `halo`, a single standalone binary with Bun built in, so nothing else needs to be installed. The script picks the build for your OS and CPU (Intel or ARM; glibc or musl on Linux), checks it against the release's `SHA256SUMS`, puts it in `~/.halo/bin`, and adds that folder to your shell's `PATH`. Check it with `halo --version`; update with `halo upgrade`, which stays on the channel you installed from (`halo upgrade --channel latest` moves back to stable releases).
 
 | Variable | Effect |
 |---|---|
 | `HALO_VERSION=0.1.0` | Install that version instead of the latest |
+| `HALO_VERSION=next` | Install the newest prerelease (`nightly`: the newest build of `main`) |
 | `HALO_INSTALL=/opt/halo` | Install into `/opt/halo/bin` |
 | `HALO_NO_MODIFY_PATH=1` | Leave your shell's rc file alone |
 
 On Alpine, install the C++ runtime first: `apk add libstdc++ libgcc`. To uninstall, delete `~/.halo/bin` and the `PATH` line the installer added.
+
+With Homebrew (macOS or Linux): `brew install cmjio/halo/halolang`, and update with `brew upgrade halolang`. Homebrew carries stable releases only; use the script for `next` or `nightly`.
 
 Already using npm, Docker or GitHub Actions? `npx @halolang/halo`, `docker run ghcr.io/cmjio/halo` and `uses: cmjio/halo` work too (from 0.5.0). See [Use what you already have](./production/deploying.md#use-what-you-already-have).
 
@@ -103,6 +106,21 @@ halo run examples/engineering/github-triage.halo --arg repo=oven-sh/bun --arg li
 ```
 
 ## Next steps
+
+Have Docker? Let an agent write code and run it, in a container that's gone when the run ends. No extra account or key:
+
+```halo
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: "auto"]
+
+pipeline Build(task: String) -> Result:
+  task |> Dev.work("Write it, run it, and check the output before you answer.")
+```
+
+```bash
+halo run build.halo --arg task="a script that prints the first 20 primes"
+```
+
+See [Coding Agents That Run Their Code](./coding-agents.md).
 
 - [Core Concepts](./concepts.md)
 - [Language Reference](./reference.md)

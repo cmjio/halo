@@ -5,7 +5,7 @@
 // ============================================================
 
 policy BudgetPolicy    : MaxSpend(1.00)
-policy StrategyAlign   : Enforce(ProductStrategy.JSON)
+policy StrategyAlign   : Enforce(JSON)
 
 // --- Tools ---
 tool Linear          : POST("api.linear.app/graphql", apiKey: Env.LINEAR_KEY)
@@ -46,7 +46,7 @@ agent Writer [openai/gpt-4o-mini, temp: 0.5]
 
 // --- The Pipeline ---
 @timeout(10m)
-pipeline RoadmapBrief(requests: FeatureRequests) -> Briefing:
+pipeline RoadmapBrief(requests: JSON) -> Result:
   requests
     // Step 1: Cluster raw requests into themes
     |> Clustering.cluster(

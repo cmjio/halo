@@ -4,7 +4,7 @@
 // Pulls the week's issues and pull requests from GitHub, summarizes
 // progress per person, flags blocked or stale work, and posts to
 // Slack after you've read it. Schedule it in halo.json, e.g.
-//   { "pipeline": "WeeklyTeamReport", "cron": "0 16 * * fri", "args": {...} }
+//   { "pipeline": "WeeklyTeamReport", "cron": "0 16 * * fri", "tz": "Europe/London", "args": {...} }
 // ============================================================
 
 policy Private : Redact(Email) & Redact(APIKey)

@@ -1,6 +1,6 @@
 /** Syntax highlighting for Halo source, as HTML spans (classes are styled in styles.css). */
 
-const KEYWORDS = new Set(["policy", "tool", "store", "schema", "agent", "pipeline", "equips", "requires", "system", "as", "each", "in", "else", "context", "yield", "listen", "loop"]);
+const KEYWORDS = new Set(["use", "with", "policy", "tool", "store", "schema", "agent", "pipeline", "equips", "requires", "system", "as", "each", "in", "else", "context", "yield", "listen", "loop"]);
 const LITERALS = new Set(["true", "false", "null"]);
 
 const TOKEN = new RegExp(

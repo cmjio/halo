@@ -54,12 +54,12 @@ export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow 
         timestamp: now,
         type: "llm_call",
         stage: `${e.agent} via ${e.model}`,
-        payload: { system: e.system, prompt: e.prompt, output: e.output, cost: e.cost, mocked: e.mocked },
+        payload: { system: e.system, prompt: e.prompt, ...(e.media?.length ? { media: e.media } : {}), output: e.output, cost: e.cost, mocked: e.mocked },
         durationMs: e.latencyMs,
         tokens: e.tokens ? e.tokens.prompt + e.tokens.completion : undefined,
       };
     case "tool":
-      return { runId: e.runId, timestamp: now, type: "tool_call", stage: `${e.tool}.${e.method}`, payload: { output: e.output, mocked: e.mocked }, durationMs: e.latencyMs };
+      return { runId: e.runId, timestamp: now, type: "tool_call", stage: `${e.tool}.${e.method}`, payload: { ...(e.sent?.length ? { sent: e.sent } : {}), output: e.output, mocked: e.mocked }, durationMs: e.latencyMs };
     case "paused":
       return { runId: e.runId, timestamp: now, type: "stream_end", stage: e.pipeline, payload: { status: "paused", waitingFor: e.waitingFor } };
     default:

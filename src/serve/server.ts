@@ -17,21 +17,31 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { parse } from "../parser/index.js";
-import { validate } from "../parser/validate.js";
+import { checkLinked, entryPipelines } from "../linker/index.js";
+import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
+import { mailFromRaw } from "../runtime/mail/provider.js";
+import { mockEverything, splitMocks } from "../runtime/mocks.js";
+import { SIGNATURE_HEADER, signBody } from "../runtime/signing.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
 import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
-import { cronMatches, nextRun, parseCron, type CronSchedule } from "./cron.js";
+import { checkTimeZone, CronError, nextSlot, parseCron, slotsBetween, type CronSchedule } from "./cron.js";
+import { parseDuration } from "../parser/builtins.js";
 import { createMcpServer } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
+import { MirroredBlobStore, openStateStore, StateMirror, StateStoreError } from "./state-mirror.js";
+import { incomingText, twilioSignature, twiml } from "../runtime/providers/sms.js";
+import { collectMedia, FileBlobStore, isMediaRef, mapMedia, MediaBytes, mediaLabel } from "../runtime/media.js";
 import { checkWatchConfig, diff, readSource, reading, watchInterval, watchKey, type Reading, type WatchConfig } from "./watch.js";
-import { loadInstalled } from "../registry/packages.js";
+import { loadPackageProviders } from "../registry/resolver.js";
+import { pausePath } from "../registry/hosted.js";
+import { checkPackageHeader, consumerKeys, keyOf, loadServedPackage, PACKAGE_KEYS_ENV, PackageServeError, UsageLog, type ServedPackage, type UsageRow } from "./package.js";
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
 
@@ -46,11 +56,40 @@ export interface ServeConfig {
   token?: string;
   /** Base URL for approval links, e.g. https://halo.example.com, or "Env.X". Default: HALO_PUBLIC_URL, else the server's own address. */
   publicUrl?: string;
-  schedules?: Array<{ pipeline: string; cron: string; args?: Record<string, unknown> }>;
+  /** IANA time zone for schedules that don't name one, e.g. "Europe/London". Default: the server's. */
+  timezone?: string;
+  schedules?: ScheduleConfig[];
   /** POST /hooks/<path> starts <pipeline>. With a secret, requests must carry it (or a GitHub signature). */
-  webhooks?: Array<{ path: string; pipeline: string; secret?: string }>;
-  /** Where to announce paused runs: a Slack incoming-webhook URL. */
-  notify?: { slack?: string };
+  /**
+   * `twilio`: the Twilio auth token ("Env.TWILIO_AUTH_TOKEN"): the request's signature is checked,
+   * and the pipeline gets the message as { from, to, text, media }. `reply: true` answers the
+   * sender with the run's output when it is text and ready within 10 seconds.
+   */
+  webhooks?: Array<{ path: string; pipeline: string; secret?: string; twilio?: string; reply?: boolean }>;
+  /**
+   * `slack`: a Slack incoming-webhook URL, to announce paused runs.
+   * `webhook`: your app's URL. Halo POSTs there when a run completes, halts, fails or pauses,
+   * signed with `secret` (see runtime/signing.ts). `events` narrows which: "completed",
+   * "halted", "failed", "paused".
+   */
+  notify?: { slack?: string; webhook?: string; secret?: string; events?: string[] };
+  /**
+   * `store`: where a copy of the state folder is kept, for hosts whose disk doesn't outlive a
+   * deploy: "s3://bucket/prefix" (S3, R2, GCS, MinIO; credentials from S3_* or AWS_*
+   * variables), a folder on a shared mount, or "Env.NAME". Default: HALO_STATE_STORE.
+   * `every`: how often databases are copied (default "30s"); other files go as they change.
+   */
+  state?: { store?: string; every?: string };
+  /**
+   * Pick up runs that were cut short when the server last stopped or died, at the stage
+   * they were on. That stage runs again, so its tools should honour idempotency keys.
+   */
+  resumeRuns?: boolean;
+  /**
+   * A mocks file (as `halo run --mocks` reads) for dry runs: a start request with
+   * `"dryRun": true` answers every model and tool from it, and nothing is sent anywhere.
+   */
+  mocks?: string;
   /** Start pipelines when a URL, file, or command's output changes (see watch.ts). */
   watches?: WatchConfig[];
   /**
@@ -68,9 +107,60 @@ export interface ServeConfig {
    * `keep` is how many to keep (default 50).
    */
   recordings?: { serve?: boolean; keep?: number };
+  /** How files reach models that can't take them: `transcribe` ("openai" or "gemini") for audio. */
+  media?: { transcribe?: string; transcribeModel?: string };
   /** Defaults for `halo evolve` and Studio's Evolve tab. */
   evolve?: EvolveConfig;
 }
+
+/** One entry of halo.json `schedules`. */
+export interface ScheduleConfig {
+  pipeline: string;
+  /** 5-field cron: minute hour day-of-month month day-of-week. */
+  cron: string;
+  args?: Record<string, unknown>;
+  /** IANA time zone. Default: `timezone`, else the server's. */
+  tz?: string;
+  /** While this schedule's last run is still running or paused: "skip" the slot (default) or "allow" another run. */
+  overlap?: "skip" | "allow";
+  /** How late a missed slot may still run, once, e.g. "1h" (default) or "24h"; "none" never runs late. */
+  catchup?: string;
+}
+
+/** A schedule as `halo serve` sees it: its config, its next slot, and what happened last. */
+export interface ScheduleInfo {
+  pipeline: string;
+  cron: string;
+  /** The zone it runs in (the server's, by name, when the config names none). */
+  tz: string;
+  next?: string;
+  lastSlot?: string;
+  lastRunId?: string;
+  lastStatus?: string;
+  skipped: number;
+  missed: number;
+}
+
+/** What `halo serve` keeps per schedule in <stateDir>/schedules.json, so restarts neither repeat nor forget. */
+interface ScheduleState {
+  /** When the schedule was first seen (it never catches up on slots before this). */
+  since?: string;
+  /** The last slot handled: run, skipped, or missed. */
+  lastSlot?: string;
+  lastRunId?: string;
+  lastStatus?: string;
+  lastStartedAt?: string;
+  skipped: number;
+  missed: number;
+}
+
+const MINUTE = 60_000;
+/** A slot this late is still on time (a slow timer, a restart within the minute). */
+const ON_TIME = 90_000;
+/** How far back a restart looks for missed slots to count. */
+const MISSED_LOOKBACK = 31 * 24 * 60 * MINUTE;
+/** A scheduler lock without a heartbeat for this long is abandoned. */
+const LOCK_STALE = 150_000;
 
 export interface ServeOptions extends ServeConfig {
   env?: Record<string, string | undefined>;
@@ -84,16 +174,33 @@ export interface ServeOptions extends ServeConfig {
   studio?: boolean;
   /** Set to "PORT" when the host was chosen because PORT is set (see listenAddress), to explain a refusal. */
   hostFrom?: string;
+  /** The pushed project version being served (`halo serve` with HALO_PROJECT), for /healthz. */
+  project?: string;
+  /** Every run is a dry run (`halo serve --mocks <file>`): no model is called and no tool runs. */
+  dryRun?: boolean;
+  /** How long to wait before each further try of a run callback. Default 2s, 10s, 60s. */
+  callbackRetryMs?: number[];
   /** Start the cron timer. Default true (tests call tick() instead). */
   scheduler?: boolean;
   logger?: Pick<Console, "log" | "warn" | "error">;
   fetch?: typeof fetch;
+  /**
+   * `halo serve --package [dir]`: serve only this package's hosted pipelines, to consumers with
+   * keys, checking the Halo-Package header (see package.ts). `files` and `root` are ignored.
+   */
+  package?: string;
+  /** Consumer keys for --package, by consumer id (merged with HALO_PACKAGE_KEYS and the keys file). */
+  packageKeys?: Record<string, string>;
+  /** A JSON file of consumer keys for --package. Default <stateDir>/package-keys.json (if it exists). */
+  keysFile?: string;
 }
 
 interface Entry {
   name: string;
   file: string;
   runtime: HaloRuntime;
+  /** The same file with every model and tool mocked, for dry runs (made when first needed). */
+  dry?: HaloRuntime;
   decl: PipelineDeclaration;
   ast: ParseResult;
   /** Absolute path of the file. */
@@ -104,20 +211,63 @@ export interface HaloServer {
   url: string;
   port: number;
   pipelines: string[];
-  /** Run schedules that are due in the minute containing `now`. */
+  /**
+   * Run the schedules due at `now`, and (once each) a missed slot still within its catch-up window.
+   * Returns the ids of the runs started. Only the process holding the state folder's scheduler lock starts any.
+   */
   tick(now?: Date): string[];
+  /** Every schedule with its zone, next slot, and last outcome. */
+  schedules(): ScheduleInfo[];
   /** Check every watch now; resolves with the runs started by changes. */
   checkWatches(): Promise<string[]>;
   /** Start a run as the API would; resolves with its id. */
-  start(pipeline: string, args: Record<string, unknown>, source: string): string;
+  start(pipeline: string, args: Record<string, unknown>, source: string, how?: StartOptions): string;
+  /** The runs that were cut short last time and picked up when this server started. */
+  resumed: string[];
   /** Wait for a started run to finish its current stretch (complete, halt, pause, or fail). */
   settled(runId: string): Promise<RunResult | undefined>;
   /** The signed link answering a paused run's current pause (undefined if it isn't paused). */
   approvalUrl(runId: string): Promise<string | undefined>;
+  /** With --package: runs, cost and tokens per consumer key. */
+  usage(since?: number): UsageRow[];
   stop(): Promise<void>;
 }
 
 export class ServeError extends Error {}
+
+/** How a run is started, beyond its arguments. */
+export interface StartOptions {
+  /**
+   * Starting again with the same key (for the same pipeline) returns the first run instead of
+   * starting another. The key also seeds each tool call's own idempotency key.
+   */
+  idempotencyKey?: string;
+  /** Answer every model and tool from mocks. */
+  dryRun?: boolean;
+}
+
+/** What a run callback carries. */
+export interface RunCallback {
+  /** Unique per event; the same on every retry of its delivery. */
+  id: string;
+  type: "run.completed" | "run.halted" | "run.failed" | "run.paused";
+  at: string;
+  runId: string;
+  pipeline: string;
+  status: "completed" | "halted" | "failed" | "paused";
+  output?: unknown;
+  error?: string;
+  cost?: number;
+  durationMs?: number;
+  /** For a paused run: what it waits for, and the link that answers it. */
+  waitingFor?: string;
+  approveUrl?: string;
+  idempotencyKey?: string;
+  dryRun?: boolean;
+}
+
+/** A start with a key keeps its run this long, so a late retry still finds it. */
+const IDEMPOTENCY_KEEP = 7 * 24 * 60 * 60_000;
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
 
@@ -138,6 +288,16 @@ function collectHaloFiles(targets: string[]): string[] {
 function safeEqual(a: string, b: string): boolean {
   const [x, y] = [Buffer.from(a), Buffer.from(b)];
   return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function pidAlive(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code === "EPERM";
+  }
 }
 
 function json(body: unknown, status = 200): Response {
@@ -172,15 +332,62 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const token = fromEnv(options.token) ?? env.HALO_SERVE_TOKEN;
   // A token that names an unset variable must not silently turn into "no token".
   if (options.token !== undefined && !token) throw new ServeError(`The API token "${options.token}" is empty or not set`);
-  if (!LOOPBACK.has(host) && !token) {
+  // --package: only the package's hosted pipelines, behind consumer keys.
+  let served: ServedPackage | undefined;
+  try {
+    served = options.package !== undefined ? loadServedPackage(options.package) : undefined;
+  } catch (err) {
+    if (err instanceof PackageServeError) throw new ServeError(err.message);
+    throw err;
+  }
+  if (!LOOPBACK.has(host) && !token && !served) {
     const why = options.hostFrom === "PORT" ? " (PORT is set, so Halo listens on every interface; set HALO_HOST=127.0.0.1 to keep it local)" : "";
     throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)${why}`);
   }
 
+  const startedAt = new Date().toISOString();
+  /** What was deployed, when the host says: an image tag or digest, a commit. */
+  const build = env.HALO_BUILD?.trim() || undefined;
   const stateDir = resolve(options.stateDir ?? ".halo");
   mkdirSync(stateDir, { recursive: true });
+  // A host without a lasting disk gets its state back from the store, before anything reads the folder.
+  const storeAt = fromEnv(options.state?.store) ?? env.HALO_STATE_STORE;
+  if (options.state?.store !== undefined && !storeAt) throw new ServeError(`state.store "${options.state.store}" is empty or not set`);
+  let mirror: StateMirror | undefined;
+  if (storeAt) {
+    const everyMs = options.state?.every === undefined ? 30_000 : parseDuration(options.state.every);
+    if (!(everyMs >= 1000)) throw new ServeError(`state.every must be a duration of at least 1s, like 30s or 2m (got "${options.state?.every}")`);
+    try {
+      mirror = new StateMirror(stateDir, openStateStore(storeAt, env), { everyMs, logger });
+      const restored = await mirror.restore();
+      logger.log(`[halo] State is kept in ${mirror.store.label}${restored ? ` (${restored} file(s) restored)` : ""}`);
+    } catch (err) {
+      if (err instanceof StateStoreError) throw new ServeError(err.message);
+      throw err;
+    }
+  }
   const runStore = new FileRunStore(join(stateDir, "runs"));
+  // Images and documents runs are given or make, by hash. With a store, each is copied up when made.
+  const blobs = mirror ? new MirroredBlobStore(stateDir, mirror.store) : new FileBlobStore(join(stateDir, "blobs"));
+  /** Runs in progress, as they were after their last finished stage. */
+  const progressStore = options.resumeRuns ? new FileRunStore(join(stateDir, "running")) : undefined;
+  // With a store, everything a run keeps lives in the state folder, so it is all copied.
+  const kept = mirror ? { threadPath: join(stateDir, "threads.sqlite"), vectorPath: join(stateDir, "vectors.sqlite"), checkpointDir: join(stateDir, "checkpoints") } : {};
   const telemetry = new SqliteTelemetry(join(stateDir, "telemetry.db"));
+  let keys: ReturnType<typeof consumerKeys> | undefined;
+  let usage: UsageLog | undefined;
+  if (served) {
+    try {
+      keys = consumerKeys({ keys: options.packageKeys, keysFile: options.keysFile, stateDir, env });
+    } catch (err) {
+      if (err instanceof PackageServeError) throw new ServeError(err.message);
+      throw err;
+    }
+    if (!keys.count()) {
+      throw new ServeError(`${served.manifest.name}: no consumer keys. Issue one per consumer in ${PACKAGE_KEYS_ENV}="acme=<key>,..." or ${join(stateDir, "package-keys.json")} ({ "acme": "<key>" })`);
+    }
+    usage = new UsageLog(join(stateDir, "telemetry.db"));
+  }
 
   // Approval links are signed with the token, or with a secret kept in the state folder.
   const secretFile = join(stateDir, "serve-secret");
@@ -192,9 +399,26 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   // A link answers one particular pause of one run, so it can't be replayed on a later pause.
   const sign = (runId: string, pauseId: string) => createHmac("sha256", signingKey!).update(`approve:${runId}:${pauseId}`).digest("hex").slice(0, 32);
 
+  // ── Dry runs ──
+  let fileMocks: ReturnType<typeof splitMocks> | undefined;
+  if (options.mocks) {
+    const mocksFile = resolve(options.root ?? ".", options.mocks);
+    if (!existsSync(mocksFile)) throw new ServeError(`Mocks file not found: ${options.mocks}`);
+    try {
+      fileMocks = splitMocks(JSON.parse(readFileSync(mocksFile, "utf8")), options.mocks);
+    } catch (err) {
+      throw new ServeError(err instanceof SyntaxError ? `Mocks file ${options.mocks} is not valid JSON: ${err.message}` : err instanceof Error ? err.message : String(err));
+    }
+  }
+  const mockForDryRun = (rt: HaloRuntime, ast: ParseResult) => {
+    mockEverything(rt, ast, fileMocks?.live);
+    if (fileMocks) rt.mockAll(fileMocks.mocks);
+  };
+
   // ── Load pipelines ──
   const registry = new AdapterRegistry();
-  const installed = await loadInstalled(options.root ?? process.cwd()).catch((err: unknown) => {
+  if (served) options = { ...options, root: served.dir, files: [...new Set(Object.values(served.sources))], studio: false, schedules: [], webhooks: [], watches: [] };
+  const installed = await loadPackageProviders(options.root ?? process.cwd()).catch((err: unknown) => {
     throw new ServeError(err instanceof Error ? err.message : String(err));
   });
   const entries = new Map<string, Entry>();
@@ -207,21 +431,34 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     telemetry.handler(e);
     options.runtime?.onEvent?.(e);
     if (e.type === "paused") void announcePause(e.runId);
+    // A stage ended, or a run started, paused or ended: what is on disk changed.
+    if (e.type === "run" || e.type === "paused" || (e.type === "stage" && e.status === "end")) mirror?.touch();
   };
   const files = collectHaloFiles(options.files?.length ? options.files : ["."]);
   if (!files.length) throw new ServeError(`No .halo files found in ${(options.files ?? ["."]).join(", ")}`);
   for (const file of files) {
     const rel = relative(process.cwd(), file) || file;
-    const ast = parse(await Bun.file(file).text());
+    // Each file is linked with everything it `use`s, so its pipelines can call pipelines in other files.
+    const linked = linkFile(file, served ? { root: served.dir, projectModels: served.manifest.models } : options.root ? { root: options.root } : {});
+    const ast = linked.program;
     if (ast.errors.length) throw new ServeError(`${rel} has syntax errors:\n  ${ast.errors.join("\n  ")}`);
-    const errors = validate(ast, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
-    if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${d.line ?? "?"}: ${d.message}`).join("\n  ")}`);
-    if (!ast.pipelines.length) continue;
-    const runtime = new HaloRuntime({ logger, ...options.runtime, ...recorder, env, runStore, onEvent }).load(ast);
+    const errors = checkLinked(linked, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
+    const where = (d: { file: string; line?: number }) => `${d.file === resolve(file) ? "" : `${relative(process.cwd(), d.file)}:`}${d.line ?? "?"}`;
+    if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${where(d)}: ${d.message}`).join("\n  ")}`);
+    // A package serves only its hosted exports, and only ones that can't pause.
+    const hostedHere = served ? served.manifest.hosted!.exports.filter((n) => served.sources[n] === file) : undefined;
+    for (const name of hostedHere ?? []) {
+      const pause = pausePath(ast, name);
+      if (pause) throw new ServeError(`${served!.manifest.name}: hosted pipeline ${name} can pause (${pause}). Hosted pipelines can't pause yet`);
+    }
+    const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
+    if (!own.length) continue;
+    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, ...options.runtime, ...recorder, env, runStore, progressStore, onEvent }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
-    for (const decl of ast.pipelines) {
+    if (options.dryRun) mockForDryRun(runtime, ast);
+    for (const decl of own) {
       const prev = entries.get(decl.name);
       if (prev) throw new ServeError(`Pipeline "${decl.name}" is declared in both ${prev.file} and ${rel}`);
       entries.set(decl.name, { name: decl.name, file: rel, runtime, decl, ast, path: resolve(file) });
@@ -234,13 +471,62 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     return e;
   };
 
+  /** The runtime a run of this entry uses: the real one, or (for a dry run) one where nothing is real. */
+  const dryRuntimes = new Map<string, HaloRuntime>();
+  const runtimeFor = (e: Entry, dry: boolean | undefined): HaloRuntime => {
+    if (!dry || options.dryRun) return e.runtime;
+    let rt = dryRuntimes.get(e.path);
+    if (!rt) {
+      // Thread state stays in memory, so a rehearsal never changes a real thread.
+      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:" }).load(e.ast);
+      for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
+      mockForDryRun(rt, e.ast);
+      dryRuntimes.set(e.path, rt);
+      runtimes.push(rt);
+    }
+    return rt;
+  };
+
   // ── Triggers from config ──
-  const schedules: Array<{ pipeline: string; cron: CronSchedule; args: Record<string, unknown>; last?: string }> = [];
+  const schedules: Array<{ key: string; label: string; pipeline: string; cron: CronSchedule; tz?: string; args: Record<string, unknown>; overlap: "skip" | "allow"; catchupMs: number }> = [];
   for (const s of options.schedules ?? []) {
     entry(s.pipeline);
-    schedules.push({ pipeline: s.pipeline, cron: parseCron(s.cron), args: s.args ?? {} });
+    const tz = s.tz ?? options.timezone;
+    const where = `Schedule "${s.cron}" for ${s.pipeline}`;
+    let cron: CronSchedule;
+    try {
+      cron = parseCron(s.cron);
+      if (tz) checkTimeZone(tz);
+    } catch (err) {
+      throw new ServeError(`${where}: ${err instanceof CronError ? err.message : err}`);
+    }
+    if (s.overlap !== undefined && s.overlap !== "skip" && s.overlap !== "allow") throw new ServeError(`${where}: overlap must be "skip" or "allow" (got "${s.overlap}")`);
+    const catchupMs = s.catchup === "none" ? 0 : parseDuration(s.catchup ?? "1h");
+    if (!(catchupMs >= 0)) throw new ServeError(`${where}: catchup must be "none" or a duration like 30m or 24h (got "${s.catchup}")`);
+    const key = `${s.pipeline} ${cron.source.trim().split(/\s+/).join(" ")}${tz ? ` ${tz}` : ""}`;
+    if (schedules.some((x) => x.key === key)) throw new ServeError(`${where} is listed twice`);
+    schedules.push({ key, label: `"${cron.source}"${tz ? ` (${tz})` : ""}`, pipeline: s.pipeline, cron, tz, args: s.args ?? {}, overlap: s.overlap ?? "skip", catchupMs });
   }
-  const webhooks = new Map<string, { pipeline: string; secret?: string }>();
+  const scheduleFile = join(stateDir, "schedules.json");
+  let scheduleState: Record<string, ScheduleState> = {};
+  try {
+    if (existsSync(scheduleFile)) scheduleState = JSON.parse(readFileSync(scheduleFile, "utf8"));
+  } catch (err) {
+    logger.warn(`[halo] ${scheduleFile} could not be read, so schedules start fresh: ${err instanceof Error ? err.message : err}`);
+  }
+  const saveSchedules = () => {
+    try {
+      writeFileSync(`${scheduleFile}.tmp`, JSON.stringify(scheduleState, null, 2));
+      renameSync(`${scheduleFile}.tmp`, scheduleFile);
+      mirror?.touch();
+    } catch (err) {
+      logger.error(`[halo] could not save ${scheduleFile}: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+  const stateOf = (key: string) => (scheduleState[key] ??= { skipped: 0, missed: 0 });
+  /** Which schedule started each run, so its outcome is recorded when the run ends (again, after a resume). */
+  const scheduledRuns = new Map<string, string>();
+  const webhooks = new Map<string, { pipeline: string; secret?: string; twilio?: string; reply?: boolean }>();
   for (const w of options.webhooks ?? []) {
     entry(w.pipeline);
     const path = w.path.replace(/^\/+|\/+$/g, "");
@@ -248,10 +534,23 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const secret = fromEnv(w.secret);
     // A secret that names an unset variable must not silently turn into "no secret".
     if (w.secret !== undefined && !secret) throw new ServeError(`Webhook /hooks/${path} has secret "${w.secret}", but it is empty or not set`);
-    if (secret === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
-    webhooks.set(path, { pipeline: w.pipeline, secret });
+    const twilio = fromEnv(w.twilio);
+    if (w.twilio !== undefined && !twilio) throw new ServeError(`Webhook /hooks/${path} has twilio "${w.twilio}", but it is empty or not set`);
+    if (secret === undefined && twilio === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
+    webhooks.set(path, { pipeline: w.pipeline, secret, twilio, reply: w.reply === true });
   }
   const slackUrl = fromEnv(options.notify?.slack);
+  const callbackUrl = fromEnv(options.notify?.webhook);
+  const callbackSecret = fromEnv(options.notify?.secret);
+  if (options.notify?.webhook !== undefined) {
+    if (!callbackUrl || !/^https?:\/\/[^/]/.test(callbackUrl)) throw new ServeError(`notify.webhook "${options.notify.webhook}" must be an http(s) URL (it is empty or not set)`);
+    // An unsigned callback could be sent by anyone who knows the URL, so there is no unsigned mode.
+    if (!callbackSecret) throw new ServeError(`notify.webhook needs notify.secret (e.g. "Env.HALO_CALLBACK_SECRET"): your app uses it to check that a callback came from this server`);
+  }
+  const CALLBACK_EVENTS = ["completed", "halted", "failed", "paused"];
+  const unknownEvents = (options.notify?.events ?? []).filter((e) => !CALLBACK_EVENTS.includes(e));
+  if (unknownEvents.length) throw new ServeError(`notify.events: ${unknownEvents.join(", ")} is not one of ${CALLBACK_EVENTS.join(", ")}`);
+  const callbackEvents = new Set(options.notify?.events ?? CALLBACK_EVENTS);
   const slackSecret = fromEnv(options.slack?.signingSecret);
   if (options.slack?.signingSecret !== undefined && !slackSecret) throw new ServeError(`slack.signingSecret "${options.slack.signingSecret}" is empty or not set`);
 
@@ -271,6 +570,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const inflight = new Map<string, Promise<RunResult | undefined>>();
   // Recent outcomes, so a caller asking after a fast run finished still gets its result.
   const recent = new Map<string, RunResult | undefined>();
+  /** Why recent runs failed, for callers waiting on them. */
+  const failures = new Map<string, string>();
   const remember = (runId: string, r: RunResult | undefined) => {
     recent.delete(runId);
     recent.set(runId, r);
@@ -281,11 +582,31 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
       (r) => {
         logger.log(`[halo] ${label} ${r.status} (run ${runId.slice(0, 8)})`);
         remember(runId, r);
+        scheduledRunEnded(runId, r.status);
+        const meta = r.context.meta;
+        void (async () =>
+          callback({
+            type: `run.${r.status}`,
+            runId,
+            pipeline: label,
+            status: r.status,
+            output: r.output,
+            cost: meta.cost,
+            durationMs: meta.durationMs,
+            ...(r.status === "paused" ? { waitingFor: meta.paused?.waitingFor, approveUrl: await approvalUrl(runId) } : {}),
+            idempotencyKey: meta.idempotencyKey,
+            dryRun: meta.dryRun,
+          }))();
         return r;
       },
       (err: unknown) => {
-        logger.error(`[halo] ${label} failed (run ${runId.slice(0, 8)}): ${err instanceof Error ? err.message : err}`);
+        const error = err instanceof Error ? err.message : String(err);
+        logger.error(`[halo] ${label} failed (run ${runId.slice(0, 8)}): ${error}`);
+        failures.set(runId, error);
+        if (failures.size > 500) failures.delete(failures.keys().next().value!);
         remember(runId, undefined);
+        scheduledRunEnded(runId, "error");
+        callback({ type: "run.failed", runId, pipeline: label, status: "failed", error, ...started.get(runId) });
         return undefined;
       },
     );
@@ -296,16 +617,99 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     return p;
   };
 
-  const start = (pipeline: string, args: Record<string, unknown>, source: string) => {
+  // ── Run callbacks ──
+  /** How each run this process started was started, for the callback of one that fails. */
+  const started = new Map<string, { idempotencyKey?: string; dryRun?: boolean }>();
+  const deliveries = new Set<Promise<void>>();
+  let stopping = false;
+  const callbackDelays = options.callbackRetryMs ?? [2_000, 10_000, 60_000];
+  function callback(event: Omit<RunCallback, "id" | "at">) {
+    if (!callbackUrl || !callbackSecret || !callbackEvents.has(event.status)) return;
+    const full: RunCallback = { id: crypto.randomUUID(), at: new Date().toISOString(), ...event };
+    const body = JSON.stringify(full);
+    const deliver = async () => {
+      for (let attempt = 0; ; attempt++) {
+        let problem: string;
+        try {
+          const res = await (options.fetch ?? fetch)(callbackUrl, {
+            method: "POST",
+            // Signed afresh each try, so a late retry isn't refused as stale.
+            headers: { "Content-Type": "application/json", "User-Agent": `halo/${pkg.version}`, "Halo-Event": full.type, "Halo-Delivery": full.id, [SIGNATURE_HEADER]: signBody(callbackSecret, body) },
+            body,
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (res.ok) return;
+          problem = `answered ${res.status}`;
+          // The app said no (not "try later"): sending it again won't change that.
+          if (res.status < 500 && res.status !== 408 && res.status !== 429) attempt = callbackDelays.length;
+        } catch (err) {
+          problem = err instanceof Error ? err.message : String(err);
+        }
+        const wait = callbackDelays[attempt];
+        if (wait === undefined || stopping) {
+          logger.warn(`[halo] Callback ${full.type} for run ${full.runId.slice(0, 8)} was not delivered: ${callbackUrl} ${problem}`);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    };
+    const p = deliver();
+    deliveries.add(p);
+    void p.finally(() => deliveries.delete(p));
+  }
+
+  // ── Starting a run once ──
+  const idempotencyFile = join(stateDir, "idempotency.json");
+  let idempotent: Record<string, { runId: string; at: number }> = {};
+  try {
+    if (existsSync(idempotencyFile)) idempotent = JSON.parse(readFileSync(idempotencyFile, "utf8"));
+  } catch (err) {
+    logger.warn(`[halo] ${idempotencyFile} could not be read, so earlier idempotency keys are forgotten: ${err instanceof Error ? err.message : err}`);
+  }
+  const saveIdempotent = () => {
+    const cutoff = Date.now() - IDEMPOTENCY_KEEP;
+    for (const [k, v] of Object.entries(idempotent)) if (v.at < cutoff) delete idempotent[k];
+    try {
+      writeFileSync(`${idempotencyFile}.tmp`, JSON.stringify(idempotent));
+      renameSync(`${idempotencyFile}.tmp`, idempotencyFile);
+      mirror?.touch();
+    } catch (err) {
+      logger.error(`[halo] could not save ${idempotencyFile}: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  /** Start a run, or find the run an earlier start with the same idempotency key began. */
+  const startOnce = (pipeline: string, args: Record<string, unknown>, source: string, how: StartOptions = {}): { runId: string; duplicate: boolean } => {
     const e = entry(pipeline);
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new ServeError(`${pipeline} needs its arguments as a JSON object`);
     const missing = e.decl.params.filter((p) => !Object.hasOwn(args, p.name)).map((p) => p.name);
     if (missing.length) throw new ServeError(`${pipeline} needs ${missing.join(", ")}`);
+    const dryRun = how.dryRun || options.dryRun || undefined;
+    const key = how.idempotencyKey?.trim() || undefined;
+    if (key !== undefined && key.length > 255) throw new ServeError("An idempotency key is at most 255 characters");
+    // A rehearsal and the real thing are different runs, even with one key.
+    const slot = key === undefined ? undefined : `${dryRun ? "dry:" : ""}${pipeline}\n${key}`;
+    const earlier = slot === undefined ? undefined : idempotent[slot];
+    if (earlier && Date.now() - earlier.at < IDEMPOTENCY_KEEP) {
+      logger.log(`[halo] ${pipeline} asked for again by ${source} with the same idempotency key (run ${earlier.runId.slice(0, 8)})`);
+      return { runId: earlier.runId, duplicate: true };
+    }
     const runId = crypto.randomUUID();
-    logger.log(`[halo] ${pipeline} started by ${source} (run ${runId.slice(0, 8)})`);
-    track(runId, pipeline, recorded(runId, pipeline, args, () => e.runtime.run(pipeline, args, { runId })));
-    return runId;
+    if (slot !== undefined) {
+      idempotent[slot] = { runId, at: Date.now() };
+      saveIdempotent();
+    }
+    started.set(runId, { idempotencyKey: key, dryRun });
+    if (started.size > 2000) started.delete(started.keys().next().value!);
+    logger.log(`[halo] ${pipeline} started by ${source}${dryRun ? " as a dry run" : ""} (run ${runId.slice(0, 8)})`);
+    const rt = runtimeFor(e, dryRun);
+    // An Image or Document argument may be a data: URI or an https URL; never a path on this machine.
+    const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun, media: "urls" });
+    // A dry run's answers are made up, so it isn't kept as something to replay or learn from.
+    track(runId, pipeline, dryRun ? work() : recorded(runId, pipeline, args, work));
+    return { runId, duplicate: false };
   };
+  const start = (pipeline: string, args: Record<string, unknown>, source: string, how?: StartOptions) => startOnce(pipeline, args, source, how).runId;
 
   /** Writes how a recorded run ended (each time it ends: a run that pauses ends, then ends again after resuming). */
   function ended(rec: Recorder, work: Promise<RunResult>): Promise<RunResult> {
@@ -329,19 +733,33 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   const settled = (runId: string) => inflight.get(runId) ?? Promise.resolve(recent.get(runId));
 
+  function scheduledRunEnded(runId: string, status: string) {
+    const key = scheduledRuns.get(runId);
+    const st = key ? scheduleState[key] : undefined;
+    if (!st || st.lastRunId !== runId) return;
+    st.lastStatus = status;
+    saveSchedules();
+  }
+
   /**
    * Claim a paused run and continue it. Resolves once the claim succeeds (the
    * run continues in the background) or with an error message: not paused,
    * a different event expected, or already answered by someone else.
    */
   const resume = async (runId: string, payload: unknown, event?: string, pauseId?: string): Promise<{ work: Promise<RunResult | undefined> } | { error: string; status: number }> => {
-    const snap = await runStore.load(runId);
+    let snap = await runStore.load(runId);
+    // Paused on another server since this one started (a deploy in progress): its files are in the store.
+    if (!snap && mirror && /^[\w-]+$/.test(runId) && (await mirror.pull(`runs/${runId}.json`))) {
+      await mirror.pull(`runs/${runId}.log.jsonl`);
+      snap = await runStore.load(runId);
+    }
     if (snap?.waitingFor === undefined) return { error: "That run is not paused", status: 409 };
     try {
       // The resumed run keeps appending to its recording (the answer to the pause is recorded too).
-      const rec = recordingsDir ? new Recorder(recordingsDir, runId) : undefined;
+      const rec = recordingsDir && !snap.meta.dryRun ? new Recorder(recordingsDir, runId) : undefined;
       const waitingFor = event ?? snap.waitingFor;
-      const claim = () => entry(snap.pipeline).runtime.resumePaused(runId, waitingFor, payload, { pauseId });
+      // A dry run continues as one, wherever it was started.
+      const claim = () => runtimeFor(entry(snap.pipeline), snap.meta.dryRun).resumePaused(runId, waitingFor, payload, { pauseId });
       // The run continues inside the recorder's context; a failed claim (already answered, wrong event) records nothing.
       const claimed = rec ? await recording.run(rec, claim) : await claim();
       logger.log(`[halo] ${claimed.pipeline} resumed (run ${runId.slice(0, 8)})`);
@@ -417,22 +835,159 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   };
   const checkWatches = async () => (await Promise.all(watches.map(checkWatch))).filter((id): id is string => !!id);
 
-  const tick = (now = new Date()) => {
-    const minute = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()} ${now.getHours()}:${now.getMinutes()}`;
-    const started: string[] = [];
-    for (const s of schedules) {
-      if (s.last === minute || !cronMatches(s.cron, now)) continue;
-      s.last = minute;
-      try {
-        started.push(start(s.pipeline, s.args, `schedule "${s.cron.source}"`));
-      } catch (err) {
-        logger.error(`[halo] schedule "${s.cron.source}" could not start ${s.pipeline}: ${err instanceof Error ? err.message : err}`);
+  // ── Scheduler ──
+  // One `halo serve` per state folder runs the schedules; another one serves the API but doesn't fire them.
+  const lockFile = join(stateDir, "scheduler.lock");
+  const lockOwner = crypto.randomUUID();
+  let lockHeldBy: string | undefined;
+  const claimLock = (): boolean => {
+    let lock: { owner?: string; pid?: number; host?: string; processStart?: number; heartbeat?: number } | undefined;
+    try {
+      lock = existsSync(lockFile) ? JSON.parse(readFileSync(lockFile, "utf8")) : undefined;
+    } catch {}
+    if (lock?.owner && lock.owner !== lockOwner && Date.now() - (lock.heartbeat ?? 0) < LOCK_STALE) {
+      // A process on this machine that has exited (or whose pid now belongs to us after a restart) holds nothing.
+      const sameHost = lock.host === hostname();
+      const restarted = sameHost && lock.pid === process.pid && Math.abs((lock.processStart ?? 0) - performance.timeOrigin) > 1000;
+      if (!sameHost || (!restarted && pidAlive(lock.pid))) {
+        if (lockHeldBy !== lock.owner) logger.warn(`[halo] Another halo serve (pid ${lock.pid} on ${lock.host}) runs the schedules for ${stateDir}; this one won't until it stops.`);
+        lockHeldBy = lock.owner;
+        return false;
       }
     }
+    if (lockHeldBy && lockHeldBy !== lockOwner) logger.log(`[halo] Taking over the schedules for ${stateDir}`);
+    lockHeldBy = lockOwner;
+    try {
+      writeFileSync(`${lockFile}.${lockOwner}`, JSON.stringify({ owner: lockOwner, pid: process.pid, host: hostname(), processStart: performance.timeOrigin, heartbeat: Date.now() }));
+      renameSync(`${lockFile}.${lockOwner}`, lockFile);
+    } catch (err) {
+      logger.error(`[halo] could not write ${lockFile}: ${err instanceof Error ? err.message : err}`);
+    }
+    return true;
+  };
+
+  /** A run is active while it is running, or paused (its snapshot is in the run store). */
+  const active = (runId: string) => inflight.has(runId) || existsSync(join(stateDir, "runs", `${runId}.json`));
+  /** The minute up to which each schedule's slots have been handled by this process. */
+  const checked = new Map<string, number>();
+
+  const tick = (now = new Date()) => {
+    const started: string[] = [];
+    if (!schedules.length || !claimLock()) return started;
+    const t = now.getTime();
+    const minute = Math.floor(t / MINUTE) * MINUTE;
+    let dirty = false;
+    for (const s of schedules) {
+      const st = stateOf(s.key);
+      if (!st.since) {
+        // New schedules don't catch up on slots from before they existed.
+        st.since = new Date(t - ON_TIME).toISOString();
+        dirty = true;
+      }
+      const from = Math.max(Date.parse(st.lastSlot ?? st.since), checked.get(s.key) ?? -Infinity, minute - MISSED_LOOKBACK);
+      checked.set(s.key, minute);
+      if (from >= minute) continue;
+      const slots = slotsBetween(s.cron, from, minute, s.tz);
+      const slot = slots.at(-1);
+      if (slot === undefined) continue;
+      const late = t - slot;
+      const tooLate = late > Math.max(s.catchupMs, ON_TIME);
+      const missed = slots.length - 1 + (tooLate ? 1 : 0);
+      st.lastSlot = new Date(slot).toISOString();
+      dirty = true;
+      if (missed) {
+        st.missed += missed;
+        logger.warn(`[halo] Schedule ${s.label} → ${s.pipeline} missed ${missed} run(s) while the server was stopped or asleep (the latest was due ${new Date(tooLate ? slot : slots.at(-2)!).toISOString()})`);
+      }
+      if (tooLate) continue;
+      if (s.overlap === "skip" && st.lastRunId && active(st.lastRunId)) {
+        st.skipped++;
+        const paused = !inflight.has(st.lastRunId);
+        logger.warn(`[halo] Schedule ${s.label} → ${s.pipeline} skipped: its last run (${st.lastRunId.slice(0, 8)}) is still ${paused ? "paused, waiting for an answer" : "running"}`);
+        if (paused) void announcePause(st.lastRunId);
+        continue;
+      }
+      try {
+        const runId = start(s.pipeline, s.args, `schedule ${s.label}${late > ON_TIME ? `, ${Math.round(late / MINUTE)}m late` : ""}`);
+        Object.assign(st, { lastRunId: runId, lastStatus: "running", lastStartedAt: now.toISOString() });
+        scheduledRuns.set(runId, s.key);
+        started.push(runId);
+      } catch (err) {
+        st.lastStatus = "error";
+        logger.error(`[halo] schedule ${s.label} could not start ${s.pipeline}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    if (dirty) saveSchedules();
     return started;
   };
 
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const scheduleInfo = (): ScheduleInfo[] =>
+    schedules.map((s) => {
+      const st = scheduleState[s.key];
+      const next = nextSlot(s.cron, Date.now(), s.tz);
+      return {
+        pipeline: s.pipeline,
+        cron: s.cron.source,
+        tz: s.tz ?? localZone,
+        next: next === undefined ? undefined : new Date(next).toISOString(),
+        lastSlot: st?.lastSlot,
+        lastRunId: st?.lastRunId,
+        lastStatus: st?.lastStatus,
+        skipped: st?.skipped ?? 0,
+        missed: st?.missed ?? 0,
+      };
+    });
+
   // ── HTTP ──
+  /** A value with each image or document given the address to download it from. */
+  const linkMedia = (v: unknown): unknown => {
+    if (isMediaRef(v)) return { ...v, url: `/api/blobs/${v.sha256}` };
+    if (Array.isArray(v)) return v.map(linkMedia);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, linkMedia(x)]));
+    return v;
+  };
+  /**
+   * A run started with files: multipart/form-data, with `args` (JSON) for the rest. Each file
+   * field fills the parameter of its name: a list for an `Array<...>` parameter, else one file.
+   */
+  const uploadBody = async (req: Request, pipeline: string) => {
+    const form = await req.formData();
+    const text = (k: string) => (typeof form.get(k) === "string" ? (form.get(k) as string) : undefined);
+    let args: Record<string, unknown> = {};
+    try {
+      args = text("args") ? JSON.parse(text("args")!) : {};
+    } catch {
+      throw new ServeError(`The "args" field is not valid JSON`);
+    }
+    const params = entries.get(pipeline)?.decl.params ?? [];
+    const files = new Map<string, MediaBytes[]>();
+    for (const [k, v] of form.entries()) {
+      if (typeof v === "string") continue;
+      files.set(k, [...(files.get(k) ?? []), new MediaBytes(new Uint8Array(await v.arrayBuffer()), { name: v.name })]);
+    }
+    for (const [k, list] of files) args[k] = /^(Array|List)</.test(params.find((p) => p.name === k)?.type ?? "") || list.length > 1 ? list : list[0];
+    return { args, wait: text("wait") === "true", idempotencyKey: text("idempotencyKey"), dryRun: text("dryRun") === "true" };
+  };
+
+  /** An image is shown in place; anything else (a PDF) is a download. Never a type the browser would run. */
+  const blobResponse = async (sha256: string): Promise<Response> => {
+    const bytes = /^[0-9a-f]{64}$/.test(sha256) ? await blobs.get(sha256) : undefined;
+    if (!bytes) return json({ error: "No such file" }, 404);
+    const { sniff } = await import("../runtime/media.js");
+    const type = sniff(bytes)?.type ?? "application/octet-stream";
+    // Pictures, sound and video play in place; documents download.
+    const inline = /^(image|audio|video)\//.test(type);
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": type,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Content-Disposition": inline ? "inline" : `attachment; filename="${sha256.slice(0, 12)}${type === "application/pdf" ? ".pdf" : ""}"`,
+        "Cache-Control": "private, max-age=31536000, immutable",
+      },
+    });
+  };
   const authorized = (req: Request, url: URL) => {
     if (!token) return true;
     const header = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? url.searchParams.get("token") ?? "";
@@ -443,6 +998,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   // name to 127.0.0.1 to read the API from the user's browser).
   const allowedHosts = new Set(["localhost", "127.0.0.1", "[::1]", host.includes(":") ? `[${host}]` : host]);
   if (options.publicUrl) allowedHosts.add(new URL(options.publicUrl).hostname);
+  // Consumers reach a package's server at the endpoint its halo.json publishes.
+  if (served) allowedHosts.add(new URL(served.manifest.hosted!.endpoint).hostname);
   /** Why a request looks like it came from another site's page, or undefined if it's fine. */
   const foreign = (req: Request, url: URL, checkHost = true): string | undefined => {
     const hostname = (req.headers.get("host") ?? url.host).replace(/:\d+$/, "");
@@ -459,8 +1016,12 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     // (and a same-site Origin when the browser sends one) means only Studio and API clients get in.
     const refused = foreign(req, url);
     if (refused) return refused;
-    if (req.method === "POST" && !(req.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
-      return "POST requests to /api must be Content-Type: application/json";
+    const type = (req.headers.get("content-type") ?? "").toLowerCase();
+    // Files come as multipart/form-data, which any page could post; only with a header a page
+    // can't send to another site (Authorization, or Halo-Client) does it count as a client's.
+    if (req.method === "POST" && type.startsWith("multipart/form-data") && /^\/api\/pipelines\/\w+\/runs$/.test(url.pathname) && (req.headers.has("authorization") || req.headers.has("halo-client"))) return undefined;
+    if (req.method === "POST" && !type.startsWith("application/json")) {
+      return "POST requests to /api must be Content-Type: application/json (or multipart/form-data, with an Authorization or Halo-Client header, to start a run with files)";
     }
     return undefined;
   };
@@ -494,10 +1055,23 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     if (done) return new Response(`${head}<h2>${escapeHtml(done)}</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (!snap?.waitingFor) return new Response(`${head}<h2>This run is no longer waiting.</h2>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     const message = snap.meta.paused?.message ?? (snap.waitingFor === "yield" ? "Approve this run?" : `Waiting for ${snap.waitingFor}`);
-    const action = `/approve/${runId}?sig=${sign(runId, linked!.pauseId)}`;
+    const sig = sign(runId, linked!.pauseId);
+    const action = `/approve/${runId}?sig=${sig}`;
+    // The images and documents in what is being approved, shown so a person sees what they say yes to.
+    const files = collectMedia(snap.current)
+      .map((m) => {
+        const src = escapeHtml(`/approve/${runId}/file/${m.sha256}?sig=${sig}`);
+        const name = escapeHtml(m.name ?? { image: "Image", document: "Document", audio: "Recording", video: "Video" }[m.$media]);
+        if (m.url) return `<p><a href="${escapeHtml(m.url)}" target="_blank" rel="noreferrer">${name}</a> (YouTube)</p>`;
+        if (m.$media === "audio") return `<p>${name}</p><audio src="${src}" controls preload="metadata" style="width:100%"></audio>`;
+        if (m.$media === "video") return `<p>${name}</p><video src="${src}" controls preload="metadata" style="max-width:100%;max-height:360px;border-radius:8px"></video>`;
+        return m.$media === "image" ? `<a href="${src}" target="_blank"><img src="${src}" alt="${name}" style="max-width:100%;max-height:360px;border-radius:8px;border:1px solid #e5e7eb"></a>` : `<p><a href="${src}">${name}</a> (PDF${m.pages ? `, ${m.pages} page${m.pages === 1 ? "" : "s"}` : ""})</p>`;
+      })
+      .join("\n");
     return new Response(
       `${head}<h2>${escapeHtml(snap.pipeline)} is waiting for you</h2>
 <p>${escapeHtml(message)}</p>
+${files}
 <details><summary>Current value</summary><pre>${escapeHtml(formatValue(snap.current))}</pre></details>
 <form method="post" action="${escapeHtml(action)}">
 <p><button class="approve" name="answer" value="approve">Approve</button><button name="answer" value="reject">Reject</button></p>
@@ -573,6 +1147,76 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     logger,
   });
 
+  // --package: which consumer key a request (and the MCP calls inside it) came with, and metering per key.
+  const callerKey = new AsyncLocalStorage<string>();
+  const meter = (key: string, pipeline: string, runId: string, r: RunResult | undefined, t0: number) => {
+    if (!usage || !served) return;
+    const meta = r?.context.meta;
+    usage.record({
+      key,
+      pkg: `${served.manifest.name}@${served.manifest.version}`,
+      pipeline,
+      runId,
+      status: r?.status ?? "error",
+      cost: meta?.cost ?? 0,
+      prompt: meta?.tokens.prompt ?? 0,
+      completion: meta?.tokens.completion ?? 0,
+      durationMs: Math.round(performance.now() - t0),
+    });
+  };
+
+  /** A request to a package's server (--package): consumers' keys, the Halo-Package header, hosted pipelines only. */
+  const packageRequest = async (req: Request, url: URL, path: string): Promise<Response | undefined> => {
+    const m = served!.manifest;
+    const refusedPkg = crossSite(req, url);
+    if (refusedPkg) return json({ error: refusedPkg, code: "forbidden" }, 403);
+    const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    const owner = !!token && safeEqual(bearer, token);
+    const consumer = owner ? undefined : keys!.idOf(keyOf(req, m));
+    if (!owner && !consumer) {
+      const how = m.hosted!.auth?.type === "header" ? `${m.hosted!.auth.name}: <key>` : "Authorization: Bearer <key>";
+      return json({ error: `Missing or unknown key: send the key the publisher of ${m.name} issued you (${how}; Halo reads it from ${m.hosted!.auth?.env ?? "the variable the package names"})`, code: "unauthorized" }, 401);
+    }
+    const who = consumer ?? "owner";
+    if (path === "/mcp") {
+      if (options.mcp === false) return json({ error: "Not found", code: "not_found" }, 404);
+      const bad = checkPackageHeader(req, m, false);
+      if (bad) return json(bad.body, bad.status);
+      return callerKey.run(who, () => mcp.handleHttp(req));
+    }
+    const startRun = path.match(/^\/api\/pipelines\/(\w+)\/runs$/);
+    if (startRun && req.method === "POST") {
+      const bad = checkPackageHeader(req, m);
+      if (bad) return json(bad.body, bad.status);
+      const name = startRun[1]!;
+      if (!entries.has(name)) return json({ error: `${name} is not a hosted pipeline of ${m.name} (it serves ${[...entries.keys()].join(", ")})`, code: "not_found" }, 404);
+      const body = ((await readJson(req)) ?? {}) as { args?: Record<string, unknown> };
+      const t0 = performance.now();
+      const runId = start(name, body.args ?? {}, `consumer ${who}`);
+      const result = await settled(runId);
+      meter(who, name, runId, result, t0);
+      if (!result) return json({ runId, status: "error", error: failures.get(runId) ?? "The run failed", code: "run_failed" }, 500);
+      // A consumer can't fetch this server's files, so each one in the answer goes inline.
+      let output: unknown;
+      try {
+        output = await mapMedia(result.output, async (ref) => {
+          const bytes = await blobs.get(ref.sha256);
+          if (!bytes) throw new Error(`the bytes of ${mediaLabel(ref)} are missing`);
+          return { ...ref, data: Buffer.from(bytes).toString("base64") };
+        });
+      } catch (err) {
+        return json({ runId, status: "error", error: `${name}'s output couldn't be sent: ${err instanceof Error ? err.message : String(err)}`, code: "media_output" }, 500);
+      }
+      return json({ runId, status: result.status, output });
+    }
+    if (path === "/api/pipelines" && req.method === "GET") {
+      return json([...entries.values()].map((e) => ({ name: e.name, params: e.decl.params, returnType: e.decl.returnType })));
+    }
+    if (!owner) return json({ error: `A consumer key can only run ${m.name}'s hosted pipelines`, code: "forbidden" }, 403);
+    if (path === "/api/usage" && req.method === "GET") return json(usage!.byKey(Number(url.searchParams.get("since") ?? 0) || 0));
+    return undefined;
+  };
+
   const mcp = createMcpServer(
     {
       list: () => [...entries.values()].map((e) => ({ name: e.name, description: describePipeline(e), params: e.decl.params })),
@@ -580,12 +1224,16 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         const e = entry(name);
         const runId = crypto.randomUUID();
         logger.log(`[halo] ${name} started by MCP (run ${runId.slice(0, 8)})`);
+        const t0 = performance.now();
         const work = e.runtime.run(name, args, { runId, signal });
         track(runId, name, work);
+        const key = callerKey.getStore();
         try {
           const r = await work;
+          if (key) meter(key, name, runId, r, t0);
           return { status: r.status, output: r.output, runId, waitingFor: r.context.meta.paused?.waitingFor };
         } catch (err) {
+          if (key) meter(key, name, runId, undefined, t0);
           return { status: "failed", runId, error: err instanceof Error ? err.message : String(err) };
         }
       },
@@ -597,12 +1245,21 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     port: options.port ?? 8080,
     hostname: host,
     development: false,
+    // A run's arguments may carry files: uploaded (multipart), or as data: URIs (a third larger than the file).
+    maxRequestBodySize: 256 * 1024 * 1024,
     ...(options.studio === false ? {} : { routes: { "/": studioPage } }),
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
       try {
         // Approval links carry their own signature; they work without the API token.
+        // So does a file the paused run shows, and only while that pause waits.
+        const approveFile = path.match(/^\/approve\/([\w-]+)\/file\/([0-9a-f]{64})$/);
+        if (approveFile && req.method === "GET") {
+          const linked = await linkedPause(approveFile[1]!, url);
+          if (!linked || !collectMedia(linked.snap.current).some((m) => m.sha256 === approveFile[2])) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
+          return blobResponse(approveFile[2]!);
+        }
         const approve = path.match(/^\/approve\/([\w-]+)$/);
         if (approve) {
           const runId = approve[1]!;
@@ -619,7 +1276,8 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         }
 
         // For load balancers and hosts' health checks: no token, and nothing about the pipelines.
-        if (path === "/healthz" && req.method === "GET") return json({ ok: true });
+        // `version` and `build` let a host tell whether the process it reached is the one it just deployed.
+        if (path === "/healthz" && req.method === "GET") return json({ ok: true, version: pkg.version, startedAt, ...(build ? { build } : {}), ...(options.project ? { project: options.project } : {}), ...(options.dryRun ? { dryRun: true } : {}) });
 
         if (path === "/slack/actions" && req.method === "POST") return slackAction(req);
 
@@ -627,7 +1285,29 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
         if (hook && req.method === "POST") {
           const target = webhooks.get(hook[1]!.replace(/\/+$/, ""));
           if (!target) return json({ error: "Unknown webhook" }, 404);
-          const raw = await req.text();
+          const bytes = new Uint8Array(await req.arrayBuffer());
+          const raw = new TextDecoder().decode(bytes);
+          const form = /^application\/x-www-form-urlencoded\b/i.test(req.headers.get("content-type") ?? "");
+          if (target.twilio) {
+            // Twilio signs the address it called (the public one, behind a proxy) and the form fields.
+            if (!form) return json({ error: "A Twilio webhook takes Twilio's form posts" }, 400);
+            const called = options.publicUrl ? `${options.publicUrl.replace(/\/+$/, "")}${url.pathname}${url.search}` : req.url;
+            if (!safeEqual(req.headers.get("x-twilio-signature") ?? "", twilioSignature(target.twilio, called, new URLSearchParams(raw)))) return json({ error: "Bad Twilio signature" }, 401);
+            let message;
+            try {
+              message = await incomingText(new URLSearchParams(raw), { token: target.twilio, fetch: options.fetch ?? fetch });
+            } catch (err) {
+              return json({ error: `Couldn't fetch the message's pictures: ${err instanceof Error ? err.message : String(err)}` }, 502);
+            }
+            const sid = message.twilio.MessageSid;
+            const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, message), `text from ${message.from || "Twilio"} (/hooks/${hook[1]})`, { idempotencyKey: sid ? `sms:${sid}` : undefined });
+            let reply: string | undefined;
+            if (target.reply && !begun.duplicate) {
+              const done = await Promise.race([settled(begun.runId), Bun.sleep(10_000).then(() => undefined)]);
+              if (done?.status === "completed" && typeof done.output === "string" && done.output.trim()) reply = done.output.trim();
+            }
+            return new Response(twiml(reply), { headers: { "Content-Type": "text/xml; charset=utf-8" } });
+          }
           if (target.secret) {
             const ghSig = req.headers.get("x-hub-signature-256");
             const ok = ghSig
@@ -642,13 +1322,33 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
             if (refused) return json({ error: refused }, 403);
           }
           let body: unknown;
-          try {
-            body = raw.trim() ? JSON.parse(raw) : undefined;
-          } catch {
-            return json({ error: "Webhook body must be JSON" }, 400);
+          let messageId: string | undefined;
+          if (/^message\/rfc822\b/i.test(req.headers.get("content-type") ?? "")) {
+            // A whole email, as a mail route (Cloudflare Email Routing, a mail server's pipe) hands it over.
+            const mail = mailFromRaw(bytes, { from: req.headers.get("x-envelope-from") ?? undefined, to: req.headers.get("x-envelope-to") ?? undefined });
+            if (!mail.from && !mail.subject && !mail.text) return json({ error: "That is not an email message" }, 400);
+            body = mail;
+            // The same message delivered twice is one run.
+            messageId = mail.messageId;
+          } else if (form) {
+            // A form post: its fields as an object (a field sent more than once, as a list).
+            const fields: Record<string, string | string[]> = {};
+            for (const [k, v] of new URLSearchParams(raw)) fields[k] = k in fields ? [fields[k]!, v].flat() : v;
+            body = fields;
+          } else {
+            try {
+              body = raw.trim() ? JSON.parse(raw) : undefined;
+            } catch {
+              return json({ error: "Webhook body must be JSON, a form post, or an email (message/rfc822)" }, 400);
+            }
           }
-          const runId = start(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`);
-          return json({ runId, status: "running" }, 202);
+          const begun = startOnce(target.pipeline, argsFromBody(entry(target.pipeline).decl, body), `webhook /hooks/${hook[1]}`, { idempotencyKey: req.headers.get("idempotency-key") || (messageId ? `mail:${messageId}`.slice(0, 255) : undefined) });
+          return json({ runId: begun.runId, status: "running", ...(begun.duplicate ? { duplicate: true } : {}) }, 202);
+        }
+
+        if (served && (path === "/mcp" || path.startsWith("/api/"))) {
+          const handled = await packageRequest(req, url, path);
+          if (handled) return handled;
         }
 
         // Pipelines as MCP tools, for Claude, Cursor, and other agents. Same token as the API.
@@ -667,6 +1367,9 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         if (path === "/api/health") return json({ ok: true, pipelines: entries.size });
 
+        const blob = path.match(/^\/api\/blobs\/([0-9a-f]{64})$/);
+        if (blob && req.method === "GET") return blobResponse(blob[1]!);
+
         if (path === "/api/evolve" || path.startsWith("/api/evolve/")) {
           const handled = await evolveRoutes(req, path, readJson);
           if (handled) return handled;
@@ -679,7 +1382,7 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
               file: e.file,
               params: e.decl.params,
               returnType: e.decl.returnType,
-              schedules: schedules.filter((s) => s.pipeline === e.name).map((s) => ({ cron: s.cron.source, next: nextRun(s.cron, new Date())?.toISOString() })),
+              schedules: scheduleInfo().filter((s) => s.pipeline === e.name),
               webhooks: [...webhooks].filter(([, w]) => w.pipeline === e.name).map(([p]) => `/hooks/${p}`),
             })),
           );
@@ -687,14 +1390,18 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
 
         const startRun = path.match(/^\/api\/pipelines\/([\w]+)\/runs$/);
         if (startRun && req.method === "POST") {
-          const body = ((await readJson(req)) ?? {}) as { args?: Record<string, unknown>; wait?: boolean };
-          const runId = start(startRun[1]!, body.args ?? {}, "API");
-          if (!body.wait) return json({ runId, status: "running" }, 202);
+          const multipart = (req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data");
+          const body = (multipart ? await uploadBody(req, startRun[1]!) : ((await readJson(req)) ?? {})) as { args?: Record<string, unknown>; wait?: boolean; idempotencyKey?: string; dryRun?: boolean };
+          const dryRun = body.dryRun === true || /^(1|true)$/i.test(req.headers.get("halo-dry-run") ?? "");
+          const { runId, duplicate } = startOnce(startRun[1]!, body.args ?? {}, "API", { idempotencyKey: req.headers.get("idempotency-key") ?? body.idempotencyKey, dryRun });
+          const extra = { ...(duplicate ? { duplicate: true } : {}), ...(dryRun || options.dryRun ? { dryRun: true } : {}) };
+          if (!body.wait) return json({ runId, status: inflight.has(runId) ? "running" : (recent.get(runId)?.status ?? "running"), ...extra }, 202);
           const result = await settled(runId);
-          return json(result ? { runId, status: result.status, output: result.output, cost: result.context.meta.cost } : { runId, status: "error" });
+          return json(result ? { runId, status: result.status, output: linkMedia(result.output), cost: result.context.meta.cost, ...extra } : { runId, status: "error", error: failures.get(runId), ...extra });
         }
 
-        if (path === "/api/runs" && req.method === "GET") return json(telemetry.listRuns(Number(url.searchParams.get("limit") ?? 50)));
+        // `running` says this server is working on it now; a run with no end and no `running` was started elsewhere (the CLI) or cut short.
+        if (path === "/api/runs" && req.method === "GET") return json(telemetry.listRuns(Number(url.searchParams.get("limit") ?? 50)).map((r) => ({ ...r, running: inflight.has(r.run_id) })));
 
         const run = path.match(/^\/api\/runs\/([\w-]+)$/);
         if (run && req.method === "GET") {
@@ -731,9 +1438,10 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     logger.warn(`Approval links will point at ${baseUrl}, which people can't open. Set HALO_PUBLIC_URL (or publicUrl in halo.json) to the address they reach this server at.`);
   }
 
-  // Check schedules at the top of every minute.
+  // Check schedules now (to catch up after a restart), then at the top of every minute.
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (options.scheduler !== false && schedules.length) {
+    tick();
     const arm = () => {
       timer = setTimeout(() => {
         tick();
@@ -743,6 +1451,37 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     arm();
   }
 
+  // ── Runs cut short last time ──
+  const MAX_RESUMES = 3;
+  const resumed: string[] = [];
+  if (progressStore) {
+    const dir = join(stateDir, "running");
+    const ids = existsSync(dir) ? readdirSync(dir).filter((f) => /^[\w-]+\.json$/.test(f)).map((f) => f.slice(0, -5)) : [];
+    for (const runId of ids) {
+      // Claimed, so two servers on one state folder don't both pick it up.
+      const snap = await progressStore.take(runId);
+      if (!snap) continue;
+      await progressStore.finished(runId);
+      const e = entries.get(snap.pipeline);
+      const tries = snap.meta.resumes ?? 0;
+      const giveUp = !e ? `its pipeline ${snap.pipeline} is no longer served` : tries >= MAX_RESUMES ? `it was picked up ${tries} times already and the server stopped each time` : undefined;
+      if (giveUp) {
+        logger.warn(`[halo] Run ${runId.slice(0, 8)} (${snap.pipeline}) was cut short and is not continued: ${giveUp}`);
+        telemetry.handler({ type: "run", pipeline: snap.pipeline, runId, status: "error", error: `Cut short by a restart and not continued: ${giveUp}` });
+        callback({ type: "run.failed", runId, pipeline: snap.pipeline, status: "failed", error: `Cut short by a restart and not continued: ${giveUp}`, idempotencyKey: snap.meta.idempotencyKey, dryRun: snap.meta.dryRun });
+        continue;
+      }
+      const stage = snap.nextStage;
+      logger.log(`[halo] ${snap.pipeline} was cut short; continuing at stage ${stage} (run ${runId.slice(0, 8)})`);
+      started.set(runId, { idempotencyKey: snap.meta.idempotencyKey, dryRun: snap.meta.dryRun });
+      const rec = recordingsDir && !snap.meta.dryRun ? new Recorder(recordingsDir, runId) : undefined;
+      const work = () => runtimeFor(e!, snap.meta.dryRun).continueRun(snap);
+      track(runId, snap.pipeline, rec ? ended(rec, recording.run(rec, work)) : work());
+      resumed.push(runId);
+    }
+  }
+  mirror?.start();
+
   const watchTimers = options.scheduler === false ? [] : watches.map((w) => setInterval(() => void checkWatch(w), w.every));
   if (options.scheduler !== false) void checkWatches();
 
@@ -751,17 +1490,31 @@ button.approve{background:#10b981;color:#fff;border-color:#10b981}input{font:inh
     port: server.port!,
     pipelines: [...entries.keys()],
     tick,
+    schedules: scheduleInfo,
     checkWatches,
     start,
     settled,
     approvalUrl,
+    resumed,
+    usage: (since = 0) => usage?.byKey(since) ?? [],
     async stop() {
       clearTimeout(timer);
       for (const t of watchTimers) clearInterval(t);
+      if (lockHeldBy === lockOwner) {
+        try {
+          if (JSON.parse(readFileSync(lockFile, "utf8")).owner === lockOwner) rmSync(lockFile);
+        } catch {}
+      }
       await server.stop(true);
       await Promise.allSettled([...inflight.values()]);
+      // Callbacks for what just ended get one try each; a retry that is waiting gives up.
+      stopping = true;
+      await Promise.race([Promise.allSettled([...deliveries]), new Promise((r) => setTimeout(r, 5_000))]);
       await Promise.all(runtimes.map((r) => r.close()));
       telemetry.close();
+      usage?.close();
+      // Last, with every database closed: the copy the next server starts from.
+      await mirror?.stop();
     },
   };
 }

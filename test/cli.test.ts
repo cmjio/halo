@@ -1,6 +1,6 @@
 import { test, expect, describe, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -18,15 +18,25 @@ function cliIn(cwd: string, ...args: string[]) {
 const cli = (...args: string[]) => cliIn(work, ...args);
 
 describe("CLI", () => {
-  test("validate examples/ succeeds", () => {
+  test("validate examples/ succeeds, except for registry packages a checkout hasn't installed", () => {
     const r = cli("validate", "examples/");
-    expect(r.code).toBe(0);
-    const count = [...new Bun.Glob("**/*.halo").scanSync(join(root, "examples"))].length;
-    expect(r.out).toContain(`${count} file(s), 0 error(s)`);
+    const halo = [...new Bun.Glob("**/*.halo").scanSync(join(root, "examples"))];
+    // Installed packages live in .halo/, which git ignores, so a fresh checkout reports each
+    // `use "@halo/..."` as not installed (test/examples.test.ts checks those examples installed).
+    // `halo install` in examples/ (as CI does before validating) installs them from examples/halo.json.
+    const installed = (name: string) => existsSync(join(root, "examples/.halo/packages", name));
+    const uses = halo.flatMap((f) => [...readFileSync(join(root, "examples", f), "utf8").matchAll(/^use "(@halo\/[a-z0-9-]+)"/gm)].filter((m) => !installed(m[1]!)).map((m) => `${f}: ${m[1]}`));
+    const errors = r.out.split("\n").filter((l) => / error /.test(l));
+    expect(errors.map((l) => l.replace(/^\s*.*?examples\/(.+?):\d+:\d+ error use "(@halo\/[a-z0-9-]+)": package .* is not installed \(run halo add .*\)$/, "$1: $2")).sort()).toEqual(uses.sort());
+    expect(r.out).toContain(`${halo.length} file(s), ${uses.length} error(s)`);
+    expect(r.code).toBe(uses.length === 0 ? 0 : 1);
   });
 
   test("validate --strict fails on warnings", () => {
-    expect(cli("validate", "examples/learn/14-env-vars.halo", "--strict").code).toBe(1);
+    const file = join(work, "warns.halo");
+    writeFileSync(file, `policy P : Redact(SalaryData)\nagent A [openai/gpt-4o]\n  requires P\npipeline S(x: String) -> Result:\n  x |> A.go()\n`);
+    expect(cli("validate", file, "--strict").code).toBe(1);
+    expect(cli("validate", file).code).toBe(0);
   });
 
   test("run --mock prints the output once", () => {
@@ -89,7 +99,7 @@ pipeline S(x: String) -> Result:
     expect(cliIn(dir, "thread", "Visit", "ana", "--reset", "--yes").out).toContain("Reset thread Visit ana (it was v2)");
     expect(cliIn(dir, "thread", "Visit", "ana").out).toContain("reset (no state)");
     expect(JSON.parse(cliIn(dir, "run", "t.halo", "--arg", "user_id=ana", "--arg", "page=again", "--json").out).output).toEqual(["again"]);
-  });
+  }, 30_000);
 
   test("run --json returns the full result", () => {
     const r = cli("run", "examples/learn/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
@@ -133,7 +143,7 @@ pipeline S(x: String) -> Result:
     try {
       const r = cliIn(dir, "init", "demo");
       expect(r.code).toBe(0);
-      expect(readdirSync(join(dir, "demo")).sort()).toEqual([".env.example", ".gitignore", "README.md", "main.halo"]);
+      expect(readdirSync(join(dir, "demo")).sort()).toEqual([".env.example", ".gitignore", "README.md", "halo.json", "main.halo"]);
       expect(cliIn(dir, "init", "demo").err).toContain(`"demo" already exists`);
       const project = join(dir, "demo");
       expect(cliIn(project, "validate", ".").out).toContain("1 file(s), 0 error(s), 0 warning(s)");

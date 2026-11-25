@@ -1,0 +1,6 @@
+// Private to the package: not in "exports", so consumers can't use these names.
+policy Polite : Block(Profanity)
+
+schema Category {
+  name: String,
+}

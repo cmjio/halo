@@ -1,0 +1,9 @@
+# halolang.com (RFC 9309). Cloudflare prepends its content signals to this file.
+# /dl/ is release binaries: each one served is counted as an install (site/worker.ts),
+# so crawlers are kept out of it.
+
+User-agent: *
+Allow: /
+Disallow: /dl/
+
+Sitemap: https://halolang.com/sitemap.xml

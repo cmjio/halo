@@ -5,7 +5,9 @@
 //          and generate an evidence-backed research report
 // ============================================================
 
-policy Privacy        : Redact(PersonalInfo) & Anonymize(Speaker)
+// Emails, phone numbers and other PII are masked before a model sees them. Halo can't
+// detect names, so transcripts should come from Dovetail with speakers pseudonymized.
+policy Privacy        : Redact(PII)
 policy ResearchBudget : MaxSpend(3.00)
 
 // --- Tools ---
@@ -31,6 +33,16 @@ agent ThematicAnalyst [anthropic/claude-sonnet-4, temp: 0.2]
   equips PriorResearch, UserSegments
   requires Privacy, ResearchBudget
 
+// A second opinion on every analyst call: it sees the same (redacted) prompt, and its
+// answers are recorded in context.meta.shadows to compare, never used.
+agent Analyst_Check [openai/gpt-4o-mini, temp: 0.2]
+  system """
+    You are a qualitative research analyst. Extract themes
+    from interview transcripts using affinity clustering.
+    Preserve participant anonymity at all times.
+  """
+  requires Privacy, ResearchBudget
+
 // The data trier validates themes against behavioral metrics
 agent DataTrier [openai/gpt-4o-mini, temp: 0.0]
   system """
@@ -54,7 +66,7 @@ agent ReportSynthesizer [openai/gpt-4o-mini, temp: 0.4]
 // --- The Pipeline ---
 @timeout(15m)
 @retry(2, 10s)
-pipeline ResearchReport(study_id: String) -> Report:
+pipeline ResearchReport(study_id: String) -> Result:
   study_id
     // Step 1: Load all interview transcripts from Dovetail
     |> ThematicAnalyst.load_transcripts(

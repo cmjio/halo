@@ -1,0 +1,36 @@
+// Best of N: three attempts at the same task, each in its own fork of one Docker sandbox, then a
+// picker chooses the attempt to keep and the run carries on from that attempt's files.
+//
+//   halo test examples/patterns/best-of-n.halo --arg task="Make the CSV parser handle quoted commas"
+//   halo run  examples/patterns/best-of-n.halo --arg task="Make the CSV parser handle quoted commas"
+//
+// Forks need Docker (E2B and Daytona sandboxes don't fork). Run it from the project folder.
+
+policy Budget : MaxSpend(3.00)
+// Which attempt survives is the pipeline's choice (keep), not an attempt's.
+policy StayInside : DenyTools("Lab.apply", "Lab.download", "Lab.keep")
+
+tool Lab : Remote("docker", from: ".", hosts: ["pypi.org", "*.pythonhosted.org", "registry.npmjs.org"])
+
+agent Dev [anthropic/claude-sonnet-4-5, preset: Coder, sandbox: Lab]
+  requires Budget, StayInside
+
+agent Picker [anthropic/claude-sonnet-4-5, temp: 0.0]
+  system """
+    You compare attempts at the same coding task. Prefer an attempt whose tests passed, then the
+    smallest change, then the clearest code. Attempts are numbered from 0.
+    Reply with JSON: {"index": 0, "why": "..."}
+  """
+  requires Budget
+
+pipeline BestOfThree(task: String) -> Result:
+  task
+    // 1. Three attempts at once, each on its own copy of the project
+    |* each(style in ["the smallest change that works", "a thorough fix with a new test", "a fix that also tidies the code around it"], concurrency: 3) => Dev.work("{{task}}. Take this approach: {{style}}. Run the tests.") as attempts
+
+    // 2. Pick one; its sandbox becomes the run's sandbox
+    |> Picker.choose("Task: {{task}}. Which attempt should we keep?", context.data.attempts) as best
+    |> Lab.keep(fork: context.data.best.index) as kept
+
+    // 3. What the kept attempt changed, as a patch
+    |> Lab.diff()

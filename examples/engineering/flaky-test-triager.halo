@@ -1,11 +1,12 @@
 // ============================================================
 // Flaky test triager in CI
 // ============================================================
-// Finds tests that fail intermittently in CI, files one ticket per test
-// with evidence, and quarantines the worst offenders so main stays
-// green. The classification is precise (same SHA, minimum sample) and
-// the threshold lives in code, so the agent can act unattended without
-// silencing real regressions.
+// Finds tests that fail intermittently in CI, reproduces each one by
+// running it 20 times in a sandbox on the same commit, files one ticket
+// per test with evidence, and quarantines the worst offenders so main
+// stays green. The classification is precise (same SHA, minimum sample,
+// a local rerun) and the threshold lives in code, so the agent can act
+// unattended without silencing real regressions.
 //
 // RUN:  halo plan examples/engineering/flaky-test-triager.halo
 // ============================================================
@@ -15,7 +16,8 @@
 //            and a Slack digest in #ci-health
 // Autonomy:  autonomous        Risk: medium
 //
-// Just do it   compute flake rates and read logs; file or update one
+// Just do it   compute flake rates and read logs; rerun the test in a
+//              sandbox with no network; file or update one
 //              ticket per flaky test; post the digest to #ci-health
 // Confirm      none at runtime; quarantine is gated by thresholds in
 //              code rather than a human click
@@ -27,6 +29,9 @@
 // in /payments" is just log text.
 //
 // Enforced in code:
+//   - the rerun happens in a Docker sandbox with a copy of the checkout at
+//     the failing SHA; the test's code runs there, not on the CI fleet,
+//     and can reach only the npm registry (to install)
 //   - nothing is filed unless the triager reports a same-SHA flip
 //   - quarantine runs only when the reported flake rate is over 5% across
 //     at least 40 runs and the test isn't @critical-path; @critical-path
@@ -55,12 +60,16 @@ policy Verdict : Require(JSON)
 tool CI      : MCP(url: "https://mcp.northwind.example/ci", apiKey: Env.CI_MCP_KEY)
 tool Tickets : MCP(url: "https://mcp.northwind.example/jira", apiKey: Env.JIRA_MCP_KEY)
 tool Chat    : Slack(Env.SLACK_BOT_TOKEN, channel: "#ci-health")
+// A copy of the checkout (at the SHA under suspicion) to rerun the test in.
+tool Rerun   : Remote("docker", image: "node:22", from: "{{workdir}}", hosts: ["registry.npmjs.org"])
 
 agent Triager [anthropic/claude-haiku-4-5, temp: 0.0]
   system """
     You're the flaky-test triager for Northwind's CI (Buildkite, ~4,000 test runs a day). Every two hours you get the list of tests that failed and then passed on retry on the same commit. Your goal is to keep main green without hiding real regressions.
 
     A test counts as flaky only if it has both passed and failed on an identical commit SHA in the last 7 days. Never call a test flaky based on failures across different commits, because that's often a genuine bug that landed.
+
+    You also get a local rerun: the test run 20 times in a sandbox on one commit, as counts of pass and fail. Both outcomes on the same commit is a same-SHA flip. Twenty passes doesn't clear a test that CI shows flipping; it lowers your confidence in a timing or ordering cause.
 
     For each flaky test, find the owning team from CODEOWNERS, look at failure logs for a pattern (timeouts, port collisions, ordering, wall-clock dates), and file or update one Jira ticket with the evidence. You may quarantine a test when its flake rate exceeds 5% over at least 40 runs; quarantine still runs the test but stops it from blocking merges. Tests tagged @critical-path (payments, auth) are never quarantined, because a silenced payments test is how outages ship; page the owning team's channel instead.
 
@@ -72,24 +81,28 @@ agent Triager [anthropic/claude-haiku-4-5, temp: 0.0]
 
 @correct(1)
 @retry(2, 5s)
-pipeline TriageFlakyTest(test_id: String) -> Result:
+pipeline TriageFlakyTest(test_id: String, workdir: String) -> Result:
   test_id
     // 1. Read-only evidence: a week of runs and the failure logs
     |> CI.get_test_history(test_id: test_id, days: 7) as history
     |> CI.get_failure_logs(test_id: test_id) as logs
-    |> Triager.classify("Test {{test_id}}.", context.data.history, context.data.logs) as verdict
 
-    // 2. Only same-SHA flips count as flaky
+    // 2. Reproduce: the same test 20 times on the same commit, in the sandbox
+    |> Rerun.run(command: "npm ci --ignore-scripts --silent && for i in $(seq 1 20); do npx jest -t {{test_id}} >/dev/null 2>&1 && echo pass || echo fail; done | sort | uniq -c", timeout_ms: 900000) as rerun
+
+    |> Triager.classify("Test {{test_id}}.", context.data.history, context.data.logs, context.data.rerun.stdout) as verdict
+
+    // 3. Only same-SHA flips count as flaky
     |? (context.data.verdict.flaky == true && context.data.verdict.same_sha_flips > 0)
     |> Tickets.upsert_flaky_ticket(test_id: test_id, owner_team: context.data.verdict.owner_team, evidence: context.data.verdict.evidence) as ticket
 
-    // 3. Critical-path tests page their team; others quarantine past the threshold
+    // 4. Critical-path tests page their team; others quarantine past the threshold
     |? {
          (context.data.verdict.critical_path == true) => Chat.post(channel: context.data.verdict.owner_channel, text: "Flaky @critical-path test {{test_id}} ({{verdict.flake_rate}} over {{verdict.runs}} runs). Not quarantined. Ticket {{ticket.key}}."),
          (context.data.verdict.flake_rate > 0.05 && context.data.verdict.runs >= 40) => CI.quarantine_test(test_id: test_id, ticket_key: context.data.ticket.key),
          else => System.Value(context.data.verdict),
        } as action
 
-    // 4. The digest line for #ci-health
+    // 5. The digest line for #ci-health
     |> Chat.post(text: "{{test_id}}: {{verdict.summary}}")
     |> System.Value(context.data.verdict.summary)

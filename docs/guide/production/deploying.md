@@ -39,9 +39,41 @@ COPY --chown=halo . .
 ```
 
 - It refuses to serve without `HALO_SERVE_TOKEN`, because it listens on every interface inside the container.
-- Paused runs, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart.
+- Paused runs, schedule state, telemetry and stores live in `/app/.halo`. Mount a volume there so runs waiting for approval survive a restart, and so scheduled runs aren't repeated or forgotten. On a host without volumes, set `HALO_STATE_STORE` to a bucket instead (see [State without a disk](./serving.md#state-without-a-disk)).
+- The container's clock is UTC. Set `timezone` in `halo.json` for schedules in local time (see [Schedules](./serving.md#schedules)).
 - On Linux, a bind-mounted folder must be writable by uid 1000. Otherwise add `--user "$(id -u)"`.
 - `halo upgrade` doesn't replace the binary in the image. Use a newer tag.
+
+### Deploy without building an image
+
+The image above already has everything except your project. Instead of building your own image around it (which needs Docker where you build), push the project to a bucket and point the stock image at it:
+
+```bash
+# From your machine or CI. No Docker.
+halo push --to s3://my-bucket/halo/app
+# ✓ Pushed version 3f9c1a2b7d04 to s3://my-bucket/halo/app (14 file(s), 38 KB; 14 new)
+```
+
+On the host, run `ghcr.io/cmjio/halo` as it is, with:
+
+| Variable | Value |
+|---|---|
+| `HALO_PROJECT` | `s3://my-bucket/halo/app` |
+| `HALO_STATE_STORE` | `s3://my-bucket/halo/state`, if the host has no lasting disk (see [State without a disk](./serving.md#state-without-a-disk)) |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT` | The bucket's credentials (the `AWS_` names work too) |
+| `HALO_SERVE_TOKEN`, provider keys | As always |
+
+`halo serve` pulls the project into `/app` before it starts. After that, a deploy is `halo push`:
+
+- The server checks for a new version every 30 seconds (`HALO_PROJECT_POLL`). When there is one it pulls it, lets running pipelines reach a stopping point, and starts again on the new files in the same process. No container is replaced, so there is no old container left running the old project.
+- If the new version doesn't start (a pipeline has an error), the server goes back to the version it was running, keeps serving it, and logs why. Push a fix and it switches.
+- `GET /healthz` reports `project`, the version being served. `halo push` prints the version it pushed, so a deploy script can wait until they match.
+- `halo push` checks the project the way `halo serve` does and refuses to push one with errors (`--force` pushes anyway).
+- What is pushed: the files git tracks or would track (everything outside dot-folders when there is no git repository), plus installed packages (`.halo/packages`). Never `.env` files, `.git`, `node_modules`, or the state in `.halo`. Secrets stay on the host, as environment variables.
+- The same files are the same version, whoever pushes them. The last five versions are kept (`--keep N`).
+- A folder works in place of a bucket (`halo push --to /mnt/shared/app`), for hosts with a shared mount.
+
+The project and its state can share one bucket under different prefixes.
 
 ### GitHub Actions
 
@@ -64,6 +96,12 @@ npm install --save-dev @halolang/halo    # then npx halo, or halo in package.jso
 The package is a small launcher. npm installs the standalone binary for your machine as an optional dependency (`@halolang/halo-<platform>`), so it needs no Bun. It covers macOS, Linux (glibc and musl, x64 and arm64) and Windows x64. If your install omits optional dependencies, or your x64 CPU lacks AVX2, use the install script instead. Update with your package manager; `halo upgrade` says so.
 
 The npm package is the CLI only. To use Halo as a library in a Bun app, see [Option 2](#option-2-embed-the-runtime-in-a-bun-server).
+
+### Sandboxes in production
+
+`Remote("docker")` and `sandbox: "docker"` start containers with the `docker` on the machine Halo runs on. Halo's own image, and hosts like Fly, Render, Railway, Heroku and Cloud Run, have no Docker inside, so a Docker sandbox can't start there. (Mounting the host's Docker socket into Halo's container would make it work, and would give every agent with a sandbox control of the host: don't.)
+
+Use `sandbox: "auto"` (or `Remote("auto")`) and set `E2B_API_KEY` or `DAYTONA_API_KEY` where you deploy: the same file uses Docker on your laptop and in CI, and a cloud sandbox in production. Allowed hosts (`hosts:`, `AllowHosts`), forks and saved sandboxes need Docker, so a pipeline that relies on them should run where Docker is: a VM or a CI runner. See [Coding Agents That Run Their Code](../coding-agents.md#which-sandbox).
 
 ## Running pipelines yourself
 

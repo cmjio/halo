@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@halo/jira": "^1.0.0",
+    "@halo/sentry": "^1.0.0"
+  }
+}

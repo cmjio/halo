@@ -94,6 +94,58 @@ pipeline Name(arg: Type, other: Type) -> ReturnType:
 
 A pipeline starts with an expression (usually an argument) and continues with stages.
 
+## Files and Packages: `use`
+
+`use` brings names from another `.halo` file, or from an installed package, into a file.
+
+```halo
+use "./shared/policies.halo" { Careful }
+use "@acme/support-kit" { Triage, Triager as AcmeTriager } with models(fast: anthropic/claude-haiku-4-5)
+use "@halo/stripe" { Stripe }
+
+tool Pay : Stripe()
+
+agent Closer [anthropic/claude-sonnet-4-5] equips Pay requires Careful
+
+pipeline Inbox(ticket: String):
+  ticket |> Triage() as triaged |> Closer.reply(context.data.triaged)
+```
+
+- The string is a relative path (`"./x.halo"`, `"../shared/x.halo"`) or a package name (`"@acme/support-kit"`). A bare name like `"stripe"` means `"@halo/stripe"`.
+- `{ Name, Other as Alias }` lists what to import. An imported name works everywhere a local one does: calls, `equips`, `requires`, `tool X : Provider()`, and types.
+- Every top-level declaration in a file is importable. A package exports only what its exported files declare (`exports` in its `halo.json`), plus its tool providers. Its other files are private.
+- Two imports that bring the same name, or an import with the same name as a declaration in the file, is an error. Rename one with `as`.
+- `use` lines can't go round in a circle (`a.halo` uses `b.halo`, which uses `a.halo`). Move what both need into a third file.
+- A `use` with no `{ ... }` imports nothing. It still checks that the file or package is there, and its `with models(...)` still applies.
+- A package can only `use` the packages in its own `dependencies`.
+- Versions live in `halo.json` and `halo.lock`, not in the source.
+- `use` and `with` are soft keywords: they still work as argument names and `as` bindings.
+
+The linker loads a file and everything it uses into one program. Declarations from other files keep their own names inside, so two files (or two packages) can each have a private `Writer` without a clash. Mocks, recordings, `halo plan`, telemetry and errors use the names you see: `"Triager.classify"` in `mocks.json` mocks the package's `Triager`. When two things would show the same name, they show their internal names (`@acme/support-kit#Triager`, `lib/shared#Writer`), and a mock can use those.
+
+Only the file's own pipelines are entry points (`halo run`, `halo serve`, `halo mcp`). Imported pipelines are called from them. `halo serve` links each file, so a pipeline can call a pipeline in another file. `halo compare` and `halo evolve` link each version of the file in its place, so its `use` lines resolve the same way.
+
+Policies name imported tools as the file imported them: `AllowTools(Desk, "Desk.get_ticket")`, `DenyTools("*.delete")` work on a `Desk` from another file or package, whatever its path.
+
+### Model slots
+
+A package's agents don't pick a model. They name a slot, and the program that uses the package fills it:
+
+```halo
+agent Triager [models.fast, temp: 0]
+```
+
+A slot is filled, in order, by:
+
+1. the `with models(...)` of the `use` line that imports the package (for that package's agents only),
+2. `"models"` in the project's `halo.json`: `{ "models": { "fast": "anthropic/claude-haiku-4-5" } }`.
+
+An unfilled slot is an error that names the slot, what the package says it needs, and a model that works. A project's own agents can use `[models.<slot>]` too, filled from `halo.json`. In a package's own `halo.json`, `models` holds `{ "description", "suggested" }` for each slot, and the `suggested` model fills it when the package runs its own tests.
+
+A binding can name a slot of the program doing the `use`: `with models(fast: models.smart)`.
+
+Every agent in a package (exported file or not) must use a slot that its `halo.json` declares. `halo publish` and the registry refuse a package with a hard-coded model id in any `.halo` file it ships. A [hosted](/guide/hosted-packages) pipeline's source may name models, because it runs on its publisher's server with their keys, and it never ships: the package carries only its interface.
+
 ## Operators
 
 | Operator | Name | Purpose |
@@ -118,6 +170,7 @@ A call is `Agent.method(...)`, `Tool.method(...)`, `System.Method(...)`, `Thread
 | `@checkpoint` | Snapshot state after every stage (and at a closed gate); continue with `halo run --checkpoint <file>`; `halo history <runId>` lists every step and `halo rewind <file> <runId> --step N` continues from one | `@checkpoint` |
 | `@thread(input)`, `@thread(input, Name)` | Keep state between runs, one thread per value of `input`: read it as `context.thread`, change it with `Thread.set`, `Thread.append` and `Thread.clear`, saved when the run ends ([Thread State](/guide/thread-state)) | `@thread(user_id)` |
 | `@shadow(Primary)` | On an agent: run it alongside every call to `Primary` and record its output, which is never used. `@shadow(openai/gpt-4o)` runs the same prompt on that model instead | `@shadow(Baseline)` |
+| `@cascade(model, ...)` | On an agent: when a call fails (after `@retry`), an output policy rejects the answer (after `@correct`), or the answer misses the pipeline's schema, ask the next model in the list. Budget violations never move up | `@cascade(anthropic/claude-opus-4-5)` |
 | `@correct(n)` | On an agent or pipeline: when an output policy rejects an answer, tell the agent what was wrong and ask again, up to n times | `@correct(2)` |
 | `@expect("cond", ...)` | On a pipeline: conditions its output must meet, in gate syntax over `output` and the inputs. `halo run`/`halo test` report them (`test` fails on a broken one); `halo compare` and `halo evolve` hold every variant to the original's, with no judge | `@expect("output.labels.length <= 3")` |
 
@@ -207,7 +260,7 @@ pipeline ResolveSalesDrop(event: String) -> Diagnosis:
 
 | Editor | Status | Path |
 |---|---|---|
-| VS Code | Highlighting + language server (errors, hover, completion) | `editors/vscode/` |
+| VS Code | Highlighting + language server (errors, hover, completion, go to definition, across `use`) | `editors/vscode/` |
 | Zed | Tree-sitter highlighting | `editors/zed/` |
 | Sublime Text | Highlighting | `editors/sublime/` |
 | JetBrains | Planned | — |

@@ -23,6 +23,7 @@
  * closed; arbitrary JavaScript (`evaluate`) needs `allowScript: true`.
  */
 
+import { MediaBytes } from "../media.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -672,7 +673,8 @@ async function run(c: Ctx): Promise<unknown> {
       const fullPage = call.named.fullPage === true || call.named.full_page === true;
       const shot = await send(c, "Page.captureScreenshot", { format: "png", captureBeyondViewport: fullPage });
       const raw = call.named.path ?? (call.implicitInput ? undefined : call.positional[0]);
-      if (raw === undefined || raw === null || raw === "") return { mimeType: "image/png", base64: shot.data };
+      // Without a path, the screenshot is an image value: a model the result reaches is sent the image.
+      if (raw === undefined || raw === null || raw === "") return { image: new MediaBytes(Buffer.from(shot.data, "base64"), { name: "screenshot.png" }) };
       const path = screenshotPath(call, str(raw));
       mkdirSync(dirname(path), { recursive: true });
       const bytes = await Bun.write(path, Buffer.from(shot.data, "base64"));
@@ -788,7 +790,7 @@ const CHROME_METHODS: ToolMethod[] = [
   },
   {
     name: "screenshot",
-    description: "Take a PNG screenshot of the page. With path, saves it (under the current directory) and returns { path, bytes }; otherwise returns { mimeType, base64 }.",
+    description: "Take a PNG screenshot of the page. With path, saves it (under the current directory) and returns { path, bytes }; otherwise returns { image }, which you are shown.",
     params: { type: "object", properties: { path: { type: "string", description: "Where to save the PNG, e.g. \"shots/home.png\"" }, fullPage: { type: "boolean", description: "Capture the whole page, not just the visible part" } } },
     effect: "read",
   },

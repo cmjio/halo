@@ -50,6 +50,7 @@ Keywords that declare foundational infrastructure blocks. Instantiated globally 
 | **Modifiers** | `system` (system prompt), `equips` (binds tools/stores), `requires` (binds policies) |
 | **Syntax** | `agent Name [model-ref, key: value]` |
 | **Example** | `agent DataAnalyst [gemini-3-1-pro, temp: 0.1]` |
+| **Model slot** | `agent Triager [models.fast]`: the model comes from `use ... with models(fast: ...)` or `halo.json` `"models"` |
 
 ### `pipeline`
 
@@ -58,6 +59,24 @@ Keywords that declare foundational infrastructure blocks. Instantiated globally 
 | **Definition** | Defines a pipeline: its parameters, return type, and stages |
 | **Syntax** | `pipeline Name(param: Type) -> ReturnType: ...` |
 | **Example** | `pipeline ProcessClaim(event: Webhook) -> Result:` |
+
+### `use`
+
+| Field | Value |
+|---|---|
+| **Definition** | Imports declarations from another `.halo` file or an installed package |
+| **Syntax** | `use "./file.halo" { Name, Other as Alias }`, `use "@scope/name" { Name }` |
+| **Checked** | When linking: the file or package must exist, each name must be exported, and no two names may clash |
+| **Example** | `use "@acme/support-kit" { Triage } with models(fast: anthropic/claude-haiku-4-5)` |
+
+### `with models(...)`
+
+| Field | Value |
+|---|---|
+| **Definition** | Fills the model slots of the agents in the package a `use` line imports |
+| **Syntax** | `with models(slot: model-ref, ...)` |
+| **Order** | The `use` line first, then `halo.json` `"models"`. An unfilled slot is an error |
+| **Example** | `with models(fast: anthropic/claude-haiku-4-5, smart: openai/gpt-5)` |
 
 ## 2. Relational Modifiers (The Verbs)
 
@@ -202,6 +221,14 @@ Annotations placed above agents or pipelines that control how they run.
 | **Definition** | When an output policy rejects an agent's answer, show the agent the reason and ask again, up to n times |
 | **Applies to** | An agent, or a pipeline (all its agents) |
 | **Example** | `@correct(2)` |
+
+### `@cascade(model, ...)`
+
+| Field | Value |
+|---|---|
+| **Definition** | On an agent: when a call fails, an output policy rejects the answer, or the answer misses the pipeline's schema, ask the next model in the list instead |
+| **Use case** | A cheap model for most calls, a bigger one only when it is needed |
+| **Example** | `@cascade(anthropic/claude-sonnet-4-5, anthropic/claude-opus-4-5)` |
 
 ## 5. Native Primitives (The Built-ins)
 

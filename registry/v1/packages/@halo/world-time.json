@@ -1,0 +1,44 @@
+{
+  "name": "@halo/world-time",
+  "description": "Time zones without an API: the time anywhere, and converting a time between zones",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "a6bfffc1a6603763085dd3cd37e00a8082f592bd397c9b6ec314c294f365f28e",
+      "size": 5587,
+      "file": "v1/files/@halo/world-time/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.752Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "WorldTime"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [],
+        "env": [],
+        "spawn": [],
+        "code": true,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.752Z",
+  "keywords": [
+    "time",
+    "timezones"
+  ],
+  "license": "MIT",
+  "readme": "# @halo/world-time\n\nTime zones without an API: the time anywhere, and converting a time between zones.\n\n```halo\nuse \"@halo/world-time\" { WorldTime }\n\ntool Clock : WorldTime()\n```\n\nNo key. It runs its own code (time zone arithmetic, no network), so it needs `halo add @halo/world-time --trust`.\n\n`halo add world-time` installs it (short for `halo add @halo/world-time`). `halo tools` then lists its methods and their effects.\n"
+}

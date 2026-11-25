@@ -5,18 +5,21 @@
 // runs the tests, and while they fail sends the agent the failing
 // output to fix (|<> loop). The tests decide when it's done, not the model.
 //
-// This runs model-written code on your machine: point `workdir` at a
-// sandbox (a scratch folder or a container), not at anything you care
-// about. Block(DestructiveOps) rejects code with things like `rm -rf`.
+// The code runs in a Docker sandbox with a copy of `workdir`, not on
+// your machine, and with no network: model-written code can't touch
+// your files or call out. The finished file comes back as a diff, and
+// `download` writes it next to the tests only once they pass.
 //
-// RUN:  halo run examples/engineering/code-writer.halo --arg workdir=/tmp/calc \
+// RUN:  halo run examples/engineering/code-writer.halo --arg workdir=calc \
 //         --arg test_file=calc.test.ts --arg target_file=calc.ts \
 //         --arg task="Evaluate arithmetic expressions"
+//       (workdir is a folder under the current one; Docker must be running)
 // ============================================================
 
 policy SafeCode : Block(DestructiveOps) & Block(APIKey) & MaxSpend(0.50)
 
-tool Shell : Bash()
+// A copy of the project in a Bun container, cut off from the network.
+tool Box : Remote("docker", image: "oven/bun:1", from: "{{workdir}}", network: false)
 
 agent Coder [anthropic/claude-sonnet-4-5, temp: 0.0]
   system """
@@ -30,24 +33,22 @@ agent Coder [anthropic/claude-sonnet-4-5, temp: 0.0]
 pipeline WriteCode(task: String, workdir: String, test_file: String, target_file: String) -> Result:
   task
     // 1. The tests are the spec
-    |> Shell.run(command: "cat {{workdir}}/{{test_file}}") as spec
-    |? (context.data.spec.exitCode == 0)
+    |> Box.read(path: test_file) as spec
 
     // 2. Write the implementation
     |> Coder.implement(
          "Task: {{task}}. Write {{target_file}} so that {{test_file}} passes.",
-         context.data.spec.stdout
+         context.data.spec.content
        ) as code
 
-    // 3. Save it and run the tests (pipefail: the exit code is bun test's)
-    |> Shell.run(command: """
-         set -o pipefail
-         cd {{workdir}}
-         printf '%s\n' {{code}} | sed '/^```/d' > {{target_file}}
-         bun test {{test_file}} 2>&1 | tail -60
-       """) as result
+    // 3. Save it in the sandbox (dropping any ``` fence lines) and run the tests there
+    //    (pipefail: the exit code is bun test's)
+    |> Box.write(path: target_file, content: context.data.code) as saved
+    |> Box.run(command: "grep -v '^```' {{target_file}} > .code.tmp; mv .code.tmp {{target_file}}; set -o pipefail; bun test {{test_file}} 2>&1 | tail -60") as result
 
     // 4. Failing? The coder sees the test output and tries again
     |<> loop(Coder, "context.data.result.exitCode != 0", max: 4) as fixes
 
+    // 5. Green: bring the file home
+    |> Box.download(from: target_file, to: "{{workdir}}/{{target_file}}") as written
     |> System.Value(context.data.result.stdout)

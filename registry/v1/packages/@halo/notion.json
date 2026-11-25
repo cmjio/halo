@@ -1,0 +1,49 @@
+{
+  "name": "@halo/notion",
+  "description": "Notion pages and databases: search, read, query, create, and append",
+  "distTags": {
+    "latest": "1.0.0"
+  },
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "sha256": "7609b9907234207a2c8175f658fca81f7b231a74046eb13f51463c812ac29a19",
+      "size": 8120,
+      "file": "v1/files/@halo/notion/1.0.0.halotool",
+      "publishedAt": "2026-11-11T22:39:48.747Z",
+      "dependencies": {},
+      "exports": {
+        "pipelines": [],
+        "agents": [],
+        "tools": [],
+        "stores": [],
+        "schemas": [],
+        "policies": [],
+        "providers": [
+          "Notion"
+        ],
+        "skills": []
+      },
+      "models": {},
+      "permissions": {
+        "network": [
+          "api.notion.com"
+        ],
+        "env": [
+          "NOTION_API_KEY"
+        ],
+        "spawn": [],
+        "code": false,
+        "hosted": []
+      }
+    }
+  },
+  "updatedAt": "2026-11-11T22:39:48.747Z",
+  "keywords": [
+    "notion",
+    "docs"
+  ],
+  "license": "MIT",
+  "homepage": "https://developers.notion.com/reference",
+  "readme": "# @halo/notion\n\nNotion pages and databases: search, read, query, create, and append.\n\n```halo\nuse \"@halo/notion\" { Notion }\n\ntool Docs : Notion()\n```\n\nSet `NOTION_API_KEY`, and share the pages and databases with your integration.\n\n`halo add notion` installs it (short for `halo add @halo/notion`). `halo tools` then lists its methods and their effects.\n"
+}

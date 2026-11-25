@@ -6,7 +6,7 @@ grammar Halo;
 
 program: declaration* EOF;
 
-declaration: policyDecl | toolDecl | storeDecl | schemaDecl | agentDecl | pipelineDecl;
+declaration: useDecl | policyDecl | toolDecl | storeDecl | schemaDecl | agentDecl | pipelineDecl;
 
 // Identifiers plus soft keywords. Used wherever a name cannot be confused with
 // a declaration keyword: named-arg keys, method names, context path segments.
@@ -14,7 +14,7 @@ name
     : IDENTIFIER
     | 'policy' | 'tool' | 'store' | 'schema' | 'agent' | 'pipeline'
     | 'equips' | 'requires' | 'system' | 'context' | 'yield' | 'listen' | 'loop' | 'as'
-    | 'each' | 'in' | 'else'
+    | 'each' | 'in' | 'else' | 'use' | 'with'
     ;
 
 dottedId: IDENTIFIER ('.' pathPart)*;
@@ -22,13 +22,23 @@ dottedId: IDENTIFIER ('.' pathPart)*;
 // A path segment: a name, or a list index (`items.0.title`).
 pathPart: name | NUMBER;
 
+// ── Imports ──
+// `use "./shared.halo" { Careful }`, `use "@acme/support-kit" { Triage as AcmeTriage } with models(fast: anthropic/claude-haiku-4-5)`.
+// The `models` after `with` is checked by the parser (it is an IDENTIFIER here so `models.fast` stays a dotted name).
+useDecl: 'use' STRING ('{' (useItem (',' useItem)* ','?)? '}')? ('with' IDENTIFIER '(' modelBinding (',' modelBinding)* ','? ')')?;
+
+useItem: IDENTIFIER ('as' IDENTIFIER)?;
+
+modelBinding: name ':' modelRef;
+
 // ── Policies ──
 policyDecl: 'policy' IDENTIFIER ':' policyRule ('&' policyRule)*;
 
 policyRule: IDENTIFIER '(' callArgs? ')';
 
 // ── Tools & Stores ──
-toolDecl: 'tool' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')';
+// Rules after the provider narrow the tool's arguments: Fixed, Match, Locked, Unlocked.
+toolDecl: 'tool' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')' ('&' policyRule)*;
 
 storeDecl: 'store' IDENTIFIER ':' IDENTIFIER '(' callArgs? ')';
 

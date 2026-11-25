@@ -1,0 +1,9 @@
+use "@acme/support-kit" { Triage, Classification } with models(fast: anthropic/claude-haiku-4-5)
+
+// `smart` is bound project-wide in halo.json.
+agent Writer [models.smart]
+
+pipeline Inbox(ticket: String) -> Result:
+  ticket
+    |> Triage() as triaged
+    |> Writer.prompt("Draft a short reply to this ticket: {{ticket}}")

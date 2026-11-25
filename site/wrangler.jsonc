@@ -14,6 +14,9 @@
   ],
   // Release binaries (too big for static assets), served at /dl/ by worker.ts.
   "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "halo-releases" }],
+  // One data point per binary downloaded from /dl (worker.ts countDownload). The dataset is
+  // created on first write; read it with `bun scripts/install-stats.ts`.
+  "analytics_engine_datasets": [{ "binding": "DOWNLOADS", "dataset": "halo_downloads" }],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

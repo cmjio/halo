@@ -6,24 +6,31 @@
  *   bun scripts/release.ts --upload-only  upload what --no-upload built (CI builds and publishes in separate jobs)
  *   bun scripts/release.ts --force        replace a version that's already published
  *
- * dist/release is laid out like halolang.com/dl (latest.json, <version>/<file>), so a
+ * dist/release is laid out like halolang.com/dl (<channel>.json, <version>/<file>), so a
  * local server over it can stand in for the site when testing the installers.
  *
  * Each binary carries the Bun runtime, so users need nothing else installed. A version's
  * files are cached forever once published, so a new release needs a new version in
- * package.json. latest.json, which says which version is current, is uploaded last.
+ * package.json. The version picks the channel (src/channel.ts): 1.2.0 is latest, 1.3.0-next.1
+ * is next, 1.2.1-nightly.… is nightly. The channel's pointer (latest.json, next.json or
+ * nightly.json), which says which version is current there, is uploaded last. A stable
+ * release also moves next.json up to it when next is behind, so `next` is never older than
+ * `latest`. Only the newest NIGHTLIES_KEPT nightlies stay in R2; older ones are deleted.
  */
 
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
+import { channelOf } from "../src/channel";
 
 const root = resolve(import.meta.dir, "..");
 const version = pkg.version;
 const out = join(root, "dist/release", version);
 const BUCKET = "halo-releases";
 const SITE = "https://halolang.com";
+const NIGHTLIES_KEPT = 14;
+const channel = channelOf(version);
 
 /** Bun's compile targets, by the file name install.sh asks for. */
 const TARGETS: Record<string, string> = {
@@ -52,10 +59,15 @@ if (!args.has("--no-upload") && !args.has("--force") && !uploadOnly) {
   if (res.ok) throw new Error(`${version} is already published; bump the version in package.json (or pass --force)`);
 }
 
-const latest = join(root, "dist/release", "latest.json");
+const pointer = join(root, "dist/release", `${channel}.json`);
+type Pointer = { version: string; published: string; commit?: string; history?: string[] };
+const readPointer = async (name: string): Promise<Pointer | undefined> => {
+  const res = await fetch(`${SITE}/dl/${name}.json`, { headers: { "cache-control": "no-cache" } });
+  return res.ok ? ((await res.json()) as Pointer) : undefined;
+};
 
 if (!uploadOnly) {
-  console.log(`Building halo ${version}`);
+  console.log(`Building halo ${version} (${channel})`);
   sh(["bun", "test"]);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -75,7 +87,8 @@ if (!uploadOnly) {
   const reported = sh([join(out, here), "--version"], { quiet: true }).trim();
   if (reported !== version) throw new Error(`${here} --version printed "${reported}", expected ${version}`);
   console.log(`  ${here} --version → ${reported}`);
-  await Bun.write(latest, JSON.stringify({ version, published: new Date().toISOString() }) + "\n");
+  const commit = process.env.GITHUB_SHA ?? Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root, stdout: "pipe" }).stdout.toString().trim();
+  await Bun.write(pointer, JSON.stringify({ version, published: new Date().toISOString(), ...(commit ? { commit } : {}) }) + "\n");
 }
 
 if (uploadOnly && !Bun.file(join(out, "SHA256SUMS")).size) throw new Error(`Nothing built in ${out}; run with --no-upload first`);
@@ -92,5 +105,32 @@ for (const file of Object.keys(TARGETS)) {
   console.log(`  uploaded ${version}/${file}`);
 }
 put(`${version}/SHA256SUMS`, join(out, "SHA256SUMS"), "text/plain; charset=utf-8");
-put("latest.json", latest, "application/json");
-console.log(`Published halo ${version}: curl -fsSL ${SITE}/install.sh | sh`);
+
+// Nightlies keep a short history in nightly.json; the ones that fall off it are deleted.
+if (channel === "nightly") {
+  const before = await readPointer("nightly");
+  const history = [version, ...[before?.version, ...(before?.history ?? [])].filter((v): v is string => !!v && v !== version)];
+  const p = (await Bun.file(pointer).json()) as Pointer;
+  await Bun.write(pointer, JSON.stringify({ ...p, history: history.slice(0, NIGHTLIES_KEPT) }) + "\n");
+  put(`${channel}.json`, pointer, "application/json");
+  for (const old of history.slice(NIGHTLIES_KEPT)) {
+    for (const file of [...Object.keys(TARGETS), "SHA256SUMS"]) {
+      Bun.spawnSync(["bunx", "wrangler", "r2", "object", "delete", `${BUCKET}/${old}/${file}`, "--remote"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    }
+    console.log(`  deleted nightly ${old}`);
+  }
+} else {
+  put(`${channel}.json`, pointer, "application/json");
+}
+
+// A stable release that's newer than next becomes next too, so `next` never trails `latest`.
+if (channel === "latest") {
+  const next = await readPointer("next");
+  if (!next || Bun.semver.order(next.version, version) < 0) {
+    put("next.json", pointer, "application/json");
+    console.log(`  next.json → ${version}`);
+  }
+}
+
+const how = channel === "latest" ? "" : `HALO_VERSION=${channel} `;
+console.log(`Published halo ${version} on ${channel}: curl -fsSL ${SITE}/install.sh | ${how}sh`);

@@ -1,7 +1,16 @@
 {
   "name": "halo",
-  "version": "0.7.1",
+  "version": "1.6.0",
   "description": "Halo: a declarative language for AI workflows",
+  "license": "MIT",
+  "homepage": "https://halolang.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmjio/halo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cmjio/halo/issues"
+  },
   "type": "module",
   "main": "./index.ts",
   "bin": {
@@ -9,6 +18,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:e2e": "bun test test/e2e-registry.test.ts",
     "typecheck": "bunx tsc --noEmit && bunx tsc -p studio/tsconfig.json && bunx tsc -p tsconfig.tooling.json",
     "generate": "bash generate-grammar.sh",
     "validate": "bun run index.ts validate examples/",
@@ -22,7 +32,9 @@
     "studio": "bun run index.ts serve",
     "site:build": "bun site/build.ts",
     "site:dev": "bun site/build.ts --no-tests && bunx wrangler dev --config site/wrangler.jsonc",
-    "site:deploy": "bun site/build.ts && bunx wrangler deploy --config site/wrangler.jsonc"
+    "site:deploy": "bun site/build.ts && bunx wrangler deploy --config site/wrangler.jsonc",
+    "registry:dev": "bunx wrangler d1 migrations apply halo-registry --local --config services/registry/wrangler.jsonc && bunx wrangler dev --local --config services/registry/wrangler.jsonc",
+    "registry:deploy": "bunx wrangler d1 migrations apply halo-registry --remote --config services/registry/wrangler.jsonc && bunx wrangler deploy --config services/registry/wrangler.jsonc"
   },
   "keywords": [
     "ai",
@@ -42,8 +54,8 @@
     "./telemetry": "./src/runtime/telemetry.ts"
   },
   "dependencies": {
+    "@ark-ui/react": "^5.40.0",
     "@tabler/icons-react": "^3.51.0",
-    "@xyflow/react": "^12.10.2",
     "antlr4ng": "^3.0.16",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",

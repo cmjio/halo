@@ -1,12 +1,43 @@
 # Releasing Halo
 
-A release is a version tag. CI does the rest.
+Halo ships on three channels. Each has a pointer at `halolang.com/dl/<channel>.json`, an npm
+dist-tag and a container image tag of the same name, and `src/channel.ts` decides a version's
+channel from its version string:
+
+| Channel | How it ships | Version | Install |
+|---|---|---|---|
+| `latest` | push a tag | `1.2.0` | `curl -fsSL https://halolang.com/install.sh \| sh`, `@halolang/halo`, `:latest` |
+| `next` | push a prerelease tag | `1.3.0-next.1`, `1.3.0-rc.1` | `… \| HALO_VERSION=next sh`, `@halolang/halo@next`, `:next` |
+| `nightly` | every night from `main` (04:23 UTC) | `1.2.1-nightly.20261113.g9172379` | `… \| HALO_VERSION=nightly sh`, `@halolang/halo@nightly`, `:nightly` |
+
+`halo upgrade` stays on the channel the installed build came from; `halo upgrade --channel
+<name>` moves to another. The GitHub Action takes `version: next` or `version: nightly` too.
+
+A release or prerelease is a version tag. CI does the rest.
 
 ```bash
-# 1. bump "version" in package.json (e.g. 0.2.0), commit, push
+# 1. bump "version" in package.json (e.g. 0.2.0, or 0.3.0-next.1), commit, push
 # 2. tag that commit and push the tag
 git tag v0.2.0 && git push origin v0.2.0
 ```
+
+A prerelease gets a GitHub release marked as a prerelease and doesn't redeploy the site. When
+a stable release is newer than what `next.json` points at, it moves `next.json` up to it too, so
+`next` never trails `latest` at halolang.com/dl. (npm's `next` dist-tag can't be moved by
+trusted publishing; it moves with the next prerelease.)
+
+Nightlies need nothing: the workflow's schedule builds `main` when it has changed since the last
+nightly, with a version made up from package.json's (the next patch after a release, or the
+release a prerelease is heading for) and never committed or tagged. They get no GitHub release
+and no site deploy. Only the newest 14 stay at halolang.com/dl; older ones are deleted from R2.
+
+The site's pages only change with a stable release. But a prerelease or nightly does check that
+halolang.com serves its `next.json` or `nightly.json`. If it doesn't (the live worker is older
+than channels), the workflow redeploys the latest release's pages with that commit's
+`site/worker.ts`, so `HALO_VERSION=next` and `HALO_VERSION=nightly` work.
+
+Run one by hand from Actions → Release → Run workflow (tick *force* to rebuild an unchanged
+`main`).
 
 The [Release workflow](workflows/release.yml) then:
 
@@ -59,6 +90,35 @@ after the rest of the release shipped, fix the setup and rerun only that job (`g
 **Container image.** Nothing to set up: the workflow pushes with its own `GITHUB_TOKEN`.
 After the first release, open the `halo` package under the account's GitHub Packages, and
 change its visibility to public so `docker pull` works without signing in.
+
+**Homebrew.** `brew install cmjio/halo/halolang` reads the formula from the tap repository
+[cmjio/homebrew-halo](https://github.com/cmjio/homebrew-halo). After each stable release
+(not prereleases or nightlies), the `homebrew` job regenerates `Formula/halolang.rb` with
+`bun scripts/homebrew.ts` (pointing at the GitHub release's binaries and their checksums)
+and pushes it there. That push needs a token, since the workflow's own can't write to
+another repository: a fine-grained personal access token with access to only
+`cmjio/homebrew-halo` and **Contents · Read and write**, stored with
+`gh secret set HOMEBREW_TAP_TOKEN`. If the job fails, fix the token and rerun it
+(`gh run rerun <id> --failed`); it does nothing when the formula is already current.
+
+## Install counts
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… bun scripts/install-stats.ts [--days 30] [--json]
+```
+
+prints how many times Halo was downloaded, per source:
+
+| Source | What's counted | Window |
+|---|---|---|
+| halolang.com/dl | Each binary `site/worker.ts` serves, into the Workers Analytics Engine dataset `halo_downloads`, by version, platform, channel and country. The channel comes from `?via=` on the binary URL: `script` (install.sh/install.ps1), `ci` (the same under `$CI`), `action` (the GitHub Action, on a cache miss), `upgrade` (`halo upgrade`), `direct` (anything else). | up to 90 days (Analytics Engine's retention) |
+| GitHub releases | Each release asset's `download_count`. | all time only |
+| npm | `@halolang/halo` from api.npmjs.org. | the window |
+| ghcr.io | Not available by API; the package page shows pulls. | |
+
+The Cloudflare token needs **Account · Account Analytics · Read**; without it the script reports
+the other sources and says /dl was skipped. These are downloads, not people: nothing identifies
+a machine, and a CI job that installs on every run counts every run.
 
 ## By hand
 

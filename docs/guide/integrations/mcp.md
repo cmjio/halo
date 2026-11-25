@@ -84,7 +84,7 @@ Each pipeline becomes an MCP tool. Its parameters become the tool's input schema
 halo mcp flows.halo        # or several files or folders; the default is the current folder
 ```
 
-This command speaks MCP on stdin and stdout, which is the setup most desktop clients expect. Every file must validate. Logs go to stderr. Tool packages from the current folder's `halo.lock` are loaded, as with `halo run`. For example, in Claude Desktop's `claude_desktop_config.json`:
+This command speaks MCP on stdin and stdout, which is the setup most desktop clients expect. Every file must validate. Logs go to stderr. Each file is linked with what it `use`s, and the packages `halo.lock` pins are loaded, as with `halo run`. For example, in Claude Desktop's `claude_desktop_config.json`:
 
 ```json
 {

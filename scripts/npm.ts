@@ -10,6 +10,8 @@
  * package, @halolang/halo-<platform>, limited by os, cpu and libc, and listed as an optional
  * dependency, so npm installs only the one for the machine (the way esbuild ships).
  * Platform packages are published first, so the launcher never points at a missing version.
+ * Each version is published under its channel's dist-tag (src/channel.ts): latest, next or
+ * nightly, so `npm install @halolang/halo@next` gets the newest prerelease.
  */
 
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
@@ -17,6 +19,7 @@ import { join, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 // Plain CommonJS shared with the launcher, so both use one table.
 import { PLATFORMS, SCOPE } from "../npm/halo/lib/platform.js";
+import { channelOf } from "../src/channel";
 
 type Platform = { asset: string; os: string; cpu: string; libc?: string };
 const platforms = PLATFORMS as Record<string, Platform>;
@@ -52,6 +55,7 @@ for (const key of keys) {
   mkdirSync(join(dir, "bin"), { recursive: true });
   cpSync(src, join(dir, "bin", exe));
   chmodSync(join(dir, "bin", exe), 0o755);
+  cpSync(join(root, "LICENSE"), join(dir, "LICENSE"));
   await Bun.write(
     join(dir, "package.json"),
     JSON.stringify(
@@ -75,6 +79,7 @@ for (const key of keys) {
 const main = join(out, "halo");
 cpSync(join(root, "npm/halo"), main, { recursive: true });
 chmodSync(join(main, "bin/halo.js"), 0o755);
+cpSync(join(root, "LICENSE"), join(main, "LICENSE"));
 await Bun.write(
   join(main, "package.json"),
   JSON.stringify(
@@ -96,15 +101,32 @@ console.log(`Built ${keys.length + 1} npm packages for ${version} in ${out}`);
 
 if (argv.includes("--publish")) {
   const published = (name: string) => Bun.spawnSync(["npm", "view", `${name}@${version}`, "version"], { stdout: "pipe", stderr: "pipe" }).stdout.toString().trim() === version;
-  const provenance = process.env.GITHUB_ACTIONS ? ["--provenance"] : [];
+  const ci = !!process.env.GITHUB_ACTIONS;
+  // Trusted publishing needs the job's OIDC token; without the id-token permission npm just says "need auth".
+  if (ci && !process.env.ACTIONS_ID_TOKEN_REQUEST_URL) throw new Error("No OIDC token for npm trusted publishing: give this job `permissions: id-token: write`.");
+  // In CI, verbose logs show npm's OIDC exchange, so a rejected trusted publisher says why instead of only ENEEDAUTH.
+  const ciFlags = ci ? ["--provenance", "--loglevel", "verbose"] : [];
+  const tag = channelOf(version);
   for (const dir of [...keys.map((k) => `halo-${k}`), "halo"]) {
     const name = `${SCOPE}/${dir}`;
     if (published(name)) {
       console.log(`  ${name}@${version} is already published`);
       continue;
     }
-    const p = Bun.spawnSync(["npm", "publish", "--access", "public", ...provenance], { cwd: join(out, dir), stdout: "inherit", stderr: "inherit" });
-    if (p.exitCode !== 0) throw new Error(`npm publish ${name} failed (${p.exitCode})`);
-    console.log(`  published ${name}@${version}`);
+    const p = Bun.spawnSync(["npm", "publish", "--access", "public", "--tag", tag, ...ciFlags], { cwd: join(out, dir), stdout: "inherit", stderr: "inherit" });
+    if (p.exitCode !== 0) {
+      if (ci) {
+        const repo = process.env.GITHUB_REPOSITORY ?? "cmjio/halo";
+        const workflow = (process.env.GITHUB_WORKFLOW_REF ?? "").split("@")[0]!.split("/").pop() || "release.yml";
+        console.error(
+          `\n${name} wasn't published. If npm said ENEEDAUTH or E404, npmjs.com rejected this workflow as a trusted publisher:\n` +
+            `  https://www.npmjs.com/package/${name}/access → Trusted Publisher → GitHub Actions\n` +
+            `  organization ${repo.split("/")[0]}, repository ${repo.split("/")[1]}, workflow ${workflow}, environment blank.\n` +
+            `The "oidc" lines above say what npm saw; the full npm log is in this run's npm-logs artifact.\n`,
+        );
+      }
+      throw new Error(`npm publish ${name} failed (${p.exitCode})`);
+    }
+    console.log(`  published ${name}@${version} (${tag})`);
   }
 }

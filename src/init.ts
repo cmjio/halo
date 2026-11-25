@@ -6,6 +6,7 @@
  *     .env.example    the API key variables Halo reads
  *     .gitignore      ignores .env and .halo/ (local runs, telemetry, vectors)
  *     README.md       how to run, test, and validate it
+ *     halo.json       the Halo it was written for, which `halo migrate` reads
  *
  * `halo init [name] --template <blueprint>` writes a complete, deployable app instead
  * (see src/blueprints and blueprints/ in the repo).
@@ -15,6 +16,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { BLUEPRINTS, blueprintFiles } from "./blueprints/index.js";
 import pkg from "../package.json" with { type: "json" };
+import { haloRange } from "./migrate/index.js";
 
 const MAIN = `// A starter pipeline. Run it with: halo run main.halo --arg topic="tide pools"
 // (or offline with: halo test main.halo --arg topic="tide pools")
@@ -84,6 +86,8 @@ export async function initProject(name: string, log: Pick<Console, "log" | "erro
   }
   if (blueprint) {
     const files = blueprintFiles(blueprint, name, pkg.version);
+    // The project says which Halo it was written for, so `halo migrate` knows what has changed since.
+    if (files["halo.json"]) files["halo.json"] = JSON.stringify({ halo: haloRange(pkg.version), ...JSON.parse(files["halo.json"]) }, null, 2) + "\n";
     for (const [path, content] of Object.entries(files)) {
       mkdirSync(dirname(join(name, path)), { recursive: true });
       await Bun.write(join(name, path), content);
@@ -98,6 +102,7 @@ export async function initProject(name: string, log: Pick<Console, "log" | "erro
   await Bun.write(join(name, ".env.example"), ENV);
   await Bun.write(join(name, ".gitignore"), GITIGNORE);
   await Bun.write(join(name, "README.md"), readme(name));
-  log.log(`Created ${name}/ (main.halo, .env.example, .gitignore, README.md)\n\n  cd ${name}\n  halo test main.halo --arg topic="tide pools"`);
+  await Bun.write(join(name, "halo.json"), JSON.stringify({ halo: haloRange(pkg.version) }, null, 2) + "\n");
+  log.log(`Created ${name}/ (main.halo, halo.json, .env.example, .gitignore, README.md)\n\n  cd ${name}\n  halo test main.halo --arg topic="tide pools"`);
   return 0;
 }
