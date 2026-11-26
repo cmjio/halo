@@ -12,6 +12,10 @@ import { getDiagnostics } from "./diagnostics.js";
 import { getCompletions } from "./completions.js";
 import { getHover } from "./hover.js";
 import { getDefinition } from "./definition.js";
+import { getSignatureHelp, type ProviderLookup } from "./tools.js";
+import { loadPackageProviders } from "../registry/resolver.js";
+import { projectRoot } from "../linker/node.js";
+import type { ProviderInfo } from "../runtime/tools.js";
 import { getDocumentHighlights, getDocumentSymbols, getReferences, getRename, prepareRename } from "./symbols.js";
 import { fileURLToPath } from "node:url";
 
@@ -47,6 +51,7 @@ connection.onInitialize((params: InitializeParams) => {
       documentHighlightProvider: true,
       documentSymbolProvider: true,
       renameProvider: { prepareProvider: true },
+      signatureHelpProvider: { triggerCharacters: ["(", ","], retriggerCharacters: [":"] },
     }
   };
   if (hasWorkspaceFolderCapability) {
@@ -74,6 +79,28 @@ function pathOf(uri: string): string | undefined {
   }
 }
 
+/**
+ * Installed packages' providers (their methods, for completion), by project. Loaded once per
+ * project and again after a minute, so a package installed meanwhile shows up.
+ */
+const packageInfo = new Map<string, { at: number; info: Map<string, ProviderInfo> }>();
+function lookupFor(path: string | undefined): ProviderLookup | undefined {
+  if (!path) return undefined;
+  const root = projectRoot(path);
+  const cached = packageInfo.get(root);
+  if (!cached || Date.now() - cached.at > 60_000) {
+    const entry = { at: Date.now(), info: cached?.info ?? new Map<string, ProviderInfo>() };
+    packageInfo.set(root, entry);
+    loadPackageProviders(root)
+      .then((loaded) => {
+        entry.info = new Map(loaded.filter((p) => p.info).map((p) => [p.name, p.info!]));
+      })
+      .catch(() => {});
+  }
+  const info = packageInfo.get(root)!.info;
+  return (provider) => info.get(provider);
+}
+
 /** Unsaved text of every open .halo document, by path: linking reads these before the disk. */
 function openBuffers(): Map<string, string> {
   const map = new Map<string, string>();
@@ -85,7 +112,8 @@ function openBuffers(): Map<string, string> {
 }
 
 function publish(doc: TextDocument) {
-  const diagnostics = getDiagnostics(doc.getText(), pathOf(doc.uri), openBuffers());
+  const path = pathOf(doc.uri);
+  const diagnostics = getDiagnostics(doc.getText(), path, openBuffers(), lookupFor(path));
   connection.sendDiagnostics({ uri: doc.uri, diagnostics });
 }
 
@@ -98,13 +126,15 @@ documents.onDidChangeContent(change => {
 connection.onCompletion((textDocumentPosition) => {
   const doc = documents.get(textDocumentPosition.textDocument.uri);
   if (!doc) return [];
-  return getCompletions(doc.getText(), textDocumentPosition.position, pathOf(doc.uri), openBuffers());
+  const path = pathOf(doc.uri);
+  return getCompletions(doc.getText(), textDocumentPosition.position, path, openBuffers(), lookupFor(path));
 });
 
 connection.onHover((textDocumentPosition) => {
   const doc = documents.get(textDocumentPosition.textDocument.uri);
   if (!doc) return null;
-  return getHover(doc.getText(), textDocumentPosition.position, pathOf(doc.uri), openBuffers());
+  const path = pathOf(doc.uri);
+  return getHover(doc.getText(), textDocumentPosition.position, path, openBuffers(), lookupFor(path));
 });
 
 connection.onDefinition((params) => {
@@ -141,6 +171,12 @@ connection.onRenameRequest((params) => {
   const path = doc && pathOf(doc.uri);
   if (!doc || !path) return null;
   return getRename(doc.getText(), params.position, params.newName, path, openBuffers());
+});
+
+connection.onSignatureHelp((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const path = doc && pathOf(doc.uri);
+  return doc ? getSignatureHelp(doc.getText(), params.position, path, openBuffers(), lookupFor(path)) : null;
 });
 
 documents.onDidClose((e) => connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] }));

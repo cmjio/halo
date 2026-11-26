@@ -8,6 +8,7 @@ import { displayText } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
 import { normalizePackageName } from "../registry/contract.js";
 import { KEYWORDS } from "./completions.js";
+import { methodHover, methodList, toolsOf, type ProviderLookup } from "./tools.js";
 
 const KEYWORD_DOCS = new Map(KEYWORDS);
 
@@ -71,9 +72,11 @@ function describe(ast: ParseResult, name: string, show: (s: string) => string = 
  * names are described from the file or package they come from, and a `use` line's package
  * shows its version and description.
  */
-export function getHover(sourceText: string, position: Position, path?: string, overrides?: Map<string, string>): Hover | null {
+export function getHover(sourceText: string, position: Position, path?: string, overrides?: Map<string, string>, lookup?: ProviderLookup): Hover | null {
   const line = sourceText.split("\n")[position.line] ?? "";
   const md = (value: string): Hover => ({ contents: { kind: MarkupKind.Markdown, value } });
+  const method = methodHover(sourceText, line, position.character, path, overrides, lookup);
+  if (method) return method;
   const src = useSourceAt(line, position.character);
   if (src !== undefined && path && !src.startsWith(".")) {
     const linked = linkFile(path, { overrides: new Map([...(overrides ?? []), [resolve(path), sourceText]]) });
@@ -90,7 +93,9 @@ export function getHover(sourceText: string, position: Position, path?: string, 
 
   const ast = parse(sourceText);
   const own = describe(ast, word);
-  if (own) return md(own);
+  const tool = own && [...ast.tools, ...ast.stores].some((t) => t.name === word) ? toolsOf(sourceText).get(word) : undefined;
+  const methods = tool && methodList(tool, lookup);
+  if (own) return md(methods ? `${own}\n\n${methods}` : own);
   if (path && ast.uses?.some((u) => u.items?.some((i) => (i.as ?? i.name) === word))) {
     const linked = linkFile(path, { overrides: new Map([...(overrides ?? []), [resolve(path), sourceText]]) });
     const imported = linked.imports[word];

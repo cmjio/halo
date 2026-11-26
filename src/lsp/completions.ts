@@ -5,6 +5,7 @@ import { parse } from "../parser/index.js";
 import { importableNames } from "../linker/index.js";
 import { diskLinkOptions, projectRoot } from "../linker/node.js";
 import { AGENT_PRESETS } from "../runtime/presets.js";
+import { argumentCompletions, memberCompletions, type ProviderLookup } from "./tools.js";
 import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SCHEMA_TYPES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS, TYPE_DESCRIPTIONS } from "../parser/builtins.js";
 
 export const KEYWORDS: Array<[string, string]> = [
@@ -33,9 +34,10 @@ export const KEYWORDS: Array<[string, string]> = [
  * With the document's path: `.halo` files and installed packages inside `use "..."`, the
  * names a file or package exports inside `use "..." { ... }`, and imported names everywhere.
  */
-export function getCompletions(sourceText: string, position: Position, path?: string, overrides?: Map<string, string>): CompletionItem[] {
+export function getCompletions(sourceText: string, position: Position, path?: string, overrides?: Map<string, string>, lookup?: ProviderLookup): CompletionItem[] {
   const line = sourceText.split("\n")[position.line] ?? "";
   const before = line.slice(0, position.character);
+  const after = line.slice(position.character);
 
   const useString = /^\s*use\s+(["'])([^"']*)$/.exec(before);
   if (useString) return path ? useTargets(path, useString[2]!) : [];
@@ -56,11 +58,17 @@ export function getCompletions(sourceText: string, position: Position, path?: st
   if (/\bcontext\.\w*$/.test(before)) {
     return CONTEXT_FIELDS.map(([label, detail]) => ({ label, kind: CompletionItemKind.Field, detail }));
   }
-  const member = /\b([A-Za-z_]\w*)\.\w*$/.exec(before);
+  const member = /(?<![\w.])([A-Za-z_]\w*)\.\w*$/.exec(before);
   if (member) {
-    const agents = [...sourceText.matchAll(/^agent\s+(\w+)/gm)].map((m) => m[1]);
-    return agents.includes(member[1]) ? [{ label: "prompt", kind: CompletionItemKind.Method, detail: `${member[1]}.prompt("...")`, documentation: "Call the agent with a prompt; {{name}} fills in a value" }] : [];
+    // Not inside a string ("Repo.read" in a policy is a name, not a call).
+    const quotes = (before.slice(0, member.index).match(/"/g) ?? []).length;
+    if (quotes % 2) return [];
+    return memberCompletions(sourceText, member[1]!, after, path, overrides, lookup) ?? [];
   }
+  // Deeper members (context.data.x.) aren't known while typing.
+  if (/\.\w*$/.test(before)) return [];
+  const args = argumentCompletions(sourceText, before, path, overrides, lookup);
+  if (args) return args;
   if (/\bpreset:\s*\w*$/.test(before)) {
     return Object.values(AGENT_PRESETS).map((p) => ({ label: p.name, kind: CompletionItemKind.EnumMember, detail: p.summary, documentation: p.returns ? `Returns JSON: ${p.returns}` : undefined }));
   }
