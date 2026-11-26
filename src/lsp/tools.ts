@@ -135,7 +135,7 @@ function methodDoc(tool: ToolRef, method: ToolMethod): string {
   if (params.length) lines.push(params.map((p) => `- \`${p.name}\`${p.required ? "" : " (optional)"}: ${p.description ?? p.type}`).join("\n"));
   if (tool.target !== undefined) lines.push(`${tool.provider === "Workspace" ? "Root" : "On"}: \`${tool.target}\``);
   const why = blocked(tool, method);
-  if (why) lines.push(`⚠ ${tool.name} is declared without \`write: true\`, so this call is refused.`);
+  if (why) lines.push(`**Refused**: ${tool.name} is declared without \`write: true\`.`);
   return lines.join("\n\n");
 }
 
