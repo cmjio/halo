@@ -62,3 +62,4 @@ services/registry/.wrangler/
 # examples/halo.json lists the registry packages examples use; `halo install` there writes the lock
 examples/halo.lock
 editors/zed/target/
+editors/zed/extension.wasm

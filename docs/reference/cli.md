@@ -10,7 +10,7 @@ title: CLI
 
 Every command that reads a `.halo` file (`run`, `test`, `validate`, `plan`, `serve`, `mcp`, `compare`, `evolve`) reads the files and installed packages it [`use`s](/spec#files-and-packages-use) too, and fills model slots from `halo.json` `"models"`. Problems in those files are reported where they are. Only the file's own pipelines can be run; the ones it imports are called from them.
 
-Every `halo run` keeps a recording in `.halo/recordings` for [`halo replay`](/guide/plan-and-replay) (`--no-record` turns that off) and records telemetry for Halo Studio in `.halo/telemetry.db` (`--no-telemetry`). Exit status is 0 on success, 1 on a failed run or validation errors.
+Every `halo run` keeps a recording in `.halo/recordings` for [`halo replay`](/guide/plan-and-replay) (`--no-record` turns that off) and records telemetry for Halo Studio in `.halo/telemetry.db` (`--no-telemetry`). In a terminal, a status line on stderr shows the stage being run, what it's doing (a model writing, a tool answering, a retry), the time so far and the cost; it clears before any output and while the run asks you something. It isn't shown in CI or when stderr isn't a terminal, and `--no-progress` (or `HALO_NO_PROGRESS=1`) hides it. Exit status is 0 on success, 1 on a failed run or validation errors.
 
 ## Packages
 
