@@ -39959,7 +39959,7 @@ async function multipartBody(fields, read) {
 // package.json
 var package_default = {
   name: "halo",
-  version: "1.7.2",
+  version: "1.8.0",
   description: "Halo: a declarative language for AI workflows",
   license: "MIT",
   homepage: "https://halolang.com",
@@ -42353,7 +42353,7 @@ function methodDoc(tool, method) {
     lines.push(`${tool.provider === "Workspace" ? "Root" : "On"}: \`${tool.target}\``);
   const why = blocked(tool, method);
   if (why)
-    lines.push(`⚠ ${tool.name} is declared without \`write: true\`, so this call is refused.`);
+    lines.push(`**Refused**: ${tool.name} is declared without \`write: true\`.`);
   return lines.join(`
 
 `);
