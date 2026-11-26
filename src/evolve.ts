@@ -88,8 +88,15 @@ export interface Variant {
 
 export type EvolveEvent =
   | { type: "round"; round: number; parent: string }
-  | { type: "variant"; variant: Variant }
-  | { type: "holdout"; variant: Variant }
+  /** The proposer is writing variant `id` (attempt > 0: fixing a rewrite that didn't parse or validate). */
+  | { type: "proposing"; id: string; attempt: number }
+  /** Variant `id` (or a finalist, on the held-out runs) is about to be replayed on `total` recorded runs. */
+  | { type: "replaying"; id: string; total: number; holdout: boolean }
+  /** One of those runs finished. `spent` is everything spent so far, this run included. */
+  | { type: "run"; id: string; done: number; total: number; outcome: Outcome; spent: number }
+  /** `spent`: everything spent so far, in USD. */
+  | { type: "variant"; variant: Variant; spent: number }
+  | { type: "holdout"; variant: Variant; spent: number }
   | { type: "budget"; spent: number };
 
 /** A version of the evolved file as a program, and what's wrong with it (parse, link and validation errors). */
@@ -153,6 +160,8 @@ export interface EvolveOptions {
   repairs?: number;
   fence: FenceOptions;
   validate?: ValidateOptions;
+  /** Recorded runs replayed at once when scoring a variant (default 4). */
+  concurrency?: number;
   onEvent?: (e: EvolveEvent) => void;
 }
 
@@ -340,12 +349,13 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
       .sort((a, b) => b.score!.winRate - a.score!.winRate || (a.score!.costPerRun ?? Infinity) - (b.score!.costPerRun ?? Infinity))[0];
 
   /** Proposes until it gets a file that parses and validates, or runs out of repairs. */
-  async function proposeOne(text: string): Promise<{ source?: string; rationale: string; cost: number; problems: string[] }> {
+  async function proposeOne(id: string, text: string): Promise<{ source?: string; rationale: string; cost: number; problems: string[] }> {
     let cost = 0;
     let ask = text;
     let last: { source?: string; rationale: string; problems: string[] } = { rationale: "", problems: [] };
     for (let attempt = 0; attempt <= repairs; attempt++) {
       if (attempt > 0 && left() <= 0) break;
+      emit({ type: "proposing", id, attempt });
       const answer = await options.propose(ask);
       cost += answer.cost;
       spent += answer.cost;
@@ -361,6 +371,22 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
     return { ...last, cost };
   }
 
+  /** Replays `variant` on `runs`, reporting each run as it finishes. */
+  const replay = async (id: string, variant: ParseResult, runs: Recording[], holdout: boolean, seedOffset: number) => {
+    emit({ type: "replaying", id, total: runs.length, holdout });
+    let done = 0;
+    let running = spent;
+    const summary = await compareRuns({
+      original, variant, pipeline, recordings: runs, runtime: options.runtime, judge: options.judge, criteria, budget: left(), seed: seed + seedOffset, concurrency: options.concurrency,
+      onRun: (r) => {
+        running += (r.variant?.liveCost ?? 0) + (r.verdict?.cost ?? 0);
+        emit({ type: "run", id, done: ++done, total: runs.length, outcome: r.outcome, spent: running });
+      },
+    });
+    spent += summary.spent;
+    return summary;
+  };
+
   let parent = { id: "original", source };
   for (let round = 1; round <= rounds && !stoppedForBudget; round++) {
     const b = best();
@@ -374,17 +400,18 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
         break;
       }
       const history = variants.map((v) => historyLine(v, scrub));
-      const p = await proposeOne(brief({ pipeline, parent, planText, criteria, expectations, fence: fenceText, examples, history, thisRound, index: k, count: perRound }));
-      const v: Variant = { id: nextId(parent.id), round, parent: parent.id, rationale: p.rationale, status: "invalid", source: p.source, problems: p.problems, proposeCost: p.cost };
+      const id = nextId(parent.id);
+      const p = await proposeOne(id, brief({ pipeline, parent, planText, criteria, expectations, fence: fenceText, examples, history, thisRound, index: k, count: perRound }));
+      const v: Variant = { id, round, parent: parent.id, rationale: p.rationale, status: "invalid", source: p.source, problems: p.problems, proposeCost: p.cost };
       variants.push(v);
       thisRound.push(`- ${v.id}: ${v.rationale || "(no rationale)"}`);
       if (p.problems.length || !p.source) {
-        emit({ type: "variant", variant: v });
+        emit({ type: "variant", variant: v, spent });
         continue;
       }
       if (seen.has(normalize(p.source))) {
         v.status = "duplicate";
-        emit({ type: "variant", variant: v });
+        emit({ type: "variant", variant: v, spent });
         continue;
       }
       seen.add(normalize(p.source));
@@ -394,22 +421,21 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
       if (!fence.inside) {
         v.status = "outside";
         v.problems = fence.checks.filter((c) => !c.ok).map((c) => `${c.rule}: ${c.detail}`);
-        emit({ type: "variant", variant: v });
+        emit({ type: "variant", variant: v, spent });
         continue;
       }
       if (left() <= 0) {
         v.status = "unscored";
         stoppedForBudget = true;
-        emit({ type: "variant", variant: v });
+        emit({ type: "variant", variant: v, spent });
         break;
       }
-      const summary = await compareRuns({ original, variant: ast, pipeline, recordings: split.proposal, runtime: options.runtime, judge: options.judge, criteria, budget: left(), seed: seed + variants.length });
-      spent += summary.spent;
+      const summary = await replay(v.id, ast, split.proposal, false, variants.length);
       v.proposal = summary;
       v.score = scoreOf(summary);
       v.status = v.score.scored ? "scored" : "unscored";
       if (summary.counts.skipped) stoppedForBudget = true;
-      emit({ type: "variant", variant: v });
+      emit({ type: "variant", variant: v, spent });
     }
   }
 
@@ -423,12 +449,11 @@ export async function evolve(options: EvolveOptions): Promise<EvolveResult> {
 
   for (const v of front) {
     if (!split.holdout.length || left() <= 0) break;
-    const summary = await compareRuns({ original, variant: load(v.source!).ast, pipeline, recordings: split.holdout, runtime: options.runtime, judge: options.judge, criteria, budget: left(), seed: seed + 1000 });
-    spent += summary.spent;
+    const summary = await replay(v.id, load(v.source!).ast, split.holdout, true, 1000);
     v.holdout = summary;
     v.holdoutScore = scoreOf(summary);
     if (summary.counts.skipped) stoppedForBudget = true;
-    emit({ type: "holdout", variant: v });
+    emit({ type: "holdout", variant: v, spent });
   }
 
   // ── The winner: better than the original on runs the proposer never saw, or as good and cheaper ──

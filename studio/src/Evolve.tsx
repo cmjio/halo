@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { NumberInput } from "@ark-ui/react";
 import { IconArrowLeft, IconCheck, IconChevronDown, IconChevronUp, IconTrophy, IconX } from "@tabler/icons-react";
 import { api, message } from "./api";
-import { money, plural } from "./format";
+import { duration, money, plural } from "./format";
 import { ConfirmDialog, CopyButton, Picker, rowKeys, StatusPill, TextField } from "./ui";
 
 /** Evolve: start `halo evolve` runs, watch them, read the variants and their diffs, apply one. */
@@ -67,6 +67,9 @@ interface EvolveDetail {
   id: string;
   status: "running" | "done" | "error";
   log: string[];
+  /** What a running evolve is doing right now, and since when. */
+  now?: string;
+  nowSince?: string;
   error?: string;
   spent?: number;
   budget?: number;
@@ -327,7 +330,16 @@ export function EvolveView({ id }: { id: string }) {
         <section className="block">
           <h2>Progress</h2>
           {d.error && <div className="callout error">{d.error}</div>}
-          {d.status === "running" && <pre className="log">{d.log.length ? d.log.join("\n") : "Proposing the first rewrite…"}</pre>}
+          {d.status === "running" && (
+            <div className="log">
+              {d.log.length > 0 && <pre>{d.log.join("\n")}</pre>}
+              <p className="log-now" aria-live="polite">
+                <span className="dot running" aria-hidden="true" />
+                <span>{d.now ?? (d.log.length ? "Working…" : "Starting…")}</span>
+                {d.nowSince && <span className="muted">{duration(Date.now() - Date.parse(d.nowSince))}</span>}
+              </p>
+            </div>
+          )}
           {d.status === "error" && d.log.length > 0 && <pre className="log">{d.log.join("\n")}</pre>}
         </section>
       )}

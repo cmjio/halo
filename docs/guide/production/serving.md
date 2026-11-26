@@ -60,7 +60,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `mcp` | `false` turns off the MCP endpoint at `/mcp`. Default on |
 | `stateDir` | Where telemetry, paused runs, schedule and watch state, and the link-signing secret are kept. Default `.halo` |
 | `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted |
-| `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
+| `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `concurrency`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
 | `registry` | The package registry for `halo add`, `halo search` and `halo publish` (not used by `halo serve` itself; see [Packages](../tool-packages.md)). `registries` maps a scope to its own registry |
 
 ### Schedules
@@ -220,7 +220,7 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 | `POST /api/runs/<id>/signal` | Resume a paused run. Body `{"answer": "approve"}`, or `{"payload": {...}, "event": "Slack.Reaction"}` |
 | `GET /api/evolve` | Evolve runs, running and finished, newest first |
 | `POST /api/evolve` | Start one in the background. Body `{"pipeline": "Name", "variants": 4, "rounds": 2, "budget": 3, "criteria": "..."}`; returns `202 {"id"}`. Needs `minRuns` (default 10) finished recordings |
-| `GET /api/evolve/<id>` | Its progress while it runs, then its `evolve.json` (`record`), every variant's diff, and the report |
+| `GET /api/evolve/<id>` | Its progress while it runs (`log`, and `now`: what it's doing at the moment, since `nowSince`), then its `evolve.json` (`record`), every variant's diff, and the report |
 | `POST /api/evolve/<id>/apply` | Write a variant (`{"variant": "v2"}`, default the winner) over its file. Refused when the file changed since. The server keeps serving the version it loaded until restarted |
 | `GET /api/blobs/<sha256>` | A [file](../files.md) a run holds. Images, audio and video are shown in place; documents are downloads. A file in a run's `output` carries its `url`. An approval link shows the files in what it asks about without the token |
 | `GET /api/health` | `{"ok": true, "pipelines": n}` |

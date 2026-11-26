@@ -8,7 +8,7 @@ import { readRecording, Recorder, type Recording } from "../src/runtime/replay";
 import { compareRuns, recordingsFor, type Judge } from "../src/compare";
 import { startServer } from "../src/serve/server";
 import { checkExpectations, expectationsOf } from "../src/expect";
-import { evolve, haloProposer, parseProposal, redactionsOf, scoreOf, splitRuns, writeEvolveDir, type EvolveRecord, type Proposer } from "../src/evolve";
+import { evolve, haloProposer, parseProposal, redactionsOf, scoreOf, splitRuns, writeEvolveDir, type EvolveEvent, type EvolveRecord, type Proposer } from "../src/evolve";
 import { diffStat, unifiedDiff } from "../src/diff";
 import { AGENT_PRESETS } from "../src/runtime/presets";
 import { validate } from "../src/parser/validate";
@@ -190,6 +190,7 @@ describe("evolve", () => {
     ]);
     const live = fakeOpenAI(answers);
     const events: string[] = [];
+    const raw: EvolveEvent[] = [];
     const r = await evolve({
       source: src,
       pipeline: "Brief",
@@ -202,8 +203,22 @@ describe("evolve", () => {
       budget: 5,
       seed: 3,
       fence: { providerInfo },
-      onEvent: (e) => events.push(e.type === "variant" ? `${e.variant.id}:${e.variant.status}` : e.type === "round" ? `round ${e.round} from ${e.parent}` : e.type),
+      onEvent: (e) => {
+        raw.push(e);
+        events.push(e.type === "variant" ? `${e.variant.id}:${e.variant.status}` : e.type === "round" ? `round ${e.round} from ${e.parent}` : e.type);
+      },
     });
+
+    // While it works it says what it's doing: proposing, replaying, and each run as it finishes, with the spend so far.
+    expect(events.slice(0, 3)).toEqual(["round 1 from original", "proposing", "v1:outside"]);
+    expect(raw.find((e) => e.type === "proposing" && e.id === "v3" && e.attempt === 1)).toBeDefined();
+    const v2runs = raw.filter((e): e is Extract<EvolveEvent, { type: "run" }> => e.type === "run" && e.id === "v2");
+    expect(v2runs.map((e) => e.done)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(v2runs.every((e) => e.total === 6 && e.outcome === "better")).toBe(true);
+    expect(v2runs.at(-1)!.spent).toBeGreaterThan(v2runs[0]!.spent);
+    const v2done = raw.find((e) => e.type === "variant" && e.variant.id === "v2") as Extract<EvolveEvent, { type: "variant" }>;
+    expect(v2done.spent).toBeCloseTo(v2runs.at(-1)!.spent, 9);
+    expect(raw.filter((e) => e.type === "replaying" && e.holdout).map((e) => (e as { id: string }).id)).toEqual(["v2.1"]);
 
     expect(r.split.holdout).toHaveLength(3);
     expect(r.split.proposal).toHaveLength(6);

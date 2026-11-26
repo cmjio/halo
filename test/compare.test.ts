@@ -235,13 +235,41 @@ describe("compareRuns", () => {
   test("stops starting runs once the budget is spent", async () => {
     const { dir, recs } = await setup(3);
     const variant = parse(original(dir).replace("Write one line", "Write one vivid line"));
-    const r = await compareRuns({ original: parse(original(dir)), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: fakeOpenAI(() => "vivid").fetch }), judge: prefers("vivid"), budget: 0.005 });
+    const r = await compareRuns({ original: parse(original(dir)), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: fakeOpenAI(() => "vivid").fetch }), judge: prefers("vivid"), budget: 0.005, concurrency: 1 });
     // The first run (with its judging) spends $0.0075, so the other two never start.
     expect(r.counts.better).toBe(1);
     expect(r.counts.skipped).toBe(2);
     const report = compareReport(r, { original: "a.halo", variant: "b.halo" }, [{ rule: "tools", ok: true, detail: "same" }]);
     expect(report).toContain("Won 1 · tied 0 · lost 0");
     expect(report).toContain("unredacted");
+  });
+
+  test("runs replay a few at a time, finish in any order and come back in recording order", async () => {
+    const { dir, recs } = await setup(5);
+    const variant = parse(original(dir).replace("Write one line", "Write one vivid line"));
+    let inFlight = 0;
+    let most = 0;
+    // Each answer waits a little, longer for earlier runs, so later runs finish first.
+    const slow = (async (url: string, init: RequestInit) => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      const body = JSON.parse(String(init.body));
+      const topic = Number(/topic (\d)/.exec(JSON.stringify(body))?.[1] ?? 0);
+      await Bun.sleep(40 - topic * 5);
+      inFlight--;
+      return fakeOpenAI(() => "vivid").fetch(url, init);
+    }) as unknown as typeof globalThis.fetch;
+    const finished: number[] = [];
+    const go = (concurrency: number) =>
+      compareRuns({ original: parse(original(dir)), variant, pipeline: "Brief", recordings: recs, runtime: () => runtime({ fetch: slow }), judge: prefers("vivid"), concurrency, onRun: (_r, i) => finished.push(i) });
+    const r = await go(3);
+    expect(most).toBe(3);
+    expect(r.runs.map((x) => x.runId)).toEqual(recs.map((x) => x.runId));
+    expect(r.counts.better).toBe(5);
+    expect(finished.toSorted()).toEqual([0, 1, 2, 3, 4]);
+    // The judge sees the same orders however the runs interleave.
+    const one = await go(1);
+    expect(one.runs.map((x) => x.outcome)).toEqual(r.runs.map((x) => x.outcome));
   });
 
   test("the Halo judge reads its answer, and recordings are found newest first", async () => {

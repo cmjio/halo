@@ -1804,6 +1804,24 @@ button.twist {
   overflow-wrap: anywhere;
 }
 
+.log pre {
+  margin: 0 0 6px;
+  font: inherit;
+  white-space: inherit;
+}
+
+.log-now {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.log-now .muted {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
 .table-wrap {
   border: 1px solid var(--line);
   border-radius: 12px;

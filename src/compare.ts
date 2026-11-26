@@ -104,6 +104,9 @@ export interface CompareOptions {
   seed?: number;
   /** Hard checks on the output (default: the original's `@expect` conditions on the pipeline). */
   expectations?: Expectation[];
+  /** How many recorded runs replay at once (default 4). Each replay has its own runtime and mocked tools. */
+  concurrency?: number;
+  /** Called as each run finishes, which with concurrency isn't always in `recordings` order. */
   onRun?: (r: RunComparison, index: number) => void;
 }
 
@@ -176,18 +179,20 @@ export async function compareRuns(options: CompareOptions): Promise<CompareSumma
   const tools = [...variant.tools, ...variant.stores].map((t) => t.name);
   // The original's expectations, never the variant's: a variant can't loosen what it's held to.
   const expectations = options.expectations ?? expectationsOf(options.original, pipeline);
-  const runs: RunComparison[] = [];
+  const runs: RunComparison[] = new Array(recordings.length);
   let spent = 0;
+  // Drawn up front, so the judge sees the same orders however the runs interleave.
+  const flips = recordings.map(() => rand() < 0.5);
 
-  for (const [i, rec] of recordings.entries()) {
-    const flip = rand() < 0.5;
+  const compareOne = async (i: number, rec: Recording): Promise<void> => {
+    const flip = flips[i]!;
     const original = { status: rec.end!.status, output: rec.end!.output, error: rec.end!.error, cost: recordedCost(rec) };
     const base = { runId: rec.runId, startedAt: rec.startedAt, args: rec.args, original };
     if (options.budget !== undefined && spent >= options.budget) {
       const r: RunComparison = { ...base, outcome: "skipped" };
-      runs.push(r);
+      runs[i] = r;
       options.onRun?.(r, i);
-      continue;
+      return;
     }
 
     const stats = newReplayStats();
@@ -268,9 +273,25 @@ export async function compareRuns(options: CompareOptions): Promise<CompareSumma
       outcome = pick === "variant" ? "better" : pick === "original" ? "worse" : "tie";
     }
     const r: RunComparison = { ...base, outcome, variant: v, verdict, ...(judgedOn ? { judgedOn } : {}), ...(note ? { note } : {}) };
-    runs.push(r);
+    runs[i] = r;
     options.onRun?.(r, i);
-  }
+  };
+
+  // A few workers take the next run as they free up. A missing key (thrown above) stops them all.
+  let next = 0;
+  let stop: unknown;
+  const worker = async () => {
+    while (next < recordings.length && stop === undefined) {
+      const i = next++;
+      try {
+        await compareOne(i, recordings[i]!);
+      } catch (err) {
+        stop ??= err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(options.concurrency ?? 4, recordings.length)) }, worker));
+  if (stop !== undefined) throw stop;
 
   const counts = Object.fromEntries((["same", "better", "worse", "tie", "now halts", "no longer halts", "both halt", "now pauses", "now fails", "diverged", "skipped"] as Outcome[]).map((o) => [o, 0])) as Record<Outcome, number>;
   for (const r of runs) counts[r.outcome]++;
