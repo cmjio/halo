@@ -4,6 +4,7 @@ import { parse } from "../parser/index.js";
 import { validate, type Diagnostic as HaloDiagnostic } from "../parser/validate.js";
 import { checkLinked, link } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
+import { toolCallDiagnostics, type ProviderLookup } from "./tools.js";
 
 /** The identifier (or token) starting at a position, used to size a diagnostic's range. */
 function rangeAt(lines: string[], line: number, character: number, length?: number): Range {
@@ -40,7 +41,7 @@ function quotedOnLine(lines: string[], line: number, character: number, message:
  * other open documents' unsaved text, by absolute path), so imported names resolve and
  * problems in `use` lines are reported. Errors in the files it uses are shown on line 1.
  */
-export function getDiagnostics(sourceText: string, path?: string, overrides?: Map<string, string>): Diagnostic[] {
+export function getDiagnostics(sourceText: string, path?: string, overrides?: Map<string, string>, lookup?: ProviderLookup): Diagnostic[] {
   const lines = sourceText.split("\n");
   const ast = parse(sourceText);
   if (ast.errors.length) {
@@ -65,10 +66,10 @@ export function getDiagnostics(sourceText: string, path?: string, overrides?: Ma
   } else {
     diags = validate(ast);
   }
-  return diags.map((d) => ({
+  return [...diags.map((d): Diagnostic => ({
     severity: d.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
     range: d.line ? ((d.token && findToken(lines, d.line - 1, d.column ?? 0, d.token)) || quotedOnLine(lines, d.line - 1, d.column ?? 0, d.message) || rangeAt(lines, d.line - 1, d.column ?? 0)) : rangeAt(lines, 0, 0, 0),
     message: d.message,
     source: "halo",
-  }));
+  })), ...toolCallDiagnostics(sourceText, path, overrides, lookup)];
 }
