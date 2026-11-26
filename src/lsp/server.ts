@@ -12,9 +12,13 @@ import { getDiagnostics } from "./diagnostics.js";
 import { getCompletions } from "./completions.js";
 import { getHover } from "./hover.js";
 import { getDefinition } from "./definition.js";
+import { getDocumentHighlights, getDocumentSymbols, getReferences, getRename, prepareRename } from "./symbols.js";
 import { fileURLToPath } from "node:url";
 
-const connection = createConnection(ProposedFeatures.all);
+// Editors name a transport (--stdio, --node-ipc, ...); `halo lsp` on its own uses stdio.
+const connection = process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a))
+  ? createConnection(ProposedFeatures.all)
+  : createConnection(ProposedFeatures.all, process.stdin, process.stdout);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let hasConfigurationCapability = false;
@@ -35,10 +39,14 @@ connection.onInitialize((params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: {
         resolveProvider: false,
-        triggerCharacters: ['"', "/", "{", ","]
+        triggerCharacters: ['"', "/", "{", ",", ".", "@"]
       },
       hoverProvider: true,
-      definitionProvider: true
+      definitionProvider: true,
+      referencesProvider: true,
+      documentHighlightProvider: true,
+      documentSymbolProvider: true,
+      renameProvider: { prepareProvider: true },
     }
   };
   if (hasWorkspaceFolderCapability) {
@@ -105,6 +113,37 @@ connection.onDefinition((params) => {
   if (!doc || !path) return null;
   return getDefinition(doc.getText(), params.position, path, openBuffers());
 });
+
+connection.onReferences((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const path = doc && pathOf(doc.uri);
+  if (!doc || !path) return [];
+  return getReferences(doc.getText(), params.position, path, openBuffers(), params.context.includeDeclaration);
+});
+
+connection.onDocumentHighlight((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? getDocumentHighlights(doc.getText(), params.position) : [];
+});
+
+connection.onDocumentSymbol((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? getDocumentSymbols(doc.getText()) : [];
+});
+
+connection.onPrepareRename((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? prepareRename(doc.getText(), params.position) : null;
+});
+
+connection.onRenameRequest((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const path = doc && pathOf(doc.uri);
+  if (!doc || !path) return null;
+  return getRename(doc.getText(), params.position, params.newName, path, openBuffers());
+});
+
+documents.onDidClose((e) => connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] }));
 
 documents.listen(connection);
 connection.listen();

@@ -7,6 +7,9 @@ import { SCHEMA_TYPES, TYPE_DESCRIPTIONS, includes } from "../parser/builtins.js
 import { displayText } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
 import { normalizePackageName } from "../registry/contract.js";
+import { KEYWORDS } from "./completions.js";
+
+const KEYWORD_DOCS = new Map(KEYWORDS);
 
 const OPERATORS: Record<string, string> = {
   "|>": "**Pipe**: run a call on the current value.",
@@ -98,5 +101,7 @@ export function getHover(sourceText: string, position: Position, path?: string, 
     }
   }
   if (includes(SCHEMA_TYPES, word)) return md(`**${word}** (built-in type): ${TYPE_DESCRIPTIONS[word]}`);
+  const keyword = KEYWORD_DOCS.get(word);
+  if (keyword) return md(`**${word}** (keyword): ${keyword}`);
   return null;
 }
