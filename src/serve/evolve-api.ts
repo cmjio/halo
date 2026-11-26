@@ -26,6 +26,8 @@ export interface EvolveConfig {
   models?: string[];
   maxCostRatio?: number;
   holdout?: number;
+  /** Recorded runs replayed at once while scoring a variant (default 4). */
+  concurrency?: number;
   criteria?: Record<string, string>;
 }
 
@@ -37,6 +39,10 @@ interface Job {
   status: "running" | "done" | "error";
   /** One line per round, variant and finalist, as the CLI prints them. */
   log: string[];
+  /** What it's doing right now, e.g. "v2: replaying on 20 recorded runs · 7 done (3 better, 4 same)". */
+  now?: string;
+  /** When `now` started, for its elapsed time. */
+  nowSince?: string;
   spent: number;
   budget: number;
   error?: string;
@@ -115,16 +121,37 @@ export function evolveApi(o: EvolveApiOptions) {
     const source = readFileSync(p.path, "utf8");
     const job: Job = { id, pipeline: p.name, file: p.file, startedAt: new Date().toISOString(), status: "running", log: [], spent: 0, budget };
     jobs.set(id, job);
+    const tally = new Map<string, number>();
+    let replaying = "";
+    const doing = (text: string, fresh = true) => {
+      job.now = text;
+      if (fresh) job.nowSince = new Date().toISOString();
+    };
     const onEvent = (e: EvolveEvent) => {
       if (e.type === "round") job.log.push(`Round ${e.round}: proposing from ${e.parent}`);
-      else if (e.type === "variant") {
+      else if (e.type === "proposing") doing(e.attempt ? `${e.id}: fixing its rewrite, which didn't validate` : `${e.id}: ${proposer} is writing a rewrite`);
+      else if (e.type === "replaying") {
+        tally.clear();
+        replaying = `${e.id}: replaying on ${e.total} ${e.holdout ? "held-out" : "recorded"} run${e.total === 1 ? "" : "s"}`;
+        doing(replaying);
+      } else if (e.type === "run") {
+        tally.set(e.outcome, (tally.get(e.outcome) ?? 0) + 1);
+        job.spent = e.spent;
+        const parts = [...tally].map(([k, n]) => `${n} ${k}`).join(", ");
+        doing(`${replaying} · ${e.done} done (${parts})`, false);
+      } else if (e.type === "variant") {
+        job.now = undefined;
         const v = e.variant;
         job.log.push(`${v.id} ${v.score ? describeScore(v.score) : v.status === "outside" ? `outside the fence: ${v.problems[0] ?? ""}` : v.status === "invalid" ? `invalid: ${v.problems[0] ?? ""}` : v.status}${v.rationale ? ` — ${v.rationale}` : ""}`);
-        job.spent += v.proposeCost + (v.proposal?.spent ?? 0);
+        job.spent = e.spent;
       } else if (e.type === "holdout") {
+        job.now = undefined;
         job.log.push(`held out ${e.variant.id}: ${describeScore(e.variant.holdoutScore!)}`);
-        job.spent += e.variant.holdout?.spent ?? 0;
-      } else if (e.type === "budget") job.log.push(`budget reached ($${e.spent.toFixed(4)})`);
+        job.spent = e.spent;
+      } else if (e.type === "budget") {
+        job.log.push(`budget reached ($${e.spent.toFixed(4)})`);
+        job.spent = e.spent;
+      }
     };
     o.logger.log(`[halo] evolving ${p.name} (${runs.length} recorded runs, budget $${budget.toFixed(2)})`);
     void evolve({
@@ -142,17 +169,22 @@ export function evolveApi(o: EvolveApiOptions) {
       budget,
       fence: { ...o.fence, allowModels: o.config?.models ?? [], maxCostRatio: o.config?.maxCostRatio ?? 1 },
       validate: o.validate,
+      concurrency: o.config?.concurrency,
       onEvent,
     })
       .then((result) => {
         writeEvolveDir(join(dir, id), result, { file: relative(o.root, p.path), source, version: o.version, models: { proposer, judge } });
         job.spent = result.spent;
         job.status = "done";
+        job.now = undefined;
         o.logger.log(`[halo] evolved ${p.name}: ${result.verdict}`);
       })
       .catch((err: unknown) => {
         job.status = "error";
+        job.now = undefined;
         job.error = err instanceof Error ? err.message : String(err);
+        // The file is read again when evolve starts: if it changed since this server loaded it, say so.
+        if (job.error.startsWith("No pipeline ")) job.error += ` (${p.file} changed on disk since halo serve loaded it; restart halo serve to load it)`;
         o.logger.error(`[halo] evolving ${p.name} failed: ${job.error}`);
       });
     return json({ id, status: "running" }, 202);
@@ -168,7 +200,7 @@ export function evolveApi(o: EvolveApiOptions) {
       for (const f of readdirSync(variantsDir)) if (f.endsWith(".diff")) diffs[f.slice(0, -".diff".length)] = readFileSync(join(variantsDir, f), "utf8");
     }
     const report = record && existsSync(join(dir, id, "report.md")) ? readFileSync(join(dir, id, "report.md"), "utf8") : undefined;
-    return json({ id, status: job?.status ?? "done", log: job?.log ?? [], error: job?.error, spent: record?.spent ?? job?.spent, budget: record?.budget ?? job?.budget, record, diffs, report });
+    return json({ id, status: job?.status ?? "done", log: job?.log ?? [], now: job?.now, nowSince: job?.nowSince, error: job?.error, spent: record?.spent ?? job?.spent, budget: record?.budget ?? job?.budget, record, diffs, report });
   };
 
   const apply = async (id: string, body: { variant?: string }) => {

@@ -49,7 +49,7 @@ import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { cmdWallet } from "./wallet-cli.js";
-import { Progress, progressWanted } from "./progress.js";
+import { Progress, progressWanted, seconds } from "./progress.js";
 import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
 import { PACKAGE_COMMANDS, PACKAGE_HELP, runPackageCommand } from "./registry/cli.js";
 import { MigrateError, migrateProject, migrationHint } from "./migrate/index.js";
@@ -201,6 +201,8 @@ EVOLVE OPTIONS:
   --min-runs <n>         Refuse to start with fewer (default 10)
   --holdout <x>          Share of runs held out for the final check (default 0.33)
   --finalists <n>        Best variants tried on the held-out runs (default 2)
+  --concurrency <n>      Recorded runs replayed at once while scoring a variant (default 4;
+                         also evolve.concurrency)
   --proposer <model>     Model that proposes rewrites (default: evolve.proposer, then the
                          priciest model the file already uses)
   --judge <model>        Judge model (default: evolve.judge, then the same rule)
@@ -1063,7 +1065,7 @@ async function cmdCompare(flags: Flags): Promise<number> {
 interface HaloConfig {
   recordings?: { keep?: number };
   media?: { transcribe?: string; transcribeModel?: string };
-  evolve?: { proposer?: string; judge?: string; models?: string[]; maxCostRatio?: number; holdout?: number; criteria?: Record<string, string> };
+  evolve?: { proposer?: string; judge?: string; models?: string[]; maxCostRatio?: number; holdout?: number; concurrency?: number; criteria?: Record<string, string> };
 }
 
 let haloConfigCache: Promise<HaloConfig> | undefined;
@@ -1130,7 +1132,30 @@ async function cmdEvolve(flags: Flags): Promise<number> {
   const criteria = criteriaPath ? await Bun.file(criteriaPath).text() : undefined;
   const budget = number("budget", 3);
   const json = flags.bools.has("json");
-  const log = (s: string) => (json ? undefined : console.error(s));
+  // On a terminal, one line under the log says what's happening now (proposing, or which run is replaying).
+  const live = !json && progressWanted() && !flags.bools.has("no-progress");
+  const CLEAR = "\r\x1b[2K";
+  let status: { text: string; since: number } | undefined;
+  const drawStatus = () => {
+    if (!live || !status) return;
+    const line = `  ${status.text} · ${seconds(Date.now() - status.since)}`;
+    process.stderr.write(CLEAR + dim(line.slice(0, Math.max(20, (process.stderr.columns ?? 80) - 1))));
+  };
+  const setStatus = (text: string | undefined, fresh = true) => {
+    status = text === undefined ? undefined : { text, since: fresh || !status ? Date.now() : status.since };
+    if (live) process.stderr.write(CLEAR);
+    drawStatus();
+  };
+  const ticker = live ? setInterval(drawStatus, 1000) : undefined;
+  ticker?.unref?.();
+  const log = (s: string) => {
+    if (json) return;
+    if (live && status) process.stderr.write(CLEAR);
+    console.error(s);
+    drawStatus();
+  };
+  const tally = new Map<string, number>();
+  let replaying = "";
 
   const out = last(flags, "out") ?? join(EVOLVE_DIR, `${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}-${pipeline}`);
   log(`${bold(`Evolving ${pipeline}`)} in ${rel}  ${dim(`(${recordings.length} recorded runs · proposer ${proposer} · judge ${judgeModel} · budget $${budget.toFixed(2)})`)}`);
@@ -1160,7 +1185,17 @@ async function cmdEvolve(flags: Flags): Promise<number> {
       maxCostRatio: number("max-cost-ratio", config.maxCostRatio ?? 1),
     },
     validate: await validateOptions(),
+    concurrency: Math.max(1, number("concurrency", config.concurrency ?? 4, true)),
     onEvent: (e) => {
+      if (e.type === "proposing") setStatus(e.attempt ? `${e.id}: fixing its rewrite, which didn't validate` : `${e.id}: ${proposer} is writing a rewrite`);
+      else if (e.type === "replaying") {
+        tally.clear();
+        replaying = `${e.id}: replaying on ${e.total} ${e.holdout ? "held-out" : "recorded"} run${e.total === 1 ? "" : "s"}`;
+        setStatus(replaying);
+      } else if (e.type === "run") {
+        tally.set(e.outcome, (tally.get(e.outcome) ?? 0) + 1);
+        setStatus(`${replaying} · ${e.done} done (${[...tally].map(([k, n]) => `${n} ${k}`).join(", ")}) · $${e.spent.toFixed(4)}`, false);
+      } else if (e.type === "variant" || e.type === "holdout") setStatus(undefined);
       if (e.type === "round") {
         log(`\n${bold(`Round ${e.round}`)}  ${dim(`proposing from ${e.parent}`)}`);
       } else if (e.type === "variant") {
@@ -1176,6 +1211,8 @@ async function cmdEvolve(flags: Flags): Promise<number> {
     },
   });
 
+  clearInterval(ticker);
+  setStatus(undefined);
   writeEvolveDir(out, result, { file: rel, source, version: pkg.version, models: { proposer, judge: judgeModel } });
   if (json) {
     console.log(JSON.stringify({ ...result, out, variants: result.variants.map(({ proposal: _, holdout: __, ...v }) => v) }, null, 2));

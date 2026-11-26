@@ -189,6 +189,6 @@ export class Progress {
   }
 }
 
-function seconds(ms: number): string {
+export function seconds(ms: number): string {
   return ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`;
 }
