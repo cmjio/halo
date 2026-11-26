@@ -49,6 +49,7 @@ import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
 import { cmdWallet } from "./wallet-cli.js";
+import { Progress, progressWanted } from "./progress.js";
 import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
 import { PACKAGE_COMMANDS, PACKAGE_HELP, runPackageCommand } from "./registry/cli.js";
 import { MigrateError, migrateProject, migrationHint } from "./migrate/index.js";
@@ -154,6 +155,8 @@ RUN OPTIONS:
   --json                 Print the full run result (output, meta, trace) as JSON
   --no-telemetry         Don't record this run for Halo Studio (.halo/telemetry.db)
   --no-record            Don't keep a recording for halo replay (.halo/recordings)
+  --no-progress          No status line on stderr while the run works (also HALO_NO_PROGRESS=1;
+                         it's never shown in CI or when stderr isn't a terminal)
 
   Without a terminal (and without --auto-approve), a run that reaches |! yield
   or ~> listen pauses and prints the command that continues it.
@@ -248,7 +251,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run", "stdin"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-progress", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run", "stdin"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -570,13 +573,16 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   const runId = resumeRun ?? crypto.randomUUID();
   // A rewound run's recording would miss what came before its step, so it couldn't be replayed.
   const recorder = mock || fileMocks || replaying || rewind || flags.bools.has("no-record") || last(flags, "checkpoint") ? undefined : new Recorder(RECORDINGS, runId);
+  // The status line on stderr while the run works (only on a terminal; --no-progress hides it).
+  const progress = progressWanted() && !flags.bools.has("no-progress") ? new Progress({ stages: Object.fromEntries(ast.pipelines.map((p) => [p.name, p.pipeline.length])) }) : undefined;
+  const held = <A, R>(fn: (a: A) => Promise<R>) => (a: A) => (progress ? progress.hold(() => fn(a)) : fn(a));
   const rt = new HaloRuntime({
     recorder: recorder?.record,
     apiKey: last(flags, "api-key"),
     router: routerJson ? (parseJsonish(routerJson) as object) : undefined,
     // In a terminal, ask; otherwise pause the run (it is saved to .halo/runs) unless auto-approving.
-    onInterrupt: autoApprove ? autoAnswer : process.stdin.isTTY ? promptInterrupt : undefined,
-    onListen: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? promptListen : undefined,
+    onInterrupt: autoApprove ? autoAnswer : process.stdin.isTTY ? held(promptInterrupt) : undefined,
+    onListen: autoApprove ? () => AUTO_EVENT : process.stdin.isTTY ? held(promptListen) : undefined,
     runStore: new FileRunStore(".halo/runs"),
     walletLog: ".halo/wallet.log",
     // Images and documents a run is given or makes, by hash.
@@ -586,6 +592,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     threadPath: mock ? ":memory:" : THREADS,
     onEvent: (e) => {
       trace(e);
+      progress?.event(e);
       telemetry?.handler(e);
     },
   }).load(ast);
@@ -600,6 +607,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
 
   let result: RunResult;
   const checkpoint = last(flags, "checkpoint");
+  progress?.start();
   try {
     if (resumeRun) {
       const payloadText = last(flags, "payload");
@@ -649,6 +657,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     recorder?.finish({ status: "error", error: err instanceof Error ? err.message : String(err) });
     throw err;
   } finally {
+    progress?.stop();
     await rt.close();
     telemetry?.close();
   }
