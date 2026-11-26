@@ -103,6 +103,9 @@ USAGE:
   halo plan <file.halo>                 Show what a run could do: model calls and worst-case
                                         cost, tool calls and their effects, approvals
   halo mcp [files|dirs ...]             Serve pipelines as MCP tools over stdio
+  halo lsp                              The language server editors use (Zed, VS Code, Neovim):
+                                        errors as you type, completion, hover, go to definition,
+                                        references, rename and the outline, over stdio
   halo compare <a.halo> <b.halo>        Is b better than a on a's recorded runs, and does it reach
                                         anything a couldn't? Replays them against b (tools from the
                                         recordings, models only where prompts changed) and has a
@@ -1603,6 +1606,12 @@ export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   // Package commands parse their own flags (--dry-run, --registry, ...).
   if (command && (PACKAGE_COMMANDS as readonly string[]).includes(command) && !rest.includes("--help")) return await runPackageCommand(command, rest);
+  if (command === "lsp" && !rest.includes("--help")) {
+    // The language server, before flag parsing: editors pass their own (--stdio, --node-ipc,
+    // --clientProcessId=N). It talks over stdin and stdout until the editor sends exit.
+    await import("./lsp/server.ts");
+    return await new Promise<number>(() => {});
+  }
   try {
     const flags = parseFlags(rest);
     if (command === "--version" || command === "-v" || flags.bools.has("version")) {

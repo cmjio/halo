@@ -8633,7 +8633,7 @@ ${stack}`);
 });
 
 // src/lsp/server.ts
-var import_node5 = __toESM(require_main4(), 1);
+var import_node6 = __toESM(require_main4(), 1);
 
 // node_modules/vscode-languageserver-textdocument/lib/esm/main.js
 class FullTextDocument {
@@ -40016,6 +40016,15 @@ function findToken(lines, line, character, token) {
   }
   return;
 }
+function quotedOnLine(lines, line, character, message) {
+  const names = [...message.matchAll(/"([A-Za-z_][\w.]*)/g)].map((m) => m[1].split(".")[0]).reverse();
+  for (const name of names) {
+    const range = findToken(lines.slice(0, line + 1), line, character, name);
+    if (range)
+      return range;
+  }
+  return;
+}
 function getDiagnostics(sourceText, path, overrides) {
   const lines = sourceText.split(`
 `);
@@ -40049,7 +40058,7 @@ function getDiagnostics(sourceText, path, overrides) {
   }
   return diags.map((d) => ({
     severity: d.severity === "error" ? import_vscode_languageserver.DiagnosticSeverity.Error : import_vscode_languageserver.DiagnosticSeverity.Warning,
-    range: d.line ? d.token && findToken(lines, d.line - 1, d.column ?? 0, d.token) || rangeAt(lines, d.line - 1, d.column ?? 0) : rangeAt(lines, 0, 0, 0),
+    range: d.line ? d.token && findToken(lines, d.line - 1, d.column ?? 0, d.token) || quotedOnLine(lines, d.line - 1, d.column ?? 0, d.message) || rangeAt(lines, d.line - 1, d.column ?? 0) : rangeAt(lines, 0, 0, 0),
     message: d.message,
     source: "halo"
   }));
@@ -40100,6 +40109,14 @@ function getCompletions(sourceText, position, path, overrides) {
   if (/\bThread\.\w*$/.test(before)) {
     return THREAD_METHODS.map((m) => ({ label: m, kind: import_vscode_languageserver2.CompletionItemKind.Method, detail: `Thread.${m}` }));
   }
+  if (/\bcontext\.\w*$/.test(before)) {
+    return CONTEXT_FIELDS.map(([label, detail]) => ({ label, kind: import_vscode_languageserver2.CompletionItemKind.Field, detail }));
+  }
+  const member = /\b([A-Za-z_]\w*)\.\w*$/.exec(before);
+  if (member) {
+    const agents = [...sourceText.matchAll(/^agent\s+(\w+)/gm)].map((m) => m[1]);
+    return agents.includes(member[1]) ? [{ label: "prompt", kind: import_vscode_languageserver2.CompletionItemKind.Method, detail: `${member[1]}.prompt("...")`, documentation: "Call the agent with a prompt; {{name}} fills in a value" }] : [];
+  }
   if (/\bpreset:\s*\w*$/.test(before)) {
     return Object.values(AGENT_PRESETS).map((p) => ({ label: p.name, kind: import_vscode_languageserver2.CompletionItemKind.EnumMember, detail: p.summary, documentation: p.returns ? `Returns JSON: ${p.returns}` : undefined }));
   }
@@ -40132,6 +40149,11 @@ function getCompletions(sourceText, position, path, overrides) {
   if (/^\s*policy\b/.test(line))
     return ENFORCED_RULES.map((r) => ({ label: r, kind: import_vscode_languageserver2.CompletionItemKind.Function, detail: "Policy rule" }));
   const items = KEYWORDS.map(([label, detail]) => ({ label, kind: import_vscode_languageserver2.CompletionItemKind.Keyword, detail }));
+  if (/^\s*\w*$/.test(before)) {
+    for (const [label, detail, body] of SNIPPETS) {
+      items.push({ label, kind: import_vscode_languageserver2.CompletionItemKind.Snippet, detail, insertText: body, insertTextFormat: import_vscode_languageserver2.InsertTextFormat.Snippet, sortText: `~${label}` });
+    }
+  }
   const ast = parse(sourceText);
   for (const a of ast.agents)
     items.push({ label: a.name, kind: import_vscode_languageserver2.CompletionItemKind.Class, detail: `agent [${a.modelId}]` });
@@ -40149,6 +40171,21 @@ function getCompletions(sourceText, position, path, overrides) {
   }
   return items;
 }
+var CONTEXT_FIELDS = [
+  ["current", "The value flowing through the pipeline"],
+  ["input", "The pipeline's arguments"],
+  ["data", "Results bound with `as name`"],
+  ["meta", "The run's id, cost and timing"],
+  ["thread", "The @thread state, for pipelines that keep one"]
+];
+var SNIPPETS = [
+  ["agent …", "An agent with a model and a system prompt", 'agent ${1:Name} [${2:anthropic/claude-haiku-4-5}]\n  system "${3:You are ...}"'],
+  ["pipeline …", "A pipeline that runs an agent on its input", 'pipeline ${1:Name}(${2:input}: ${3:String}) -> Result:\n  ${2:input}\n    |> ${4:Agent}.prompt("${5:Answer this}")'],
+  ["tool …", "A tool an agent can be equipped with", 'tool ${1:Name} : ${2:REST}("${3:https://api.example.com}")'],
+  ["policy …", "Rules an agent must follow", 'policy ${1:Guard} : AllowTools("${2:Tool.method}") & MaxSpend(${3:0.25})'],
+  ["schema …", "A typed output", "schema ${1:Name} {\n  ${2:field}: ${3:String}\n}"],
+  ["use …", "Import from a file or package", 'use "${1:./shared.halo}" { ${2:Name} }']
+];
 var KIND_ICONS = {
   agent: import_vscode_languageserver2.CompletionItemKind.Class,
   tool: import_vscode_languageserver2.CompletionItemKind.Interface,
@@ -40212,6 +40249,7 @@ function atType(sourceText, position, line, before) {
 // src/lsp/hover.ts
 var import_vscode_languageserver3 = __toESM(require_main4(), 1);
 import { resolve as resolve5 } from "node:path";
+var KEYWORD_DOCS = new Map(KEYWORDS);
 var OPERATORS = {
   "|>": "**Pipe**: run a call on the current value.",
   "|?": "**Gate** `|? (cond)`: stop the run unless the condition holds.  \n**Branch** `|? { (cond) => A(), else => B() }`: run the first matching arm.",
@@ -40323,6 +40361,9 @@ from \`${imported.from}\`${imported.name !== word ? ` (as ${word})` : ""}`);
   }
   if (includes(SCHEMA_TYPES, word))
     return md(`**${word}** (built-in type): ${TYPE_DESCRIPTIONS[word]}`);
+  const keyword = KEYWORD_DOCS.get(word);
+  if (keyword)
+    return md(`**${word}** (keyword): ${keyword}`);
   return null;
 }
 
@@ -40373,10 +40414,293 @@ function getDefinition(sourceText, position, path, overrides) {
   return at(target.file, target.line, target.column);
 }
 
+// src/lsp/symbols.ts
+var import_vscode_languageserver4 = __toESM(require_main4(), 1);
+import { readdirSync as readdirSync2, readFileSync as readFileSync6 } from "node:fs";
+import { join as join7, resolve as resolve7 } from "node:path";
+import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
+var DECL = /^(\s*)(agent|pipeline|tool|store|policy|schema)\s+([A-Za-z_]\w*)/;
+function identifiers(text) {
+  const out = [];
+  let line = 0, col = 0;
+  for (let i = 0;i < text.length; ) {
+    const c = text[i];
+    if (c === `
+`) {
+      line++;
+      col = 0;
+      i++;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== `
+`) {
+        i++;
+        col++;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const triple = text.startsWith(c.repeat(3), i);
+      const close = triple ? c.repeat(3) : c;
+      i += close.length;
+      col += close.length;
+      while (i < text.length && !text.startsWith(close, i)) {
+        if (text[i] === "\\") {
+          i++;
+          col++;
+        }
+        if (text[i] === `
+`) {
+          if (!triple)
+            break;
+          line++;
+          col = 0;
+          i++;
+          continue;
+        }
+        i++;
+        col++;
+      }
+      if (text.startsWith(close, i)) {
+        i += close.length;
+        col += close.length;
+      }
+      continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i;
+      while (j < text.length && /\w/.test(text[j]))
+        j++;
+      if (text[i - 1] !== ".")
+        out.push({ name: text.slice(i, j), line, character: col });
+      col += j - i;
+      i = j;
+      continue;
+    }
+    i++;
+    col++;
+  }
+  return out;
+}
+function declarations(text) {
+  const lines = text.split(`
+`);
+  const found = [];
+  lines.forEach((l, n) => {
+    const m = DECL.exec(l);
+    if (!m || m[1].length)
+      return;
+    const start = m[0].length - m[3].length;
+    found.push({
+      name: m[3],
+      kind: m[2],
+      selection: { start: { line: n, character: start }, end: { line: n, character: start + m[3].length } },
+      range: { start: { line: n, character: 0 }, end: { line: n, character: l.length } },
+      fields: []
+    });
+  });
+  found.forEach((d, i) => {
+    let last = (found[i + 1]?.range.start.line ?? lines.length) - 1;
+    while (last > d.range.start.line && !(lines[last] ?? "").trim())
+      last--;
+    d.range.end = { line: last, character: (lines[last] ?? "").length };
+    if (d.kind !== "schema")
+      return;
+    for (let n = d.range.start.line;n <= last; n++) {
+      const body = n === d.range.start.line ? (lines[n] ?? "").slice((lines[n] ?? "").indexOf("{") + 1) : lines[n] ?? "";
+      const offset = (lines[n] ?? "").length - body.length;
+      for (const f of body.matchAll(/([A-Za-z_]\w*)\s*:\s*([\w<>\[\], ]+?)\s*(?=[,}]|$)/g)) {
+        const at = offset + f.index;
+        d.fields.push({ name: f[1], type: f[2].trim(), range: { start: { line: n, character: at }, end: { line: n, character: at + f[1].length } } });
+      }
+    }
+  });
+  return found;
+}
+var SYMBOL_KINDS = {
+  agent: import_vscode_languageserver4.SymbolKind.Class,
+  pipeline: import_vscode_languageserver4.SymbolKind.Function,
+  tool: import_vscode_languageserver4.SymbolKind.Interface,
+  store: import_vscode_languageserver4.SymbolKind.Interface,
+  policy: import_vscode_languageserver4.SymbolKind.Constant,
+  schema: import_vscode_languageserver4.SymbolKind.Struct
+};
+function getDocumentSymbols(text) {
+  return declarations(text).map((d) => ({
+    name: d.name,
+    detail: d.kind,
+    kind: SYMBOL_KINDS[d.kind],
+    range: d.range,
+    selectionRange: d.selection,
+    children: d.fields.map((f) => ({ name: f.name, detail: f.type, kind: import_vscode_languageserver4.SymbolKind.Field, range: f.range, selectionRange: f.range }))
+  }));
+}
+function imports(text) {
+  const out = [];
+  const lines = text.split(`
+`);
+  lines.forEach((l, n) => {
+    const m = /^\s*use\s+(["'])([^"']+)\1\s*\{([^}]*)\}?/.exec(l);
+    if (!m)
+      return;
+    const open = l.indexOf("{");
+    for (const item of m[3].matchAll(/([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?/g)) {
+      const local = item[2] ?? item[1];
+      const character = open + 1 + item.index + (item[2] ? item[0].lastIndexOf(item[2]) : 0);
+      out.push({ source: m[2], name: item[1], local, at: { name: local, line: n, character } });
+    }
+  });
+  return out;
+}
+function wordAt3(text, position) {
+  return identifiers(text).find((t) => t.line === position.line && position.character >= t.character && position.character <= t.character + t.name.length);
+}
+var rangeOf = (t) => ({ start: { line: t.line, character: t.character }, end: { line: t.line, character: t.character + t.name.length } });
+function uses(text, name) {
+  return identifiers(text).filter((t) => t.name === name);
+}
+function getDocumentHighlights(text, position) {
+  const word = wordAt3(text, position);
+  if (!word)
+    return [];
+  const known = declarations(text).some((d) => d.name === word.name) || imports(text).some((i) => i.local === word.name);
+  if (!known)
+    return [];
+  return uses(text, word.name).map((t) => ({ range: rangeOf(t) }));
+}
+function projectFiles(path, limit = 2000) {
+  const root = projectRoot(path);
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync2(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= limit)
+        return;
+      if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "dist")
+        continue;
+      const full = join7(dir, e.name);
+      if (e.isDirectory())
+        walk(full);
+      else if (e.name.endsWith(".halo"))
+        out.push(full);
+    }
+  };
+  walk(root);
+  return out;
+}
+function originOf(text, position, path, overrides) {
+  const word = wordAt3(text, position);
+  if (!word)
+    return;
+  const file = resolve7(path);
+  if (declarations(text).some((d) => d.name === word.name))
+    return { file, name: word.name };
+  const imported = imports(text).find((i) => i.local === word.name || i.name === word.name && i.at.line === word.line);
+  if (!imported)
+    return;
+  const def = getDefinition(text, { line: imported.at.line, character: imported.at.character }, file, overrides);
+  if (!def || !def.uri.startsWith("file:"))
+    return;
+  const target = fileURLToPath(def.uri);
+  if (!target.endsWith(".halo"))
+    return;
+  return { file: target, name: imported.name };
+}
+function occurrences(origin, path, overrides, renaming = false) {
+  const read = (f) => overrides.get(f) ?? (() => {
+    try {
+      return readFileSync6(f, "utf8");
+    } catch {
+      return;
+    }
+  })();
+  const found = new Map;
+  const own = read(origin.file);
+  if (own !== undefined)
+    found.set(origin.file, uses(own, origin.name));
+  const files = new Set([...projectFiles(path), ...overrides.keys(), resolve7(path)]);
+  for (const f of files) {
+    if (f === origin.file)
+      continue;
+    const text = read(f);
+    if (!text || !/\buse\s+["']\./.test(text))
+      continue;
+    const tokens = [];
+    for (const i of imports(text)) {
+      if (i.name !== origin.name || !i.source.startsWith(".") || resolve7(f, "..", i.source) !== origin.file)
+        continue;
+      if (i.local === i.name)
+        tokens.push(...uses(text, i.name));
+      else
+        tokens.push(...uses(text, i.name).filter((t) => t.line === i.at.line), ...renaming ? [] : uses(text, i.local));
+    }
+    if (tokens.length)
+      found.set(f, tokens);
+  }
+  return found;
+}
+function getReferences(text, position, path, overrides, includeDeclaration = true) {
+  const all = new Map([...overrides, [resolve7(path), text]]);
+  const origin = originOf(text, position, path, all);
+  if (!origin) {
+    const word = wordAt3(text, position);
+    return word && getDocumentHighlights(text, position).length ? uses(text, word.name).map((t) => ({ uri: pathToFileURL2(path).href, range: rangeOf(t) })) : [];
+  }
+  const out = [];
+  const decl = declarations(all.get(origin.file) ?? (() => {
+    try {
+      return readFileSync6(origin.file, "utf8");
+    } catch {
+      return "";
+    }
+  })()).find((d) => d.name === origin.name);
+  for (const [file, tokens] of occurrences(origin, path, all)) {
+    for (const t of tokens) {
+      const isDecl = file === origin.file && decl && t.line === decl.selection.start.line && t.character === decl.selection.start.character;
+      if (isDecl && !includeDeclaration)
+        continue;
+      out.push({ uri: pathToFileURL2(file).href, range: rangeOf(t) });
+    }
+  }
+  return out;
+}
+function prepareRename(text, position) {
+  const word = wordAt3(text, position);
+  if (!word)
+    return null;
+  const known = declarations(text).some((d) => d.name === word.name) || imports(text).some((i) => i.local === word.name);
+  return known ? rangeOf(word) : null;
+}
+function getRename(text, position, newName, path, overrides) {
+  if (!/^[A-Za-z_]\w*$/.test(newName))
+    return null;
+  const word = wordAt3(text, position);
+  if (!word)
+    return null;
+  const alias = imports(text).find((i) => i.local === word.name && i.local !== i.name && !(i.name === word.name && i.at.line === word.line));
+  const edit = (tokens) => tokens.map((t) => ({ range: rangeOf(t), newText: newName }));
+  if (alias)
+    return { changes: { [pathToFileURL2(path).href]: edit(uses(text, alias.local)) } };
+  const all = new Map([...overrides, [resolve7(path), text]]);
+  const origin = originOf(text, position, path, all);
+  if (!origin)
+    return null;
+  const changes = {};
+  for (const [file, tokens] of occurrences(origin, path, all, true))
+    changes[pathToFileURL2(file).href] = edit(tokens);
+  return { changes };
+}
+
 // src/lsp/server.ts
-import { fileURLToPath } from "node:url";
-var connection = import_node5.createConnection(import_node5.ProposedFeatures.all);
-var documents = new import_node5.TextDocuments(TextDocument);
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+var connection = process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a)) ? import_node6.createConnection(import_node6.ProposedFeatures.all) : import_node6.createConnection(import_node6.ProposedFeatures.all, process.stdin, process.stdout);
+var documents = new import_node6.TextDocuments(TextDocument);
 var hasConfigurationCapability = false;
 var hasWorkspaceFolderCapability = false;
 connection.onInitialize((params) => {
@@ -40385,13 +40709,17 @@ connection.onInitialize((params) => {
   hasWorkspaceFolderCapability = !!(capabilities.workspace && !!capabilities.workspace.workspaceFolders);
   const result = {
     capabilities: {
-      textDocumentSync: import_node5.TextDocumentSyncKind.Incremental,
+      textDocumentSync: import_node6.TextDocumentSyncKind.Incremental,
       completionProvider: {
         resolveProvider: false,
-        triggerCharacters: ['"', "/", "{", ","]
+        triggerCharacters: ['"', "/", "{", ",", ".", "@"]
       },
       hoverProvider: true,
-      definitionProvider: true
+      definitionProvider: true,
+      referencesProvider: true,
+      documentHighlightProvider: true,
+      documentSymbolProvider: true,
+      renameProvider: { prepareProvider: true }
     }
   };
   if (hasWorkspaceFolderCapability) {
@@ -40405,12 +40733,12 @@ connection.onInitialize((params) => {
 });
 connection.onInitialized(() => {
   if (hasConfigurationCapability) {
-    connection.client.register(import_node5.DidChangeConfigurationNotification.type, undefined);
+    connection.client.register(import_node6.DidChangeConfigurationNotification.type, undefined);
   }
 });
 function pathOf(uri) {
   try {
-    return uri.startsWith("file:") ? fileURLToPath(uri) : undefined;
+    return uri.startsWith("file:") ? fileURLToPath2(uri) : undefined;
   } catch {
     return;
   }
@@ -40453,5 +40781,32 @@ connection.onDefinition((params) => {
     return null;
   return getDefinition(doc.getText(), params.position, path, openBuffers());
 });
+connection.onReferences((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const path = doc && pathOf(doc.uri);
+  if (!doc || !path)
+    return [];
+  return getReferences(doc.getText(), params.position, path, openBuffers(), params.context.includeDeclaration);
+});
+connection.onDocumentHighlight((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? getDocumentHighlights(doc.getText(), params.position) : [];
+});
+connection.onDocumentSymbol((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? getDocumentSymbols(doc.getText()) : [];
+});
+connection.onPrepareRename((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  return doc ? prepareRename(doc.getText(), params.position) : null;
+});
+connection.onRenameRequest((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const path = doc && pathOf(doc.uri);
+  if (!doc || !path)
+    return null;
+  return getRename(doc.getText(), params.position, params.newName, path, openBuffers());
+});
+documents.onDidClose((e) => connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] }));
 documents.listen(connection);
 connection.listen();

@@ -24,6 +24,16 @@ function findToken(lines: string[], line: number, character: number, token: stri
   return undefined;
 }
 
+/** The last name the message quotes ("unknown callee \"X\"") that's on the diagnostic's own line, so the squiggle sits under it. */
+function quotedOnLine(lines: string[], line: number, character: number, message: string): Range | undefined {
+  const names = [...message.matchAll(/"([A-Za-z_][\w.]*)/g)].map((m) => m[1]!.split(".")[0]!).reverse();
+  for (const name of names) {
+    const range = findToken(lines.slice(0, line + 1), line, character, name);
+    if (range) return range;
+  }
+  return undefined;
+}
+
 /**
  * Syntax errors plus the validator's errors and warnings (undefined names, unequipped tools, ...).
  * With the document's path, the file is linked with everything it `use`s (`overrides` holds
@@ -57,7 +67,7 @@ export function getDiagnostics(sourceText: string, path?: string, overrides?: Ma
   }
   return diags.map((d) => ({
     severity: d.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
-    range: d.line ? ((d.token && findToken(lines, d.line - 1, d.column ?? 0, d.token)) || rangeAt(lines, d.line - 1, d.column ?? 0)) : rangeAt(lines, 0, 0, 0),
+    range: d.line ? ((d.token && findToken(lines, d.line - 1, d.column ?? 0, d.token)) || quotedOnLine(lines, d.line - 1, d.column ?? 0, d.message) || rangeAt(lines, d.line - 1, d.column ?? 0)) : rangeAt(lines, 0, 0, 0),
     message: d.message,
     source: "halo",
   }));

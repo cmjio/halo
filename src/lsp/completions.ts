@@ -1,4 +1,4 @@
-import { CompletionItemKind, type CompletionItem, type Position } from "vscode-languageserver";
+import { CompletionItemKind, InsertTextFormat, type CompletionItem, type Position } from "vscode-languageserver";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "../parser/index.js";
@@ -7,7 +7,7 @@ import { diskLinkOptions, projectRoot } from "../linker/node.js";
 import { AGENT_PRESETS } from "../runtime/presets.js";
 import { BLOCK_CATEGORIES, DIRECTIVES, ENFORCED_RULES, REDACT_CATEGORIES, SCHEMA_TYPES, SYSTEM_EVENTS, SYSTEM_METHODS, THREAD_METHODS, TOOL_PROVIDERS, TYPE_DESCRIPTIONS } from "../parser/builtins.js";
 
-const KEYWORDS: Array<[string, string]> = [
+export const KEYWORDS: Array<[string, string]> = [
   ["agent", "Declare an agent: agent Name [model, temp: 0.2]"],
   ["pipeline", "Declare a pipeline: pipeline Name(arg: Type) -> Type:"],
   ["tool", "Declare a tool: tool Name : Provider(...)"],
@@ -53,6 +53,14 @@ export function getCompletions(sourceText: string, position: Position, path?: st
   if (/\bThread\.\w*$/.test(before)) {
     return THREAD_METHODS.map((m) => ({ label: m, kind: CompletionItemKind.Method, detail: `Thread.${m}` }));
   }
+  if (/\bcontext\.\w*$/.test(before)) {
+    return CONTEXT_FIELDS.map(([label, detail]) => ({ label, kind: CompletionItemKind.Field, detail }));
+  }
+  const member = /\b([A-Za-z_]\w*)\.\w*$/.exec(before);
+  if (member) {
+    const agents = [...sourceText.matchAll(/^agent\s+(\w+)/gm)].map((m) => m[1]);
+    return agents.includes(member[1]) ? [{ label: "prompt", kind: CompletionItemKind.Method, detail: `${member[1]}.prompt("...")`, documentation: "Call the agent with a prompt; {{name}} fills in a value" }] : [];
+  }
   if (/\bpreset:\s*\w*$/.test(before)) {
     return Object.values(AGENT_PRESETS).map((p) => ({ label: p.name, kind: CompletionItemKind.EnumMember, detail: p.summary, documentation: p.returns ? `Returns JSON: ${p.returns}` : undefined }));
   }
@@ -86,6 +94,11 @@ export function getCompletions(sourceText: string, position: Position, path?: st
   if (/^\s*policy\b/.test(line)) return ENFORCED_RULES.map((r) => ({ label: r, kind: CompletionItemKind.Function, detail: "Policy rule" }));
 
   const items: CompletionItem[] = KEYWORDS.map(([label, detail]) => ({ label, kind: CompletionItemKind.Keyword, detail }));
+  if (/^\s*\w*$/.test(before)) {
+    for (const [label, detail, body] of SNIPPETS) {
+      items.push({ label, kind: CompletionItemKind.Snippet, detail, insertText: body, insertTextFormat: InsertTextFormat.Snippet, sortText: `~${label}` });
+    }
+  }
   const ast = parse(sourceText);
   for (const a of ast.agents) items.push({ label: a.name, kind: CompletionItemKind.Class, detail: `agent [${a.modelId}]` });
   for (const t of [...ast.tools, ...ast.stores]) items.push({ label: t.name, kind: CompletionItemKind.Interface, detail: `tool : ${t.provider}` });
@@ -97,6 +110,24 @@ export function getCompletions(sourceText: string, position: Position, path?: st
   }
   return items;
 }
+
+const CONTEXT_FIELDS: Array<[string, string]> = [
+  ["current", "The value flowing through the pipeline"],
+  ["input", "The pipeline's arguments"],
+  ["data", "Results bound with `as name`"],
+  ["meta", "The run's id, cost and timing"],
+  ["thread", "The @thread state, for pipelines that keep one"],
+];
+
+/** Whole declarations, offered at the start of a line; tab moves through the placeholders. */
+const SNIPPETS: Array<[string, string, string]> = [
+  ["agent …", "An agent with a model and a system prompt", 'agent ${1:Name} [${2:anthropic/claude-haiku-4-5}]\n  system "${3:You are ...}"'],
+  ["pipeline …", "A pipeline that runs an agent on its input", 'pipeline ${1:Name}(${2:input}: ${3:String}) -> Result:\n  ${2:input}\n    |> ${4:Agent}.prompt("${5:Answer this}")'],
+  ["tool …", "A tool an agent can be equipped with", 'tool ${1:Name} : ${2:REST}("${3:https://api.example.com}")'],
+  ["policy …", "Rules an agent must follow", 'policy ${1:Guard} : AllowTools("${2:Tool.method}") & MaxSpend(${3:0.25})'],
+  ["schema …", "A typed output", "schema ${1:Name} {\n  ${2:field}: ${3:String}\n}"],
+  ["use …", "Import from a file or package", 'use "${1:./shared.halo}" { ${2:Name} }'],
+];
 
 const KIND_ICONS: Record<string, CompletionItemKind> = {
   agent: CompletionItemKind.Class,

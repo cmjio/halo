@@ -1,8 +1,8 @@
 id = "halo"
 name = "Halo DSL"
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 2
-description = "Syntax highlighting for the Halo DSL (.halo files)"
+description = "Halo (.halo files): highlighting, errors as you type, completion, hover, go to definition, references, rename and the outline"
 repository = "https://github.com/cmjio/halo"
 authors = []
 themes = []
@@ -18,7 +18,10 @@ repository = "https://github.com/cmjio/halo"
 rev = "9d58d650c48e5ebaefcd29adef10196ee6eeb5dd"
 path = "editors/tree-sitter-halo"
 
-[language_servers]
+# The language server is `halo lsp` from the halo on your PATH (src/halo.rs starts it).
+[language_servers.halo]
+name = "Halo"
+languages = ["Halo"]
 
 [context_servers]
 

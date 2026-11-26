@@ -1,8 +1,24 @@
 # Zed extension: Halo
 
-Syntax highlighting, bracket matching, and indentation for `.halo` files in
-[Zed](https://zed.dev), from a tree-sitter grammar (`../tree-sitter-halo/grammar.js`,
-ported from `grammars/Halo.g4`). It has no language server.
+Halo in [Zed](https://zed.dev): syntax highlighting, bracket matching and indentation from a
+tree-sitter grammar (`../tree-sitter-halo/grammar.js`, ported from `grammars/Halo.g4`), and
+Halo's language server: errors as you type, completion (with templates for whole
+declarations), hover, go to definition, find references, rename, and the outline.
+
+The language server is `halo lsp`, from the `halo` on your PATH, so install Halo first
+(`curl -fsSL https://halolang.com/install.sh | sh`, 1.7.1 or later). To use another one, such
+as a checkout of this repository, set it in Zed's settings:
+
+```json
+"lsp": {
+  "halo": {
+    "binary": { "path": "/path/to/bun", "arguments": ["/path/to/halo/index.ts", "lsp", "--stdio"] }
+  }
+}
+```
+
+If nothing happens, run **zed: open log** and look for `halo`; **editor: restart language
+server** restarts it after you install or upgrade Halo.
 
 ## Install as a dev extension
 
@@ -11,9 +27,9 @@ ported from `grammars/Halo.g4`). It has no language server.
    repository root fails with "No extension manifest found for extension halo".
 3. Open any file under `examples/`; it should be highlighted as Halo.
 
-Zed compiles the grammar itself (it downloads a WASI SDK the first time). If
-installing fails, run **zed: open log** for the reason. Dev extensions also need
-Rust installed with rustup.
+Zed compiles the grammar and the extension (`src/halo.rs`, which starts the language server)
+itself; it downloads a WASI SDK the first time. Dev extensions need Rust installed with rustup.
+If installing fails, run **zed: open log** for the reason.
 
 Zed clones the grammar's repository into `editors/zed/grammars/` (ignored by
 git). That's why the grammar source lives outside this folder: a source folder
@@ -37,6 +53,7 @@ Then commit and push (Zed builds the grammar from a commit on GitHub, including 
 ## Files
 
 - `extension.toml`: the manifest
+- `Cargo.toml`, `src/halo.rs`: the extension code that starts `halo lsp`
 - `languages/halo/`: language config and the highlight, bracket, and indent queries
 - `../tree-sitter-halo/`: the tree-sitter grammar and its generated parser (`src/`)
 - `build.sh`: regenerates the parser
