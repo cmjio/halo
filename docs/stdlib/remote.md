@@ -28,6 +28,7 @@ Every kind has the same methods, so an agent or pipeline doesn't need to know wh
 - Commands run in a shell on the remote computer. Remote paths are relative to the home folder.
 - When stdout is JSON, it's also returned parsed, as `json`.
 - `upload` and `download` use local paths inside `root:` (default `.`); a path can't leave it.
+- `upload` won't send a credential file (`.env`, a private key like `id_ed25519` or `*.pem`, `.npmrc`, `.netrc`, `credentials.json`...) and `download` won't write one here, unless the declaration names it: `allowFiles: ["deploy/.env"]` (or, for a sandbox, `files:` names it exactly). A symlink to one counts as one. That way an agent that is talked into it can't copy your keys to a host.
 - `timeout_ms` is 120000 unless the call or the declaration sets it (`timeout_ms:` on the declaration is the default for every method). A file that takes longer fails with `TIMEOUT`.
 - A file over 50 MB can't be read or downloaded. The check is made as the file arrives, so a huge file isn't read into memory first.
 - In a pipeline, `{{placeholders}}` in `command` are shell-quoted, like in `Bash`: `Box.run(command: "grep {{term}} app.log")` is safe whatever `term` holds. Other arguments, like `path`, are filled in as written.

@@ -944,6 +944,24 @@ function insideFrom(rel: string, from: string): string | undefined {
   return rel === from ? "." : rel.startsWith(from + "/") ? rel.slice(from.length + 1) : undefined;
 }
 
+/**
+ * Refuse to copy a credential file (.env, a private key, .npmrc...) to or from the remote computer
+ * unless the declaration names it: allowFiles: ["deploy/.env"], or, for a sandbox, files: exactly.
+ * `asked` is the path as the call gave it, `rel` where it leads (through any symlink).
+ */
+function checkCredential(call: ToolCall, asked: unknown, rel: string, what: string): void {
+  if (!credentialFile(rel) && !(typeof asked === "string" && credentialFile(asked))) return;
+  const norm = (p: string) => posix.normalize(p.replace(/\\/g, "/")).replace(/^\.\//, "");
+  const allowed = stringList(call, "allowFiles") ?? [];
+  if (allowed.some((p) => norm(p) === norm(rel))) return;
+  const files = call.config("files") !== undefined ? fileList(call) : undefined;
+  if (files && call.config("from") !== undefined) {
+    const inner = insideFrom(rel, confine(call, workspaceRoot(call, call.config("root"), false), call.config("from")).rel);
+    if (inner !== undefined && files.includes(inner)) return;
+  }
+  throw new HaloError(`${call.tool.name}: ${rel} looks like a credential file (a key, .env or token file), so it isn't ${what} the remote computer unless the declaration names it: allowFiles: ["${rel}"]`, { code: "TOOL_ARGUMENT" });
+}
+
 /** Refuse a local path outside the sandbox's `files:` (when it has them). */
 function checkFiles(call: ToolCall, rel: string, what: string): void {
   const files = fileList(call);
@@ -1535,6 +1553,7 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
       const root = workspaceRoot(call, call.config("root"), false);
       const from = confine(call, root, named.from);
       checkFiles(call, from.rel, "upload from");
+      checkCredential(call, named.from, from.rel, "uploaded to");
       const to = remotePath(call, named.to ?? named.from, "to");
       const file = Bun.file(from.abs);
       if (!(await file.exists())) throw fail(call, `${from.rel} doesn't exist`, "TOOL_ARGUMENT");
@@ -1550,6 +1569,7 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
       const root = workspaceRoot(call, call.config("root"), true);
       const to = confine(call, root, named.to ?? posix.basename(from));
       checkFiles(call, to.rel, "download to");
+      checkCredential(call, named.to ?? posix.basename(from), to.rel, "downloaded from");
       const o = io();
       const bytes = await timed(m.read(from, call.signal, o), o.timeoutMs);
       refuseSecret(call, bytes, s.secrets, from, "downloaded");

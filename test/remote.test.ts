@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "../src/parser/index";
@@ -325,6 +325,23 @@ describe("Remote over SSH", () => {
     expect(readFileSync(join(tmp, "ssh-args"), "utf8")).toContain(`UserKnownHostsFile=${join(tmp, "known")}`);
     await ssh("run", { command: "true" }, { hostKey: ["SHA256:rqHBoqTqavuOg1MchxTFBTtPkCiMS3pyWA4UzaE4tn8"] });
     expect(readFileSync(join(tmp, "ssh-args"), "utf8")).toContain("KnownHostsCommand=/bin/sh -c");
+  });
+
+  test("credential files aren't uploaded or downloaded unless allowFiles: names them", async () => {
+    mkdirSync(join(local, "keys"), { recursive: true });
+    writeFileSync(join(local, ".env"), "OPENAI_API_KEY=sk-live");
+    writeFileSync(join(local, "keys/id_ed25519"), "PRIVATE");
+    symlinkSync(join(local, ".env"), join(local, "innocent.txt"));
+    for (const from of [".env", "keys/id_ed25519", "innocent.txt"]) {
+      await expect(ssh("upload", { from, to: "x" })).rejects.toThrow(/looks like a credential file.*allowFiles/);
+    }
+    expect(existsSync(join(home, "x"))).toBe(false);
+    expect(await ssh("upload", { from: ".env", to: "app/.env" }, { allowFiles: [".env"] })).toMatchObject({ to: "app/.env" });
+    expect(readFileSync(join(home, "app/.env"), "utf8")).toBe("OPENAI_API_KEY=sk-live");
+    // Nor written over here from the host.
+    await expect(ssh("download", { from: "app/.env", to: ".env" })).rejects.toThrow(/credential file/);
+    expect(readFileSync(join(local, ".env"), "utf8")).toBe("OPENAI_API_KEY=sk-live");
+    await expect(ssh("upload", { from: ".env.example", to: "x" })).rejects.toThrow(/doesn't exist/);
   });
 
   test("read takes timeout_ms:", async () => {

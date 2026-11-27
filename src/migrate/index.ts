@@ -452,6 +452,27 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    id: "remote-credential-files",
+    since: "1.12.0",
+    title: "Remote upload and download refuse credential files unless allowFiles: names them",
+    detail:
+      "An agent could be talked into Box.upload(from: \".env\") or a private key, sending it to the host or sandbox. Now upload refuses a credential file (.env, id_*, *.pem, *.key, .npmrc, .netrc, credentials.json...), or a symlink to one, and download won't write one here, unless the declaration names it: allowFiles: [\"deploy/.env\"] (for a sandbox, files: naming it exactly also works). Listed: Remote tools whose pipelines upload or download a path that looks like a credential file.",
+    find(project) {
+      const out: Finding[] = [];
+      const cred = /(?:^|[\/"])(?:\.env(?:\.[\w.-]+)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|[\w.-]+\.(?:pem|key|p12|pfx)|\.npmrc|\.netrc|\.pypirc|credentials(?:\.json)?)"/;
+      for (const file of project.files) {
+        const remotes = new Set(file.ast.tools.filter((t) => t.provider === "Remote" && !t.argList.some((a) => a.name === "allowFiles")).map((t) => t.name));
+        if (!remotes.size) continue;
+        const text = readFileSync(join(project.root, file.path), "utf8").split("\n");
+        text.forEach((line, i) => {
+          const m = /(\w+)\.(upload|download)\(/.exec(line);
+          if (m && remotes.has(m[1]!) && cred.test(line) && !/\.env\.(example|sample|template)/.test(line)) out.push({ file: file.path, line: i + 1, message: `${m[1]}.${m[2]} names a credential file: add allowFiles: [...] to ${m[1]}'s declaration if it should` });
+        });
+      }
+      return out;
+    },
+  },
+  {
     id: "bash-ssh-options",
     since: "1.12.0",
     title: "A Bash placeholder in an ssh option that runs a command, or in a remote path, is refused",
