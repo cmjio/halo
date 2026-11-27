@@ -55,10 +55,42 @@ export interface TokenRecord {
   revokeUrl?: string;
   /** Set when a refresh was refused (invalid_grant): the connection needs signing in again. */
   needsLogin?: string;
+  /**
+   * For an MCP server's discovered authorization (`auth: "discover"`): where its authorization
+   * server is, and the client Halo registered there. Not a secret; a registered client's secret is
+   * kept in `clientSecret`, with the other secrets.
+   */
+  discovery?: McpDiscovery;
+  /** A dynamically registered client's secret, when the authorization server issued one. */
+  clientSecret?: string;
+}
+
+/** What discovery found for an MCP server (RFC 9728, RFC 8414), and the client registered there (RFC 7591). */
+export interface McpDiscovery {
+  /** The MCP server's URL, normalized: what `resource=` names (RFC 8707). */
+  resource: string;
+  /** The protected resource metadata it came from. */
+  resourceMetadata: string;
+  issuer: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  registrationUrl?: string;
+  revokeUrl?: string;
+  /** The scopes to ask for: the declaration's, else the server's challenge, else its scopes_supported. */
+  scopes: string[];
+  /** The client id Halo registered (dynamic client registration), when the declaration gives none. */
+  clientId?: string;
+  /** The redirect URIs that client was registered with. */
+  redirectUris?: string[];
+  /** Whether the client was registered by Halo (so no person chose its publisher). */
+  dynamic?: boolean;
+  /** Whether a client secret was issued (kept with the secrets). */
+  hasSecret?: boolean;
+  discoveredAt: string;
 }
 
 /** A record without its secrets: what lists and plans show. */
-export type TokenInfo = Omit<TokenRecord, "accessToken" | "refreshToken" | "seed">;
+export type TokenInfo = Omit<TokenRecord, "accessToken" | "refreshToken" | "seed" | "clientSecret">;
 
 export interface TokenStore {
   readonly kind: "file" | "keychain";
@@ -98,7 +130,7 @@ export function storeId(key: StoreKey): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 40);
 }
 
-const SECRET_FIELDS = ["accessToken", "refreshToken", "seed"] as const;
+const SECRET_FIELDS = ["accessToken", "refreshToken", "seed", "clientSecret"] as const;
 const withoutSecrets = (r: TokenRecord): TokenInfo => {
   const out = { ...r } as Partial<TokenRecord>;
   for (const f of SECRET_FIELDS) delete out[f];
@@ -295,9 +327,9 @@ async function securityInput(commands: string): Promise<{ ok: boolean; err: stri
  * The tokens as one Keychain item. `security -i` reads 4095 bytes a line, so a pair too long for
  * one line keeps the refresh token only (the access token is fetched again when needed).
  */
-export function keychainLine(id: string, secrets: { a?: string; r?: string; s?: string }): string | undefined {
+export function keychainLine(id: string, secrets: { a?: string; r?: string; s?: string; c?: string }): string | undefined {
   const line = (v: object) => `add-generic-password -U -s ${q(KEYCHAIN_OAUTH_SERVICE)} -a ${q(id)} -l ${q("Halo OAuth connection")} -T "" -w ${q(JSON.stringify(v))}\n`;
-  for (const v of [secrets, { r: secrets.r, s: secrets.s }]) {
+  for (const v of [secrets, { r: secrets.r, s: secrets.s, c: secrets.c }]) {
     const l = line(v);
     if (Buffer.byteLength(l) < 4000 && !/[\u0000-\u0009\u000b-\u001f\u007f]/.test(l) && l.indexOf("\n") === l.length - 1) return l;
   }
@@ -316,8 +348,8 @@ export class KeychainTokenStore extends IndexedStore implements TokenStore {
     const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     if (code !== 0) return { ...r };
     try {
-      const s = JSON.parse(out.trim()) as { a?: string; r?: string; s?: string };
-      return { ...r, ...(s.a ? { accessToken: s.a } : { expiresAt: undefined }), ...(s.r ? { refreshToken: s.r } : {}), ...(s.s ? { seed: s.s } : {}) };
+      const s = JSON.parse(out.trim()) as { a?: string; r?: string; s?: string; c?: string };
+      return { ...r, ...(s.a ? { accessToken: s.a } : { expiresAt: undefined }), ...(s.r ? { refreshToken: s.r } : {}), ...(s.s ? { seed: s.s } : {}), ...(s.c ? { clientSecret: s.c } : {}) };
     } catch {
       return { ...r };
     }
@@ -325,7 +357,7 @@ export class KeychainTokenStore extends IndexedStore implements TokenStore {
 
   async put(key: StoreKey, record: TokenRecord): Promise<void> {
     const id = storeId(key);
-    const line = keychainLine(id, { a: record.accessToken, r: record.refreshToken, s: record.seed });
+    const line = keychainLine(id, { a: record.accessToken, r: record.refreshToken, s: record.seed, c: record.clientSecret });
     if (!line) throw new Error("This token is too long to keep in the Keychain; set HALO_CREDENTIALS_STORE=file to keep it in a 0600 file instead");
     const r = await securityInput(line);
     if (!r.ok) throw new Error(`The Keychain refused the token: ${r.err}`);

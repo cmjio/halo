@@ -279,10 +279,10 @@ describe("MCP settings", () => {
   });
 
   test("an unknown setting is an error, with the name it was close to", () => {
-    const all = "command, url, apiKey, headers, env, cwd, timeout_ms, max_ms, wallet_safe";
+    const all = "command, url, apiKey, headers, env, cwd, timeout_ms, max_ms, wallet_safe, auth, clientId, clientSecret, scopes, as";
     expect(messages(`tool T : MCP("npx -y server", timeout: 5, oauth: true, apikey: Env.K)\n${P}`, "error")).toEqual([
       `Tool "T": MCP has no setting "timeout" (it has ${all})`,
-      `Tool "T": MCP has no setting "oauth" (it has ${all})`,
+      `Tool "T": MCP has no setting "oauth"; did you mean auth?`,
       'Tool "T": MCP has no setting "apikey"; did you mean apiKey?',
     ]);
     expect(messages(`tool T : MCP("npx -y server", timeot_ms: 5)\n${P}`, "error")).toEqual(['Tool "T": MCP has no setting "timeot_ms"; did you mean timeout_ms?']);

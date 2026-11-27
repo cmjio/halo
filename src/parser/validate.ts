@@ -49,7 +49,7 @@ import { splitToolPath } from "../linker/names.js";
 import { WALLET_PATTERN, walletItemProblems, walletNames, walletUnsafeTool } from "../runtime/wallet-rules.js";
 import { reparseChecks } from "../runtime/shell.js";
 import { HOSTED_PROVIDER } from "../linker/hosted.js";
-import { endpointProblem, OAUTH_EMAIL_SERVICES, OAUTH_GRANTS, OAUTH_PRESET_NAMES, OAUTH_PRESETS, OAUTH_SETTINGS, OAUTH_TOOL_PROVIDERS } from "../runtime/oauth-presets.js";
+import { endpointProblem, MCP_DISCOVER, OAUTH_AS, OAUTH_EMAIL_SERVICES, OAUTH_GRANTS, OAUTH_PRESET_NAMES, OAUTH_PRESETS, OAUTH_SETTINGS, OAUTH_TOOL_PROVIDERS } from "../runtime/oauth-presets.js";
 
 /** The calls a stage makes (a fan-out's, an each's, every branch arm's). */
 function stageCalls(st: PipelineStage): CallStage[] {
@@ -87,6 +87,8 @@ export interface ValidateOptions {
   canHandleModel?: (modelId: string) => boolean;
   /** Extra providers (installed packages' http providers with "type": "oauth") whose tools take `auth:`. */
   oauthProviders?: string[];
+  /** Pipelines halo.json's schedules, webhooks or watches start: they run as the service, so they can't use an `as: "invoker"` connection. */
+  serviceStarted?: string[];
 }
 
 export function validate(ast: ParseResult, options: ValidateOptions = {}): Diagnostic[] {
@@ -161,6 +163,7 @@ class Validator {
     for (const s of this.ast.pipelines) this.checkPipeline(s);
     this.checkPrivate();
     this.checkWallet();
+    this.checkInvokerStarts();
     const seen = new Set<string>();
     this.diags = this.diags.filter((d) => {
       const key = `${d.severity}|${d.file ?? ""}|${d.line}|${d.message}`;
@@ -427,6 +430,67 @@ class Validator {
     const secret = arg("clientSecret");
     if (secret?.kind === "string" && !/^Env\.\w+$/.test(secret.value)) this.add("warning", `${where}: clientSecret is written in the file; read it from the environment (clientSecret: Env.${t.name.toUpperCase()}_CLIENT_SECRET)`, t.loc);
     if (arg("tenant") && provider !== "microsoft") this.add("warning", `${where}: tenant: is only for provider: "microsoft"`, t.loc);
+    this.checkAs(t, where);
+  }
+
+  /** `as:` is "service" (one shared token, the default) or "invoker" (the token of the person who started the run). */
+  private checkAs(t: ParseResult["tools"][number], where: string) {
+    const v = t.argList.find((a) => a.name === "as")?.value;
+    if (!v) return;
+    if (v.kind !== "string" || !includes(OAUTH_AS, v.value)) this.add("error", `${where}: as: is "service" (one token every run shares, the default) or "invoker" (the token of the person who started the run)`, t.loc, "as");
+  }
+
+  /** The invoker connection a tool acts through (`as: "invoker"`), if any. */
+  private invokerConnection(toolName: string): string | undefined {
+    const t = this.tools.get(toolName);
+    if (!t) return undefined;
+    const asOf = (d: ParseResult["tools"][number]) => ((v) => (v?.kind === "string" ? v.value : undefined))(d.argList.find((a) => a.name === "as")?.value);
+    if (t.provider === "OAuth") return asOf(t) === "invoker" ? t.name : undefined;
+    const v = t.argList.find((a) => a.name === "auth")?.value;
+    if (!v) return undefined;
+    if (t.provider === "MCP" && v.kind === "string" && v.value === MCP_DISCOVER) return asOf(t) === "invoker" ? t.name : undefined;
+    const name = v.kind === "ref" ? v.path.join(".") : v.kind === "string" ? v.value : undefined;
+    const target = name ? this.tools.get(name) : undefined;
+    return target?.provider === "OAuth" && asOf(target) === "invoker" ? target.name : undefined;
+  }
+
+  /**
+   * A pipeline that schedules, webhooks or watches start (halo.json) runs as the service, with no
+   * person to act as: an invoker connection it reaches (directly, through an agent or a called
+   * pipeline) can't be used.
+   */
+  private checkInvokerStarts() {
+    for (const name of this.options.serviceStarted ?? []) {
+      const p = this.pipelines.get(name);
+      if (!p) continue;
+      const tools = new Set<string>();
+      const seen = new Set<string>();
+      const stack = [p];
+      while (stack.length) {
+        const q = stack.pop()!;
+        if (seen.has(q.name)) continue;
+        seen.add(q.name);
+        for (const st of q.pipeline) {
+          for (const c of stageCalls(st)) {
+            const callee = this.pipelines.get(c.callee);
+            if (callee) stack.push(callee);
+            for (const e of this.agents.get(c.callee)?.equips ?? []) tools.add(e);
+            tools.add(c.callee);
+          }
+          if (st.kind === "interrupt") {
+            const v = st.argList.find((a) => a.name === "connect")?.value;
+            if (v?.kind === "ref") tools.add(v.path.join("."));
+          }
+        }
+      }
+      const warned = new Set<string>();
+      for (const t of tools) {
+        const conn = this.invokerConnection(t);
+        if (!conn || warned.has(conn)) continue;
+        warned.add(conn);
+        this.add("warning", `Pipeline "${name}" is started by a schedule, webhook or watch (halo.json), which runs it as the service, with no person to act as; but ${t === conn ? conn : `${t} uses ${conn}, which`} is as: "invoker". Give it a service connection, or start it from the API or Studio as a user`, p.loc);
+      }
+    }
   }
 
   /** A tool's `auth:` names an OAuth declaration, isn't Env, isn't with apiKey:, and is on a provider that can use it. */
@@ -441,9 +505,17 @@ class Validator {
     if (v.kind === "ref" && v.path[0] === "Env") return void this.add("error", `${where}: auth: names an OAuth declaration, not Env.${v.path.slice(1).join(".")} (an environment value can't hold a connection)`, t.loc);
     const name = v.kind === "ref" ? v.path.join(".") : v.kind === "string" ? v.value : undefined;
     const target = name ? this.tools.get(name) : undefined;
-    if (!name || !target) {
+    const discover = t.provider === "MCP" && v.kind === "string" && name === MCP_DISCOVER;
+    if (t.provider === "MCP") {
+      const first = t.argList.find((x) => !x.name)?.value;
+      const url = t.argList.find((x) => x.name === "url") ?? (first?.kind === "string" && /^https?:\/\//i.test(first.value.trim()) ? first : undefined);
+      if (!url) this.add("error", `${where}: auth: is for an MCP server reached by url:; a server run as a command signs in by itself`, t.loc);
+    }
+    if (discover) {
+      // Found from the server's own 401 when someone signs in.
+    } else if (!name || !target) {
       const near = name ? didYouMean(name, [...this.tools.values()].filter((x) => x.provider === "OAuth").map((x) => x.name)) : undefined;
-      this.add("error", `${where}: auth: ${name ?? "?"} is not an OAuth declaration${near ? `; did you mean ${near}?` : ` (declare one: tool ${name ?? "Google"} : OAuth(provider: ..., clientId: ...))`}`, t.loc, name);
+      this.add("error", `${where}: auth: ${name ?? "?"} is not an OAuth declaration${near ? `; did you mean ${near}?` : ` (declare one: tool ${name ?? "Google"} : OAuth(provider: ..., clientId: ...))`}${t.provider === "MCP" && v.kind === "string" ? `; or auth: "discover" to find the server's own sign-in` : ""}`, t.loc, name);
     } else if (target.provider !== "OAuth") {
       this.add("error", `${where}: auth: ${name} is a ${target.provider} tool, not an OAuth declaration`, t.loc, name);
     }
@@ -462,8 +534,21 @@ class Validator {
   }
 
   private checkMcp(t: ParseResult["tools"][number]) {
-    const KNOWN = ["command", "url", "apiKey", "headers", "env", "cwd", "timeout_ms", "max_ms", "wallet_safe"];
+    const KNOWN = ["command", "url", "apiKey", "headers", "env", "cwd", "timeout_ms", "max_ms", "wallet_safe", "auth", "clientId", "clientSecret", "scopes", "as"];
     const positional = t.argList.filter((a) => !a.name);
+    // clientId:, clientSecret:, scopes: and as: describe a discovered sign-in; a declared connection has its own.
+    const authV = t.argList.find((a) => a.name === "auth")?.value;
+    const discover = authV?.kind === "string" && authV.value === MCP_DISCOVER;
+    for (const k of ["clientId", "clientSecret", "scopes", "as"]) {
+      if (!t.argList.some((a) => a.name === k) || discover) continue;
+      this.add("error", `Tool "${t.name}": MCP's ${k}: is for auth: "discover"${authV ? ` (with auth: a declared connection, set ${k}: on that OAuth declaration)` : ""}`, t.loc, k);
+    }
+    if (discover) {
+      const secret = t.argList.find((a) => a.name === "clientSecret")?.value;
+      if (secret?.kind === "string" && !/^Env\.\w+$/.test(secret.value)) this.add("warning", `Tool "${t.name}": clientSecret is written in the file; read it from the environment (clientSecret: Env.${t.name.toUpperCase()}_CLIENT_SECRET)`, t.loc);
+      if (t.argList.some((a) => a.name === "clientSecret") && !t.argList.some((a) => a.name === "clientId")) this.add("error", `Tool "${t.name}": clientSecret: needs clientId: (without one, Halo registers a public client of its own)`, t.loc);
+      this.checkAs(t, `Tool "${t.name}"`);
+    }
     if (positional.length > 1) this.add("error", `Tool "${t.name}": MCP takes one server, a command or a URL, as its first argument; the others would be ignored (write the command as one string, e.g. MCP("npx -y @modelcontextprotocol/server-github"))`, t.loc);
     for (const a of t.argList) {
       if (!a.name || KNOWN.includes(a.name)) continue;

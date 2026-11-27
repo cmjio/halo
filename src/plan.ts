@@ -89,6 +89,8 @@ export interface AuthStatus {
   scopes?: string[];
   /** Why it needs signing in again (a revoked grant). */
   needsLogin?: string;
+  /** For an MCP tool with `auth: "discover"`: the host of the authorization server discovered for it. */
+  server?: string;
 }
 
 /** An OAuth connection the pipeline's tools use. */
@@ -104,6 +106,8 @@ export interface PlanAuth {
   refreshable?: boolean;
   /** Granted scopes beyond the declared ones. */
   wider?: string[];
+  /** An MCP tool with `auth: "discover"`: its authorization server's host once discovered, "" until then. */
+  discovered?: string;
 }
 
 export interface Plan {
@@ -191,7 +195,14 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     let connection: string;
     let grant = "authorization_code";
     let scopes: string[] = [];
-    if (named !== undefined) {
+    let discovered: string | undefined;
+    if (named === "discover" && tool.provider === "MCP" && written?.kind === "string") {
+      // The server's own sign-in, found from its 401: the tool is its own connection.
+      connection = tool.name;
+      const s = literalArg(tool, "scopes");
+      scopes = Array.isArray(s) ? s.map(String) : typeof s === "string" ? s.split(/[\s,]+/).filter(Boolean) : [];
+      discovered = options.authStatus?.(connection)?.server ?? "";
+    } else if (named !== undefined) {
       const decl = tools.get(named);
       if (decl?.provider !== "OAuth") return undefined;
       connection = named;
@@ -223,6 +234,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         ...(st?.expiresAt ? { expiresAt: st.expiresAt } : {}),
         ...(st?.refreshable !== undefined ? { refreshable: st.refreshable } : {}),
         ...(wider?.length ? { wider } : {}),
+        ...(discovered !== undefined ? { discovered } : {}),
       };
       auths.set(connection, entry);
     }
@@ -232,7 +244,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   const authNote = (toolName: string): string[] => {
     const a = authOf(toolName);
     if (!a) return [];
-    return [`auth: ${a.connection} (oauth, ${a.grant})${a.scopes.length ? ` [${a.scopes.join(", ")}]` : ""}${a.status === "unknown" ? "" : ` · ${authState(a, options.now ?? Date.now())}`}`];
+    return [`auth: ${a.connection} (${authKind(a)})${a.scopes.length ? ` [${a.scopes.join(", ")}]` : ""}${a.status === "unknown" ? "" : ` · ${authState(a, options.now ?? Date.now())}`}`];
   };
 
   /** Would a policy hide or deny this call; would it need approval? */
@@ -425,6 +437,12 @@ function relative(ms: number, now: number): string {
   return d >= 0 ? `in ${text}` : `${text} ago`;
 }
 
+/** How a connection signs in: `oauth, authorization_code`, or for an MCP server's own, `oauth, discovered: auth.example.com`. */
+export function authKind(a: PlanAuth): string {
+  if (a.discovered === undefined) return `oauth, ${a.grant}`;
+  return `oauth, ${a.discovered ? `discovered: ${a.discovered}` : "discovered at sign-in"}`;
+}
+
 /** A connection's state in words: `connected as ada@example.com, token expires in 41 min` or `not connected: halo auth login Google`. */
 export function authState(a: PlanAuth, now = Date.now()): string {
   switch (a.status) {
@@ -467,7 +485,7 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
   if (unknown.length) lines.push(`${color.bold("Effects unknown:")} ${unknown.join(", ")}`);
   for (const a of p.auth ?? []) {
     const state = authState(a);
-    lines.push(`${color.bold("Acts as:")} ${a.tools.join(", ")} through ${a.connection} (oauth, ${a.grant})${a.scopes.length ? ` [${a.scopes.join(", ")}]` : ""}${state ? `: ${a.status === "connected" || a.status === "service" ? state : color.yellow(state)}` : ""}`);
+    lines.push(`${color.bold("Acts as:")} ${a.tools.join(", ")} through ${a.connection} (${authKind(a)})${a.scopes.length ? ` [${a.scopes.join(", ")}]` : ""}${state ? `: ${a.status === "connected" || a.status === "service" ? state : color.yellow(state)}` : ""}`);
     if (a.wider?.length) lines.push(color.yellow(`  warning: ${a.connection} was granted more than it declares: ${a.wider.join(", ")}`));
   }
   const capped = p.cappedAt !== undefined && (p.maxCost === undefined || p.cappedAt < p.maxCost) ? `, but MaxSpend stops the run at $${p.cappedAt.toFixed(2)}` : "";

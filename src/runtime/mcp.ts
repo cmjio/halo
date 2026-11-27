@@ -24,6 +24,9 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { HaloError, TimeoutError } from "./errors.js";
 import { inlineFiles } from "./media.js";
+import { bearerChallenge, connectionId } from "./mcp-auth.js";
+import { AuthRequired, authName, defaultBroker, type OAuthConnection, type TokenBroker } from "./oauth.js";
+import type { ToolDeclaration } from "../parser/types.js";
 import pkg from "../../package.json" with { type: "json" };
 import type { JsonSchema, ProviderInfo, ToolCall, ToolEffect, ToolInfoContext, ToolMethod, ToolProvider, ToolServices } from "./tools.js";
 
@@ -291,7 +294,8 @@ class HttpTransport implements Transport {
   onNotification?: (msg: JsonRpcMessage) => void;
   readonly alive = true;
 
-  constructor(private label: string, private url: string, private headers: Record<string, string>, private fetchFn: typeof fetch) {}
+  /** `connection`: the OAuth connection that signs the requests (fetchFn is the broker's), if any. */
+  constructor(private label: string, private url: string, private headers: Record<string, string>, private fetchFn: typeof fetch, private connection?: string) {}
 
   private async post(msg: JsonRpcMessage, signal?: AbortSignal): Promise<Response> {
     const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...this.headers };
@@ -310,7 +314,19 @@ class HttpTransport implements Transport {
       this.sessionId = undefined;
       throw new HaloError(`${this.label}: MCP session expired`, { code: "MCP_SESSION_EXPIRED", retryable: true });
     }
-    const auth = res.status === 401 || res.status === 403 ? " (check the tool's apiKey:)" : "";
+    const challenge = bearerChallenge(res.headers.get("www-authenticate"));
+    // A token without the scope a tool needs: a person signs in again, approving more (Halo never widens on its own).
+    if (res.status === 403 && this.connection && challenge?.error === "insufficient_scope") {
+      throw new AuthRequired(this.connection, `${this.label}'s server wants more access than it was granted${challenge.scope ? ` (scope: ${challenge.scope.slice(0, 200)})` : ""}; add it to scopes: and sign in again`);
+    }
+    const auth =
+      res.status === 401 && !this.connection && challenge
+        ? ` (this server signs in with OAuth: add auth: "discover" to the tool${challenge.resource_metadata ? "" : " (or auth: <an OAuth declaration>)"} and run halo auth login ${this.label})`
+        : res.status === 401 || res.status === 403
+          ? this.connection
+            ? ` (it refused ${this.connection}'s token)`
+            : " (check the tool's apiKey:)"
+          : "";
     throw new HaloError(`${this.label}: MCP server answered ${res.status}${auth}${text ? `: ${text}` : ""}`, { code: "TOOL_FAILED", retryable: res.status === 429 || res.status >= 500 });
   }
 
@@ -406,11 +422,16 @@ export class McpClient {
     private fetchFn: typeof fetch = fetch,
     private timeoutMs = DEFAULT_TIMEOUT_MS,
     private maxMs = DEFAULT_MAX_MS,
+    /** The OAuth connection whose broker signs this client's requests (fetchFn), if any. */
+    readonly connection?: string,
   ) {}
+
+  /** Where the tokens a signed client sends are reported, for the runs' secret masking. */
+  readonly secretSinks = new Set<(name: string, value: string) => void>();
 
   private open(): Transport {
     const t = this.target;
-    return t.kind === "stdio" ? new StdioTransport(this.label, t.argv, t.env, t.cwd) : new HttpTransport(this.label, t.url, t.headers, this.fetchFn);
+    return t.kind === "stdio" ? new StdioTransport(this.label, t.argv, t.env, t.cwd) : new HttpTransport(this.label, t.url, t.headers, this.fetchFn, this.connection);
   }
 
   private connect(signal: AbortSignal): Promise<Transport> {
@@ -612,8 +633,19 @@ function withoutBunEnvFile(argv: string[]): string[] {
   return [exe, "--no-env-file", ...argv.slice(1)];
 }
 
-/** The shared client for a declaration's config (a new one when the config differs). */
-export function mcpClient(label: string, config: Config, fetchFn: typeof fetch = fetch, environ?: Record<string, string | undefined>): McpClient {
+/** An OAuth connection that signs an HTTP MCP client's requests, through the broker. */
+export interface McpAuth {
+  conn: OAuthConnection;
+  broker: TokenBroker;
+}
+
+/**
+ * The shared client for a declaration's config (a new one when the config differs). With `auth`,
+ * every request goes through the broker: the token is added for the server's origin only, a 401
+ * refreshes and retries once, and a redirect to another origin is refused. One client per account,
+ * so two people's runs never share a session.
+ */
+export function mcpClient(label: string, config: Config, fetchFn: typeof fetch = fetch, environ?: Record<string, string | undefined>, auth?: McpAuth): McpClient {
   const target = mcpTarget(label, config, environ);
   const ms = (name: string, fallback: number) => {
     const n = Number(config(name) ?? fallback);
@@ -621,13 +653,48 @@ export function mcpClient(label: string, config: Config, fetchFn: typeof fetch =
   };
   const timeoutMs = ms("timeout_ms", DEFAULT_TIMEOUT_MS);
   const maxMs = Math.max(timeoutMs, ms("max_ms", DEFAULT_MAX_MS));
+  const signer = auth && target.kind === "http" ? auth : undefined;
+  const c = signer?.conn;
   // Hash the config, so keys and tokens don't sit in the map's keys as plain text.
-  const key = String(Bun.hash(JSON.stringify([target, timeoutMs, maxMs])));
+  const key = String(Bun.hash(JSON.stringify([target, timeoutMs, maxMs, c ? [connectionId(c), c.tokenUrl, c.clientSecret ?? "", c.resource ?? "", c.scopes] : null])));
   let client = clients.get(key);
   if (!client) {
-    client = new McpClient(label, target, fetchFn, timeoutMs, maxMs);
+    if (signer && target.kind === "http") {
+      const origin = new URL(target.url).origin;
+      let made: McpClient | undefined;
+      const signed = ((url: string | URL | Request, init: RequestInit = {}) =>
+        signer.broker.fetch(signer.conn, String(url instanceof Request ? url.url : url), init, {
+          origins: [origin],
+          fetch: fetchFn,
+          signal: init.signal ?? undefined,
+          onSecret: (n, v) => {
+            for (const s of made?.secretSinks ?? []) s(n, v);
+          },
+          crossOriginRedirects: "refuse",
+        })) as typeof fetch;
+      client = made = new McpClient(label, target, signed, timeoutMs, maxMs, signer.conn.name);
+    } else {
+      client = new McpClient(label, target, fetchFn, timeoutMs, maxMs);
+    }
     clients.set(key, client);
   }
+  return client;
+}
+
+/**
+ * The client for a tool call (or a listing of its methods), signed with the tool's `auth:` when it
+ * has one: a declared OAuth connection, or (`auth: "discover"`) the one stored for its server.
+ */
+async function clientFor(tool: ToolDeclaration, config: Config, services: ToolServices): Promise<McpClient> {
+  const name = authName(tool);
+  if (name === undefined) return mcpClient(tool.name, config, services.fetch, services.env);
+  const target = mcpTarget(tool.name, config, services.env);
+  if (target.kind !== "http") throw new HaloError(`Tool "${tool.name}": auth: is for an MCP server reached by url:; a command's server signs in by itself`, { code: "TOOL_CONFIG" });
+  const oauth = services.oauth;
+  const conn = name === "discover" ? await oauth?.discovered?.(tool, target.url) : oauth?.connection(tool);
+  if (!conn) throw new HaloError(`Tool "${tool.name}": auth: needs a runtime that signs requests (this one has no OAuth broker)`, { code: "TOOL_CONFIG" });
+  const client = mcpClient(tool.name, config, services.fetch, services.env, { conn, broker: oauth?.broker ?? defaultBroker() });
+  if (oauth?.secret) client.secretSinks.add(oauth.secret);
   return client;
 }
 
@@ -716,7 +783,7 @@ function toolArguments(call: ToolCall, tool: McpToolInfo | undefined): Record<st
 }
 
 export const mcpProvider: ToolProvider = async (call, services) => {
-  const client = mcpClient(call.tool.name, call.config, services.fetch, services.env);
+  const client = await clientFor(call.tool, call.config, services);
   const signal = call.signal;
   switch (call.method) {
     case "list_tools":
@@ -752,7 +819,7 @@ export const mcpProvider: ToolProvider = async (call, services) => {
 export const MCP_INFO: ProviderInfo = {
   description: "A Model Context Protocol server's tools, over stdio (a command) or Streamable HTTP (url:).",
   methods: async (ctx: ToolInfoContext, services: ToolServices): Promise<ToolMethod[]> => {
-    const client = mcpClient(ctx.tool.name, ctx.config, services.fetch, services.env);
+    const client = await clientFor(ctx.tool, ctx.config, services);
     // A server tool named like one of Halo's own methods can't be called (Halo's wins), so it isn't offered.
     const methods = (await client.listTools(ctx.signal)).filter((t) => !BUILTIN_METHODS.has(t.name)).map(mcpToolMethod);
     // Resources are offered to agents only when the server has some.

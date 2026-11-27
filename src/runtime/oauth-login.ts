@@ -25,6 +25,8 @@ export function startLoopback(opts: { timeoutMs?: number } = {}): Loopback {
   const path = `/callback/${randomBytes(12).toString("base64url")}`;
   let settle!: { ok: (p: URLSearchParams) => void; no: (e: Error) => void };
   const result = new Promise<URLSearchParams>((ok, no) => (settle = { ok, no }));
+  // Closed before anyone waited (a sign-in that failed before the browser opened): not an unhandled rejection.
+  result.catch(() => {});
   let done = false;
   const finish = () => {
     done = true;

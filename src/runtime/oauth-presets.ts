@@ -13,7 +13,10 @@ export const OAUTH_GRANTS = ["authorization_code", "client_credentials", "device
 export type OAuthGrant = (typeof OAUTH_GRANTS)[number];
 
 /** The settings an `OAuth(...)` declaration takes. */
-export const OAUTH_SETTINGS = ["provider", "clientId", "clientSecret", "scopes", "grant", "authorizeUrl", "tokenUrl", "deviceUrl", "revokeUrl", "issuer", "tenant", "audience", "resource"] as const;
+export const OAUTH_SETTINGS = ["provider", "clientId", "clientSecret", "scopes", "grant", "authorizeUrl", "tokenUrl", "deviceUrl", "revokeUrl", "issuer", "tenant", "audience", "resource", "as"] as const;
+
+/** Whose tokens a connection uses: one shared token ("service", the default), or the token of the person who started the run ("invoker"). */
+export const OAUTH_AS = ["service", "invoker"] as const;
 
 export interface OAuthEndpoints {
   authorizeUrl?: string;
@@ -59,7 +62,10 @@ export const OAUTH_PRESET_NAMES = Object.keys(OAUTH_PRESETS);
  * The tool providers whose `auth:` takes an OAuth connection. A package's http provider takes one
  * too; the validator learns those from the installed packages.
  */
-export const OAUTH_TOOL_PROVIDERS = ["REST", "GET", "POST", "Slack", "GitHub", "Linear", "Figma", "Email"] as const;
+export const OAUTH_TOOL_PROVIDERS = ["REST", "GET", "POST", "Slack", "GitHub", "Linear", "Figma", "Email", "MCP"] as const;
+
+/** `auth: "discover"` on an HTTP MCP server: find its authorization server from its 401 (RFC 9728, 8414, 7591). */
+export const MCP_DISCOVER = "discover";
 
 /** The email services that sign in with OAuth (the others take an API key or a password). */
 export const OAUTH_EMAIL_SERVICES = ["gmail", "outlook"] as const;

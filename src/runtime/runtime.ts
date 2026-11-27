@@ -50,7 +50,8 @@ import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
 import { costAt, missingPriceMessage, priceOf, type Prices } from "./prices.js";
 import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
-import { closeMcpClients } from "./mcp.js";
+import { closeMcpClients, mcpTarget } from "./mcp.js";
+import { discoveredConnection, type DiscoverSettings } from "./mcp-auth.js";
 import { closeChromeSessions } from "./providers/chrome.js";
 import { closeRemoteSessions, endRemoteBranches, seedRemoteSessions, snapshotRemoteSessions, suspendRemoteSessions } from "./providers/remote.js";
 import { closeKvDatabases, closeSqliteDatabases } from "./providers/index.js";
@@ -2954,7 +2955,7 @@ export class HaloRuntime {
         broker: this.broker,
         project: this.projectRoot,
         connection: (t) => this.connectionFor(t, ctx),
-        // A token is masked wherever the run's output goes, like a key read from Env.
+        discovered: (t, url) => this.discoveredFor(t, url, ctx),        // A token is masked wherever the run's output goes, like a key read from Env.
         secret: (name, value) => this.envSecrets.add(name, value),
       },
       progress: (p) => {
@@ -2995,18 +2996,77 @@ export class HaloRuntime {
    */
   private connectionFor(tool: ToolDeclaration, ctx: ExecutionContext): OAuthConnection | undefined {
     const name = authName(tool);
-    if (name === undefined) return undefined;
+    // An MCP server's discovered authorization is read from the store (ToolAuth.discovered).
+    if (name === undefined || (name === "discover" && tool.provider === "MCP")) return undefined;
     return this.oauthConnection(name, ctx, tool.name);
+  }
+
+  /** The connection stored for an MCP tool with `auth: "discover"`, for the run's owner. */
+  private discoveredFor(tool: ToolDeclaration, url: string, ctx: ExecutionContext): Promise<OAuthConnection> {
+    const target = this.discoverSettings(tool, ctx);
+    return discoveredConnection(this.broker.store, { name: this.displayName(tool.name), url, project: this.projectRoot, user: target.user, settings: target.settings });
+  }
+
+  /** A discovered MCP tool's own settings (clientId:, clientSecret:, scopes:) and whose tokens it uses. */
+  private discoverSettings(tool: ToolDeclaration, ctx: ExecutionContext): { settings: DiscoverSettings; user: string } {
+    const { config } = this.toolConfig(tool, ctx);
+    const s = (k: string) => (typeof config(k) === "string" && config(k) ? (config(k) as string) : undefined);
+    const raw = config("scopes");
+    const scopes = Array.isArray(raw) ? raw.map(String) : typeof raw === "string" && raw ? raw.split(/[\s,]+/).filter(Boolean) : undefined;
+    const settings: DiscoverSettings = { ...(s("clientId") ? { clientId: s("clientId") } : {}), ...(s("clientSecret") ? { clientSecret: s("clientSecret") } : {}), ...(scopes?.length ? { scopes } : {}) };
+    return { settings, user: this.oauthUser(s("as"), this.ownerOf(ctx), this.displayName(tool.name)) };
+  }
+
+  /** Who started the run a context belongs to (the top-level run's owner). */
+  private ownerOf(ctx: ExecutionContext): string | undefined {
+    let c = ctx;
+    while (c.parent) c = c.parent;
+    return c.meta.owner;
+  }
+
+  /**
+   * Whose tokens a connection uses: "local" (one shared token) for `as: "service"`, the default;
+   * for `as: "invoker"`, the user who started the run ("local" for a run started on this machine,
+   * outside `halo serve`). A run a schedule, webhook, watch, the operator's token or a package's
+   * consumer started has no person to act as, so it can't use an invoker connection.
+   */
+  private oauthUser(as: string | undefined, owner: string | undefined, connection: string): string {
+    if (as !== "invoker") return "local";
+    if (owner === undefined) return "local";
+    if (owner.startsWith("user:")) return owner.slice("user:".length);
+    const who = owner === "service" ? "a schedule, webhook or watch" : owner === "operator" ? "the server's own token, not a person" : owner.startsWith("consumer:") ? `a package consumer (${owner.slice("consumer:".length)})` : owner;
+    throw new HaloError(`${connection} acts as the person who started the run (as: "invoker"), but this run was started by ${who}. Use a service connection (as: "service") here, or start the run as a user`, { code: "AUTH_INVOKER" });
   }
 
   /**
    * The OAuth connection a declaration of the loaded program describes, by name, with its Env
-   * settings read now (for `halo serve`'s /connect, and anything else that signs a person in).
+   * settings read now (for `halo serve`'s /connect, and anything else that signs a person in), for
+   * a run that `owner` started (whose user an invoker connection's tokens are kept for).
    * Throws when there is no such OAuth declaration.
    */
-  connection(name: string): OAuthConnection {
+  connection(name: string, owner?: string): OAuthConnection {
+    return this.oauthConnection(name, this.ownedContext(owner));
+  }
+
+  /**
+   * An MCP tool with `auth: "discover"`, by name: its server's URL, its own settings, and whose
+   * tokens a run `owner` started uses. Undefined for anything else.
+   */
+  discoverTarget(name: string, owner?: string): { url: string; settings: DiscoverSettings; user: string; project: string } | undefined {
+    const decl = this.tools.get(name);
+    if (!decl || decl.provider !== "MCP" || authName(decl) !== "discover") return undefined;
+    const ctx = this.ownedContext(owner);
+    const { config } = this.toolConfig(decl, ctx);
+    const target = mcpTarget(decl.name, config, this.env, this.projectRoot);
+    if (target.kind !== "http") return undefined;
+    return { url: target.url, project: this.projectRoot, ...this.discoverSettings(decl, ctx) };
+  }
+
+  private ownedContext(owner?: string): ExecutionContext {
     const pipeline = { name: "", params: [], pipeline: [], directives: [] } as unknown as PipelineDeclaration;
-    return this.oauthConnection(name, this.newContext(pipeline, {}, 0));
+    const ctx = this.newContext(pipeline, {}, 0);
+    if (owner) ctx.meta.owner = owner;
+    return ctx;
   }
 
   /** The token broker this runtime's tools use. */
@@ -3014,14 +3074,17 @@ export class HaloRuntime {
     return this.broker;
   }
 
-  /** The connection an `OAuth(...)` declaration describes, by its name. */
+  /** The connection an `OAuth(...)` declaration describes, by its name, with the user whose tokens it uses. */
   private oauthConnection(name: string, ctx: ExecutionContext, user?: string): OAuthConnection {
     const decl = this.tools.get(name);
     if (!decl || decl.provider !== "OAuth") {
       throw new HaloError(`${user ? `Tool "${this.displayName(user)}": auth: ` : ""}${this.displayName(name)} is not an OAuth declaration (declare it with tool ${this.displayName(name)} : OAuth(provider: ..., clientId: ...))`, { code: "TOOL_CONFIG" });
     }
     const { config } = this.toolConfig(decl, ctx);
-    return connectionFrom(this.displayName(name), (k) => config(k), this.projectRoot);
+    const conn = connectionFrom(this.displayName(name), (k) => config(k), this.projectRoot);
+    const as = config("as");
+    conn.user = this.oauthUser(typeof as === "string" ? as : undefined, this.ownerOf(ctx), conn.name);
+    return conn;
   }
 
   /** A tool declaration's own args, resolved when read (so an unused key is never needed). */

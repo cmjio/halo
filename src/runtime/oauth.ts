@@ -507,7 +507,7 @@ export class TokenBroker {
    * hand: with the token to the same origins, without it anywhere else. A 401 gets a fresh token
    * and one more try; a second 401 is AUTH_REQUIRED (for a person's connection) or the response.
    */
-  async fetch(conn: OAuthConnection, url: string | URL, init: RequestInit, opts: { origins: string[]; fetch?: typeof fetch; signal?: AbortSignal; onSecret?: (name: string, value: string) => void }): Promise<Response> {
+  async fetch(conn: OAuthConnection, url: string | URL, init: RequestInit, opts: { origins: string[]; fetch?: typeof fetch; signal?: AbortSignal; onSecret?: (name: string, value: string) => void; crossOriginRedirects?: "strip" | "refuse" }): Promise<Response> {
     const target = new URL(String(url));
     if (!opts.origins.includes(target.origin)) {
       throw new HaloError(`${conn.name}'s token is only sent to ${opts.origins.join(", ")}, not ${target.origin}`, { code: "AUTH_ORIGIN" });
@@ -517,14 +517,15 @@ export class TokenBroker {
       opts.onSecret?.(`${conn.name} access token`, t.accessToken);
       return t;
     };
+    const refuse = opts.crossOriginRedirects === "refuse" ? conn.name : undefined;
     let token = reveal(await this.token(conn, { fetch: fetchImpl, signal: opts.signal ?? init.signal ?? undefined }));
     this.revealRefresh(conn, opts.onSecret);
-    let res = await this.send(target, init, token, opts.origins, fetchImpl);
+    let res = await this.send(target, init, token, opts.origins, fetchImpl, refuse);
     if (res.status !== 401) return res;
     await res.body?.cancel().catch(() => {});
     token = reveal(await this.token(conn, { fetch: fetchImpl, signal: opts.signal ?? init.signal ?? undefined, rejected: token.accessToken }));
     this.revealRefresh(conn, opts.onSecret);
-    res = await this.send(target, init, token, opts.origins, fetchImpl);
+    res = await this.send(target, init, token, opts.origins, fetchImpl, refuse);
     if (res.status === 401 && conn.grant !== "client_credentials") {
       await res.body?.cancel().catch(() => {});
       this.cache.delete(this.id(conn));
@@ -538,7 +539,8 @@ export class TokenBroker {
     if (r && onSecret) onSecret(`${conn.name} refresh token`, r);
   }
 
-  private async send(url: URL, init: RequestInit, token: AccessToken, origins: string[], fetchImpl: typeof fetch): Promise<Response> {
+  /** `refuse` (a connection's name): a redirect to another origin is an error, not followed without the token. */
+  private async send(url: URL, init: RequestInit, token: AccessToken, origins: string[], fetchImpl: typeof fetch, refuse?: string): Promise<Response> {
     let current = url;
     let method = (init.method ?? "GET").toUpperCase();
     let body = init.body;
@@ -552,6 +554,7 @@ export class TokenBroker {
       await res.body?.cancel().catch(() => {});
       current = new URL(location, current);
       if (current.protocol !== "https:" && current.protocol !== "http:") return res;
+      if (refuse && !origins.includes(current.origin)) throw new HaloError(`${refuse}: the server redirected to ${current.origin}, which Halo doesn't follow`, { code: "AUTH_ORIGIN" });
       if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
         method = "GET";
         body = undefined;
@@ -618,11 +621,26 @@ export function defaultBroker(): TokenBroker {
   return (shared ??= new TokenBroker());
 }
 
+/**
+ * Where discovery may fetch from. Under `halo serve` a server-chosen URL is a request from inside
+ * the network, so private, link-local and metadata addresses are refused (`blockPrivate`); loopback
+ * only when serve itself listens on loopback (`allowLoopback`).
+ */
+export interface DiscoveryGuard {
+  blockPrivate: boolean;
+  allowLoopback: boolean;
+}
+
 /** What the runtime gives providers for `auth:`. Never a token. */
 export interface ToolAuth {
   broker: TokenBroker;
   /** The connection a tool's `auth:` names, resolved; undefined when it has none. Throws for one that isn't an OAuth declaration. */
   connection(tool: ToolDeclaration): OAuthConnection | undefined;
+  /**
+   * An MCP tool with `auth: "discover"`: the connection its discovered authorization server gives,
+   * as stored by `halo auth login` (or serve's /connect). Throws AuthRequired when nothing is.
+   */
+  discovered?(tool: ToolDeclaration, url: string): Promise<OAuthConnection>;
   /** The folder its tokens are kept for. */
   project: string;
   /** Hand a token value to the run's secret masking. */
