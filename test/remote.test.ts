@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "../src/parser/index";
@@ -9,7 +9,7 @@ import { plan } from "../src/plan";
 import { getCompletions } from "../src/lsp/completions";
 import { withSandbox } from "../src/runtime/sandbox-agents";
 import { LOCAL_PROVIDER_INFO } from "../src/runtime/providers/index";
-import { backendOf, closeRemoteSessions, connectFrame, connectFrames, dockerRunArgs, dockerShell, parseSshTarget, prelude, remote, sshArgs } from "../src/runtime/providers/remote";
+import { backendOf, closeRemoteSessions, connectFrame, connectFrames, dockerRunArgs, dockerShell, hostKeyOptions, parseHostKey, parseSshTarget, prelude, remote, sshArgs, SSH_PINNED } from "../src/runtime/providers/remote";
 import type { ToolCall, ToolServices } from "../src/runtime/tools";
 
 let tmp: string;
@@ -31,6 +31,7 @@ beforeAll(() => {
     fakeSsh,
     `#!/bin/sh
 printf '%s\\n' "$@" > "${tmp}/ssh-args"
+env > "${tmp}/ssh-env"
 for last; do :; done
 for a; do if [ "$a" = "down" ]; then echo "ssh: connect to host down port 22: Connection refused" >&2; exit 255; fi; done
 cd "${home}" && exec sh -c "$last"
@@ -104,8 +105,72 @@ describe("Remote: parsing", () => {
     expect(args.slice(-2)).toEqual(["--", "h"]);
     expect(args.join(" ")).toContain("-p 2222");
     expect(args.join(" ")).toContain("-i /k");
-    expect(args.join(" ")).not.toContain("StrictHostKeyChecking");
+    expect(args.join(" ")).toContain("StrictHostKeyChecking=yes");
     expect(sshArgs({ host: "h" }, { strict: false }).join(" ")).toContain("StrictHostKeyChecking=accept-new");
+    expect(sshArgs({ host: "h" }, { knownHosts: "/k/known" }).join(" ")).toContain("UserKnownHostsFile=/k/known -o GlobalKnownHostsFile=/dev/null");
+  });
+
+  // ssh -G prints the options ssh would use, without connecting.
+  const sshG = (config: string, args: string[]) => {
+    const file = join(tmp, "ssh_config");
+    writeFileSync(file, config);
+    const r = Bun.spawnSync(["ssh", "-F", file, "-G", ...args], { stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+    return Object.fromEntries(r.stdout.toString().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf(" ")), l.slice(l.indexOf(" ") + 1)]));
+  };
+  const hasSsh = Bun.which("ssh") !== null;
+
+  test.skipIf(!hasSsh)("a ~/.ssh/config can't turn off Halo's safety options, and its host aliases still work", () => {
+    const config = `Host staging
+  HostName real.example.com
+  User alice
+  Port 2200
+Host *
+  StrictHostKeyChecking no
+  ForwardAgent yes
+  ForwardX11 yes
+  ControlMaster auto
+  ControlPath /tmp/halo-test-%r@%h:%p
+  ControlPersist yes
+  PermitLocalCommand yes
+  LocalCommand touch /tmp/halo-pwned
+  LocalForward 8080 localhost:80
+  RemoteForward 9090 localhost:22
+  DynamicForward 1080
+  GSSAPIDelegateCredentials yes
+  Tunnel yes
+  RequestTTY yes
+  VerifyHostKeyDNS yes
+`;
+    const g = sshG(config, sshArgs(parseSshTarget("staging"), {}));
+    expect(g).toMatchObject({ hostname: "real.example.com", user: "alice", port: "2200" });
+    expect(g).toMatchObject({ stricthostkeychecking: "true", forwardagent: "no", forwardx11: "no", controlmaster: "false", controlpersist: "no", permitlocalcommand: "no", clearallforwardings: "yes", gssapidelegatecredentials: "no", tunnel: "false", requesttty: "false", verifyhostkeydns: "false", batchmode: "yes" });
+    expect(g.controlpath).toBeUndefined();
+    expect(sshG(config, sshArgs(parseSshTarget("staging"), { strict: false })).stricthostkeychecking).toBe("accept-new");
+    expect(SSH_PINNED.length).toBeGreaterThan(10);
+  });
+
+  test.skipIf(!hasSsh)("hostKey: ssh asks a KnownHostsCommand that vouches only for the pinned key", async () => {
+    const fp = "SHA256:rqHBoqTqavuOg1MchxTFBTtPkCiMS3pyWA4UzaE4tn8";
+    const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBk1FqzfEaSaOw2sMCLMRc3M6tAORun7UnfSdL3H8rya";
+    expect(parseHostKey(fp)).toEqual({ fingerprint: fp });
+    expect(parseHostKey(`${key} root@box`)).toEqual({ type: "ssh-ed25519", key: key.split(" ")[1]! });
+    expect(parseHostKey(`box.example.com ${key}`)).toEqual({ type: "ssh-ed25519", key: key.split(" ")[1]! });
+    for (const bad of ["SHA256:short", "md5:aa", "ssh-ed25519 'x'", "ssh-ed25519 AAAA$(x)"]) expect(() => parseHostKey(bad)).toThrow();
+    const g = sshG("", sshArgs({ host: "h" }, { hostKeys: [key] }));
+    expect(g).toMatchObject({ stricthostkeychecking: "true", userknownhostsfile: "/dev/null", globalknownhostsfile: "/dev/null", hostkeyalgorithms: "ssh-ed25519" });
+    expect(g.knownhostscommand).toContain("halo-hostkey %f %t %K %H");
+    // Run the command as ssh would: split into words (quotes kept together), tokens filled in per word.
+    const command = hostKeyOptions([fp, key]).find((o) => o.startsWith("KnownHostsCommand="))!.slice("KnownHostsCommand=".length);
+    const words = [...command.matchAll(/'([^']*)'|"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]!);
+    const ask = (f: string, t: string, k: string) => {
+      const argv = words.map((w) => w.replace("%f", f).replace("%t", t).replace("%K", k).replace("%H", "[h]:2222"));
+      return Bun.spawnSync(argv as [string, ...string[]]).stdout.toString();
+    };
+    expect(ask(fp, "ssh-ed25519", "AAAAother")).toBe("[h]:2222 ssh-ed25519 AAAAother\n");
+    expect(ask("SHA256:" + "x".repeat(43), "ssh-ed25519", key.split(" ")[1]!)).toBe(`[h]:2222 ${key}\n`);
+    expect(ask("SHA256:" + "x".repeat(43), "ssh-ed25519", "AAAAother")).toBe("");
+    expect(ask("NONE", "NONE", "NONE")).toBe("");
   });
 
   test("backends", () => {
@@ -202,6 +267,72 @@ describe("Remote over SSH", () => {
 
   test("info", async () => {
     expect(await ssh("info")).toEqual({ backend: "ssh", host: "deploy@build.example.com:2222" });
+  });
+
+  test("ssh gets a small environment, so SendEnv in a config file can't send Halo's keys", async () => {
+    process.env.HALO_TEST_API_KEY = "sk-not-for-the-server";
+    try {
+      await ssh("run", { command: "true" });
+    } finally {
+      delete process.env.HALO_TEST_API_KEY;
+    }
+    const env = readFileSync(join(tmp, "ssh-env"), "utf8");
+    expect(env).not.toContain("sk-not-for-the-server");
+    expect(env).toContain("PATH=");
+    const names = env.split("\n").filter(Boolean).map((l) => l.slice(0, l.indexOf("=")));
+    for (const n of names) expect(["PATH", "HOME", "USER", "LOGNAME", "SSH_AUTH_SOCK", "KRB5CCNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "PWD", "SHLVL", "_", "OLDPWD"]).toContain(n);
+  });
+
+  test("a command that exits 255 is the command's result, not a connection failure", async () => {
+    const r = await ssh("run", { command: "echo did it; echo bad >&2; exit 255" });
+    expect(r).toMatchObject({ stdout: "did it", stderr: "bad", exitCode: 255 });
+  });
+
+  test("a connection that drops while the command runs isn't retried: it may have run", async () => {
+    const e = await ssh("run", { command: "echo 'client_loop: send disconnect: Broken pipe' >&2; exit 255" }).catch((x: any) => x);
+    expect(e.message).toContain("may have run");
+    expect(e.retryable).toBe(false);
+    // Couldn't connect at all: nothing ran, so it can be tried again.
+    const down: any = await remote(makeCall("run", { command: "true" }, { 0: "down", ssh: fakeSsh }), services()).catch((x: any) => x);
+    expect(down.retryable).toBe(true);
+  });
+
+  test("write replaces the file whole, keeping its mode, and leaves nothing beside it", async () => {
+    mkdirSync(join(home, "atomic"), { recursive: true });
+    writeFileSync(join(home, "atomic/run.sh"), "old");
+    chmodSync(join(home, "atomic/run.sh"), 0o750);
+    await ssh("write", { path: "atomic/run.sh", content: "#!/bin/sh\necho new\n" });
+    expect(readFileSync(join(home, "atomic/run.sh"), "utf8")).toBe("#!/bin/sh\necho new\n");
+    expect(statSync(join(home, "atomic/run.sh")).mode & 0o777).toBe(0o750);
+    await ssh("write", { path: "atomic/-dash.txt", content: "x" });
+    expect(readFileSync(join(home, "atomic/-dash.txt"), "utf8")).toBe("x");
+    expect(readdirSync(join(home, "atomic")).sort()).toEqual(["-dash.txt", "run.sh"]);
+  });
+
+  test("halo validate warns about accept_new_hosts, unless the key is pinned another way", () => {
+    const diags = (decl: string) => validate(parse(`tool Box : Remote("deploy@build.example.com"${decl})`)).map((d) => `${d.severity}: ${d.message}`);
+    expect(diags(", accept_new_hosts: true").join("\n")).toContain("warning: Tool \"Box\": accept_new_hosts: true trusts whatever key");
+    expect(diags(', accept_new_hosts: true, hostKey: "SHA256:x"').join("\n")).toContain("error: Tool \"Box\": hostKey: pins the host's key");
+    expect(diags(', accept_new_hosts: true, knownHosts: "~/.ssh/ci_known_hosts"').join("\n")).not.toContain("accept_new_hosts");
+  });
+
+  test("hostKey: and knownHosts: are checked when the tool is used", async () => {
+    await expect(ssh("run", { command: "true" }, { hostKey: "not a key" })).rejects.toMatchObject({ code: "TOOL_CONFIG" });
+    await expect(ssh("run", { command: "true" }, { hostKey: "SHA256:rqHBoqTqavuOg1MchxTFBTtPkCiMS3pyWA4UzaE4tn8", accept_new_hosts: true })).rejects.toMatchObject({ code: "TOOL_CONFIG" });
+    await expect(ssh("run", { command: "true" }, { knownHosts: join(tmp, "no-such-file") })).rejects.toThrow(/doesn't exist/);
+    writeFileSync(join(tmp, "known"), "");
+    await ssh("run", { command: "true" }, { knownHosts: join(tmp, "known") });
+    expect(readFileSync(join(tmp, "ssh-args"), "utf8")).toContain(`UserKnownHostsFile=${join(tmp, "known")}`);
+    await ssh("run", { command: "true" }, { hostKey: ["SHA256:rqHBoqTqavuOg1MchxTFBTtPkCiMS3pyWA4UzaE4tn8"] });
+    expect(readFileSync(join(tmp, "ssh-args"), "utf8")).toContain("KnownHostsCommand=/bin/sh -c");
+  });
+
+  test("read takes timeout_ms:", async () => {
+    Bun.spawnSync(["mkfifo", join(home, "never.fifo")]);
+    const started = Date.now();
+    await expect(ssh("read", { path: "never.fifo", timeout_ms: 1000 })).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(Date.now() - started).toBeLessThan(3000);
+    rmSync(join(home, "never.fifo"));
   });
 
   test("{{placeholders}} in a pipeline's command are shell-quoted; other arguments aren't", async () => {

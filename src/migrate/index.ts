@@ -433,6 +433,25 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    id: "remote-ssh-pinned",
+    since: "1.12.0",
+    title: "Remote over SSH ignores ~/.ssh/config settings that hand the host more than a shell",
+    detail:
+      "Halo now sets StrictHostKeyChecking yes (accept-new with accept_new_hosts: true), ForwardAgent no, ForwardX11 no, ClearAllForwardings yes, ControlMaster no and PermitLocalCommand no on every ssh call, and gives ssh only PATH, HOME, USER, LOGNAME, SSH_AUTH_SOCK, KRB5CCNAME, TMPDIR and LANG/LC_*, so a Host * block in ~/.ssh/config can't turn these back on and SendEnv can't send your API keys. Host aliases (HostName, User, Port, IdentityFile, ProxyJump) still work. A host that only worked because of StrictHostKeyChecking no now fails until its key is in known_hosts, or pinned with hostKey: \"SHA256:…\"; a remote command that used your forwarded agent (git clone over ssh on the host) needs a deploy key there. A remote command that exits 255 now returns exitCode 255 instead of failing as \"couldn't reach\", and a connection that drops while a command runs is no longer retried. write replaces a file by renaming a new one over it (a symlink there is replaced, not written through). Listed: each Remote tool that reaches a machine over SSH.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const tool of file.ast.tools) {
+          if (tool.provider !== "Remote") continue;
+          const spec = tool.args?.[0] as { kind?: string; value?: unknown } | undefined;
+          if (spec?.kind !== "string" || typeof spec.value !== "string" || /^(e2b|daytona|docker|auto)$/i.test(spec.value.trim())) continue;
+          out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} (${spec.value}): ssh now ignores StrictHostKeyChecking no, ForwardAgent, port forwards, ControlMaster and SendEnv from your ssh config` });
+        }
+      }
+      return out;
+    },
+  },
+  {
     id: "bash-ssh-options",
     since: "1.12.0",
     title: "A Bash placeholder in an ssh option that runs a command, or in a remote path, is refused",

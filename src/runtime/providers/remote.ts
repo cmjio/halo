@@ -15,9 +15,12 @@
  *     download(from, to)                     remote file → local
  *     info()                                 →  { backend, host | id }
  *
- * SSH uses the `ssh` on this machine with your keys and ~/.ssh/config, in batch mode (it
- * never prompts), and checks host keys against known_hosts as ssh always does. Each call
- * is its own connection; remote paths are relative to the login's home folder.
+ * SSH uses the `ssh` on this machine with your keys and ~/.ssh/config's host aliases, in batch
+ * mode (it never prompts). Options that would give the host more than a shell (agent and port
+ * forwarding, shared connections, StrictHostKeyChecking no...) are pinned off whatever the config
+ * says (SSH_PINNED), and ssh gets a small environment (SSH_ENV), so SendEnv can't ship Halo's
+ * keys. Host keys are checked against known_hosts, knownHosts:, or the keys hostKey: pins. Each
+ * call is its own connection; remote paths are relative to the login's home folder.
  *
  * A sandbox is created on a run's first call, kept for the rest of that run (so a run can
  * write a file, then test it), and deleted when the run ends. If Halo dies before it can
@@ -73,8 +76,9 @@ export interface Machine {
   /** The host (ssh) or sandbox id. */
   id: string;
   exec(command: string, opts: ExecOptions): Promise<ExecResult>;
-  read(path: string, signal: AbortSignal): Promise<Uint8Array>;
-  write(path: string, bytes: Uint8Array, signal: AbortSignal): Promise<void>;
+  /** timeoutMs: give up after this long; maxBytes: refuse a file bigger than this, without reading it all. */
+  read(path: string, signal: AbortSignal, opts?: { timeoutMs?: number; maxBytes?: number }): Promise<Uint8Array>;
+  write(path: string, bytes: Uint8Array, signal: AbortSignal, opts?: { timeoutMs?: number }): Promise<void>;
   /** Save the sandbox's files as something a new sandbox can start from (Docker: an image). */
   snapshot?(): Promise<string>;
   close(): Promise<void>;
@@ -142,10 +146,105 @@ export function parseSshTarget(text: string): SshTarget {
   return { user, host: rest, port };
 }
 
+/**
+ * Options set on every ssh call, whatever ~/.ssh/config says: ssh keeps the first value it gets
+ * for an option, and -o comes before any config file. So a `Host *` block with ForwardAgent yes,
+ * StrictHostKeyChecking no or a ControlMaster doesn't apply to Halo's calls; a host alias's
+ * HostName, User, Port, IdentityFile and ProxyJump still do. (SendEnv adds up instead of keeping
+ * the first value, so it can't be cleared here: ssh gets a small environment instead, SSH_ENV.)
+ */
+export const SSH_PINNED = [
+  "BatchMode=yes",
+  "ForwardAgent=no",
+  "ForwardX11=no",
+  "ClearAllForwardings=yes",
+  "Tunnel=no",
+  "GSSAPIDelegateCredentials=no",
+  "PermitLocalCommand=no",
+  "RemoteCommand=none",
+  "RequestTTY=no",
+  "EscapeChar=none",
+  "ControlMaster=no",
+  "ControlPath=none",
+  "ControlPersist=no",
+  "VerifyHostKeyDNS=no",
+];
+
+/** The environment variables ssh gets from Halo's: enough to find programs, your keys and your agent. */
+export const SSH_ENV = ["PATH", "HOME", "USER", "LOGNAME", "SSH_AUTH_SOCK", "KRB5CCNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"];
+
+/** ssh's environment: only SSH_ENV, so SendEnv in a config file has nothing secret to send. */
+export function sshEnv(from: Record<string, string | undefined> = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of SSH_ENV) if (typeof from[k] === "string") out[k] = from[k]!;
+  return out;
+}
+
+const FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/;
+const KEY_TYPES = ["ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com"];
+
+/**
+ * A pinned host key, as written: a fingerprint ("SHA256:…", as `ssh-keygen -lf` prints it) or a
+ * public key ("ssh-ed25519 AAAA…", from the host's /etc/ssh/ssh_host_*_key.pub or a known_hosts
+ * line; a host name before it or a comment after it is dropped).
+ */
+export function parseHostKey(text: string): { fingerprint: string } | { type: string; key: string } {
+  const t = text.trim().replace(/=+$/, "");
+  if (FINGERPRINT.test(t)) return { fingerprint: t };
+  const words = text.trim().split(/\s+/);
+  const i = words.findIndex((w) => KEY_TYPES.includes(w));
+  const key = i >= 0 ? words[i + 1] : undefined;
+  if (key && /^AAAA[A-Za-z0-9+/]+={0,2}$/.test(key)) return { type: words[i]!, key };
+  throw new Error(`hostKey: ${JSON.stringify(text)} is neither a fingerprint like "SHA256:…" (ssh-keygen -lf) nor a public key like "ssh-ed25519 AAAA…"`);
+}
+
+/**
+ * hostKey: as ssh options. Known-hosts files are switched off and a KnownHostsCommand answers
+ * instead: ssh hands it the key the host showed (%f, %t %K) and it vouches for that key only if
+ * it is one of the pins. ssh runs it without a shell in between (argv split, %-tokens expanded
+ * per word), so the pins, checked by parseHostKey, are its only input besides ssh's own tokens.
+ * Needs OpenSSH 8.5 or later.
+ */
+export function hostKeyOptions(pins: string[]): string[] {
+  const parsed = pins.map(parseHostKey);
+  const words = parsed.map((p) => ("fingerprint" in p ? p.fingerprint : `${p.type} ${p.key}`));
+  const script = `f=$1 k="$2 $3" h=$4; shift 4; for p; do if [ "$p" = "$f" ] || [ "$p" = "$k" ]; then echo "$h $k"; exit 0; fi; done`;
+  const opts = [
+    "StrictHostKeyChecking=yes",
+    "UserKnownHostsFile=/dev/null",
+    "GlobalKnownHostsFile=/dev/null",
+    "CheckHostIP=no",
+    "UpdateHostKeys=no",
+    `KnownHostsCommand=/bin/sh -c '${script}' halo-hostkey %f %t %K %H ${words.map((w) => `"${w}"`).join(" ")}`,
+  ];
+  // With only whole keys pinned, ask the host for those kinds of key.
+  if (parsed.every((p) => "type" in p)) {
+    const algs = [...new Set(parsed.flatMap((p) => ((p as { type: string }).type === "ssh-rsa" ? ["rsa-sha2-512", "rsa-sha2-256"] : [(p as { type: string }).type])))];
+    opts.push(`HostKeyAlgorithms=${algs.join(",")}`);
+  }
+  return opts;
+}
+
+export interface SshOptions {
+  key?: string;
+  connectTimeout?: number;
+  /** false: trust a host's key the first time (accept-new). */
+  strict?: boolean;
+  /** Check host keys against only this file. */
+  knownHosts?: string;
+  /** Trust only these host keys (see parseHostKey). */
+  hostKeys?: string[];
+}
+
 /** The arguments to `ssh`, before the remote command. */
-export function sshArgs(target: SshTarget, opts: { key?: string; connectTimeout?: number; strict?: boolean }): string[] {
-  const args = ["-o", "BatchMode=yes", "-o", `ConnectTimeout=${opts.connectTimeout ?? 15}`, "-o", "ServerAliveInterval=15", "-T"];
-  if (opts.strict === false) args.push("-o", "StrictHostKeyChecking=accept-new");
+export function sshArgs(target: SshTarget, opts: SshOptions): string[] {
+  const args = ["-o", `ConnectTimeout=${opts.connectTimeout ?? 15}`, "-o", "ServerAliveInterval=15", "-T"];
+  for (const o of SSH_PINNED) args.push("-o", o);
+  if (opts.hostKeys?.length) for (const o of hostKeyOptions(opts.hostKeys)) args.push("-o", o);
+  else {
+    args.push("-o", `StrictHostKeyChecking=${opts.strict === false ? "accept-new" : "yes"}`);
+    if (opts.knownHosts) args.push("-o", `UserKnownHostsFile=${opts.knownHosts}`, "-o", "GlobalKnownHostsFile=/dev/null");
+  }
   if (target.port) args.push("-p", String(target.port));
   if (opts.key) args.push("-i", opts.key, "-o", "IdentitiesOnly=yes");
   if (target.user) args.push("-l", target.user);
@@ -157,21 +256,31 @@ function expandHome(path: string): string {
   return path.startsWith("~/") ? `${process.env.HOME ?? ""}${path.slice(1)}` : path;
 }
 
-/** Read a stream into memory, so whatever arrived can be taken even if it never ends. */
-function collect(stream: ReadableStream<Uint8Array>) {
+/** Read a stream into memory, so whatever arrived can be taken even if it never ends; past `limit` bytes it stops. */
+function collect(stream: ReadableStream<Uint8Array>, limit = Infinity, onOver?: () => void) {
   const chunks: Uint8Array[] = [];
+  let size = 0;
+  let over = false;
   const reader = stream.getReader();
   const done = (async () => {
     try {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) return;
+        size += value.length;
+        if (size > limit) {
+          over = true;
+          onOver?.();
+          void reader.cancel().catch(() => {});
+          return;
+        }
         chunks.push(value);
       }
     } catch {}
   })();
   return {
     done,
+    over: () => over,
     stop: () => void reader.cancel().catch(() => {}),
     bytes: () => {
       const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
@@ -182,10 +291,15 @@ function collect(stream: ReadableStream<Uint8Array>) {
   };
 }
 
-/** Run a program, feeding it `stdin`, killed after `timeoutMs` or when `signal` aborts. */
-async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal; env?: Record<string, string> }) {
+/**
+ * Run a program, feeding it `stdin`, killed after `timeoutMs` or when `signal` aborts, or once its
+ * stdout passes `maxOut` bytes (then `over` is true). `cleanEnv` is its whole environment;
+ * otherwise it gets Halo's, plus `env`.
+ */
+async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal; env?: Record<string, string>; cleanEnv?: Record<string, string>; maxOut?: number }) {
   // env: process.env so `docker`/`ssh` are looked up on the PATH as it is now, not as it was at startup.
-  const proc = Bun.spawn(argv, { stdin: opts.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe", env: opts.env ? { ...process.env, ...opts.env } : process.env });
+  const env = opts.cleanEnv ?? (opts.env ? { ...process.env, ...opts.env } : process.env);
+  const proc = Bun.spawn(argv, { stdin: opts.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe", env });
   let timedOut = false;
   const kill = () => proc.kill();
   const timer = setTimeout(() => {
@@ -194,24 +308,79 @@ async function spawnProgram(argv: string[], opts: { stdin?: Uint8Array; timeoutM
   }, opts.timeoutMs);
   opts.signal.addEventListener("abort", kill, { once: true });
   try {
-    if (opts.stdin && proc.stdin) {
-      proc.stdin.write(opts.stdin);
-      await proc.stdin.end();
-    }
-    const out = collect(proc.stdout);
+    const out = collect(proc.stdout, opts.maxOut, kill);
     const err = collect(proc.stderr);
+    if (opts.stdin && proc.stdin) {
+      try {
+        proc.stdin.write(opts.stdin);
+        await proc.stdin.end();
+      } catch {}
+    }
     const code = await proc.exited;
     const exitCode = typeof code === "number" ? code : -1;
     // A killed client can leave a child holding its pipes open; don't wait on them past a moment.
-    const grace = timedOut || opts.signal.aborted ? 500 : 30_000;
+    const grace = timedOut || opts.signal.aborted || out.over() ? 500 : 30_000;
     await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(grace)]);
     out.stop();
     err.stop();
-    return { out: out.bytes(), err: new TextDecoder().decode(err.bytes()), exitCode, timedOut };
+    return { out: out.bytes(), err: new TextDecoder().decode(err.bytes()), exitCode, timedOut, over: out.over() };
   } finally {
     clearTimeout(timer);
     opts.signal.removeEventListener("abort", kill);
   }
+}
+
+/**
+ * Printed to stderr by the remote shell before the command, so an exit of 255 can be told apart:
+ * without it ssh never got as far as running anything (safe to try again); with it, the command
+ * started, and exited 255 itself or lost its connection part way.
+ */
+const STARTED = "\x1ehalo:started\x1e";
+const STARTED_CMD = `printf '\\036halo:started\\036\\n' >&2; `;
+/** What ssh itself prints when a connection it had drops. */
+const CONNECTION_LOST = /client_loop: |Connection to \S+ closed by remote host|Broken pipe|Connection reset by|Timeout, server \S+ not responding|packet_write_wait|Write failed/;
+
+/** The key of a declaration's list setting, as strings: `allowFiles: ["a", "b"]` or `allowFiles: "a"`. */
+function stringList(call: ToolCall, name: string): string[] | undefined {
+  const raw = call.config(name);
+  if (raw === undefined || raw === null) return undefined;
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const v of list) if (typeof v !== "string" || !v) throw configError(call, `${name}: lists strings, e.g. ${name}: ["…"]`);
+  return list as string[];
+}
+
+/** The ssh options a declaration asks for, checked. */
+export function sshConfig(call: ToolCall): SshOptions {
+  const key = call.config("key");
+  const knownHosts = call.config("knownHosts");
+  const hostKeys = stringList(call, "hostKey");
+  const accept = call.config("accept_new_hosts") === true;
+  if (hostKeys && (accept || knownHosts !== undefined)) throw configError(call, `hostKey: pins the host's key, so it can't go with ${accept ? "accept_new_hosts:" : "knownHosts:"}`);
+  if (hostKeys) for (const h of hostKeys) {
+    try {
+      parseHostKey(h);
+    } catch (e) {
+      throw configError(call, (e as Error).message);
+    }
+  }
+  let known: string | undefined;
+  if (knownHosts !== undefined) {
+    if (typeof knownHosts !== "string" || !knownHosts || /[\s%$"'\\]/.test(knownHosts)) throw configError(call, `knownHosts: is the path of a known_hosts file, without spaces, quotes, % or $`);
+    known = expandHome(knownHosts);
+    try {
+      statSync(known);
+    } catch {
+      throw configError(call, `knownHosts: ${knownHosts} doesn't exist; make it with ssh-keyscan, and check the keys it holds`);
+    }
+  }
+  return {
+    key: typeof key === "string" && key ? expandHome(key) : undefined,
+    connectTimeout: typeof call.config("connect_timeout") === "number" ? (call.config("connect_timeout") as number) : undefined,
+    // Only a first connection to a host is trusted on sight; a changed key is still refused.
+    strict: accept ? false : undefined,
+    knownHosts: known,
+    hostKeys,
+  };
 }
 
 function sshMachine(call: ToolCall, spec: string): Machine {
@@ -221,43 +390,54 @@ function sshMachine(call: ToolCall, spec: string): Machine {
   } catch (e) {
     throw configError(call, (e as Error).message);
   }
-  const key = call.config("key");
   const ssh = (call.config("ssh") as string | undefined) ?? "ssh";
-  const base = sshArgs(target, {
-    key: typeof key === "string" && key ? expandHome(key) : undefined,
-    connectTimeout: typeof call.config("connect_timeout") === "number" ? (call.config("connect_timeout") as number) : undefined,
-    // Only a first connection to a host is trusted on sight; a changed key is still refused.
-    strict: call.config("accept_new_hosts") === true ? false : undefined,
-  });
+  const base = sshArgs(target, sshConfig(call));
   const id = `${target.user ? `${target.user}@` : ""}${target.host}${target.port ? `:${target.port}` : ""}`;
 
-  const spawn = (remote: string, opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal }) => spawnProgram([ssh, ...base, remote], opts);
+  const spawn = (remote: string, opts: { stdin?: Uint8Array; timeoutMs: number; signal: AbortSignal; maxOut?: number }) => spawnProgram([ssh, ...base, remote], { ...opts, cleanEnv: sshEnv() });
 
-  /** ssh exits 255 when it couldn't connect or log in (not when the command did). */
-  const connectError = (r: { exitCode: number; err: string }) =>
-    r.exitCode === 255 ? new HaloError(`${call.tool.name}: couldn't reach ${id} over SSH: ${r.err.trim() || "connection failed"}`, { code: "TOOL_FAILED", retryable: true }) : undefined;
+  /** ssh exits 255 when it couldn't connect or log in, so nothing ran: safe to try again. */
+  const unreachable = (r: { err: string }) => new HaloError(`${call.tool.name}: couldn't reach ${id} over SSH: ${r.err.trim() || "connection failed"}`, { code: "TOOL_FAILED", retryable: true });
+  const failedToConnect = (r: { exitCode: number; timedOut: boolean }) => r.exitCode === 255 && !r.timedOut;
 
   return {
     backend: "ssh",
     id,
     async exec(command, opts) {
-      const r = await spawn(prelude(opts.cwd, opts.env) + command, opts);
-      const e = connectError(r);
-      if (e && !r.timedOut) throw e;
-      return { stdout: new TextDecoder().decode(r.out), stderr: r.err, exitCode: r.exitCode, timedOut: r.timedOut };
+      const r = await spawn(STARTED_CMD + prelude(opts.cwd, opts.env) + command, opts);
+      const at = r.err.indexOf(STARTED);
+      const stderr = at >= 0 ? r.err.slice(0, at) + r.err.slice(at + STARTED.length + 1) : r.err;
+      if (failedToConnect(r)) {
+        if (at < 0) throw unreachable(r);
+        // It started, so it may have done some or all of its work: never run it again on its own.
+        if (CONNECTION_LOST.test(stderr)) {
+          throw new HaloError(`${call.tool.name}: lost the connection to ${id} while the command ran, so it may have run in part or in full; it isn't retried: ${stderr.trim()}`, { code: "TOOL_FAILED", retryable: false });
+        }
+      }
+      return { stdout: new TextDecoder().decode(r.out), stderr, exitCode: r.exitCode, timedOut: r.timedOut };
     },
-    async read(path, signal) {
-      const r = await spawn(`cat -- ${q(path)}`, { timeoutMs: DEFAULT_TIMEOUT_MS, signal });
-      const e = connectError(r);
-      if (e) throw e;
+    async read(path, signal, o) {
+      const r = await spawn(`cat -- ${q(path)}`, { timeoutMs: o?.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal, maxOut: o?.maxBytes });
+      if (r.over) throw fail(call, `${path} is over ${o!.maxBytes} bytes`);
+      if (r.timedOut) throw new TimeoutError(`${call.tool.name}.${call.method}: reading ${path} took longer than ${o?.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`);
+      if (failedToConnect(r)) throw unreachable(r);
       if (r.exitCode !== 0) throw fail(call, r.err.trim() || `can't read ${path}`);
       return r.out;
     },
-    async write(path, bytes, signal) {
+    async write(path, bytes, signal, o) {
       const dir = posix.dirname(path);
-      const r = await spawn(`${dir === "." ? "" : `mkdir -p -- ${q(dir)} && `}cat > ${q(path)}`, { stdin: bytes, timeoutMs: DEFAULT_TIMEOUT_MS, signal });
-      const e = connectError(r);
-      if (e) throw e;
+      // Written to a new file beside it, then renamed over it, so a reader never sees half a file,
+      // and a write cut short leaves the old one. The new file keeps the old one's mode.
+      const tmp = `${dir === "." ? "" : `${dir}/`}.${posix.basename(path)}.halo-${crypto.randomUUID().slice(0, 8)}`;
+      const t = q(tmp.startsWith("-") ? `./${tmp}` : tmp);
+      const p = q(path.startsWith("-") ? `./${path}` : path);
+      const script =
+        `${dir === "." ? "" : `mkdir -p -- ${q(dir)} && `}set -C && cat > ${t} || { rm -f -- ${t}; exit 1; }; ` +
+        `if [ -e ${p} ]; then m=$(stat -c %a ${p} 2>/dev/null || stat -f %Lp ${p} 2>/dev/null) && chmod "$m" ${t}; fi; ` +
+        `mv -f -- ${t} ${p} || { rm -f -- ${t}; exit 1; }`;
+      const r = await spawn(script, { stdin: bytes, timeoutMs: o?.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal });
+      if (r.timedOut) throw new TimeoutError(`${call.tool.name}.${call.method}: writing ${path} took longer than ${o?.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms; the file is as it was`);
+      if (failedToConnect(r)) throw unreachable(r);
       if (r.exitCode !== 0) throw fail(call, r.err.trim() || `can't write ${path}`);
     },
     async close() {},
@@ -280,6 +460,30 @@ async function api(call: ToolCall, fetchFn: typeof fetch, what: string, url: str
     throw new HaloError(`${call.tool.name}: ${what} failed (${res.status}): ${body || res.statusText}`, { code: res.status === 401 || res.status === 403 ? "TOOL_AUTH" : "TOOL_FAILED", retryable });
   }
   return res;
+}
+
+function withTimeout(signal: AbortSignal, ms: number | undefined): AbortSignal {
+  return ms ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : signal;
+}
+
+/** A response body, refused once it passes `max` bytes rather than after reading it all. */
+async function readCapped(call: ToolCall, res: Response, path: string, max = Infinity): Promise<Uint8Array> {
+  const length = Number(res.headers.get("content-length"));
+  if (length > max) throw sandboxFail(call, `${path} is over ${max} bytes`);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of res.body ?? new ReadableStream<Uint8Array>()) {
+    size += chunk.length;
+    if (size > max) {
+      await res.body?.cancel().catch(() => {});
+      throw sandboxFail(call, `${path} is over ${max} bytes`);
+    }
+    chunks.push(chunk);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) (out.set(c, at), (at += c.length));
+  return out;
 }
 
 function apiKey(call: ToolCall, services: ToolServices, name: string): string {
@@ -393,14 +597,14 @@ async function e2bMachine(call: ToolCall, services: ToolServices, signal: AbortS
         return { stdout, stderr, exitCode, timedOut: true };
       }
     },
-    async read(path, sig) {
-      const res = await api(call, services.fetch, `reading ${path}`, fileUrl(path), { headers: auth, signal: sig });
-      return new Uint8Array(await res.arrayBuffer());
+    async read(path, sig, o) {
+      const res = await api(call, services.fetch, `reading ${path}`, fileUrl(path), { headers: auth, signal: withTimeout(sig, o?.timeoutMs) });
+      return readCapped(call, res, path, o?.maxBytes);
     },
-    async write(path, bytes, sig) {
+    async write(path, bytes, sig, o) {
       const form = new FormData();
       form.append("file", new Blob([bytes as Uint8Array<ArrayBuffer>]), posix.basename(path));
-      await api(call, services.fetch, `writing ${path}`, fileUrl(path), { method: "POST", headers: auth, body: form, signal: sig });
+      await api(call, services.fetch, `writing ${path}`, fileUrl(path), { method: "POST", headers: auth, body: form, signal: withTimeout(sig, o?.timeoutMs) });
     },
     async close() {
       await services.fetch(`${base}/sandboxes/${encodeURIComponent(sb.sandboxID)}`, { method: "DELETE", headers: { "X-API-Key": key }, signal: AbortSignal.timeout(15_000) }).catch(() => {});
@@ -468,14 +672,14 @@ async function daytonaMachine(call: ToolCall, services: ToolServices, signal: Ab
           return { stdout: "", stderr: "", exitCode: -1, timedOut: true };
         }
       },
-      async read(path, sig) {
-        const r = await api(call, services.fetch, `reading ${path}`, `${toolbox}/files/download?${new URLSearchParams({ path })}`, { headers, signal: sig });
-        return new Uint8Array(await r.arrayBuffer());
+      async read(path, sig, o) {
+        const r = await api(call, services.fetch, `reading ${path}`, `${toolbox}/files/download?${new URLSearchParams({ path })}`, { headers, signal: withTimeout(sig, o?.timeoutMs) });
+        return readCapped(call, r, path, o?.maxBytes);
       },
-      async write(path, bytes, sig) {
+      async write(path, bytes, sig, o) {
         const form = new FormData();
         form.append("file", new Blob([bytes as Uint8Array<ArrayBuffer>]), posix.basename(path));
-        await api(call, services.fetch, `writing ${path}`, `${toolbox}/files/upload-v2?${new URLSearchParams({ path })}`, { method: "POST", headers, body: form, signal: sig });
+        await api(call, services.fetch, `writing ${path}`, `${toolbox}/files/upload-v2?${new URLSearchParams({ path })}`, { method: "POST", headers, body: form, signal: withTimeout(sig, o?.timeoutMs) });
       },
       close: remove,
     };
@@ -853,17 +1057,20 @@ async function dockerMachine(call: ToolCall, signal: AbortSignal, from?: string,
       const blocked = proxy ? await proxy.blocked() : [];
       return { stdout: decode(r.out), stderr: r.err, exitCode: r.exitCode, timedOut: r.timedOut || killed, ...(blocked.length ? { blocked } : {}) };
     },
-    async read(path, sig) {
-      const r = await spawnProgram([docker, "exec", id, "cat", "--", path], { timeoutMs: DEFAULT_TIMEOUT_MS, signal: sig });
+    async read(path, sig, o) {
+      const r = await spawnProgram([docker, "exec", id, "cat", "--", path], { timeoutMs: o?.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal: sig, maxOut: o?.maxBytes });
+      if (r.over) throw sandboxFail(call, `${path} is over ${o!.maxBytes} bytes`);
+      if (r.timedOut) throw new TimeoutError(`${call.tool.name}: reading ${path} took longer than ${o?.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`);
       const e = await daemonError(r);
       if (e) throw e;
       if (r.exitCode !== 0) throw sandboxFail(call, r.err.trim() || `can't read ${path}`);
       return r.out;
     },
-    async write(path, bytes, sig) {
+    async write(path, bytes, sig, o) {
       const dir = posix.dirname(path);
       const script = `${dir === "." ? "" : `mkdir -p -- ${q(dir)} && `}cat > ${q(path)}`;
-      const r = await spawnProgram([docker, "exec", "--interactive", id, "sh", "-c", script], { stdin: bytes, timeoutMs: DEFAULT_TIMEOUT_MS, signal: sig });
+      const r = await spawnProgram([docker, "exec", "--interactive", id, "sh", "-c", script], { stdin: bytes, timeoutMs: o?.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal: sig });
+      if (r.timedOut) throw new TimeoutError(`${call.tool.name}: writing ${path} took longer than ${o?.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`);
       const e = await daemonError(r);
       if (e) throw e;
       if (r.exitCode !== 0) throw sandboxFail(call, r.err.trim() || `can't write ${path}`);
@@ -1253,6 +1460,16 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
   const m = await s.machine;
   const named = call.named;
   if (CHANGES.has(call.method)) s.dirty = true;
+  /** read, write, list, upload and download: timeout_ms: on the call or the declaration. */
+  const io = () => ({ timeoutMs: intArg(call, "timeout_ms", named.timeout_ms ?? call.config("timeout_ms"), DEFAULT_TIMEOUT_MS, 1_000, 3_600_000), maxBytes: MAX_FILE });
+  const timed = async <T>(p: Promise<T>, ms: number): Promise<T> => {
+    try {
+      return await p;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "TimeoutError" && !call.signal.aborted) throw new TimeoutError(`${call.tool.name}.${call.method}: took longer than ${ms} ms`);
+      throw e;
+    }
+  };
 
   switch (call.method) {
     case "info":
@@ -1284,8 +1501,9 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
 
     case "read": {
       const path = remotePath(call, named.path ?? (call.implicitInput ? undefined : call.positional[0]));
-      const bytes = await m.read(path, call.signal);
-      if (bytes.length > MAX_FILE) throw fail(call, `${path} is ${bytes.length} bytes; download it instead`);
+      const o = io();
+      // Capped as it arrives: a huge file isn't read into memory to find it's too big.
+      const bytes = await timed(m.read(path, call.signal, o), o.timeoutMs);
       if (looksBinary(bytes)) {
         refuseSecret(call, bytes, s.secrets, path, "returned"); // base64 would hide it from mask()
         return { path, content: Buffer.from(bytes).toString("base64"), bytes: bytes.length, encoding: "base64" };
@@ -1298,13 +1516,16 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
       const content = named.content ?? (call.implicitInput ? call.positional[0] : call.positional[1] ?? call.positional[0]);
       if (content === undefined || content === null) throw fail(call, "needs content", "TOOL_ARGUMENT");
       const bytes = new TextEncoder().encode(typeof content === "string" ? content : JSON.stringify(content, null, 2));
-      await m.write(path, bytes, call.signal);
+      const o = io();
+      await timed(m.write(path, bytes, call.signal, o), o.timeoutMs);
       return { path, bytes: bytes.length };
     }
 
     case "list": {
       const path = named.path === undefined || named.path === null || named.path === "" ? "." : remotePath(call, named.path);
-      const r = await m.exec(`ls -1Ap -- ${q(path)}`, { env: {}, timeoutMs: 30_000, signal: call.signal });
+      const timeoutMs = named.timeout_ms ?? call.config("timeout_ms") ? io().timeoutMs : 30_000;
+      const r = await m.exec(`ls -1Ap -- ${q(path)}`, { env: {}, timeoutMs, signal: call.signal });
+      if (r.timedOut) throw new TimeoutError(`${call.tool.name}.list: listing ${path} took longer than ${timeoutMs} ms`);
       if (r.exitCode !== 0) throw fail(call, (r.stderr || r.stdout).trim() || `can't list ${path}`);
       const entries = r.stdout.split("\n").filter(Boolean).map((line) => (line.endsWith("/") ? { name: line.slice(0, -1), type: "dir" } : { name: line, type: "file" }));
       return { path, entries };
@@ -1319,7 +1540,8 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
       if (!(await file.exists())) throw fail(call, `${from.rel} doesn't exist`, "TOOL_ARGUMENT");
       if (file.size > MAX_FILE) throw fail(call, `${from.rel} is over ${MAX_FILE} bytes`, "TOOL_ARGUMENT");
       const bytes = await file.bytes();
-      await m.write(to, bytes, call.signal);
+      const o = io();
+      await timed(m.write(to, bytes, call.signal, o), o.timeoutMs);
       return { from: from.rel, to, bytes: bytes.length };
     }
 
@@ -1328,8 +1550,8 @@ async function dispatch(call: ToolCall, services: ToolServices, hold: { secrets?
       const root = workspaceRoot(call, call.config("root"), true);
       const to = confine(call, root, named.to ?? posix.basename(from));
       checkFiles(call, to.rel, "download to");
-      const bytes = await m.read(from, call.signal);
-      if (bytes.length > MAX_FILE) throw fail(call, `${from} is over ${MAX_FILE} bytes`);
+      const o = io();
+      const bytes = await timed(m.read(from, call.signal, o), o.timeoutMs);
       refuseSecret(call, bytes, s.secrets, from, "downloaded");
       mkdirSync(dirname(to.abs), { recursive: true });
       await Bun.write(to.abs, bytes);
