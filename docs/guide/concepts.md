@@ -72,7 +72,7 @@ pipeline Route(ticket: String) -> Result:
 
 - `|? (cond)` is a **gate**. If the condition is false, the run stops with status `"halted"`. This is not an error.
 - `|? { (cond) => Call(), else => Call() }` is a **branch**. The first arm that matches runs. If no arm matches, the value passes through unchanged.
-- `|<> loop(Agent, "cond", max: n)` sends the run back to that agent's earlier stage while the condition holds.
+- `|<> loop(Agent, (cond), max: n)` sends the run back to that agent's earlier stage while the condition holds.
 
 See [Pipe Operators](../reference/operators.md) for all of them.
 

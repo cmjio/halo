@@ -107,12 +107,15 @@ Tool rules don't apply to tool calls the pipeline makes itself (`|> Files.write(
 
 ## Not enforced
 
-The validator warns about each of these, and the runtime **ignores** them:
+`Tone(...)`, `Anonymize(...)` and `MaxDensity(...)` would need a model to judge the output, and that isn't implemented. The validator warns about them, and the runtime **ignores** them.
 
-- `Tone(...)`, `Anonymize(...)`, `MaxDensity(...)`: these would need a model to judge the output, and that isn't implemented.
-- `Require(...)` with anything other than `JSON`, `XML`, or `Citation`, for example `Require(Approver)`. For human approval, use `|! yield`.
+Anything else a policy can't check is an error, because a rule that silently does nothing is worse than a file that doesn't load. That covers:
+
+- a rule name Halo doesn't have (`maxspend`, `MaxSpnd`);
+- a `Block`/`Redact` category it can't detect (`Block(Competitors)`, `Block(PromptInjecton)`);
+- `Require(...)` with anything other than `JSON`, `XML` or `Citation` (for a person's approval, use `|! yield`);
 - `Enforce(...)` with anything other than `JSON`.
-- `Block`/`Redact` with any other category, for example `Block(Competitors)` or `Block(HateSpeech)`.
-- Any other rule name.
+
+When the name is close to a real one, the error says which (`maxspend(...) is not a policy rule; did you mean MaxSpend?`). A tool name in a tool rule that's close to a declared tool (`AllowTools("Cod.*")` with `tool Code`) is an error too. A tool name that matches nothing declared is a warning, because the policy may be shared with a file that declares it.
 
 There is no API for custom policy rules. To run your own checks, do them in a tool provider or a `System` method (`runtime.registerSystem`) placed after the agent stage, and call `System.Fail(...)` or throw.

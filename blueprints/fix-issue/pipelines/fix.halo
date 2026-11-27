@@ -93,7 +93,7 @@ pipeline FixIssue(number: String) -> Result:
     // 4. The pipeline runs the tests itself. Red goes back to Dev with
     //    the output, twice at most; after that the run fails.
     |> Repo.run(command: "npm test > /tmp/halo-tests.log 2>&1; status=$?; tail -n 60 /tmp/halo-tests.log; exit $status", timeout_ms: 600000) as tests
-    |<> loop(Dev, "context.data.tests.exitCode != 0", max: 2)
+    |<> loop(Dev, (context.data.tests.exitCode != 0), max: 2)
 
     // 5. What changed, measured from the files, not from the report
     |> Repo.diff() as changes

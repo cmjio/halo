@@ -108,7 +108,7 @@ describe("examples run to completion with realistic data", () => {
     expect(requests[0]!.headers.get("authorization")).toBe("Bearer dk-123");
   });
 
-  test("06: gate passes for non-English and the second prompt translates the bound greeting", async () => {
+  test("06: the branch translates for non-English, English goes straight through, and no name halts", async () => {
     const prompts: string[] = [];
     const { rt } = await load("06-gates.halo", {}, {
       "Greeter.prompt": (r: MockRequest) => (prompts.push(r.prompt!), r.prompt!.startsWith("Translate") ? "¡Hola Ana!" : "Hi Ana!"),
@@ -120,9 +120,13 @@ describe("examples run to completion with realistic data", () => {
     expect(prompts[0]).toBe("Write a warm, 1-sentence greeting for Ana.");
     expect(prompts[1]).toBe("Translate this greeting into the language with code es:\n\nInput:\nHi Ana!");
 
-    const english = await rt.run("ConditionalHello", { name: "Ana", lang: "en" });
-    expect(english.status).toBe("halted");
+    console.log = () => {};
+    const english = await rt.run("ConditionalHello", { name: "Ana", lang: "en" }).finally(() => (console.log = print));
+    expect(english.status).toBe("completed");
     expect(english.output).toBe("Hi Ana!");
+    const nobody = await rt.run("ConditionalHello", { name: "", lang: "en" });
+    expect(nobody.status).toBe("halted");
+    expect(nobody.context.meta.halted?.condition).toBe('name != ""');
   });
 
   test("07: yields for approval, listens, and prints when approved", async () => {

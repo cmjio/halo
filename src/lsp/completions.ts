@@ -20,7 +20,7 @@ export const KEYWORDS: Array<[string, string]> = [
   ["system", "An agent's system prompt"],
   ["yield", "|! yield(...): ask a human"],
   ["listen", "~> listen(Source.Event): wait for an event"],
-  ["loop", "|<> loop(Agent, \"condition\"): retry the agent while the condition holds"],
+  ["loop", "|<> loop(Agent, (condition)): retry the agent while the condition holds"],
   ["each", "|* each(item in list) => Call(): one call per item"],
   ["else", "The fallback arm of a branch"],
   ["as", "Bind a result: ... as name → context.data.name"],

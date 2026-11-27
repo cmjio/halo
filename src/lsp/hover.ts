@@ -18,7 +18,7 @@ const OPERATORS: Record<string, string> = {
   "|!": "**Interrupt** `|! yield(...)`: ask a human. With no handler, the run pauses until `signal()` / `halo resume`.",
   "|*": "**Fan-out** `|* { A(), B() }`: run calls in parallel.  \n**Each** `|* each(item in list) => Call()`: one call per item.",
   "~>": "**Listen** `~> listen(Source.Event)`: wait for an external event.",
-  "|<>": "**Loop** `|<> loop(Agent, \"cond\", max: 3)`: while the condition holds, go back to the agent's stage.",
+  "|<>": "**Loop** `|<> loop(Agent, (cond), max: 3)`: while the condition holds, go back to the agent's stage.",
 };
 
 function wordAt(line: string, character: number): string {

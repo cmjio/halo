@@ -20,7 +20,7 @@ pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
   workdir
     |> Fixer.fix("Make the acceptance tests pass. The spec:", spec, tools: [Code, Tests]) as report
     |> Tests.run(command: "bun test acceptance.test.ts 2>&1 | tail -40") as result
-    |<> loop(Fixer, "context.data.result.exitCode != 0", max: 3)
+    |<> loop(Fixer, (context.data.result.exitCode != 0), max: 3)
     |> System.Value(context.data.report)
 ```
 

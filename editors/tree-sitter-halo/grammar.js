@@ -107,7 +107,7 @@ module.exports = grammar({
         seq($.fanout_operator, "{", commaSep1($.fanout_item), "}", optional($.binding)),
         seq($.fanout_operator, $.each_clause, "=>", $.call_expr, optional($.binding)),
         seq($.listen_operator, "listen", "(", $._call_value, ")", optional($.binding)),
-        seq($.loop_operator, "loop", "(", field("agent", $.identifier), ",", $.string, optional(seq(",", commaSep1($.call_arg))), ")", optional($.binding)),
+        seq($.loop_operator, "loop", "(", field("agent", $.identifier), ",", choice(seq("(", $._cond, ")"), $.string), optional(seq(",", commaSep1($.call_arg))), ")", optional($.binding)),
       ),
 
     pipe_operator: (_) => "|>",

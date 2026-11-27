@@ -1,6 +1,6 @@
 # Directives
 
-Directives go before an `agent` or `pipeline` declaration. Unknown directives produce a validator warning and are ignored.
+Directives go before an `agent` or `pipeline` declaration. A directive Halo doesn't have is an error, with the one you probably meant (`@retyr` → `@retry`).
 
 | Directive | On agents | On pipelines |
 |---|---|---|

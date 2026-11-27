@@ -36,7 +36,7 @@ The proposed syntax and an image-shaped value were run through Halo 1.5.0.
 |---|---|
 | `photo: Image`, `-> Image`, `schema Claim { photo: Image }` | Parses. Warns that `Image` is not a declared schema |
 | `photo.size < 5000000` in a gate, `{{before}}` in a prompt, `each(page in contract.pages)` | Parses |
-| `Flag(SelfHarm)`, `AllowMedia(image, pdf)` | Parses. Warns that the rule is unknown and ignored |
+| `Flag(SelfHarm)`, `AllowMedia(image, pdf)` | Parses. An unknown rule is an error (since 1.9: a rule that does nothing shouldn't load) |
 | `images: [a, b]` on a call, `yield("Approve?", show: a)` | Parses |
 | `Block(Nudity, above: 0.8)` | Parses, but reads `above: 0.8` as a second category |
 | A list at the head of a pipeline: `[a, b] \|> Eye.look()` | Does not parse |

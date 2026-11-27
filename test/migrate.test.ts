@@ -8,6 +8,8 @@ import { readAnyLock } from "../src/registry/lockfile";
 import { TOOL_PROVIDERS } from "../src/parser/builtins";
 import { initProject } from "../src/init";
 import { main } from "../src/cli";
+import { parse } from "../src/parser/index";
+import { validate } from "../src/parser/validate";
 import pkg from "../package.json";
 
 const tmp = mkdtempSync(join(tmpdir(), "halo-migrate-"));
@@ -193,4 +195,67 @@ pipeline Q(x: String) -> Result:
     }
     expect(json(dir).halo).toMatch(/^\^\d+\.\d+\.\d+$/);
   });
+
+  describe("1.9.0", () => {
+    const OLD = `tool Code : Workspace(".")
+tool Card : Vault(source: "mock", kind: "card", fields: ["number"], host: ["shop.example"])
+
+policy Budget : maxspend(0.25) & Block(PromptInjecton)
+  & AllowTools("Cod.read")
+policy Wish : Require(Approver)
+
+@retyr(2)
+agent Coder [openai/gpt-4o]
+  requires Budget, Wish
+
+schema Reply {
+  text: String
+}
+
+pipeline Fix(task: String) -> Result<Reply>:
+  task
+    |> Coder.fix("Fix it") as tests
+    |? (context.data.tests != "") =>
+    |<> loop(Coder, "context.data.tests != \\"ok\\" && task != 'x'", mx: 3)
+`;
+
+    test("lists every change: renames, rules nothing can check, loops, gate arrows and Result<T>", async () => {
+      const dir = project({ "fix.halo": OLD, "halo.json": JSON.stringify({ halo: "^1.8.0" }) });
+      const report = await migrateProject(dir, { haloVersion: "1.9.0" });
+      const by = Object.fromEntries(report.results.map((r) => [r.id, r]));
+      expect(Object.keys(by)).toEqual(["misspelled-names", "unknown-names", "loop-condition", "gate-arrow", "result-type-checked"]);
+      expect(by["misspelled-names"]!.findings.map((f) => f.message).sort()).toEqual(["Cod → Code", "PromptInjecton → PromptInjection", "host → hosts", "maxspend → MaxSpend", "mx → max", "retyr → retry"]);
+      expect(by["misspelled-names"]!.automatic).toBe(true);
+      expect(by["unknown-names"]!.findings.map((f) => f.message)).toEqual([expect.stringContaining("Require(Approver) is not something it can check")]);
+      expect(by["unknown-names"]!.automatic).toBe(false);
+      expect(by["loop-condition"]!.findings).toEqual([{ file: "fix.halo", line: 20, message: `loop(Coder, "context.data.tests != "ok" && task != 'x'")` }]);
+      expect(by["gate-arrow"]!.findings).toHaveLength(1);
+      expect(by["result-type-checked"]!.findings).toEqual([{ file: "fix.halo", line: 16, message: "Fix: Result<Reply>" }]);
+      // A Halo before the change has nothing to say about it.
+      expect((await migrateProject(dir, { haloVersion: "1.8.1" })).results).toEqual([]);
+    });
+
+    test("--write renames, rewrites the loop and the gate, and leaves the rest to a person", async () => {
+      const dir = project({ "fix.halo": OLD, "halo.json": JSON.stringify({ halo: "^1.8.0" }) });
+      const report = await migrateProject(dir, { haloVersion: "1.9.0", write: true });
+      expect(report.results.filter((r) => r.automatic).map((r) => [r.id, r.applied, r.error])).toEqual([
+        ["misspelled-names", true, undefined],
+        ["loop-condition", true, undefined],
+        ["gate-arrow", true, undefined],
+      ]);
+      const text = readFileSync(join(dir, "fix.halo"), "utf8");
+      expect(text).toContain(`policy Budget : MaxSpend(0.25) & Block(PromptInjection)\n  & AllowTools("Code.read")`);
+      expect(text).toContain(`hosts: ["shop.example"]`);
+      expect(text).toContain("@retry(2)");
+      expect(text).toContain(`    |? (context.data.tests != "")\n`);
+      expect(text).toContain(`    |<> loop(Coder, (context.data.tests != "ok" && task != 'x'), max: 3)`);
+      // What's left is the rule nothing can check, which is a person's.
+      const errors = validate(parse(text)).filter((d) => d.severity === "error").map((d) => d.message);
+      expect(errors).toEqual([expect.stringContaining("Require(Approver)")]);
+      // Running it again changes nothing.
+      await migrateProject(dir, { haloVersion: "1.9.0", write: true, from: "1.8.0" });
+      expect(readFileSync(join(dir, "fix.halo"), "utf8")).toBe(text);
+    });
+  });
 });
+

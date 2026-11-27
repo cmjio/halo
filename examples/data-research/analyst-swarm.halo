@@ -90,7 +90,7 @@ pipeline AnomalyResponse(alert: MarketAnomaly) -> Result:
          ) as news
        }
 
-    // Step 2: Gate — only proceed if anomaly is confirmed (confidence > 75%)
+    // Step 2: Gate — stop here unless the anomaly is confirmed (confidence > 75%)
     |? (context.data.assessment.confidence > 75)
 
     // Step 3: Correlate findings with existing playbooks

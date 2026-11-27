@@ -17,6 +17,6 @@ pipeline ApprovedHello(name: String) -> Result:
     |! yield(context.data.greeting)
     // Listen for approval response (the event is stored at context.data.reaction)
     ~> listen(SlackApprovals.Reaction) as reaction
-    // Gate: Only print if approved
+    // Gate: stop here unless approved (so only an approved greeting is printed)
     |? (context.data.reaction.approved == true)
     |> System.Print()

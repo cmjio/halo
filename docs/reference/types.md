@@ -32,7 +32,8 @@ Field types:
 | `Boolean` | `true` / `false` |
 | `Array`, `List`, `Array<T>` | a list (every item checked against `T`) |
 | `Object`, `JSON` | an object |
-| `Any`, `Result` | anything |
+| `Any`, `Result` | anything (not checked) |
+| `Result<T>` | the pipeline's output, checked as `T`: `-> Result<Reply>` is checked the same as `-> Reply` |
 | `Image` | an image (PNG, JPEG, GIF, WebP); see [Files](/guide/files) |
 | `Document` | a document: PDF, Word, PowerPoint, email, CSV, Markdown, HTML, JSON or text |
 | `Audio` | a recording: MP3, WAV, M4A, AAC, Ogg, FLAC, WebM |
@@ -52,6 +53,8 @@ A built-in return type is checked the same way. A model answers in text, so plai
 `@retry` does not retry schema failures. To have the model fix bad JSON, add a `Require(JSON)` policy to the agent together with `@correct(n)`. That checks the answer at the agent call and asks the model again (see [Directives](./compiler-directives.md#correct)).
 
 Halted and paused runs aren't checked. Neither are `-> Result`, `-> Any`, or a return type that isn't declared.
+
+`Result` is what a pipeline returns. Bare, it is anything. With a type, `Result<T>`, it is checked as `T`, so `-> Result<Reply>` and `-> Reply` mean the same. `Result<T>` takes exactly one type. It has no error type (`Result<Reply, String>` is an error), because a run that fails ends in an error, not a value: its status is `"failed"` and `error` says why.
 
 ## Parameters
 

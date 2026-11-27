@@ -95,7 +95,7 @@ pipeline BuildModule(m: JSON, workdir: String, spec: String, types: String) -> R
          printf '%s\n' {{code}} | sed '/^```/d' > {{m.file}}
          bun -e 'const m = await import(process.argv[1]); const missing = JSON.parse(process.argv[2]).filter((n) => !(n in m)); if (missing.length) { console.error("missing exports: " + missing.join(", ")); process.exit(1) }' "$PWD"/{{m.file}} {{m.exports}} 2>&1 | tail -30
        """) as check
-    |<> loop(Coder, "context.data.check.exitCode != 0", max: 3)
+    |<> loop(Coder, (context.data.check.exitCode != 0), max: 3)
     |> System.Value(m.file)
 
 // The fixer runs the tests, reads and edits files, and reruns them, until
@@ -104,7 +104,7 @@ pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
   workdir
     |> Fixer.fix("Make the acceptance tests pass. The spec:", spec, tools: [Code, Tests]) as report
     |> Tests.run(command: "bun test acceptance.test.ts 2>&1 | tail -40") as result
-    |<> loop(Fixer, "context.data.result.exitCode != 0", max: 3)
+    |<> loop(Fixer, (context.data.result.exitCode != 0), max: 3)
     |> System.Value(context.data.report)
 
 @correct(2)

@@ -38,6 +38,7 @@ import { FanoutOpContext } from "./HaloParser.js";
 import { EachOpContext } from "./HaloParser.js";
 import { ListenOpContext } from "./HaloParser.js";
 import { LoopOpContext } from "./HaloParser.js";
+import { LoopConditionContext } from "./HaloParser.js";
 import { BindingContext } from "./HaloParser.js";
 import { CondArmContext } from "./HaloParser.js";
 import { ElseArmContext } from "./HaloParser.js";
@@ -294,6 +295,12 @@ export class HaloVisitor<Result> extends AbstractParseTreeVisitor<Result> {
      * @return the visitor result
      */
     visitLoopOp?: (ctx: LoopOpContext) => Result;
+    /**
+     * Visit a parse tree produced by `HaloParser.loopCondition`.
+     * @param ctx the parse tree
+     * @return the visitor result
+     */
+    visitLoopCondition?: (ctx: LoopConditionContext) => Result;
     /**
      * Visit a parse tree produced by `HaloParser.binding`.
      * @param ctx the parse tree

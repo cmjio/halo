@@ -134,7 +134,7 @@ pipeline FixChecked(task: String) -> Result:
   task
     |> Dev.work("{{task}}. Run the tests until they pass.") as report
     |> Repo.run(command: "npm test 2>&1 | tail -40") as tests
-    |<> loop(Dev, "context.data.tests.exitCode != 0", max: 2)
+    |<> loop(Dev, (context.data.tests.exitCode != 0), max: 2)
     |> Repo.diff()
 ```
 

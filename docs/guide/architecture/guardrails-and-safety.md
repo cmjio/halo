@@ -55,7 +55,7 @@ See [Coding Agents That Run Their Code](../coding-agents.md) and [Remote Compute
 
 ## What is not enforced
 
-`Tone(...)`, `Anonymize(...)`, `MaxDensity(...)`, `Require(Approver)`-style checks, and topic blocks like `Block(Competitors)` would each need a model to judge the content. The runtime **ignores** them, and `halo validate` warns about every one. Run `halo validate --strict` in CI to make those warnings fail the build.
+`Tone(...)`, `Anonymize(...)` and `MaxDensity(...)` would each need a model to judge the content. The runtime **ignores** them, and `halo validate` warns about every one; run `halo validate --strict` in CI to make those warnings fail the build. A rule that can never be checked, such as `Require(Approver)`, a topic block like `Block(Competitors)`, or a misspelling like `maxspend(...)`, is an error, so the file doesn't load. See [Not enforced](../../stdlib/policies.md#not-enforced).
 
 ## Other safety features
 

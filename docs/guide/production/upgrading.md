@@ -64,7 +64,7 @@ Once the version is recorded, older changes are not checked again, including the
 | `--trust` | With `--write`: allows packages that run their own code, as `halo install --trust` does |
 | `--json` | The report as JSON |
 
-`halo validate` (run on the project folder) and `halo serve` print one line when the project is behind or ahead. They never stop for it.
+`halo validate` (run on the project folder) and `halo serve` print one line when the project is behind or ahead. They never stop for it. When `halo run` stops on a validation error and the project is behind, it says to run `halo migrate` too.
 
 ## The changes
 
@@ -74,3 +74,8 @@ Once the version is recorded, older changes are not checked again, including the
 | 1.4.0 | A model can no longer set a `POST` tool's `path` unless the tool is declared `& Unlocked("path")` (see [Rules on a tool's arguments](../../stdlib/tools.md#rules-on-a-tool-s-arguments)). Listed for each `POST` tool an agent equips that has no rule for `path` | No |
 | 1.6.0 | `Chrome.screenshot()` without a `path:` returns `{ image }`, an [image value](../files.md), instead of `{ mimeType, base64 }`. Listed for each line that reads `.base64` or `mimeType` in a file that declares a `Chrome` tool | No |
 | 1.7.0 | A `Bash` command no longer inherits Halo's whole environment, so an agent with a shell can't print your API keys. It sees `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`, `TZ` and `TERM`, plus what the declaration passes on with `env:` (see [`Bash`](../../stdlib/tools.md#bash)). Listed for each `Bash` tool with no `env:`, with the `$VARIABLES` its commands name | No |
+| 1.9.0 | A misspelled policy rule, `Block`/`Redact` category, directive, `Vault` setting or `loop` option, or a policy tool name one letter off a declared tool, is an error instead of a warning. Before, the misspelled name did nothing: `maxspend(0.25)` ran with no spend cap. `--write` renames each to the name it was close to (`maxspend` → `MaxSpend`, `@retyr` → `@retry`), which turns that rule on, so check it's what you want | Yes |
+| 1.9.0 | A rule nothing can check (`Require(Approver)`, `Block(Competitors)`, `Enforce(XML)`) is an error. It never ran before. Remove it, or use a rule that is enforced; for a person's approval, `\|! yield` | No |
+| 1.9.0 | A `loop`'s condition is written in parentheses like a gate's: `loop(Coder, (context.data.tests.exitCode != 0))`. The quoted form still works and behaves the same; `--write` rewrites it | Yes |
+| 1.9.0 | A `=>` after a gate's condition (`\|? (cond) =>`) did nothing and is now a warning. `--write` removes it | Yes |
+| 1.9.0 | `Result<T>` is checked as `T` (it was ignored, so `-> Result<Reply>` checked nothing). A run whose output doesn't match now fails. Listed for each `Result<…>` type | No |

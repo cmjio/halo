@@ -326,7 +326,8 @@ describe("halo validate: the wallet", () => {
     ]);
     expect(errors(`tool Card : Vault(source: "mock", fields: ["n"], hosts: [Env.HOST])\n${WEB}`)).toContain('Tool "Card": a Vault holds names, not values (Env.HOST would be a value); its values stay in its source');
     expect(warnings(`${VAULT}\n${WEB.replace("wallet: [Card]", "wallet: [Card], colour: \"red\"")}`)).toEqual([]);
-    expect(warnings(`tool Card : Vault(source: "mock", kind: "card", fields: ["number"], hosts: ["a.example"], colour: "red")\n${WEB}`)).toContain('Tool "Card": Vault has no setting "colour" (it has source, kind, fields, secret, hosts, pay_via, ask, hint, serve, item, vault)');
+    expect(errors(`tool Card : Vault(source: "mock", kind: "card", fields: ["number"], hosts: ["a.example"], colour: "red")\n${WEB}`)).toContain('Tool "Card": Vault has no setting "colour" (it has source, kind, fields, secret, hosts, pay_via, ask, hint, serve, item, vault)');
+    expect(errors(`tool Card : Vault(source: "mock", kind: "card", fields: ["number"], host: ["a.example"])\n${WEB}`)).toContain('Tool "Card": Vault has no setting "host"; did you mean hosts?');
   });
 
   test("wallet: names Vaults; no page scripts with a wallet; a Vault in no wallet is a warning", () => {

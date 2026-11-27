@@ -1587,8 +1587,30 @@
               "value": ","
             },
             {
-              "type": "SYMBOL",
-              "name": "string"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "("
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "_cond"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": ")"
+                    }
+                  ]
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "string"
+                }
+              ]
             },
             {
               "type": "CHOICE",
