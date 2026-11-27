@@ -214,6 +214,13 @@ describe("|! yield(connect: X)", () => {
     expect(done.status).toBe("completed");
     expect(done.output).toMatchObject({ ok: true });
   });
+
+  test("in a rehearsal (every tool mocked, the connection too) it asks nothing of the provider", async () => {
+    const r = setup(() => `pipeline P(q: String) -> Result:\n  |! yield(connect: Acme)\n  |> System.Value(context.data.yield)`, { mocks: { Acme: { mock: true }, Api: { mock: true } } });
+    const out = await r.runtime.run("P", { q: "1" });
+    expect(out.output).toEqual({ connected: true, connection: "Acme", mocked: true });
+    expect(r.s.state.requests).toHaveLength(0);
+  });
 });
 
 describe("mail with a refresh token in Env goes through the broker", () => {

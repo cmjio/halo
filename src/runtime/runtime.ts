@@ -3329,6 +3329,8 @@ export class HaloRuntime {
       this.record({ kind: "yield", target: "yield", value: answer });
       return this.deliver(stage, ctx, answer, "yield");
     }
+    // A rehearsal (halo test, a dry run) mocks every tool, the connection too: nothing is asked of the provider.
+    if (this.mockFor(name)) return this.deliver(stage, ctx, { connected: true, connection: this.displayName(name), mocked: true }, "yield");
     const conn = this.oauthConnection(name, ctx);
     try {
       await this.broker.token(conn, { fetch: this.fetch, signal: ctx.signal });
