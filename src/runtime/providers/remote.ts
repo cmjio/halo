@@ -43,6 +43,7 @@ import { shellQuote as q } from "../shell.js";
 import { intArg, need, unknownMethod } from "./common.js";
 import { confine, workspaceRoot } from "./workspace.js";
 import { unifiedDiff } from "../../diff.js";
+import { mask, maskDeep, maskError } from "../secret-mask.js";
 import { inFiles, RESERVED_SECRET, scopePath, SECRET_NAME } from "../../parser/builtins.js";
 import { compareTrees, credentialFile, hashCommand, HOST_PATTERN, parseHashes, projectFiles, PROXY_SCRIPT, sha256Hex, tarball, type FileChange } from "./sandbox-kit.js";
 
@@ -687,41 +688,10 @@ function secretValues(call: ToolCall, services: ToolServices): Map<string, strin
   return out;
 }
 
-const maskers = new WeakMap<Map<string, string>, ((text: string) => string) | null>();
-
-/**
- * Secret values masked in text a sandbox sends back: ignoring case (a host name comes back
- * lowercased), longest value first (so one secret that starts another can't leave its tail).
- * Values under 4 characters are left alone. This catches accidents, not a determined agent:
- * pair secrets: with hosts:.
- */
-export function mask(text: string, secrets: Map<string, string> | undefined): string {
-  if (!secrets || !text) return text;
-  let m = maskers.get(secrets);
-  if (m === undefined) {
-    const byValue = new Map<string, string>();
-    for (const [name, value] of secrets) {
-      const v = value.trim().toLowerCase();
-      if (v.length >= 4 && !byValue.has(v)) byValue.set(v, name);
-    }
-    const values = [...byValue.keys()].sort((a, b) => b.length - a.length);
-    const re = values.length ? new RegExp(values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "gi") : undefined;
-    m = re ? (t: string) => t.replace(re, (hit) => `[secret ${byValue.get(hit.toLowerCase())}]`) : null;
-    maskers.set(secrets, m);
-  }
-  return m ? m(text) : text;
-}
-
-/** mask() over every string in a result: names, paths, hosts, not just output. */
-function maskDeep<T>(value: T, secrets: Map<string, string> | undefined): T {
-  if (!secrets) return value;
-  if (typeof value === "string") return mask(value, secrets) as T;
-  if (Array.isArray(value)) return value.map((v) => maskDeep(v, secrets)) as T;
-  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [mask(k, secrets), maskDeep(v, secrets)])) as T;
-  }
-  return value;
-}
+// mask() is shared (secret-mask.ts): the runtime masks what it read from Env.* the same way.
+// Here it's the backstop for secrets: values a sandbox sends back. This catches accidents, not a
+// determined agent: pair secrets: with hosts:.
+export { mask };
 
 /** The name of a secret whose value is in `bytes`, if any (checked as text, ignoring case). */
 function secretIn(bytes: Uint8Array, secrets: Map<string, string> | undefined): string | undefined {
@@ -1231,11 +1201,7 @@ export async function remote(call: ToolCall, services: ToolServices): Promise<un
   try {
     return maskDeep(await dispatch(call, services, hold), hold.secrets);
   } catch (e) {
-    if (hold.secrets && e instanceof Error) {
-      e.message = mask(e.message, hold.secrets);
-      if (e.stack) e.stack = mask(e.stack, hold.secrets);
-    }
-    throw e;
+    throw maskError(e, hold.secrets);
   }
 }
 
