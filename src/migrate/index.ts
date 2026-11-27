@@ -25,6 +25,9 @@ import { readAnyLock } from "../registry/lockfile.js";
 import { compare, parseRange, parseVersion, satisfies } from "../registry/semver.js";
 import { BASH_BASE_ENV } from "../runtime/integrations.js";
 import { argRules } from "../runtime/tool-rules.js";
+import { AdapterRegistry } from "../runtime/adapter.js";
+import { priceOf, type Prices } from "../runtime/prices.js";
+import { hasLegacyTrust } from "../registry/trust.js";
 
 export interface ProjectFile {
   /** Relative to the project, with forward slashes. */
@@ -322,6 +325,111 @@ export const MIGRATIONS: Migration[] = [
         }
       }
       return out;
+    },
+  },
+  {
+    id: "package-trust-moved",
+    since: "1.10.0",
+    title: "Package trust is kept on this machine, outside the project",
+    detail:
+      "Before 1.10.0, trust for packages that run their own code was kept in the project's .halo/trust.json, so a repo could ship its own trust and have its code run by halo test or by opening a file in an editor. Now it is in ~/.config/halo/trust.json, keyed by the project's folder, and .halo/trust.json is ignored. Run halo install --trust once in this project (check halo.lock first), and delete .halo/trust.json.",
+    find(project) {
+      const out: Finding[] = [];
+      if (hasLegacyTrust(project.root)) out.push({ file: ".halo/trust.json", message: "ignored now: run halo install --trust here, then delete it" });
+      const lock = readAnyLock(project.root);
+      if (lock.version === 2) {
+        for (const [name, entry] of Object.entries(lock.lock.packages)) {
+          if (entry.permissions?.code) out.push({ file: "halo.lock", message: `${name} runs its own code, so it needs halo install --trust on this machine` });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "maxspend-needs-a-price",
+    since: "1.10.0",
+    title: "MaxSpend refuses a model Halo can't price",
+    detail:
+      "Before 1.10.0, MaxSpend counted spend with prices guessed from the model's name, or a flat rate for OpenRouter and Together, or nothing for a generic OpenAI-compatible endpoint, so a budget could let a run spend many times its cap. Now prices are exact, and an agent under MaxSpend whose model has no price is refused before the call is sent. Add each model listed here to \"prices\" in halo.json, in USD per million tokens: {\"prices\": {\"openrouter/openai/o1-pro\": {\"input\": <USD>, \"output\": <USD>}}}. Reported costs change too: claude-haiku-4-5 is counted at its real $1/$5.",
+    find(project) {
+      const registry = new AdapterRegistry();
+      const prices = (project.config.prices ?? {}) as Prices;
+      const slots = (project.config.models ?? {}) as Record<string, string>;
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        const capped = new Set(file.ast.policies.filter((p) => p.rules.some((r) => r.name === "MaxSpend")).map((p) => p.name));
+        for (const agent of file.ast.agents) {
+          if (!(agent.requires ?? []).some((r) => capped.has(r))) continue;
+          const model = agent.modelId.startsWith("models.") ? slots[agent.modelId.slice(7)] : agent.modelId;
+          if (!model) continue;
+          if (!priceOf(model, 0, registry.findAdapter(model), prices)) out.push({ file: file.path, line: agent.loc?.line, message: `${agent.name} (${model}) has MaxSpend and no price: add ${model} to "prices"` });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "query-locked",
+    since: "1.10.0",
+    title: "A model can't set query: on a GET, REST or POST tool",
+    detail:
+      "query: is a raw query string, so a model could put any parameter in it, past the tool's Locked, Fixed and Match rules. Now a model's call can't set it unless the tool says & Unlocked(\"query\"), and a key in it that one of those rules names is refused for any call. The tools listed are ones an agent equips: if a model should be able to pass extra parameters, give the tool & Unlocked(\"query\"), or better, name each parameter.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        const equipped = new Set(file.ast.agents.flatMap((a) => a.equips ?? []));
+        for (const tool of file.ast.tools) {
+          if (!["GET", "REST", "POST"].includes(tool.provider) || !equipped.has(tool.name)) continue;
+          if (!argRules(tool).locked.has("query")) continue;
+          out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} (${tool.provider}): an agent's call can't set query: now` });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "bash-second-shell",
+    since: "1.10.0",
+    title: "A Bash placeholder that a second shell would read is refused",
+    detail:
+      "Halo escapes a {{placeholder}} for the bash that runs the command, but a value inside bash -c '...', sh -c \"...\", eval or an ssh command is read again by another shell, which can run it. A value that starts with - is also refused where a command would read it as an option, unless -- comes first. These commands now fail before they run: pass the value as an argument (bash -c '... \"$1\"' _ {{x}}), through an exported variable, or after --.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const d of validate(file.ast)) {
+          if (d.severity === "warning" && /as shell code, so the run will refuse it|would read as an option/.test(d.message)) out.push({ file: file.path, line: d.line, message: d.message });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "workspace-no-git",
+    since: "1.10.0",
+    title: "A Workspace can't read or write inside .git",
+    detail:
+      "A repository's .git/config names programs git runs on ordinary calls, so a Workspace that could write it could run commands. Paths inside a .git folder are now refused, and so is a Workspace rooted in one. Listed: Workspaces rooted in a .git folder. If a tool really must reach .git, declare it with git: true.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const tool of file.ast.tools) {
+          if (tool.provider !== "Workspace") continue;
+          const root = tool.args?.[0] as { kind?: string; value?: unknown } | undefined;
+          if (root?.kind === "string" && typeof root.value === "string" && root.value.split(/[\\/]/).some((p) => p.toLowerCase() === ".git")) out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} is rooted in .git` });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "secrets-not-in-urls",
+    since: "1.10.0",
+    title: "halo serve doesn't take the API token or a webhook secret from the URL",
+    detail:
+      "URLs end up in logs and proxies. The API (and /mcp) now needs Authorization: Bearer <token>; ?token= gets 401. A webhook's secret must come in the x-halo-secret header (or a GitHub signature); ?secret= is accepted only for a webhook with \"secretInQuery\": true, for senders that can only put it in the URL. Listed: webhooks with a secret.",
+    find(project) {
+      const hooks = Array.isArray(project.config.webhooks) ? (project.config.webhooks as Array<{ path?: string; secret?: unknown; secretInQuery?: boolean }>) : [];
+      return hooks.filter((h) => h.secret && !h.secretInQuery).map((h) => ({ file: "halo.json", message: `webhook /hooks/${h.path}: send the secret as x-halo-secret, or add "secretInQuery": true` }));
     },
   },
 ];

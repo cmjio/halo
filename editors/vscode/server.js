@@ -8085,7 +8085,7 @@ var require_server = __commonJS(function(exports) {
 
 // node_modules/vscode-languageserver/lib/node/files.js
 var require_files = __commonJS(function(exports) {
-  var __filename = "/Users/cmj/projects/oneshots/halo/.claude/worktrees/wallet/node_modules/vscode-languageserver/lib/node/files.js";
+  var __filename = "/Users/cmj/projects/oneshots/halo/node_modules/vscode-languageserver/lib/node/files.js";
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.resolveModulePath = exports.FileSystem = exports.resolveGlobalYarnPath = exports.resolveGlobalNodePath = exports.resolve = exports.uriToFilePath = undefined;
   var url = __require("url");
@@ -36900,7 +36900,9 @@ class HttpError extends HaloError {
 // src/runtime/tool-rules.ts
 var TOOL_ARG_RULES = ["Fixed", "Match", "Locked", "Unlocked"];
 var DEFAULT_LOCKED = {
-  POST: ["path"]
+  POST: ["path", "query"],
+  GET: ["query"],
+  REST: ["query"]
 };
 var cache = new WeakMap;
 
@@ -37357,6 +37359,412 @@ function walletUnsafeTool(t) {
   }
 }
 
+// src/runtime/shell.ts
+var PLACEHOLDER = /\{\{\s*[\w.]+\s*\}\}/y;
+var PLACEHOLDERS = /\{\{\s*[\w.]+\s*\}\}/g;
+var QUOTING = new Set(["'", '"', "$'", "`", "(", "((", "$["]);
+function heredocWord(cmd, from) {
+  let i = from;
+  const stripTabs = cmd[i] === "-";
+  if (stripTabs)
+    i++;
+  while (cmd[i] === " " || cmd[i] === "\t")
+    i++;
+  let delimiter = "";
+  let quoted = false;
+  for (;i < cmd.length && !/[\s;&|<>()]/.test(cmd[i]); i++) {
+    const c = cmd[i];
+    if (c === "'" || c === '"') {
+      const close = cmd.indexOf(c, i + 1);
+      if (close < 0)
+        return;
+      delimiter += cmd.slice(i + 1, close);
+      quoted = true;
+      i = close;
+    } else if (c === "\\") {
+      delimiter += cmd[++i] ?? "";
+      quoted = true;
+    } else {
+      delimiter += c;
+    }
+  }
+  if (!delimiter)
+    return;
+  return { doc: { delimiter, expands: !quoted, stripTabs }, end: i };
+}
+var SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish", "su"]);
+var WRAPPERS = new Set(["sudo", "doas", "env", "exec", "command", "builtin", "nohup", "time", "nice", "timeout", "xargs", "sshpass", "stdbuf", "setsid"]);
+var PREFIXES = new Set(["if", "then", "elif", "else", "do", "while", "until", "!", "{", "fi", "done", "}", "esac"]);
+var NO_OPTIONS = new Set(["echo", "for", "case", "select", "in", "[[", "((", "[", "test", ":", "true", "false", "function"]);
+var SSH_ARG = new Set("BbcDEeFIiJLlmOoPpQRSWw");
+var ASSIGNMENT = /^([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=/;
+var REDIRECT = /\d*(<<<|<<-|<<|&>>|&>|>>|<>|>\||<&|>&|<\(|>\(|<|>)/y;
+function simpleCommands(cmd) {
+  const out = [];
+  const pending = [];
+  let i = 0;
+  let backticks = 0;
+  const placeholder = () => {
+    PLACEHOLDER.lastIndex = i;
+    const m = PLACEHOLDER.exec(cmd);
+    if (m)
+      i += m[0].length;
+    return !!m;
+  };
+  const bodies = () => {
+    let p = i + 1;
+    while (pending.length && p <= cmd.length) {
+      const { doc, owner } = pending.shift();
+      const from = p;
+      for (;; ) {
+        const e = cmd.indexOf(`
+`, p);
+        const end = e < 0 ? cmd.length : e;
+        const line = cmd.slice(p, end);
+        if ((doc.stripTabs ? line.replace(/^\t+/, "") : line) === doc.delimiter || end === cmd.length) {
+          owner.stdin.push({ start: from, end: (doc.stripTabs ? line.replace(/^\t+/, "") : line) === doc.delimiter ? p : end });
+          p = end + 1;
+          break;
+        }
+        p = end + 1;
+      }
+    }
+    pending.length = 0;
+    i = p;
+  };
+  const skipParens = () => {
+    let depth = 0;
+    for (;i < cmd.length; i++) {
+      if (cmd[i] === "(")
+        depth++;
+      else if (cmd[i] === ")" && --depth === 0)
+        return void i++;
+    }
+  };
+  const single = () => {
+    const e = cmd.indexOf("'", i + 1);
+    i = e < 0 ? cmd.length : e + 1;
+  };
+  const dollar = () => {
+    if (cmd[i] === "`") {
+      i++;
+      backticks++;
+      list("`");
+      backticks--;
+      return;
+    }
+    const n = cmd[i + 1];
+    if (n === "(" && cmd[i + 2] === "(")
+      i++, skipParens();
+    else if (n === "(")
+      i += 2, list(")");
+    else if (n === "{") {
+      i += 2;
+      while (i < cmd.length && cmd[i] !== "}") {
+        if (placeholder())
+          continue;
+        const c = cmd[i];
+        if (c === "\\")
+          i += 2;
+        else if (c === "'")
+          single();
+        else if (c === '"')
+          i += 1, double();
+        else if (c === "$" || c === "`")
+          dollar();
+        else
+          i++;
+      }
+      i++;
+    } else if (n === "[") {
+      const e = cmd.indexOf("]", i);
+      i = e < 0 ? cmd.length : e + 1;
+    } else
+      i++;
+  };
+  const double = () => {
+    while (i < cmd.length && cmd[i] !== '"') {
+      if (placeholder())
+        continue;
+      const c = cmd[i];
+      if (c === "\\")
+        i += 2;
+      else if (c === "$" || c === "`" && !backticks)
+        dollar();
+      else if (c === "`")
+        return;
+      else
+        i++;
+    }
+    i++;
+  };
+  const word = () => {
+    while (i < cmd.length) {
+      if (placeholder())
+        continue;
+      const c = cmd[i];
+      if (/[\s;&|<>()]/.test(c) || c === "`" && backticks)
+        return;
+      if (c === "\\")
+        i += 2;
+      else if (c === "'")
+        single();
+      else if (c === "$" && cmd[i + 1] === "'") {
+        i += 2;
+        while (i < cmd.length && cmd[i] !== "'")
+          i += cmd[i] === "\\" ? 2 : 1;
+        i++;
+      } else if (c === '"')
+        i += 1, double();
+      else if (c === "$" || c === "`")
+        dollar();
+      else
+        i++;
+    }
+  };
+  const list = (close) => {
+    let cur = { words: [], stdin: [] };
+    out.push(cur);
+    const next = () => {
+      if (cur.words.length || cur.stdin.length)
+        out.push(cur = { words: [], stdin: [] });
+    };
+    let target;
+    while (i < cmd.length) {
+      const c = cmd[i];
+      if (close && c === close)
+        return void i++;
+      if (c === " " || c === "\t" || c === "\r")
+        i++;
+      else if (c === "\\" && cmd[i + 1] === `
+`)
+        i += 2;
+      else if (c === `
+`) {
+        next();
+        if (pending.length)
+          bodies();
+        else
+          i++;
+      } else if (c === ";" || c === "|" || c === "&" && cmd[i + 1] !== ">" || c === ")") {
+        next();
+        i++;
+      } else if (c === "(" && cmd[i + 1] === "(")
+        skipParens();
+      else if (c === "(") {
+        i++;
+        next();
+        list(")");
+        next();
+      } else if (c === "#") {
+        const e = cmd.indexOf(`
+`, i);
+        i = e < 0 ? cmd.length : e;
+      } else {
+        REDIRECT.lastIndex = i;
+        const r = REDIRECT.exec(cmd);
+        if (r && (r[1] === "<(" || r[1] === ">(")) {
+          const start = i;
+          i += r[0].length;
+          list(")");
+          cur.words.push({ start, end: i });
+        } else if (r && (r[1] === "<<" || r[1] === "<<-")) {
+          const h = heredocWord(cmd, i + r[0].length - (r[1] === "<<-" ? 1 : 0));
+          if (h)
+            pending.push({ doc: h.doc, owner: cur });
+          i = h ? h.end : i + r[0].length;
+        } else if (r) {
+          i += r[0].length;
+          target = r[1] === "<<<" ? "stdin" : "file";
+        } else {
+          const start = i;
+          word();
+          if (i === start)
+            i++;
+          const w = { start, end: i };
+          if (target === "stdin")
+            cur.stdin.push(w);
+          else if (!target)
+            cur.words.push(w);
+          target = undefined;
+        }
+      }
+    }
+  };
+  list();
+  return out.filter((c) => c.words.length || c.stdin.length);
+}
+function literal2(cmd, w) {
+  if (!w)
+    return;
+  const text = cmd.slice(w.start, w.end);
+  if (/[$`]|\{\{/.test(text))
+    return;
+  return text.replace(/\\(.)|['"]/g, "$1");
+}
+function expandedNames(text) {
+  const names = [];
+  let dq = false;
+  for (let i = 0;i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\")
+      i++;
+    else if (c === "'" && !dq) {
+      const e = text.indexOf("'", i + 1);
+      i = e < 0 ? text.length : e;
+    } else if (c === '"')
+      dq = !dq;
+    else if (c === "$") {
+      const m = /^\$\{?([A-Za-z_]\w*)/.exec(text.slice(i));
+      if (m)
+        names.push(m[1]);
+    }
+  }
+  return names;
+}
+function reparseChecks(cmd) {
+  const spots = new Map;
+  const runsCode = new Set;
+  const commands = simpleCommands(cmd);
+  const placeholders = (from, to) => [...cmd.slice(from, to).matchAll(PLACEHOLDERS)].map((m) => ({ at: from + m.index, name: m[0] }));
+  const base = (w) => literal2(cmd, w)?.replace(/^.*\//, "");
+  const taint = new Map;
+  const assigned = [];
+  for (const c of commands) {
+    for (const w of c.words) {
+      const text = cmd.slice(w.start, w.end);
+      const m = ASSIGNMENT.exec(text);
+      if (m)
+        assigned.push({ name: m[1], text, at: placeholders(w.start, w.end).map((p) => p.at) });
+    }
+  }
+  for (let changed = true;changed; ) {
+    changed = false;
+    for (const a of assigned) {
+      const from = new Set(a.at);
+      for (const n of expandedNames(a.text.slice(a.name.length)))
+        for (const at of taint.get(n) ?? [])
+          from.add(at);
+      const had = taint.get(a.name) ?? new Set;
+      if ([...from].some((at) => !had.has(at))) {
+        taint.set(a.name, new Set([...had, ...from]));
+        changed = true;
+      }
+    }
+  }
+  const nameAt = (at) => cmd.slice(at).match(PLACEHOLDER.source)[0];
+  const refuse = (words, why, via) => {
+    for (const w of words) {
+      for (const p of placeholders(w.start, w.end))
+        spots.set(p.at, { name: p.name, reparse: why(p.name) });
+      for (const v of expandedNames(cmd.slice(w.start, w.end))) {
+        for (const at of taint.get(v) ?? [])
+          if (!spots.get(at)?.reparse)
+            spots.set(at, { name: nameAt(at), reparse: via(nameAt(at), v) });
+      }
+    }
+  };
+  for (const c of commands) {
+    const { words } = c;
+    let n = 0;
+    while (n < words.length && (PREFIXES.has(literal2(cmd, words[n]) ?? "") || ASSIGNMENT.test(cmd.slice(words[n].start, words[n].end))))
+      n++;
+    if (n >= words.length && !c.stdin.length)
+      continue;
+    const name = base(words[n]);
+    const runs = (j) => j === n || WRAPPERS.has(name ?? "");
+    let positional = Infinity;
+    for (let j = n;j < words.length; j++) {
+      const word = base(words[j]);
+      if (word === "eval" && (j === n || name === "builtin" || name === "command")) {
+        runsCode.add("eval");
+        refuse(words.slice(j + 1), (p) => `${p} is an argument of eval, which runs it as shell code, so it can't be escaped; use the value in the command itself instead of through eval`, (p, v) => `${p} is stored in $${v}, and eval runs $${v} as shell code, so it can't be escaped; use the value in the command itself instead of through eval`);
+        break;
+      }
+      if (word === "ssh" && runs(j)) {
+        let k = j + 1;
+        for (;k < words.length; k++) {
+          const opt = literal2(cmd, words[k]);
+          if (!opt?.startsWith("-") || opt === "-")
+            break;
+          if (opt === "--") {
+            k++;
+            break;
+          }
+          const letters = [...opt.slice(1)];
+          const takes = letters.findIndex((l) => SSH_ARG.has(l));
+          if (takes === letters.length - 1)
+            k++;
+        }
+        const remote = words.slice(k + 1);
+        if (remote.length)
+          runsCode.add("ssh");
+        refuse(remote, (p) => `${p} is in the command ssh runs on the remote host, which a second shell reads there, so it can't be escaped; send the value on stdin instead, e.g. printf '%s' ${p} | ssh host 'cat > file'`, (p, v) => `${p} is stored in $${v}, which is in the command ssh runs on the remote host, where a second shell reads it, so it can't be escaped; send the value on stdin instead`);
+        if (!remote.length) {
+          refuse(c.stdin, (p) => `${p} is in the script ssh sends to the remote host's shell on stdin, so it can't be escaped; pass the value as data instead`, (p, v) => `${p} is stored in $${v}, which is in the script ssh sends to the remote host's shell on stdin, so it can't be escaped; pass the value as data instead`);
+        }
+        positional = k + 1;
+        break;
+      }
+      if (word && SHELLS.has(word)) {
+        let k = j + 1;
+        let code;
+        let stdin = false;
+        for (;k < words.length; k++) {
+          const opt = literal2(cmd, words[k]);
+          if (word === "su") {
+            if (opt === "-c" || opt === "--command" || opt === "--session-command")
+              code = words[k + 1];
+            else if (opt?.startsWith("--command="))
+              code = words[k];
+            if (code)
+              break;
+            continue;
+          }
+          if (opt === undefined || !/^[-+]/.test(opt) || opt === "-" || opt === "--")
+            break;
+          if (/^[-+][oO]$/.test(opt))
+            k++;
+          else if (opt === "--command" || /^-[A-Za-z]*c[A-Za-z]*$/.test(opt)) {
+            code = words[k + 1];
+            break;
+          } else if (/^-[A-Za-z]*s[A-Za-z]*$/.test(opt))
+            stdin = true;
+        }
+        if (code) {
+          runsCode.add(`${word} -c`);
+          const fix = word === "su" || word === "fish" ? "restructure the command so the value isn't in that string" : `pass it as an argument instead: ${word} -c '... "$1"' _ {{value}}`;
+          refuse([code], (p) => `${p} is inside a string that a second shell runs (${word} -c), so it can't be escaped; ${fix.replace("{{value}}", p)}`, (p, v) => `${p} is stored in $${v}, which is inside a string that a second shell runs (${word} -c), so it can't be escaped; ${fix.replace("{{value}}", p)}`);
+          positional = words.indexOf(code) + 1;
+          break;
+        }
+        if (runs(j) && (stdin || k >= words.length)) {
+          runsCode.add(word);
+          const fix = (p) => `pass it as an argument instead: ${word} -s -- ${p} <<'EOF' ... "$1"`;
+          refuse(c.stdin, (p) => `${p} is in a script that a second shell reads on stdin (${word} <<EOF), so it can't be escaped; ${fix(p)}`, (p, v) => `${p} is stored in $${v}, which is in a script that a second shell reads on stdin (${word} <<EOF), so it can't be escaped; ${fix(p)}`);
+          positional = k;
+        }
+        break;
+      }
+    }
+    if (NO_OPTIONS.has(name ?? "") || name === undefined && words[n] && /^\[\[|^\(\(/.test(cmd.slice(words[n].start)))
+      continue;
+    for (let k = n + 1;k < words.length && k < positional; k++) {
+      const w = words[k];
+      if (literal2(cmd, w) === "--")
+        break;
+      if (name === "printf" && k > n + 1)
+        break;
+      const first = placeholders(w.start, w.end)[0];
+      if (!first || !/^(?:["']|\$')*$/.test(cmd.slice(w.start, first.at)) || spots.has(first.at))
+        continue;
+      const before = cmd.slice(words[n].start, w.start).replace(/\s+/g, " ").trim();
+      spots.set(first.at, { name: first.name, option: `${name ?? "the command"} would read as an option; put -- before it to end the options (${before} -- ${first.name}), or join it to the option it is the value of (--option=${first.name})` });
+    }
+  }
+  return { spots, runsCode: [...runsCode] };
+}
+
 // src/parser/validate.ts
 function stageCalls(st) {
   switch (st.kind) {
@@ -37592,7 +38000,7 @@ class Validator {
     for (const t of tools) {
       const why = walletUnsafeTool(t);
       if (why)
-        this.add("error", `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser} has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file`, t.loc);
+        this.add("error", `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser} has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file, run in a separate process (its own halo run, or its own halo serve with its own stateDir)`, t.loc);
     }
     const walletAgents = new Set(this.ast.agents.filter((a) => (a.equips ?? []).some((e) => walletTools.has(e))).map((a) => a.name));
     for (const a of this.ast.agents) {
@@ -38131,8 +38539,14 @@ class Validator {
       return;
     }
     const cmd = arg.value.value;
-    if (/\b(?:eval|(?:ba|z|da)?sh\s+-c)\s+\{\{/.test(cmd) || /\{\{[^}]*\}\}[^\n;&]*\|\s*(?:ba|z|da)?sh\b/.test(cmd))
+    const { spots, runsCode } = reparseChecks(cmd);
+    const reparsed = [...spots.values()].filter((s) => s.reparse);
+    for (const s of reparsed)
+      warn(`runs ${s.name}'s value as shell code, so the run will refuse it: ${s.reparse}`);
+    if (!reparsed.length && (/\b(?:eval|(?:ba|z|da)?sh\s+-c)\s+\{\{/.test(cmd) || /\{\{[^}]*\}\}[^\n;&]*\|\s*(?:ba|z|da)?sh\b/.test(cmd)))
       warn("runs a {{placeholder}}'s value as shell code (eval, sh -c, or | sh); pass it as data instead");
+    if (runsCode.includes("eval") && /\{\{/.test(cmd) && !reparsed.length)
+      warn("uses eval in a command with a {{placeholder}}; if the value reaches eval (through a variable, a file, or a command's output), it runs as shell code, so check the value with a policy or gate first, or don't use eval");
   }
   checkSystem(call, where) {
     const positional = call.argList.filter((a) => !a.name);
@@ -39976,9 +40390,8 @@ function readPackage(bytes, options = {}) {
 var checks = new WeakMap;
 
 // src/registry/lockfile.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-var TRUST_FILE = ".halo/trust.json";
 function readAnyLock(root) {
   const path = join(root, LOCK_FILE);
   if (!existsSync(path))
@@ -39999,19 +40412,8 @@ function readAnyLock(root) {
 }
 var packageDir = (root, name) => join(root, PACKAGES_DIR, ...name.split("/"));
 var PACKAGE_FILE = "package.halotool";
-function readTrust(root) {
-  const path = join(root, TRUST_FILE);
-  if (!existsSync(path))
-    return {};
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return {};
-  }
-}
 
 // src/registry/packages.ts
-import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { dirname, join as join2, relative, resolve } from "node:path";
 // src/runtime/providers/sandbox-kit.ts
@@ -40276,7 +40678,7 @@ async function multipartBody(fields, read) {
 // package.json
 var package_default = {
   name: "halo",
-  version: "1.8.1",
+  version: "1.10.0",
   description: "Halo: a declarative language for AI workflows",
   license: "MIT",
   homepage: "https://halolang.com",
@@ -40832,43 +41234,6 @@ function mcpClient(label, config, fetchFn = fetch, environ) {
   }
   return client;
 }
-function maybeJson(text) {
-  if (/^\s*[[{"]/.test(text)) {
-    try {
-      return JSON.parse(text);
-    } catch {}
-  }
-  return text;
-}
-function contentItem(item) {
-  switch (item?.type) {
-    case "text":
-      return item.text;
-    case "image":
-    case "audio":
-      return { type: item.type, mimeType: item.mimeType, data: item.data };
-    case "resource":
-      return item.resource?.text !== undefined ? maybeJson(item.resource.text) : item.resource;
-    default:
-      return item;
-  }
-}
-function mcpResultValue(result) {
-  if (result?.structuredContent !== undefined && result.structuredContent !== null)
-    return result.structuredContent;
-  const content = Array.isArray(result?.content) ? result.content : [];
-  if (content.every((c) => c?.type === "text"))
-    return maybeJson(content.map((c) => c.text).join(`
-`));
-  const items = content.map(contentItem);
-  return items.length === 1 ? items[0] : items;
-}
-function errorText(result) {
-  const content = Array.isArray(result?.content) ? result.content : [];
-  const text = content.filter((c) => c?.type === "text").map((c) => c.text).join(`
-`).trim();
-  return text || "the tool reported an error";
-}
 function effectOf(tool) {
   const a = tool.annotations ?? {};
   if (a.readOnlyHint === true)
@@ -40885,59 +41250,6 @@ function mcpToolMethod(tool) {
     effect: effectOf(tool)
   };
 }
-function toolArguments(call, tool) {
-  const args = {};
-  if (!call.implicitInput) {
-    const [first, ...more] = call.positional;
-    if (more.length)
-      throw new HaloError(`${call.tool.name}.${call.method}: pass MCP tool arguments by name, e.g. ${call.tool.name}.${call.method}(query: "...")`, { code: "TOOL_ARGUMENT" });
-    if (first && typeof first === "object" && !Array.isArray(first))
-      Object.assign(args, first);
-    else if (first !== undefined) {
-      const schema = tool?.inputSchema;
-      const name = schema?.required?.[0] ?? (schema?.properties && Object.keys(schema.properties).length === 1 ? Object.keys(schema.properties)[0] : undefined);
-      if (!name)
-        throw new HaloError(`${call.tool.name}.${call.method}: pass MCP tool arguments by name, e.g. ${call.tool.name}.${call.method}(name: value)`, { code: "TOOL_ARGUMENT" });
-      args[name] = first;
-    }
-  }
-  Object.assign(args, call.named);
-  return args;
-}
-var mcpProvider = async (call, services) => {
-  const client = mcpClient(call.tool.name, call.config, services.fetch, services.env);
-  const signal = call.signal;
-  switch (call.method) {
-    case "list_tools":
-      return client.listTools(signal);
-    case "list_resources":
-      return client.listResources(signal);
-    case "read_resource": {
-      const uri = call.named.uri ?? (call.implicitInput ? undefined : call.positional[0]);
-      if (typeof uri !== "string" || !uri)
-        throw new HaloError(`${call.tool.name}.read_resource needs uri: "..."`, { code: "TOOL_ARGUMENT" });
-      const res = await client.request("resources/read", { uri }, signal);
-      const contents = Array.isArray(res?.contents) ? res.contents : [];
-      const values = contents.map((c) => c.text !== undefined ? maybeJson(c.text) : { uri: c.uri, mimeType: c.mimeType, blob: c.blob });
-      return values.length === 1 ? values[0] : values;
-    }
-  }
-  const tools = await client.listTools(signal);
-  const tool = tools.find((t) => t.name === call.method);
-  if (!tool) {
-    const names = [...tools.map((t) => t.name), ...BUILTIN_METHODS];
-    throw new HaloError(`MCP tool "${call.tool.name}" has no method "${call.method}" (use ${names.join(", ")})`, { code: "TOOL_METHOD" });
-  }
-  const args = await inlineFiles(toolArguments(call, tool), (ref) => {
-    if (!services.media)
-      throw new HaloError(`${call.tool.name}: this runtime can't read the files its runs hold, so it can't send them`, { code: "TOOL_CONFIG" });
-    return services.media(ref);
-  });
-  const result = await client.request("tools/call", { name: tool.name, arguments: args }, signal);
-  if (result?.isError)
-    throw new HaloError(`${call.tool.name}.${call.method}: ${errorText(result)}`, { code: "TOOL_FAILED" });
-  return mcpResultValue(result);
-};
 var MCP_INFO = {
   description: "A Model Context Protocol server's tools, over stdio (a command) or Streamable HTTP (url:).",
   methods: async (ctx, services) => {
@@ -41078,111 +41390,12 @@ function httpProvider(providerName, spec) {
   };
   return { provider, info };
 }
-function mcpPackageProvider(spec) {
-  const fixed = (config) => (key) => {
-    if (key === 0)
-      return spec.command ?? spec.url;
-    if (key === "url")
-      return spec.url;
-    if (key === "env")
-      return spec.env;
-    return config(key);
-  };
-  const provider = (call, services) => mcpProvider({ ...call, config: fixed(call.config) }, services);
-  const list = MCP_INFO.methods;
-  return { provider, info: { description: spec.description, methods: (ctx, services) => list({ ...ctx, config: fixed(ctx.config) }, services) } };
-}
-async function moduleProvider(entryPath, name, spec) {
-  const mod = await import(entryPath);
-  const own = mod.providers?.[name] ?? (mod.provider ? { provider: mod.provider, info: mod.info } : undefined);
-  if (typeof own?.provider !== "function")
-    throw new HaloError(`${entryPath} doesn't export a provider for ${name} (export \`provider\` and \`info\`, or \`providers.${name}\`)`, { code: "TOOL_CONFIG" });
-  return { provider: own.provider, info: { description: spec.description, ...own.info ?? {} } };
-}
 
 // src/registry/packages.ts
-var PACKAGE_FORMAT = "halo-tool/1";
-var LOCK_FILE2 = "halo.lock";
-var TOOLS_DIR = ".halo/tools";
-var TRUST_FILE2 = ".halo/trust.json";
 var HOSTED_REGISTRY = "https://halolang.com/registry/index.json";
 var BUNDLED_REGISTRY = resolve(import.meta.dirname, "../../registry/index.json");
 var DEFAULT_REGISTRY = existsSync2(BUNDLED_REGISTRY) ? BUNDLED_REGISTRY : HOSTED_REGISTRY;
 var MAX_PACKAGE_BYTES2 = 5 * 1024 * 1024;
-
-class PackageError2 extends Error {
-}
-var sha2562 = (bytes) => createHash2("sha256").update(bytes).digest("hex");
-function readPackage2(bytes, reserved = []) {
-  if (bytes.length > MAX_PACKAGE_BYTES2 * 1.5)
-    throw new PackageError2("Package is too large");
-  let pkg;
-  try {
-    pkg = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new PackageError2("Not a Halo tool package (not JSON)");
-  }
-  if (pkg?.format !== PACKAGE_FORMAT || !pkg.files || typeof pkg.files !== "object")
-    throw new PackageError2(`Not a Halo tool package (format is not ${PACKAGE_FORMAT})`);
-  for (const path of Object.keys(pkg.files))
-    if (!safeRelative(path))
-      throw new PackageError2(`Package has an unsafe file path: ${path}`);
-  const inner = pkg.files[MANIFEST_FILE];
-  if (!inner)
-    throw new PackageError2(`Package has no ${MANIFEST_FILE}`);
-  pkg.manifest = checkManifest(JSON.parse(Buffer.from(inner, "base64").toString("utf8")), reserved);
-  return pkg;
-}
-function readLock(root) {
-  const path = join2(root, LOCK_FILE2);
-  if (!existsSync2(path))
-    return { tools: {} };
-  const lock = JSON.parse(readFileSync2(path, "utf8"));
-  return { tools: lock.tools ?? {} };
-}
-function readTrust2(root) {
-  const path = join2(root, TRUST_FILE2);
-  return existsSync2(path) ? JSON.parse(readFileSync2(path, "utf8")) : {};
-}
-async function loadInstalled(root) {
-  const lock = readLock(root);
-  const trust = readTrust2(root);
-  const out = [];
-  for (const [name, entry] of Object.entries(lock.tools)) {
-    const dir = join2(root, TOOLS_DIR, name);
-    const file = join2(dir, "package.halotool");
-    if (!existsSync2(file))
-      throw new PackageError2(`Tool package "${name}" is in ${LOCK_FILE2} but not installed; run \`halo install\``);
-    const bytes = readFileSync2(file);
-    if (sha2562(bytes) !== entry.sha256)
-      throw new PackageError2(`Tool package "${name}" doesn't match ${LOCK_FILE2} (its files changed); run \`halo install\``);
-    const pkg = readPackage2(bytes);
-    for (const [path, data] of Object.entries(pkg.files)) {
-      const target = join2(dir, path);
-      const content = Buffer.from(data, "base64");
-      if (!existsSync2(target) || !readFileSync2(target).equals(content)) {
-        mkdirSync2(dirname(target), { recursive: true });
-        writeFileSync2(target, content);
-      }
-    }
-    for (const [providerName, spec] of Object.entries(pkg.manifest.providers)) {
-      let built;
-      if (spec.kind === "http")
-        built = httpProvider(providerName, spec);
-      else if (spec.kind === "mcp") {
-        if (spec.command && trust[name] !== entry.sha256)
-          throw new PackageError2(`Tool package "${name}" starts a command, and this machine hasn't trusted this version; run \`halo add ${name} --trust\` (or halo install --trust)`);
-        built = mcpPackageProvider(spec);
-      } else {
-        if (trust[name] !== entry.sha256)
-          throw new PackageError2(`Tool package "${name}" runs its own code, and this machine hasn't trusted this version; run \`halo add ${name} --trust\` (or halo install --trust)`);
-        built = await moduleProvider(join2(dir, spec.entry), providerName, spec);
-      }
-      out.push({ name: providerName, packageName: name, ...built });
-    }
-  }
-  return out;
-}
 
 // src/registry/resolver.ts
 function verifyInstalled(root, name, lock) {
@@ -41234,26 +41447,11 @@ function installedResolver(root) {
     }
   };
 }
-async function buildProvider(name, providerName, spec, dir, trusted) {
-  if (spec.kind === "http")
-    return httpProvider(providerName, spec);
-  if (spec.kind === "mcp") {
-    if (spec.command && !trusted)
-      throw new PackageError(`Package ${name} starts a command, and this machine hasn't trusted this version; run \`halo install --trust\``);
-    return mcpPackageProvider(spec);
-  }
-  if (!trusted)
-    throw new PackageError(`Package ${name} runs its own code, and this machine hasn't trusted this version; run \`halo install --trust\``);
-  return moduleProvider(join3(dir, spec.entry), providerName, spec);
-}
-async function loadPackageProviders(root) {
+function loadPackageInfo(root) {
   const any = readAnyLock(root);
-  if (any.version === 1)
-    return loadInstalled(root);
-  if (any.version === 0)
+  if (any.version !== 2)
     return [];
   const lock = any.lock;
-  const trust = readTrust(root);
   const verified = Object.keys(lock.packages).map((name) => [name, verifyInstalled(root, name, lock)]);
   const owners = new Map;
   for (const [name, v] of verified) {
@@ -41266,10 +41464,10 @@ async function loadPackageProviders(root) {
   const out = [];
   for (const [name, v] of verified) {
     for (const [providerName, spec] of Object.entries(v.pkg.manifest.providers ?? {})) {
-      const built = await buildProvider(name, providerName, spec, v.dir, trust[name] === v.sha256);
-      out.push({ name: qualifiedProvider(name, providerName), packageName: name, ...built });
+      const info = spec.kind === "http" ? httpProvider(providerName, spec).info : { description: spec.description };
+      out.push({ name: qualifiedProvider(name, providerName), info });
       if (bare.get(providerName) === name)
-        out.push({ name: providerName, packageName: name, ...built });
+        out.push({ name: providerName, info });
     }
   }
   return out;
@@ -41643,9 +41841,7 @@ var CHROME_INFO = {
 var SKIP = new Set(["node_modules", ".git"]);
 // src/runtime/providers/git.ts
 var WRITES = new Set(["commit", "checkout"]);
-
-// src/runtime/shell.ts
-var QUOTING = new Set(["'", '"', "$'", "`", "(", "((", "$["]);
+var SECRET_PATHSPECS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", ".netrc", ".pgpass", ".npmrc", ".pypirc", "credentials", "credentials.json", ".git-credentials"].map((g) => `:(exclude,glob,icase)**/${g}`);
 
 // src/runtime/providers/remote.ts
 var DAYTONA_FAILED = new Set(["error", "build_failed", "destroyed", "destroying"]);
@@ -42572,14 +42768,14 @@ var BUILTIN_PROVIDER_INFO = {
 
 // src/lsp/tools.ts
 var builtin = (p) => BUILTIN_PROVIDER_INFO[p];
-var literal2 = (v) => v === undefined ? undefined : v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map(literal2) : v.kind === "null" ? null : v.kind === "ref" ? v.path.join(".") : v.kind;
+var literal3 = (v) => v === undefined ? undefined : v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map(literal3) : v.kind === "null" ? null : v.kind === "ref" ? v.path.join(".") : v.kind;
 function fromDeclaration(t) {
   const positional = t.argList.filter((a) => !a.name);
   const first = positional[0]?.value;
   return {
     name: t.name,
     provider: t.provider,
-    config: (key) => literal2(typeof key === "number" ? positional[key]?.value : t.argList.find((a) => a.name === key)?.value),
+    config: (key) => literal3(typeof key === "number" ? positional[key]?.value : t.argList.find((a) => a.name === key)?.value),
     target: first?.kind === "string" ? first.value : undefined
   };
 }
@@ -43698,9 +43894,9 @@ function lookupFor(path) {
   if (!cached || Date.now() - cached.at > 60000) {
     const entry = { at: Date.now(), info: cached?.info ?? new Map };
     packageInfo.set(root, entry);
-    loadPackageProviders(root).then((loaded) => {
-      entry.info = new Map(loaded.filter((p) => p.info).map((p) => [p.name, p.info]));
-    }).catch(() => {});
+    try {
+      entry.info = new Map(loadPackageInfo(root).map((p) => [p.name, p.info]));
+    } catch {}
   }
   const info = packageInfo.get(root).info;
   return (provider) => info.get(provider);
