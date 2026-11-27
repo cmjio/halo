@@ -1,14 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolDeclaration } from "../src/parser/types.js";
 import { HaloError } from "../src/runtime/errors.js";
-import { closeMcpClients, MCP_INFO, mcpProvider, splitCommand } from "../src/runtime/mcp.js";
+import { closeMcpClients, MCP_INFO, mcpProvider, mcpTarget, resolveCommandPaths, splitCommand } from "../src/runtime/mcp.js";
 import type { ToolCall, ToolServices } from "../src/runtime/tools.js";
 import { createMcpServer, haloTypeToJsonSchema, serveMcpStdio } from "../src/serve/mcp-server.js";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "mcp-echo-server.ts");
-// Bun loads .env from its cwd, so the env test runs the fixture from a folder without one.
-const FIXTURE_DIR = join(import.meta.dir, "fixtures");
 const COMMAND = `"${process.execPath}" "${FIXTURE}"`;
 
 const services = { fetch } as unknown as ToolServices;
@@ -72,7 +72,7 @@ describe("MCP client over stdio", () => {
 
   test("list_tools follows pagination; resources work", async () => {
     const tools = (await mcpProvider(call(cfg, "list_tools"), services)) as Array<{ name: string }>;
-    expect(tools.map((t) => t.name)).toEqual(["echo", "add", "fail", "env", "picture", "die"]);
+    expect(tools.map((t) => t.name)).toEqual(["echo", "add", "fail", "env", "picture", "die", "cwd", "slow"]);
     expect(await mcpProvider(call(cfg, "list_resources"), services)).toEqual([{ uri: "memo://hello", name: "hello" }]);
     expect(await mcpProvider(call(cfg, "read_resource", { uri: "memo://hello" }), services)).toEqual({ hello: "world" });
   });
@@ -99,15 +99,62 @@ describe("MCP client over stdio", () => {
     process.env.PROBE = "visible";
     process.env.SECRET_NOT_LISTED = "hidden";
     try {
-      const listed = (await mcpProvider(call({ 0: COMMAND, env: ["PROBE"], cwd: FIXTURE_DIR }, "env"), services)) as { names: string[]; probe: string | null };
+      const listed = (await mcpProvider(call({ 0: COMMAND, env: ["PROBE"] }, "env"), services)) as { names: string[]; probe: string | null };
       expect(listed.probe).toBe("visible");
       expect(listed.names).not.toContain("SECRET_NOT_LISTED");
       for (const n of listed.names) expect(["PATH", "HOME", "PROBE"]).toContain(n);
-      const bare = (await mcpProvider(call({ 0: COMMAND, cwd: FIXTURE_DIR }, "env"), services)) as { names: string[]; probe: string | null };
+      const bare = (await mcpProvider(call({ 0: COMMAND }, "env"), services)) as { names: string[]; probe: string | null };
       expect(bare.probe).toBeNull();
     } finally {
       delete process.env.PROBE;
       delete process.env.SECRET_NOT_LISTED;
+    }
+  });
+
+  test("a server starts in a private empty folder, so it can't load the project's .env", async () => {
+    // A project with a .env holding a key, and a server script in it, run as `bun ./server.ts`.
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "halo-mcp-project-")));
+    copyFileSync(FIXTURE, join(project, "server.ts"));
+    mkdirSync(join(project, "bin"));
+    copyFileSync(FIXTURE, join(project, "bin", "server.ts"));
+    writeFileSync(join(project, ".env"), "HALO_API_KEY=leaked\nPROBE=from-dotenv\n");
+    const home = process.cwd();
+    process.chdir(project);
+    try {
+      for (const command of [`"${process.execPath}" ./server.ts`, `"${process.execPath}" server.ts`, `"${process.execPath}" bin/server.ts`]) {
+        const seen = (await mcpProvider(call({ 0: command }, "env"), services)) as { names: string[]; probe: string | null };
+        expect(seen.names).not.toContain("HALO_API_KEY");
+        expect(seen.probe).toBeNull();
+        const where = (await mcpProvider(call({ 0: command }, "cwd"), services)) as { cwd: string };
+        expect(where.cwd.startsWith(project)).toBe(false);
+      }
+      // cwd: "." runs it in the project, still without the project's .env (bun gets --no-env-file).
+      const here = { 0: `"${process.execPath}" ./server.ts`, cwd: "." };
+      expect(((await mcpProvider(call(here, "cwd"), services)) as { cwd: string }).cwd).toBe(project);
+      const seen = (await mcpProvider(call(here, "env"), services)) as { names: string[] };
+      expect(seen.names).not.toContain("HALO_API_KEY");
+    } finally {
+      process.chdir(home);
+      await closeMcpClients();
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("relative paths in the command resolve against the project", () => {
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "halo-mcp-paths-")));
+    writeFileSync(join(project, "server.ts"), "");
+    try {
+      expect(resolveCommandPaths(["bun", "./server.ts"], project)).toEqual(["bun", join(project, "server.ts")]);
+      expect(resolveCommandPaths(["bun", "server.ts", "--root=./data", "."], project)).toEqual(["bun", join(project, "server.ts"), `--root=${join(project, "data")}`, project]);
+      expect(resolveCommandPaths(["./bin/server", "-y", "@scope/pkg", "missing.ts", "https://x.example"], project)).toEqual([join(project, "bin/server"), "-y", "@scope/pkg", "missing.ts", "https://x.example"]);
+      expect(resolveCommandPaths(["npx", "-y", "/abs/path"], project)).toEqual(["npx", "-y", "/abs/path"]);
+      // With cwd: the command is left as written, and cwd: is resolved against the project.
+      const t = mcpTarget("T", (k) => ({ 0: "bun ./server.ts", cwd: "sub" } as Record<string | number, unknown>)[k], {}, project);
+      expect(t).toMatchObject({ kind: "stdio", argv: ["bun", "./server.ts"], cwd: join(project, "sub") });
+      const dot = mcpTarget("T", (k) => ({ 0: "bun ./server.ts", cwd: "." } as Record<string | number, unknown>)[k], {}, project);
+      expect(dot).toMatchObject({ argv: ["bun", "--no-env-file", "./server.ts"], cwd: project });
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
   });
 
