@@ -46,7 +46,7 @@ test("every built-in provider with a fixed set of methods lists them", () => {
   for (const p of TOOL_PROVIDERS) {
     const src = `tool T : ${p}("x")\n\npipeline P(a: String) -> Result:\n  a\n    |> T.`;
     const items = getCompletions(src, at(src));
-    if (p === "MCP" || p === "Skills") expect(items).toEqual([]); // listed by the server / skills folder at run time
+    if (p === "MCP" || p === "Skills" || p === "OAuth") expect(items).toEqual([]); // listed by the server / skills folder at run time; a connection has none
     else expect(items.length).toBeGreaterThan(0);
   }
 });

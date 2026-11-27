@@ -44,9 +44,40 @@ export interface PlanStep {
   notes: string[];
 }
 
+/** What this machine has stored for a connection (never a token), as `halo plan` shows it. */
+export interface AuthStatus {
+  connected: boolean;
+  account?: string;
+  /** When the access token expires (ms since epoch). */
+  expiresAt?: number;
+  /** Whether a refresh token is kept (so an expired access token renews itself). */
+  refreshable?: boolean;
+  /** The scopes the server granted. */
+  scopes?: string[];
+  /** Why it needs signing in again (a revoked grant). */
+  needsLogin?: string;
+}
+
+/** An OAuth connection the pipeline's tools use. */
+export interface PlanAuth {
+  connection: string;
+  grant: string;
+  scopes: string[];
+  /** The tools that act through it. */
+  tools: string[];
+  status: "connected" | "not connected" | "needs login" | "service" | "unknown";
+  account?: string;
+  expiresAt?: number;
+  refreshable?: boolean;
+  /** Granted scopes beyond the declared ones. */
+  wider?: string[];
+}
+
 export interface Plan {
   pipeline: string;
   steps: PlanStep[];
+  /** The OAuth connections its tools use, and whether this machine is connected. */
+  auth: PlanAuth[];
   /** Worst case for the whole run; undefined when it depends on input size (each over a list). */
   maxCost?: number;
   costNote?: string;
@@ -60,7 +91,14 @@ export interface PlanOptions {
   adapters?: AdapterRegistry;
   /** halo.json "prices" (USD per million tokens, by model), which win over the adapters' tables. */
   prices?: Prices;
+  /** What this machine has stored for an OAuth connection (the CLI reads its token index; nothing is unlocked or asked). */
+  authStatus?(connection: string): AuthStatus | undefined;
+  /** For "expires in": now, in ms. */
+  now?: number;
 }
+
+/** Scopes that ask for a refresh token or an identity, not access: never "wider than declared". */
+const IDENTITY_SCOPES = new Set(["openid", "offline_access", "profile", "email"]);
 
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_MAX_STEPS = 10;
@@ -109,6 +147,60 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     });
   };
   const effectOf = (toolName: string, method: string): ToolEffect | "unknown" => methodsOf(toolName)?.find((m) => m.name === method)?.effect ?? "unknown";
+
+  // ── OAuth: which connection each tool acts through, and whether this machine has it ──
+  const auths = new Map<string, PlanAuth>();
+  const authOf = (toolName: string): PlanAuth | undefined => {
+    const tool = tools.get(toolName);
+    if (!tool) return undefined;
+    const written = tool.argList.find((a) => a.name === "auth")?.value;
+    const named = written?.kind === "ref" ? written.path.join(".") : written?.kind === "string" ? written.value : undefined;
+    let connection: string;
+    let grant = "authorization_code";
+    let scopes: string[] = [];
+    if (named !== undefined) {
+      const decl = tools.get(named);
+      if (decl?.provider !== "OAuth") return undefined;
+      connection = named;
+      grant = String(literalArg(decl, "grant") ?? grant);
+      const s = literalArg(decl, "scopes");
+      scopes = Array.isArray(s) ? s.map(String) : typeof s === "string" ? s.split(/[\s,]+/).filter(Boolean) : [];
+    } else {
+      // A package tool whose manifest says "type": "oauth" is its own connection.
+      const info = options.providerInfo(tool.provider);
+      if (!info?.oauth) return undefined;
+      connection = tool.name;
+      try {
+        const c = info.oauth(tool.name, (k) => literalArg(tool, k) ?? (k === "clientId" ? "(client id)" : undefined), {}, "/");
+        grant = c.grant;
+        scopes = c.scopes;
+      } catch {}
+    }
+    let entry = auths.get(connection);
+    if (!entry) {
+      const st = options.authStatus?.(connection);
+      const wider = st?.scopes?.filter((x) => !scopes.includes(x) && !IDENTITY_SCOPES.has(x));
+      entry = {
+        connection,
+        grant,
+        scopes,
+        tools: [],
+        status: grant === "client_credentials" ? "service" : !options.authStatus ? "unknown" : st?.needsLogin ? "needs login" : st?.connected ? "connected" : "not connected",
+        ...(st?.account ? { account: st.account } : {}),
+        ...(st?.expiresAt ? { expiresAt: st.expiresAt } : {}),
+        ...(st?.refreshable !== undefined ? { refreshable: st.refreshable } : {}),
+        ...(wider?.length ? { wider } : {}),
+      };
+      auths.set(connection, entry);
+    }
+    if (!entry.tools.includes(toolName)) entry.tools.push(toolName);
+    return entry;
+  };
+  const authNote = (toolName: string): string[] => {
+    const a = authOf(toolName);
+    if (!a) return [];
+    return [`auth: ${a.connection} (oauth, ${a.grant})${a.scopes.length ? ` [${a.scopes.join(", ")}]` : ""}${a.status === "unknown" ? "" : ` · ${authState(a, options.now ?? Date.now())}`}`];
+  };
 
   /** Would a policy hide or deny this call; would it need approval? */
   const decide = (agent: Agent, target: string, effect: ToolEffect | "unknown") => {
@@ -184,7 +276,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         return;
       }
       const unknownWhy = !methodsOf(tool.name) ? " (its server says what this does only at run time: effect unknown)" : " (effect not described)";
-      steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? unknownWhy : ""}`] });
+      steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? unknownWhy : ""}`, ...authNote(tool.name)] });
       return;
     }
     if (agent) {
@@ -197,6 +289,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         step.effects.push({ target: `${name}.${stage.method}`, effect: effectOf(name, stage.method) });
       }
       for (const name of toolset) {
+        step.notes.push(...authNote(name));
         const methods = methodsOf(name);
         if (!methods) {
           // A rule that approves every method of the tool still applies, whatever they turn out to be.
@@ -280,11 +373,39 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
       effects: s.effects.map((e) => ({ ...e, target: show(e.target), ...(e.via ? { via: show(e.via) } : {}), ...(e.approval ? { approval: show(e.approval) } : {}) })),
       notes: s.notes.map(show),
     })),
+    auth: [...auths.values()].map((a) => ({ ...a, connection: show(a.connection), tools: a.tools.map(show) })),
     maxCost,
     cappedAt,
     costNote: unbounded ? "depends on how many items `each` gets" : unpriced.length ? `no price for ${unpriced.join(", ")}` : undefined,
     spendLimits: spendLimits.map((l) => ({ ...l, agent: show(l.agent), policy: show(l.policy) })),
   };
+}
+
+/** "in 41 min", "in 3 h", "2 days ago". */
+function relative(ms: number, now: number): string {
+  const d = ms - now;
+  const a = Math.abs(d);
+  const text = a < 90_000 ? `${Math.round(a / 1000)} s` : a < 90 * 60_000 ? `${Math.round(a / 60_000)} min` : a < 36 * 3_600_000 ? `${Math.round(a / 3_600_000)} h` : `${Math.round(a / 86_400_000)} days`;
+  return d >= 0 ? `in ${text}` : `${text} ago`;
+}
+
+/** A connection's state in words: `connected as ada@example.com, token expires in 41 min` or `not connected: halo auth login Google`. */
+export function authState(a: PlanAuth, now = Date.now()): string {
+  switch (a.status) {
+    case "service":
+      return "client credentials (no login)";
+    case "not connected":
+      return `not connected: halo auth login ${a.connection}`;
+    case "needs login":
+      return `needs signing in again: halo auth login ${a.connection}`;
+    case "unknown":
+      return "";
+    case "connected": {
+      const who = a.account ? ` as ${a.account}` : "";
+      const until = a.expiresAt ? `, access token ${a.expiresAt > now ? "expires" : "expired"} ${relative(a.expiresAt, now)}${a.refreshable ? " (refresh token kept)" : ""}` : a.refreshable ? ", refresh token kept" : "";
+      return `connected${who}${until}`;
+    }
+  }
 }
 
 /** The plan as text for the terminal. */
@@ -308,6 +429,11 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
   lines.push(`${color.bold("Acts on the world without asking:")} ${acts.length ? acts.join("; ") : "nothing"}`);
   lines.push(`${color.bold("Needs a person's approval:")} ${approved.length ? approved.join(", ") : "nothing"}`);
   if (unknown.length) lines.push(`${color.bold("Effects unknown:")} ${unknown.join(", ")}`);
+  for (const a of p.auth ?? []) {
+    const state = authState(a);
+    lines.push(`${color.bold("Acts as:")} ${a.tools.join(", ")} through ${a.connection} (oauth, ${a.grant})${a.scopes.length ? ` [${a.scopes.join(", ")}]` : ""}${state ? `: ${a.status === "connected" || a.status === "service" ? state : color.yellow(state)}` : ""}`);
+    if (a.wider?.length) lines.push(color.yellow(`  warning: ${a.connection} was granted more than it declares: ${a.wider.join(", ")}`));
+  }
   const capped = p.cappedAt !== undefined && (p.maxCost === undefined || p.cappedAt < p.maxCost) ? `, but MaxSpend stops the run at $${p.cappedAt.toFixed(2)}` : "";
   lines.push(`${color.bold("Worst-case model cost:")} ${p.maxCost !== undefined ? `$${p.maxCost.toFixed(4)}` : p.costNote?.startsWith("no price") ? "unknown" : "unbounded"}${capped}${p.costNote ? color.dim(` (${p.costNote})`) : ""}`);
   for (const l of p.spendLimits) lines.push(`${color.bold("Spend limit:")} ${l.agent} stops once the run has spent $${l.limit.toFixed(2)} (policy ${l.policy})`);

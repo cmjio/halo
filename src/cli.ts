@@ -50,8 +50,9 @@ import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
 import { annotationsFromEffects, createMcpServer, describePipelineTool, pipelineEffects, serveMcpStdio, type McpToolAnnotations } from "./serve/mcp-server.js";
 import { cmdWallet } from "./wallet-cli.js";
+import { authStatusFor, cmdAuth } from "./auth-cli.js";
 import { Progress, progressWanted, seconds } from "./progress.js";
-import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
+import { installedProviderNames, loadPackageInfo, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
 import { PACKAGE_COMMANDS, PACKAGE_HELP, runPackageCommand } from "./registry/cli.js";
 import { MigrateError, migrateProject, migrationHint } from "./migrate/index.js";
 
@@ -82,6 +83,10 @@ USAGE:
                                         Card and personal details a browser agent can type but never
                                         read: store one in the Keychain at a hidden prompt (add <Item>
                                         <field>), see which are set, read the audit log
+  halo auth [login|logout|list|status]  Connect an OAuth declaration to an account, once, for
+                                        every run in this project: login <Connection> opens the
+                                        browser (--device prints a code instead); its tokens stay
+                                        in the Keychain or ~/.config/halo, never in the project
   halo sandboxes [prune]                List the Docker sandboxes, snapshots and networks Halo made;
                                         prune removes the snapshots and networks (--all: stops
                                         running sandboxes too; --json)
@@ -254,7 +259,7 @@ interface Flags {
   bools: Set<string>;
 }
 
-const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-progress", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run", "stdin"]);
+const BOOL_FLAGS = new Set(["yes", "reset", "mock", "auto-approve", "json", "strict", "help", "version", "no-telemetry", "no-progress", "no-studio", "trust", "no-record", "live-models", "live-tools", "live-changed", "no-builtin", "no-judge", "force", "pr", "package", "write", "check", "dry-run", "stdin", "device", "no-browser", "no-revoke"]);
 const RECORDINGS = ".halo/recordings";
 const CHECKPOINTS = ".halo/checkpoints";
 const THREADS = ".halo/threads.sqlite";
@@ -358,7 +363,16 @@ async function installed(): Promise<LoadedProvider[]> {
 }
 
 // Checking a file only needs the names of installed providers: no package code is loaded for it.
-const validateOptions = async () => ({ canHandleModel, toolProviders: installedProviderNames(process.cwd()) });
+const validateOptions = async () => ({ canHandleModel, toolProviders: installedProviderNames(process.cwd()), oauthProviders: oauthPackageProviders() });
+
+/** Installed http providers whose tools sign in with OAuth (read from their manifests: no package code runs). */
+function oauthPackageProviders(): string[] {
+  try {
+    return loadPackageInfo(process.cwd()).filter((p) => p.info.oauth).map((p) => p.name);
+  } catch {
+    return [];
+  }
+}
 
 function registerInstalled(rt: HaloRuntime, providers: LoadedProvider[]) {
   for (const p of providers) rt.registerToolProvider(p.name, p.provider, p.info);
@@ -704,7 +718,9 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
   if (result.status === "paused" && meta.paused) {
     const what = meta.paused.waitingFor === "yield" ? "a human response" : meta.paused.waitingFor;
     console.error(yellow(`‖ Paused at stage ${meta.paused.stage} ${stageAt(ast, meta.pipeline, meta.paused.stage)}, waiting for ${what}${meta.paused.message ? `: ${meta.paused.message}` : ""}`));
-    console.error(`  Continue with: halo resume ${rel} ${result.runId} --payload approve`);
+    const connect = meta.paused.waitingFor.startsWith("connect:") ? meta.paused.waitingFor.slice("connect:".length) : undefined;
+    if (connect) console.error(`  Connect it with: halo auth login ${connect}\n  Then continue with: halo resume ${rel} ${result.runId}`);
+    else console.error(`  Continue with: halo resume ${rel} ${result.runId} --payload approve`);
   }
   // @expect: hard checks on the output. Placeholder answers from --mock (without --mocks) can't be held to them.
   let expectFailed = false;
@@ -942,7 +958,9 @@ async function cmdPlan(flags: Flags): Promise<number> {
   const target = last(flags, "pipeline");
   const names = target ? [pickStream(ast, target, true).name] : entryPipelines(ast).map((p) => p.name);
   const prices = (await haloConfig()).prices;
-  const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider), prices }));
+  // Whether this machine is connected, from the token index (nothing is unlocked, nothing is asked).
+  const authStatus = authStatusFor(ast, { project: process.cwd(), providerInfo: (provider) => rt.toolProviderInfo(provider) });
+  const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider), prices, authStatus }));
   if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));
   else console.log(plans.map((p) => formatPlan(p, { bold, dim, red, yellow })).join("\n\n"));
   return diags.some((d) => d.severity === "error") ? 1 : 0;
@@ -1765,6 +1783,11 @@ export async function main(argv: string[]): Promise<number> {
         return cmdSkills(flags);
       case "wallet":
         return await cmdWallet({ positional: flags.positional, bools: flags.bools, get: (n) => last(flags, n) });
+      case "auth": {
+        const providers = await installed();
+        const info = new Map(providers.map((p) => [p.name, p.info]));
+        return await cmdAuth({ positional: flags.positional, bools: flags.bools, get: (n) => last(flags, n) }, { providerInfo: (p) => info.get(p) });
+      }
       default:
         // `halo file.halo` runs the file.
         if (command.endsWith(".halo")) return await cmdRun(parseFlags(argv), false);

@@ -208,6 +208,8 @@ export const BUILTIN_PROVIDER_INFO: Record<string, ProviderInfo> = {
   MCP: MCP_INFO,
   Chrome: CHROME_INFO,
   Vault: VAULT_INFO,
+  // A connection other tools name with auth:; nothing to call.
+  OAuth: { description: "An OAuth connection: tools take it with auth:", methods: [] },
   ...LOCAL_PROVIDER_INFO,
 };
 
