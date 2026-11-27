@@ -41,6 +41,7 @@ import {
 } from "./builtins.js";
 import { PRESET_NAMES, findPreset } from "../runtime/presets.js";
 import { DEFAULT_LOCKED, TOOL_ARG_RULES } from "../runtime/tool-rules.js";
+import { canBacktrackBadly, FALLBACK_MS, regexProblem, type RegexOptions } from "../runtime/safe-regex.js";
 import { sandboxChoice, sandboxProblem } from "../runtime/sandbox-agents.js";
 import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
@@ -117,6 +118,21 @@ class Validator {
 
   private add(severity: Diagnostic["severity"], message: string, loc?: Loc, token?: string) {
     this.diags.push({ severity, message, ...(loc ? { line: loc.line, column: loc.column } : {}), ...(token ? { token } : {}), ...(loc?.file ? { file: loc.file } : {}) });
+  }
+
+  /**
+   * A regex as the runtime will run it (src/runtime/safe-regex.ts, with the same options).
+   * Invalid is an error. One RE2 can't run goes to JavaScript's engine under a time limit, and a
+   * check that runs out of time fails closed: a warning, or an error for a deny rule whose
+   * pattern has the shape that backtracks for ever, since a model could then get every call refused.
+   */
+  private checkRegex(what: string, pattern: string, opts: RegexOptions, loc: Loc | undefined, deny: boolean) {
+    const r = regexProblem(pattern, opts);
+    if ("error" in r) return this.add("error", `${what} is not a valid regular expression`, loc);
+    if (r.engine === "re2") return;
+    const why = `uses something the linear-time engine can't run (a backreference like \\1, or a lookahead that isn't at the start), so it runs on JavaScript's engine with a ${FALLBACK_MS}ms limit, and a check that runs out of time ${deny ? "refuses the call" : "counts as a violation"}`;
+    if (canBacktrackBadly(pattern)) this.add(deny ? "error" : "warning", `${what} ${why}; it also has a nested repeat like (a+)+, which can take exponential time: rewrite it without one or without the backreference/lookahead`, loc);
+    else this.add("warning", `${what} ${why}`, loc);
   }
 
   run(): Diagnostic[] {
@@ -209,8 +225,8 @@ class Validator {
         this.add("error", `Policy "${g.name}": Validate needs a field, an operator, and a value, e.g. Validate("amount", "<=", "context.data.limit")`, g.loc);
       } else if (rule.name === "Enforce" && !rule.args.every((a) => a.toUpperCase() === "JSON")) {
         this.add("error", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) can't be checked; only Enforce(JSON) is`, g.loc);
-      } else if (rule.name === "MatchRegex" && !validRegex(rule.args[0] ?? "")) {
-        this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
+      } else if (rule.name === "MatchRegex") {
+        this.checkRegex(`Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""})`, rule.args[0] ?? "", {}, g.loc, false);
       } else if (rule.name === "AllowHosts") {
         if (!rule.args.length) this.add("error", `Policy "${g.name}": AllowHosts(...) needs at least one host, e.g. AllowHosts("pypi.org", "*.pythonhosted.org")`, g.loc);
         for (const h of rule.args) if (!HOST_PATTERN.test(h)) this.add("error", `Policy "${g.name}": AllowHosts(${h}) is not a host name like "pypi.org" or "*.pythonhosted.org"`, g.loc);
@@ -372,7 +388,7 @@ class Validator {
     }
     if (rule.name === "DenyArgs") {
       if (args.length !== 2 && args.length !== 3) this.add("error", `Policy "${g.name}": DenyArgs needs a tool pattern, optionally an argument name, and a regular expression, e.g. DenyArgs("Shell.run", "command", "rm\\s+-rf")`, g.loc);
-      else if (!validRegex(args.at(-1)!)) this.add("error", `Policy "${g.name}": DenyArgs(${rule.args.at(-1)}) is not a valid regular expression`, g.loc);
+      else this.checkRegex(`Policy "${g.name}": DenyArgs(${rule.args.at(-1)})`, args.at(-1)!, { ignoreCase: true }, g.loc, true);
     }
     const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
     for (const pattern of patterns) {
@@ -402,7 +418,7 @@ class Validator {
       } else if (rule.name === "Match") {
         const pattern = rule.args[1];
         if (rule.args.length !== 2 || !name(rule.args[0]) || pattern?.kind !== "string") this.add("error", `${where} needs an argument name and a regular expression for its whole value, e.g. Match("amount", "\\\\d+")`, t.loc);
-        else if (!validRegex(pattern.value)) this.add("error", `${where}("${name(rule.args[0])}", ${JSON.stringify(pattern.value)}) is not a valid regular expression`, t.loc);
+        else this.checkRegex(`${where}("${name(rule.args[0])}", ${JSON.stringify(pattern.value)})`, pattern.value, { whole: true, dotAll: true }, t.loc, false);
       } else {
         if (!rule.args.length || rule.args.some((a) => !name(a))) this.add("error", `${where} needs argument names, e.g. ${rule.name}("path")`, t.loc);
         if (rule.name === "Unlocked") {
@@ -1013,14 +1029,5 @@ function nearMiss(written: string, known: string): boolean {
 
 function article(type: string): string {
   return `${/^[AEIOU]/.test(type) ? "an" : "a"} ${type}`;
-}
-
-function validRegex(pattern: string): boolean {
-  try {
-    new RegExp(pattern);
-    return true;
-  } catch {
-    return false;
-  }
 }
 

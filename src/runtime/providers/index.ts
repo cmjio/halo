@@ -377,7 +377,12 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
       { name: "blame", description: "Who last changed each line of a file.", params: object({ path: { type: "string" }, start: { type: "integer", minimum: 1 }, end: { type: "integer", minimum: 1 }, ref: { type: "string" } }, ["path"]), effect: "read" },
       { name: "branches", description: "Local and remote branches.", params: object({}), effect: "read" },
       { name: "files", description: "Tracked and untracked (not ignored) files, optionally matching a pathspec.", params: object({ pattern: { type: "string" } }), effect: "read" },
-      { name: "grep", description: "Search the repository's files.", params: object({ pattern: { type: "string" }, path: { type: "string" }, regex: { type: "boolean" }, ignore_case: { type: "boolean" } }, ["pattern"]), effect: "read" },
+      {
+        name: "grep",
+        description: "Search the repository's files for plain text, or with regex: true a POSIX extended regex (git grep -E). \\d \\w \\s and their capitals work; \\b, lookarounds and backreferences don't.",
+        params: object({ pattern: { type: "string" }, path: { type: "string" }, regex: { type: "boolean" }, ignore_case: { type: "boolean" } }, ["pattern"]),
+        effect: "read",
+      },
       { name: "commit", description: "Stage paths (or all: true) and commit them. Hooks are skipped.", params: object({ message: { type: "string" }, paths: strings("Files to stage first."), all: { type: "boolean" } }, ["message"]), effect: "write" },
       { name: "checkout", description: "Switch to a branch, or create it with create: true.", params: object({ branch: { type: "string" }, create: { type: "boolean" } }, ["branch"]), effect: "write" },
     ],

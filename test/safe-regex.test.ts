@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "../src/parser/index";
+import { validate } from "../src/parser/validate";
 import { PolicyEngine, type PolicyHooks } from "../src/runtime/policies";
 import { HaloRuntime, useTool, type MockRequest } from "../src/runtime/runtime";
 import { constrain } from "../src/runtime/tool-rules";
@@ -176,5 +177,23 @@ describe("Data.filter matches", () => {
 
   test("a row the pattern can't be decided on is an error, not a dropped row", async () => {
     await expect(call({ data: [{ name: `${"a".repeat(32)}!` }], where: { name: { matches: String.raw`^(a+)+\1$` } } })).rejects.toThrow("took too long");
+  });
+});
+describe("halo validate", () => {
+  const diags = (src: string) => validate(parse(src));
+
+  test("a DenyArgs pattern that can backtrack badly on the bounded engine is an error; RE2 ones are fine", () => {
+    const base = `tool Sh : Bash()\nagent A [openai/gpt-4o] equips Sh requires G\npipeline P(x: String) -> Result:\n  x |> A.go()\n`;
+    const d = diags(`policy G : DenyArgs("Sh.run", "command", "^(a+)+\\\\1$")\n${base}`);
+    expect(d.filter((x) => x.severity === "error").map((x) => x.message).join("\n")).toContain("can take exponential time");
+    const ok = diags(`policy G : DenyArgs("Sh.run", "command", "${ALLOW_WORDS.replaceAll("\\", "\\\\")}")\n${base}`);
+    expect(ok.filter((x) => /regular expression|exponential|JavaScript's engine/.test(x.message))).toEqual([]);
+    const warn = diags(`policy G : DenyArgs("Sh.run", "command", "rm(?!x)")\n${base}`);
+    expect(warn.find((x) => x.severity === "warning" && x.message.includes("runs on JavaScript's engine"))).toBeDefined();
+  });
+
+  test("validate uses the runtime's flags and engine: (?i) and \\p{L} are valid", () => {
+    const d = diags(`policy G : MatchRegex("(?i)^\\\\p{L}+$")\nagent A [openai/gpt-4o] requires G\npipeline P(x: String) -> Result:\n  x |> A.go()\n`);
+    expect(d.filter((x) => x.message.includes("regular expression"))).toEqual([]);
   });
 });
