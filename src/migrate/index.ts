@@ -432,6 +432,22 @@ export const MIGRATIONS: Migration[] = [
       return hooks.filter((h) => h.secret && !h.secretInQuery).map((h) => ({ file: "halo.json", message: `webhook /hooks/${h.path}: send the secret as x-halo-secret, or add "secretInQuery": true` }));
     },
   },
+  {
+    id: "bash-ssh-options",
+    since: "1.12.0",
+    title: "A Bash placeholder in an ssh option that runs a command, or in a remote path, is refused",
+    detail:
+      "ssh runs -o ProxyCommand=, LocalCommand= and KnownHostsCommand= through a shell on this machine, turns -J into such a command, and scp and rsync can hand a remote path (host:{{f}}) to the remote host's shell; sftp reads a heredoc as its commands. These commands now fail before they run. Write the option out or put it under a Host alias in ~/.ssh/config (ProxyJump for a jump host), use a fixed remote path, and write ./{{f}} for a local scp path.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const d of validate(file.ast)) {
+          if (d.severity === "warning" && /ssh's \w+ option|is the value of (?:ssh|scp|sftp|rsync) |part of (?:ssh|scp|sftp)'s options|in a remote path|starts an scp path|commands sftp reads/.test(d.message)) out.push({ file: file.path, line: d.line, message: d.message });
+        }
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {
