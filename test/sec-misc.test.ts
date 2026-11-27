@@ -114,8 +114,10 @@ describe("regex search runs off the main thread", () => {
   test("a pattern that backtracks forever is stopped, and the process stays responsive", async () => {
     const dir = join(tmp, "redos");
     mkdirSync(dir, { recursive: true });
-    // JavaScriptCore gives up on one line after about a second, so it takes a file of them to stall a process.
-    writeFileSync(join(dir, "f.txt"), `${"a".repeat(40)}!\n`.repeat(12));
+    // JavaScriptCore gives up on one line after a while (about a second here, a third of that on a
+    // fast machine), so it takes a file of them to stall a process: enough that no machine gets
+    // through them inside the 5s limit.
+    writeFileSync(join(dir, "f.txt"), `${"a".repeat(40)}!\n`.repeat(400));
     const rt = new HaloRuntime().load(parse(`tool W : Workspace(${JSON.stringify(dir)})\npipeline P(x: String) -> Result:\n  x |> W.search(pattern: "^(a+)+$", regex: true)`));
     let ticks = 0;
     const timer = setInterval(() => ticks++, 100);
