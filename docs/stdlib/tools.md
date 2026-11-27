@@ -2,6 +2,8 @@
 
 Declare a tool with `tool Name : Provider(args)`. A pipeline can call it directly (`|> Name.method(...)`), an equipped agent can call it first (`Agent.task(tool: Name, ...)`), or an equipped agent can choose its own calls (`Agent.task(tools: [Name])`, see [Agents with Tools](../guide/agents-with-tools.md)). If a call has no positional arguments, its first argument is the flowing value (Browser's URL, a memory search's query, a File entry); REST and POST don't send it. Tokens can be written as `Env.NAME` or `"Env.NAME"`, and they are read only when the tool is used.
 
+**A value read from `Env` is masked if a service sends it back.** Some services quote what they were sent, like an error page that repeats the `Authorization` header. Halo remembers each value it reads from `Env.NAME` (and the model providers' keys), and replaces it with `[secret NAME]` in every tool result and error, before the model, the terminal, telemetry, recordings, Studio or an `onEvent` callback sees it. The values stay in memory only. A value isn't masked if it is under 8 characters, a number, `true` or `false`, a word like `production` or `us-east-1`, a host name, a path, or a URL without a user, password or query, unless the variable's name has `KEY`, `TOKEN`, `SECRET`, `PASS`, `AUTH` or a similar word in it (then any value of 8 or more characters is masked). Masking catches accidents. A tool that re-encodes a value (base64, URL-encoding) gets past it, so keep keys out of what a tool returns.
+
 | Provider | What it does |
 |---|---|
 | `REST` / `GET` | HTTP GET, JSON or text response |
@@ -56,6 +58,7 @@ tool Ledger : POST("ledger.example.com/v1/prizes/issue", apiKey: Env.LEDGER_KEY,
 - A model's call that breaks a rule isn't made. The model is told why, the run goes on, and the refusal is recorded in `context.meta.violations` with the tool's name as the policy and `phase: "tool"`, like a call refused by a [policy](./policies.md#tool-rules).
 - The rules apply to the named argument on every method of the tool.
 - They are checked before an approval is asked for, so a person is never asked to approve a call the tool would refuse.
+- Keep secrets out of a `GET` or `REST` tool's `Fixed`. A GET sends its arguments in the URL's query string, and server logs, proxies and browser history keep URLs. Send a key in a header with `apiKey: Env.NAME` (it goes as `Authorization: Bearer …`). `halo validate` warns about `Fixed("api_key", Env.NAME)` on a GET or REST tool. If the service only takes the key in the URL, the warning can be ignored.
 
 **`query:` is locked by default on `GET`, `REST` and `POST` tools.** It's a raw query string, so a model could put any parameter in it, including ones the tool's rules lock, fix or pattern-check, and many servers read the URL and the body as one. A model's call can't set `query:` unless the declaration says `& Unlocked("query")`, and even then (or in a pipeline's own call) a key in it that a `Locked`, `Fixed` or `Match` rule names is refused: pass that one as its own argument, where the rule sees it.
 

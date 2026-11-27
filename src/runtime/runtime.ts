@@ -70,6 +70,7 @@ import { HOSTED_PROVIDER, HOSTED_PROVIDER_INFO, hostedProvider } from "./hosted.
 import { MEDIA_INFO, MEDIA_PROVIDER, MEDIA_TOOL, mediaProvider, type Transcriber } from "./providers/media-files.js";
 import { clock, isService, TRANSCRIBE_KEYS, TRANSCRIBE_SERVICES, transcriptionCost, transcriptText } from "./providers/transcribe.js";
 import { aKind, kinds } from "./media-ref.js";
+import { SecretRegistry } from "./secret-mask.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, RunStoppedError, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
@@ -745,6 +746,12 @@ export class HaloRuntime {
   private vectorStore?: LocalVectorStore;
   private threadStore?: ThreadStore;
   private sqlPool = new Map<string, InstanceType<typeof Bun.SQL>>();
+  /**
+   * The values this runtime read from its environment (Env.NAME, provider keys), by name, so a
+   * service that echoes one back (an error page quoting the Authorization header) can't hand it
+   * to the model, the terminal, telemetry or a recording: tool results and errors are masked.
+   */
+  private readonly envSecrets = new SecretRegistry();
   private runStore: RunStore;
   private blobs: BlobStore;
 
@@ -1813,6 +1820,7 @@ export class HaloRuntime {
           if (!opts.allowEnv) throw new HaloError(`Env.${name} can only be used in tool declarations`);
           const value = this.env[name];
           if (value === undefined) throw new HaloError(`Environment variable ${name} is not set (needed by "${opts.owner}")`);
+          this.envSecrets.add(name, value);
           return value;
         }
         if (hasOwnKey(ctx.input, root)) return getPath(ctx.input[root], rest);
@@ -2703,8 +2711,12 @@ export class HaloRuntime {
   }
 
   private apiKeyFor(adapter: ProviderAdapter): string | undefined {
-    const fromEnv = adapter.envKeys?.map((k) => this.env[k]).find(Boolean);
-    return this.config.apiKeys?.[adapter.id] ?? fromEnv ?? this.config.apiKey ?? this.env.HALO_API_KEY ?? undefined;
+    const envKey = adapter.envKeys?.find((k) => this.env[k]);
+    const fromEnv = envKey ? this.env[envKey] : undefined;
+    const key = this.config.apiKeys?.[adapter.id] ?? fromEnv ?? this.config.apiKey ?? this.env.HALO_API_KEY ?? undefined;
+    // An error body that quotes the key back is masked like a tool's.
+    if (key) this.envSecrets.add(key === fromEnv && envKey ? envKey : `${adapter.id.toUpperCase()}_API_KEY`, key);
+    return key;
   }
 
   /** Whether a model has an adapter and the key it needs. */
@@ -2759,7 +2771,7 @@ export class HaloRuntime {
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new HttpError(`LLM API error from ${adapter.id} (${res.status}): ${body.slice(0, 500)}`, res.status, body);
+      throw this.envSecrets.maskError(new HttpError(`LLM API error from ${adapter.id} (${res.status}): ${body.slice(0, 500)}`, res.status, body));
     }
     const parsed = adapter.parseResponse(await res.json());
     const tokens = { prompt: parsed.usage?.promptTokens ?? 0, completion: parsed.usage?.completionTokens ?? 0 };
@@ -2944,6 +2956,19 @@ export class HaloRuntime {
     return { config, template0: first?.kind === "string" ? first.value : undefined };
   }
 
+  /**
+   * A provider's result (or error) with every environment value the runtime read masked, before
+   * a retry event, the model, a recording or the terminal sees it. Masked inside the retry loop,
+   * so even the retry events carry no secret.
+   */
+  private async unechoed<T>(call: () => Promise<T>): Promise<T> {
+    try {
+      return this.envSecrets.maskDeep(await call());
+    } catch (e) {
+      throw this.envSecrets.maskError(e);
+    }
+  }
+
   /** Call a tool. `chosenBy` names the agent that chose the call: its arguments are all it gets (never the pipeline value). */
   private async toolCall(tool: ToolDeclaration, method: string, positional: unknown[], named: Record<string, unknown>, ctx: ExecutionContext, viaAgent: boolean, chosenBy?: string, wallet?: WalletLimits): Promise<unknown> {
     const target = `${tool.name}.${method}`;
@@ -2967,9 +2992,11 @@ export class HaloRuntime {
       mock
         ? { value: await mock({ target, kind: "tool", args, named, input: ctx.current, fingerprint }), mocked: true }
         : {
-            value: await provider!(
-              { tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: top.runId, branch: ctx.branch, pauses: top.pauses ?? 0, idempotencyKey, ...(wallet ? { wallet } : {}) },
-              this.toolServices(ctx, tool, chosenBy, method),
+            value: await this.unechoed(() =>
+              provider!(
+                { tool, method, positional: args, implicitInput, named, config, template0, viaAgent, signal, runId: top.runId, branch: ctx.branch, pauses: top.pauses ?? 0, idempotencyKey, ...(wallet ? { wallet } : {}) },
+                this.toolServices(ctx, tool, chosenBy, method),
+              ),
             ),
             mocked: false,
           },

@@ -258,3 +258,15 @@ describe("parser: syntax added for the runtime", () => {
     ]);
   });
 });
+
+describe("a secret in a GET's URL", () => {
+  test("Fixed(arg, Env.K) on a GET or REST tool warns; on POST, or a literal, it does not", () => {
+    const w = (decl: string) => messages(`${decl}\npipeline P(x: String) -> Result:\n  x |> T.get()`, "warning").filter((m) => m.includes("query string"));
+    expect(w(`tool T : REST("api.example.com") & Fixed("api_key", Env.WEATHER_KEY)`)).toHaveLength(1);
+    expect(w(`tool T : GET("api.example.com") & Fixed("api_key", "Env.WEATHER_KEY")`)).toHaveLength(1);
+    expect(w(`tool T : REST("api.example.com") & Fixed("api_key", Env.WEATHER_KEY)`)[0]).toContain("apiKey: Env.WEATHER_KEY");
+    expect(w(`tool T : POST("api.example.com") & Fixed("api_key", Env.WEATHER_KEY)`)).toEqual([]);
+    expect(w(`tool T : REST("api.example.com") & Fixed("units", "metric")`)).toEqual([]);
+    expect(w(`tool T : REST("api.example.com") & Fixed("region", Env.REGION)`)).toEqual([]);
+  });
+});

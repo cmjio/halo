@@ -59,7 +59,7 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 | `slack.signingSecret` | Your Slack app's signing secret. Adds Approve / Reject buttons to the announcements, answered at `POST /slack/actions`. If it names a variable that is empty or not set, the server refuses to start |
 | `mcp` | `false` turns off the MCP endpoint at `/mcp`. Default on |
 | `stateDir` | Where telemetry, paused runs, schedule and watch state, and the link-signing secret are kept. Default `.halo` |
-| `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted |
+| `recordings` | `{"serve": true}` records every served run to `<stateDir>/recordings`, as `halo run` does, so `halo replay`, `halo compare` and `halo evolve` can learn from production traffic. `keep` (default 50) is how many to keep. Recordings aren't redacted by policies, but here as in telemetry, run callbacks and Studio a value a tool read from `Env.NAME` shows as `[secret NAME]` if a service sent it back (see [Built-in Tools](../../stdlib/tools.md)) |
 | `evolve` | Defaults for `halo evolve` and Studio's Evolve tab: `proposer`, `judge`, `models`, `maxCostRatio`, `holdout`, `concurrency`, `criteria` (see [`halo evolve`](../plan-and-replay.md#halo-evolve)) |
 | `registry` | The package registry for `halo add`, `halo search` and `halo publish` (not used by `halo serve` itself; see [Packages](../tool-packages.md)). `registries` maps a scope to its own registry |
 

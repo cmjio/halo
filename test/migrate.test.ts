@@ -259,3 +259,19 @@ pipeline Fix(task: String) -> Result<Reply>:
   });
 });
 
+
+describe("1.12.0", () => {
+  test("Env variables a tool reads that don't look like secrets are listed: their values are masked if a service sends them back", async () => {
+    const dir = project({
+      "acct.halo": `tool Api : REST("api.example.com", apiKey: Env.API_KEY) & Fixed("account", Env.ACCOUNT_ID)\ntool Db : PostgreSQL("Env.DATABASE_URL")\npipeline P(x: String) -> Result:\n  x |> Api.get()\n`,
+      "halo.json": JSON.stringify({ halo: "^1.11.0" }),
+    });
+    const report = await migrateProject(dir, { haloVersion: "1.12.0" });
+    expect(report.results.map((r) => [r.id, r.findings])).toEqual([
+      ["env-values-masked", [
+        { file: "acct.halo", line: 1, message: "Api reads Env.ACCOUNT_ID: if a service sends its value back, the run sees [secret ACCOUNT_ID]" },
+        { file: "acct.halo", line: 2, message: "Db reads Env.DATABASE_URL: if a service sends its value back, the run sees [secret DATABASE_URL]" },
+      ]],
+    ]);
+  });
+});

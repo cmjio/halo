@@ -55,8 +55,25 @@ The detectors are patterns, so they are one layer, not a guarantee: they can't s
 | `Profanity` | ✓ | | a short English word list |
 | `Markdown` | ✓ | | bold, headings, code fences |
 | `PII` | ✓ | ✓ | SSN, credit card, email, and phone |
-| `SSN`, `CreditCard`, `Email`, `Phone`, `APIKey` | ✓ | ✓ | each alone (credit cards are Luhn-checked; phones include `+` international numbers; API keys are OpenAI, Anthropic, AWS, GitHub, GitLab, Slack, Stripe and Google formats, JWTs, and PEM private keys) |
+| `SSN`, `CreditCard`, `Email`, `Phone` | ✓ | ✓ | each alone (credit cards are Luhn-checked; phones include `+` international numbers) |
+| `APIKey` | ✓ | ✓ | see the next table |
 | `IPAddress` | ✓ | ✓ | IPv4 addresses |
+
+What `APIKey` finds:
+
+| Kind | Looks like |
+|---|---|
+| Model providers | OpenAI and Anthropic `sk-…`, Google `AIza…`, Hugging Face `hf_…` |
+| Code hosts and registries | GitHub `ghp_…`, `github_pat_…`, GitLab `glpat-…`, npm `npm_…` |
+| Payments and mail | Stripe `sk_live_…`, `rk_…`, `pk_…`, webhook secrets `whsec_…`; SendGrid `SG.….…` |
+| Chat | Slack `xox…-`, `xapp-…`; Slack and Discord webhook URLs (`hooks.slack.com/services/…`) |
+| AWS | access key IDs `AKIA…`/`ASIA…`; a secret access key (40 characters) only next to its name, like `aws_secret_access_key = …` or `"SecretAccessKey": "…"` |
+| Tokens | JWTs (any payload), and a `Bearer` token of 20 or more characters |
+| Private keys | PEM and PGP private key blocks (`BEGIN … PRIVATE KEY`, `BEGIN PGP PRIVATE KEY BLOCK`), even cut off before their `END`; age keys `AGE-SECRET-KEY-1…` |
+| Passwords in URLs | the password in `postgres://user:password@host`, `redis://:password@host`, `https://user:password@host`; the rest of the URL is kept |
+| Named hex secrets | 32 or more hex digits assigned to a name with `secret`, `token`, `key` or `password` in it, like `client_secret = 9f86…` |
+
+In an object, a field whose name has `secret`, `token`, `key` or `password` in it is read with its name, so `{"SecretAccessKey": "…"}` is found too. UUIDs, git commit hashes, URLs without a password and base64 images in data URIs are left alone.
 
 The detectors are regular expressions. They catch common patterns, not every possible variant.
 

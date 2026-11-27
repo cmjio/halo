@@ -398,7 +398,17 @@ class Validator {
         if (rule.args.length !== 2 || !arg) this.add("error", `${where} needs an argument name and its value, e.g. Fixed("currency", "USD")`, t.loc);
         else if (rule.args[1]!.kind === "context") this.add("error", `${where}("${arg}", …): a fixed value is the same for every run, so it can't read context`, t.loc);
         else if (fixed.has(arg)) this.add("error", `${where}("${arg}", …) is written twice`, t.loc);
-        else fixed.add(arg);
+        else {
+          fixed.add(arg);
+          const v = rule.args[1]!;
+          const env = v.kind === "ref" && v.path[0] === "Env" ? v.path.slice(1).join(".") : v.kind === "string" && /^Env\.\w+$/.test(v.value) ? v.value.slice(4) : undefined;
+          // A GET sends its arguments in the URL, which servers, proxies and browsers log. Only for a
+          // value whose name (or argument's name) says it's a secret: Env.REGION in a URL is fine.
+          const secret = /key|token|secret|pass|pwd|auth|cred|sig/i;
+          if (env && (t.provider === "REST" || t.provider === "GET") && (secret.test(env) || secret.test(arg))) {
+            this.add("warning", `${where}("${arg}", Env.${env}) puts the secret in the URL's query string, where server and proxy logs keep it. Send it in a header instead: apiKey: Env.${env} sends "Authorization: Bearer …" (ignore this if the service only takes the key in the URL)`, t.loc);
+          }
+        }
       } else if (rule.name === "Match") {
         const pattern = rule.args[1];
         if (rule.args.length !== 2 || !name(rule.args[0]) || pattern?.kind !== "string") this.add("error", `${where} needs an argument name and a regular expression for its whole value, e.g. Match("amount", "\\\\d+")`, t.loc);
