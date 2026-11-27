@@ -13,6 +13,7 @@ import { aKind, type MediaKind } from "./media-ref.js";
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
 import { HaloError, PolicyViolation } from "./errors.js";
 import { splitToolPath } from "../linker/names.js";
+import { safeRegex, type SafeRegex } from "./safe-regex.js";
 
 export interface Violation {
   policy: string;
@@ -485,13 +486,15 @@ export class PolicyEngine {
       }
       if (name === "MatchRegex") {
         const pattern = args[0] ?? "";
-        let re: RegExp;
+        let re: SafeRegex;
         try {
-          re = new RegExp(pattern);
+          re = safeRegex(pattern);
         } catch {
           throw new PolicyViolation(`Policy "${b.policy}": MatchRegex(${args[0]}) is not a valid regular expression`, b.policy, name);
         }
-        if (!re.test(text)) this.violate(b, `Output does not match the pattern /${pattern}/`, "output", hooks);
+        // An output the pattern can't be decided on (it ran out of time) is not shown to match: a violation.
+        const matched = re.test(text);
+        if (matched !== true) this.violate(b, matched === false ? `Output does not match the pattern /${pattern}/` : `Output could not be checked against /${pattern}/ in time, so it counts as not matching`, "output", hooks);
       }
       if (name === "MaxTokens" && usage.completionTokens !== undefined) {
         const limit = Number(args[0]);
@@ -610,17 +613,22 @@ export class PolicyEngine {
       const parts = b.rule.args;
       const [pattern = "*", field, regex = ""] = parts.length >= 3 ? parts : [parts[0], undefined, parts[1]];
       if (!toolMatches(pattern, target)) continue;
-      let re: RegExp;
+      let re: SafeRegex;
       try {
-        re = new RegExp(regex, "i");
+        re = safeRegex(regex, { ignoreCase: true });
       } catch {
         throw new PolicyViolation(`Policy "${b.policy}": DenyArgs(${b.rule.args.join(", ")}) is not a valid regular expression`, b.policy, "DenyArgs");
       }
       const values = argValues(field === undefined ? args : isRecord(args) ? args[field] : undefined);
       // A missing argument is checked as "", so an allow-list pattern like ^(?!bun test) also refuses its absence.
       if (field !== undefined && !values.length) values.push("");
-      const hit = values.find((v) => [v, normalizeForScan(v), unescapeJson(v), normalizePath(v)].some((t) => re.test(t)));
-      if (hit !== undefined) this.violate(b, `${target} was refused: ${field ? `its ${field}` : "an argument"} matches /${regex}/`, "tool", hooks);
+      // A value the pattern can't be decided on (it ran out of time) is refused like a match: a deny rule fails closed.
+      for (const v of values) {
+        const hit = re.testAny([v, normalizeForScan(v), unescapeJson(v), normalizePath(v)]);
+        if (hit === false) continue;
+        const what = field ? `its ${field}` : "an argument";
+        this.violate(b, hit ? `${target} was refused: ${what} matches /${regex}/` : `${target} was refused: ${what} could not be checked against /${regex}/ in time`, "tool", hooks);
+      }
     }
     const approver = rules.find(
       (b) => (b.rule.name === "ApproveTools" && b.rule.args.some((p) => toolMatches(p, target))) || (b.rule.name === "ApproveEffects" && b.rule.args.includes(effect)),

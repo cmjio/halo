@@ -18,6 +18,7 @@
 import type { ToolDeclaration, Value } from "../parser/types.js";
 import { HaloError } from "./errors.js";
 import type { JsonSchema } from "./tools.js";
+import { safeRegex, type SafeRegex } from "./safe-regex.js";
 
 export const TOOL_ARG_RULES = ["Fixed", "Match", "Locked", "Unlocked"] as const;
 
@@ -32,7 +33,7 @@ export const DEFAULT_LOCKED: Record<string, string[]> = {
 
 export interface ArgRules {
   fixed: Map<string, Value>;
-  match: Map<string, { source: string; re: RegExp }[]>;
+  match: Map<string, { source: string; re: SafeRegex }[]>;
   locked: Set<string>;
 }
 
@@ -47,7 +48,7 @@ export class ToolRuleViolation extends HaloError {
 const text = (v: Value | undefined): string | undefined => (v?.kind === "string" ? v.value : v?.kind === "ref" ? v.path.join(".") : undefined);
 
 /** A Match pattern covers the whole value, so `\d+` can't be satisfied by "1; drop table". */
-export const wholeValue = (source: string) => new RegExp(`^(?:${source})$`, "s");
+export const wholeValue = (source: string) => safeRegex(source, { whole: true, dotAll: true });
 
 const cache = new WeakMap<ToolDeclaration, ArgRules>();
 
@@ -60,7 +61,7 @@ export function argRules(tool: ToolDeclaration): ArgRules {
     if (rule.name === "Fixed" && name !== undefined && rule.args[1]) rules.fixed.set(name, rule.args[1]);
     else if (rule.name === "Match" && name !== undefined) {
       const source = text(rule.args[1]) ?? "";
-      let re: RegExp;
+      let re: SafeRegex;
       try {
         re = wholeValue(source);
       } catch {
@@ -118,7 +119,12 @@ export function constrain(tool: ToolDeclaration, method: string, named: Record<s
     // A missing argument is checked as "", so a pattern that needs something also needs the argument.
     const value = out[name] === undefined || out[name] === null ? "" : shown(out[name]);
     for (const { source, re } of patterns) {
-      if (!re.test(value)) {
+      // A value the pattern can't be decided on (it ran out of time) is refused, like one that doesn't match.
+      const matched = re.test(value);
+      if (matched === undefined) {
+        throw new ToolRuleViolation(`${target} was refused: ${name} (${value.slice(0, 80)}) could not be checked against /${source}/ in time (Match on the tool)`, tool.name, "Match");
+      }
+      if (!matched) {
         throw new ToolRuleViolation(`${target} was refused: ${name} ${value === "" ? "is missing or empty, and" : `(${value.slice(0, 80)})`} must match /${source}/ (Match on the tool)`, tool.name, "Match");
       }
     }
