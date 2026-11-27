@@ -104,6 +104,13 @@ Annotations are hints from the server, and a server can say anything. A server t
 
 Each pipeline becomes an MCP tool. Its parameters become the tool's input schema, all required: `String`, `Number`, `Integer`, `Boolean`, `Array<T>`/`List`, `Object`/`Map` and `JSON`/`Any` map to the matching JSON Schema types, and schema types map to objects.
 
+Halo plans each pipeline, as [`halo plan`](../plan-and-replay.md) does, and the tool says what it found:
+
+- Its description gives the signature and file, the tool calls the pipeline may make with their effects (and which ask a person first), and whether it can pause for approval.
+- Its annotations come from those effects. A pipeline whose calls only read (or that calls no tools) is `readOnlyHint: true`. One that writes or calls out is `readOnlyHint: false` and `destructiveHint: true` (Halo can't tell adding from deleting), with `openWorldHint: true` when a call is external. A pipeline with an effect the plan can't know, such as an MCP tool's, gets no annotations, so the client treats it as able to do anything.
+
+Annotations are hints for the client, as they are for Halo's own MCP client: they don't stop anything.
+
 ### stdio
 
 ```sh
@@ -147,7 +154,7 @@ Runs started over `/mcp` appear in Studio and the API like any other run.
 | Run status | What the client gets |
 | --- | --- |
 | completed | The output as text, plus `structuredContent` when the output is an object |
-| paused | A message such as `Paused waiting for yield, run id 4f1c…`. Under `halo serve`, answer it with the approval link, Studio, or the HTTP API. Under `halo mcp`, the run is saved in `.halo/runs` (in the folder `halo mcp` started in): continue it with `halo resume <file> <runId> --payload approve`. |
+| paused | A message such as `Paused waiting for yield, run id 4f1c…`, and the same as `structuredContent`: `{ status: "paused", runId, waitingFor, approveUrl }`. Under `halo serve`, `approveUrl` is the signed approval link, which is also in the text; answer it there, in Studio, or with the HTTP API. The link lets whoever opens it answer the pause, like the API token does, so a client should show it to a person rather than open it itself. Under `halo mcp`, the run is saved in `.halo/runs` (in the folder `halo mcp` started in): continue it with `halo resume <file> <runId> --payload approve`. |
 | halted or failed | A tool error (`isError: true`) with the reason and the run id |
 
 If the client cancels a call (or, over HTTP, drops the request), Halo aborts the run. A request id belongs to the caller that sent it: the API token, or under `halo serve --package` each consumer key. So a `notifications/cancelled` stops only that caller's own call with that id, never another client's.

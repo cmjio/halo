@@ -19,7 +19,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { checkLinked, entryPipelines, isPrivate } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
@@ -35,7 +35,7 @@ import { walletNames, walletUnsafeTool } from "../runtime/wallet-rules.js";
 import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
 import { checkTimeZone, CronError, nextSlot, parseCron, slotsBetween, type CronSchedule } from "./cron.js";
 import { parseDuration } from "../parser/builtins.js";
-import { createMcpServer } from "./mcp-server.js";
+import { annotationsFromEffects, createMcpServer, describePipelineTool, pipelineEffects, type McpToolAnnotations } from "./mcp-server.js";
 import { evolveApi, type EvolveConfig } from "./evolve-api.js";
 import { pruneRecordings, Recorder } from "../runtime/replay.js";
 import { MirroredBlobStore, openStateStore, StateMirror, StateStoreError } from "./state-mirror.js";
@@ -1310,9 +1310,20 @@ ${files}
     return undefined;
   };
 
+  // Each pipeline's plan, once: its tool's description and annotations say what it can do.
+  const toolInfo = new Map<string, { description: string; annotations: McpToolAnnotations }>();
+  const mcpTool = (e: Entry) => {
+    let info = toolInfo.get(e.name);
+    if (!info) {
+      const effects = pipelineEffects(e.ast, e.name, (provider) => e.runtime.toolProviderInfo(provider));
+      info = { description: describePipelineTool({ name: e.name, params: e.decl.params, returnType: e.decl.returnType, file: basename(e.file) }, effects), annotations: effects ? annotationsFromEffects(effects) : {} };
+      toolInfo.set(e.name, info);
+    }
+    return info;
+  };
   const mcp = createMcpServer(
     {
-      list: () => [...entries.values()].map((e) => ({ name: e.name, description: describePipeline(e), params: e.decl.params })),
+      list: () => [...entries.values()].map((e) => ({ name: e.name, params: e.decl.params, ...mcpTool(e) })),
       call: async (name, args, signal) => {
         const e = entry(name);
         const runId = crypto.randomUUID();
@@ -1324,7 +1335,8 @@ ${files}
         try {
           const r = await work;
           if (key) meter(key, name, runId, r, t0);
-          return { status: r.status, output: r.output, runId, waitingFor: r.context.meta.paused?.waitingFor };
+          const approveUrl = r.status === "paused" ? await approvalUrl(runId) : undefined;
+          return { status: r.status, output: r.output, runId, waitingFor: r.context.meta.paused?.waitingFor, ...(approveUrl ? { approveUrl } : {}) };
         } catch (err) {
           if (key) meter(key, name, runId, undefined, t0);
           return { status: "failed", runId, error: err instanceof Error ? err.message : String(err) };
@@ -1698,13 +1710,6 @@ ${files}
       await mirror?.stop();
     },
   };
-}
-
-/** Read halo.json (if present) from a path or the current folder. */
-/** A pipeline's description for MCP clients: its signature and where it lives. */
-function describePipeline(e: Entry): string {
-  const params = e.decl.params.map((p) => `${p.name}: ${p.type}`).join(", ");
-  return `Halo pipeline ${e.name}(${params})${e.decl.returnType ? ` -> ${e.decl.returnType}` : ""} from ${e.file}. Runs it and returns its output.`;
 }
 
 /**

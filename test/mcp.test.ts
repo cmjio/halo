@@ -9,7 +9,7 @@ import { HaloRuntime, type RuntimeEvent } from "../src/runtime/runtime.js";
 import { HaloError } from "../src/runtime/errors.js";
 import { closeMcpClients, MCP_INFO, mcpProvider, mcpTarget, resolveCommandPaths, splitCommand } from "../src/runtime/mcp.js";
 import type { ToolCall, ToolServices } from "../src/runtime/tools.js";
-import { createMcpServer, haloTypeToJsonSchema, serveMcpStdio } from "../src/serve/mcp-server.js";
+import { annotationsFromEffects, createMcpServer, describePipelineTool, haloTypeToJsonSchema, serveMcpStdio } from "../src/serve/mcp-server.js";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "mcp-echo-server.ts");
 const COMMAND = `"${process.execPath}" "${FIXTURE}"`;
@@ -299,6 +299,7 @@ describe("MCP server", () => {
     expect(JSON.parse(done.result.content[0].text)).toEqual({ greeting: "hello Ada" });
     const paused: any = await server.handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "Review", arguments: {} } });
     expect(paused.result.content[0].text).toContain("waiting for approval, run id r2");
+    expect(paused.result.structuredContent).toEqual({ status: "paused", runId: "r2", waitingFor: "approval" });
     const halted: any = await server.handleMessage({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "Halts", arguments: {} } });
     expect(halted.result.isError).toBe(true);
     expect(halted.result.content[0].text).toContain("policy said no");
@@ -350,6 +351,28 @@ describe("MCP server", () => {
       await closeMcpClients();
       http.stop(true);
     }
+  });
+
+  test("annotations and descriptions from a pipeline's plan", () => {
+    const of = (...effects: string[]) => annotationsFromEffects({ effects: effects.map((effect, i) => ({ target: `T.m${i}`, effect })), pauses: false });
+    expect(of()).toEqual({ readOnlyHint: true, openWorldHint: false });
+    expect(of("read", "read")).toEqual({ readOnlyHint: true, openWorldHint: false });
+    expect(of("read", "write")).toEqual({ readOnlyHint: false, destructiveHint: true, openWorldHint: false });
+    expect(of("external")).toEqual({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
+    // Unknown claims nothing: the client's defaults (not read-only, destructive) apply.
+    expect(of("read", "unknown")).toEqual({});
+    const text = describePipelineTool({ name: "Ship", params: [{ name: "pr", type: "Integer" }], returnType: "Result", file: "ship.halo" }, {
+      effects: [{ target: "Git.merge", effect: "write", approval: "Careful" }, { target: "Chat.post", effect: "external" }],
+      pauses: true,
+    });
+    expect(text).toBe("Runs the Halo pipeline Ship(pr: Integer) -> Result from ship.halo and returns its output. It may call Git.merge (write, asks a person first), Chat.post (external). It can pause for a person's approval; the result then says so, with the run id.");
+  });
+
+  test("tools/list sends the annotations a source gives", async () => {
+    const annotated = createMcpServer({ list: () => [{ name: "Look", params: [], annotations: { readOnlyHint: true } }], call: async () => ({ status: "completed", runId: "r" }) });
+    const res: any = await annotated.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    expect(res.result.tools[0].annotations).toEqual({ readOnlyHint: true });
+    expect(res.result.tools[0].description).toBe("Runs the Halo pipeline Look() and returns its output.");
   });
 
   test("a caller can cancel only its own calls, even when another uses the same id", async () => {

@@ -8,18 +8,67 @@
  * Each pipeline is one tool; its params become the tool's input schema. A run that
  * completes returns its output (as text, and as structuredContent). A run that fails or
  * halts is a tool error; one that pauses for approval says so, with its run id, so it
- * can be resumed through the HTTP API or Studio.
+ * can be resumed through the HTTP API or Studio. A tool's annotations (readOnlyHint,
+ * destructiveHint, openWorldHint) come from its pipeline's plan, when the source gives one.
  *
  * Stateless: no sessions, no server-sent streams. Each POST carries its own answer.
  */
 
 import pkg from "../../package.json" with { type: "json" };
-import { MCP_PROTOCOL_VERSION, MCP_SUPPORTED_VERSIONS } from "../runtime/mcp.js";
+import { MCP_PROTOCOL_VERSION, MCP_SUPPORTED_VERSIONS, type McpToolInfo } from "../runtime/mcp.js";
 import type { JsonSchema } from "../runtime/tools.js";
+import type { ParseResult } from "../parser/types.js";
+import { plan, type PlanOptions } from "../plan.js";
+
+export type McpToolAnnotations = NonNullable<McpToolInfo["annotations"]>;
 
 export interface McpPipelineSource {
-  list(): Array<{ name: string; description?: string; params: Array<{ name: string; type: string }> }>;
-  call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: string; output?: unknown; runId: string; error?: string; waitingFor?: string }>;
+  list(): Array<{ name: string; description?: string; params: Array<{ name: string; type: string }>; annotations?: McpToolAnnotations }>;
+  call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: string; output?: unknown; runId: string; error?: string; waitingFor?: string; approveUrl?: string }>;
+}
+
+/** What a pipeline's plan says it can do: the effect of every call it may make, and whether it can wait for a person. */
+export interface PipelineEffects {
+  effects: Array<{ target: string; effect: string; approval?: string }>;
+  pauses: boolean;
+}
+
+/**
+ * MCP annotations from a plan's effects. Only reads: readOnlyHint. Anything that writes or
+ * reaches out: not read-only, and destructive (Halo can't tell an append from a delete), and
+ * openWorldHint when a call is external. An effect the plan can't know (an MCP tool's)
+ * claims nothing, so the client's own defaults (not read-only, destructive) apply.
+ */
+export function annotationsFromEffects(p: PipelineEffects): McpToolAnnotations {
+  const kinds = new Set(p.effects.map((e) => e.effect));
+  if (kinds.has("unknown")) return {};
+  const open = kinds.has("external") || kinds.has("wallet");
+  if ([...kinds].every((k) => k === "read")) return { readOnlyHint: true, openWorldHint: false };
+  return { readOnlyHint: false, destructiveHint: true, openWorldHint: open };
+}
+
+/** A pipeline's effects from `halo plan`'s analysis, or undefined when it can't be planned. */
+export function pipelineEffects(ast: ParseResult, pipeline: string, providerInfo: PlanOptions["providerInfo"]): PipelineEffects | undefined {
+  try {
+    const steps = plan(ast, pipeline, { providerInfo }).steps;
+    return { effects: steps.flatMap((s) => s.effects), pauses: steps.some((s) => s.kind === "human" || s.effects.some((e) => e.approval)) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** A tool description from a pipeline's signature and plan, for an agent choosing what to call. */
+export function describePipelineTool(d: { name: string; params: Array<{ name: string; type: string }>; returnType?: string; file?: string }, plan?: PipelineEffects): string {
+  const sig = `${d.name}(${d.params.map((p) => `${p.name}: ${p.type}`).join(", ")})${d.returnType ? ` -> ${d.returnType}` : ""}`;
+  const parts = [`Runs the Halo pipeline ${sig}${d.file ? ` from ${d.file}` : ""} and returns its output.`];
+  if (plan) {
+    const seen = new Map<string, string>();
+    for (const e of plan.effects) if (!seen.has(e.target)) seen.set(e.target, `${e.target} (${e.effect}${e.approval ? ", asks a person first" : ""})`);
+    if (seen.size) parts.push(`It may call ${[...seen.values()].slice(0, 12).join(", ")}${seen.size > 12 ? `, and ${seen.size - 12} more` : ""}.`);
+    else parts.push("It calls no tools.");
+    if (plan.pauses) parts.push("It can pause for a person's approval; the result then says so, with the run id.");
+  }
+  return parts.join(" ");
 }
 
 export interface McpServer {
@@ -123,8 +172,15 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
           const structured = out !== null && typeof out === "object" && !Array.isArray(out) ? { structuredContent: out } : {};
           return ok(id, { content: [{ type: "text", text: outputText(out) }], ...structured });
         }
-        case "paused":
-          return text(`Paused waiting for ${run.waitingFor ?? "approval"}, run id ${run.runId}. Resume it through the Halo HTTP API or Studio.`);
+        case "paused": {
+          // The same, as data, so a client can show the run or hand the link to a person.
+          const waitingFor = run.waitingFor ?? "approval";
+          const how = run.approveUrl ? `A person can answer it at ${run.approveUrl}` : "Resume it through the Halo HTTP API or Studio";
+          return ok(id, {
+            content: [{ type: "text", text: `Paused waiting for ${waitingFor}, run id ${run.runId}. ${how}.` }],
+            structuredContent: { status: "paused", runId: run.runId, waitingFor, ...(run.approveUrl ? { approveUrl: run.approveUrl } : {}) },
+          });
+        }
         case "halted":
           return text(`Halted${run.error ? `: ${run.error}` : ""} (run id ${run.runId})${run.output !== undefined ? `\n${outputText(run.output)}` : ""}`, true);
         default:
@@ -164,7 +220,12 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
           return ok(id, {});
         case "tools/list":
           return ok(id, {
-            tools: source.list().map((p) => ({ name: p.name, description: p.description ?? `Run the ${p.name} pipeline.`, inputSchema: inputSchema(p.params) })),
+            tools: source.list().map((p) => ({
+              name: p.name,
+              description: p.description ?? describePipelineTool(p),
+              inputSchema: inputSchema(p.params),
+              ...(p.annotations && Object.keys(p.annotations).length ? { annotations: p.annotations } : {}),
+            })),
           });
         case "tools/call":
           return await callTool(id, msg.params, signal, caller);
