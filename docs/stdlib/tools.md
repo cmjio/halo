@@ -58,6 +58,7 @@ tool Ledger : POST("ledger.example.com/v1/prizes/issue", apiKey: Env.LEDGER_KEY,
 - A model's call that breaks a rule isn't made. The model is told why, the run goes on, and the refusal is recorded in `context.meta.violations` with the tool's name as the policy and `phase: "tool"`, like a call refused by a [policy](./policies.md#tool-rules).
 - The rules apply to the named argument on every method of the tool.
 - They are checked before an approval is asked for, so a person is never asked to approve a call the tool would refuse.
+- Keep secrets out of a `GET` or `REST` tool's `Fixed`. A GET sends its arguments in the URL's query string, and server logs, proxies and browser history keep URLs. Send a key in a header with `apiKey: Env.NAME` (it goes as `Authorization: Bearer …`). `halo validate` warns about `Fixed("api_key", Env.NAME)` on a GET or REST tool. If the service only takes the key in the URL, the warning can be ignored.
 
 **`query:` is locked by default on `GET`, `REST` and `POST` tools.** It's a raw query string, so a model could put any parameter in it, including ones the tool's rules lock, fix or pattern-check, and many servers read the URL and the body as one. A model's call can't set `query:` unless the declaration says `& Unlocked("query")`, and even then (or in a pipeline's own call) a key in it that a `Locked`, `Fixed` or `Match` rule names is refused: pass that one as its own argument, where the rule sees it.
 
