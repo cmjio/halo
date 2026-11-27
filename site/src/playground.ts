@@ -51,7 +51,7 @@ const SNIPPETS: Array<{ id: string; icon: IconName; title: string; note: string;
   { id: "fanout", icon: "arrows-split", title: "|*  fan-out", note: "Run several calls at once.", code: '    |* { Helper.prompt("Idea one"), Helper.prompt("Idea two") }\n' },
   { id: "gate", icon: "traffic-lights", title: "|?  gate", note: "Stop here unless the condition holds.", code: "    |? (context.current != null)\n" },
   { id: "ask", icon: "hand-stop", title: "|!  ask a person", note: "Pause the run until someone answers.", code: '    |! yield(msg: "Look good?", [context.current]) as ok\n    |? (context.data.ok.approved == true)\n' },
-  { id: "loop", icon: "repeat", title: "|<> loop", note: "Send it back to an agent while a check fails.", code: '    |<> loop(Helper, "context.current.length > 280", max: 3)\n' },
+  { id: "loop", icon: "repeat", title: "|<> loop", note: "Send it back to an agent while a check fails.", code: '    |<> loop(Helper, (context.current.length > 280), max: 3)\n' },
   { id: "policy", icon: "shield", title: "policy", note: "Rules the runtime enforces. Attach with `requires`.", code: "policy Budget : MaxSpend(0.10)\n" },
   { id: "requires", icon: "link", title: "requires", note: "Put on the line under an agent to apply a policy.", code: "  requires Budget\n" },
   { id: "tool", icon: "tool", title: "tool", note: "Something agents can call: Slack, GitHub, SQL, Bash…", code: "tool Chat : Slack(Env.SLACK_BOT_TOKEN)\n" },

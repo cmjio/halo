@@ -14,10 +14,11 @@
  * A migration finds its cases in the files themselves, so running it twice changes nothing.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { parse } from "../parser/index.js";
-import type { ParseResult } from "../parser/types.js";
+import type { LoopStage, ParseResult, PipelineStage } from "../parser/types.js";
+import { validate, type Diagnostic } from "../parser/validate.js";
 import { readProjectConfig, writeProjectConfig } from "../registry/config.js";
 import { HALO_VERSION, installProject } from "../registry/install.js";
 import { readAnyLock } from "../registry/lockfile.js";
@@ -63,6 +64,71 @@ export interface Migration {
 }
 
 const names = (v: unknown[]) => v.join(", ");
+
+// ── 1.9.0: names that did nothing are errors ──
+
+/** The validator's errors since 1.9.0 for a name that, misspelled, used to be a warning and do nothing. */
+const STRICT_NAME = [
+  /is not a policy rule/,
+  /is not a category it can detect/,
+  /\) is not something it can check/,
+  /\) can't be checked; only Enforce\(JSON\) is/,
+  /^@\w+ is not a directive/,
+  /Vault has no setting/,
+  /which is not a declared tool; did you mean/,
+  /is not a Vault tool; did you mean/,
+  /loop\(\.\.\.\) has no option/,
+];
+
+interface NameFix {
+  file: string;
+  line: number;
+  /** The name as written, and what it should be (undefined: no close match, a person decides). */
+  from: string;
+  to?: string;
+  message: string;
+}
+
+function strictNames(project: Project): NameFix[] {
+  const out: NameFix[] = [];
+  for (const file of project.files) {
+    if (file.ast.errors.length) continue;
+    for (const d of validate(file.ast) as Diagnostic[]) {
+      if (d.severity !== "error" || !STRICT_NAME.some((r) => r.test(d.message))) continue;
+      const to = /did you mean @?([\w.]+)\?/.exec(d.message)?.[1];
+      out.push({ file: file.path, line: d.line ?? 1, from: d.token ?? "", ...(to ? { to } : {}), message: d.message });
+    }
+  }
+  return out;
+}
+
+/** Each source line of every stage in a pipeline, nested arms and fan-outs included. */
+function stagesOf(ast: ParseResult): PipelineStage[] {
+  const out: PipelineStage[] = [];
+  for (const p of ast.pipelines) for (const st of p.pipeline) out.push(st);
+  return out;
+}
+
+/** Rewrites each file `edit` changes, and keeps the change only if the file still parses. */
+function rewrite(project: Project, files: string[], edit: (text: string) => string, same: (before: ParseResult, after: ParseResult) => boolean): void {
+  const refused: string[] = [];
+  for (const path of files) {
+    const full = join(project.root, path);
+    const text = readFileSync(full, "utf8");
+    const next = edit(text);
+    if (next === text) continue;
+    const before = parse(text);
+    const after = parse(next);
+    if (after.errors.length || !same(before, after)) {
+      refused.push(path);
+      continue;
+    }
+    writeFileSync(full, next);
+  }
+  if (refused.length) throw new Error(`left ${names(refused)} as they were: the rewrite didn't read back the same; change them by hand`);
+}
+
+const loops = (ast: ParseResult) => stagesOf(ast).filter((s): s is LoopStage => s.kind === "loop");
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -143,6 +209,116 @@ export const MIGRATIONS: Migration[] = [
           const names = [...used].sort();
           const message = names.length ? `tool ${tool.name} has no env:, and its commands read ${names.map((n) => `$${n}`).join(", ")}` : `tool ${tool.name} has no env:`;
           out.push({ file: file.path, line: tool.loc?.line, message });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "misspelled-names",
+    since: "1.9.0",
+    title: "A misspelled policy rule, category, directive, Vault setting or loop option is an error",
+    detail:
+      "Before 1.9.0 these were warnings, and the misspelled name did nothing: maxspend(0.25) ran with no spend cap, Block(PromptInjecton) blocked nothing, @retyr(3) never retried. Now the file doesn't load. --write renames each one to the name it was close to, which turns that rule on: check that a newly enforced cap, block or retry is what you want.",
+    find(project) {
+      return strictNames(project)
+        .filter((f) => f.to)
+        .map((f) => ({ file: f.file, line: f.line, message: `${f.from} → ${f.to}` }));
+    },
+    async apply(project) {
+      const fixes = strictNames(project).filter((f) => f.to && f.from);
+      const byFile = new Map<string, NameFix[]>();
+      for (const f of fixes) byFile.set(f.file, [...(byFile.get(f.file) ?? []), f]);
+      for (const [path, list] of byFile) {
+        const full = join(project.root, path);
+        const lines = readFileSync(full, "utf8").split("\n");
+        for (const f of list) {
+          // The diagnostic points at the declaration. The name is on that line, a few after it (a policy can
+          // span lines), or just before it (a directive sits above its agent or pipeline): nearest first.
+          const word = new RegExp(`(?<![\\w])${f.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`);
+          const at = f.line - 1;
+          const order = [at, ...Array.from({ length: 30 }, (_, k) => [at + k + 1, at - k - 1]).flat()].filter((i) => i >= 0 && i < lines.length);
+          for (const i of order) {
+            if (!word.test(lines[i]!.replace(/\/\/.*$/, ""))) continue;
+            lines[i] = lines[i]!.replace(word, f.to!);
+            break;
+          }
+        }
+        writeFileSync(full, lines.join("\n"));
+      }
+      const left = strictNames(loadProject(project.root)).filter((f) => f.to);
+      if (left.length) throw new Error(`couldn't find ${names(left.map((f) => `${f.from} (${f.file}:${f.line})`))} to rename; change them by hand`);
+    },
+  },
+  {
+    id: "unknown-names",
+    since: "1.9.0",
+    title: "A policy rule or check Halo can't apply is an error",
+    detail:
+      "Before 1.9.0 these were warnings, and the runtime ignored them, so they never ran. Now the file doesn't load. None of them is close to a name Halo has, so there's nothing to rename: remove the rule, or replace it with one that is enforced (see the Policies page). For a person's approval, use |! yield.",
+    find(project) {
+      return strictNames(project)
+        .filter((f) => !f.to)
+        .map((f) => ({ file: f.file, line: f.line, message: f.message }));
+    },
+  },
+  {
+    id: "loop-condition",
+    since: "1.9.0",
+    title: "A loop's condition is written in parentheses, like a gate's",
+    detail:
+      'loop(Coder, "context.data.tests.exitCode != 0") becomes loop(Coder, (context.data.tests.exitCode != 0)). The quoted form still works, so nothing changes in how a run behaves; --write rewrites it to the form the docs use and the editor checks as you type.',
+    find(project) {
+      return project.files.flatMap((f) => loops(f.ast).filter((l) => l.quoted).map((l) => ({ file: f.path, line: l.loc?.line, message: `loop(${l.target}, "${l.condition}")` })));
+    },
+    async apply(project) {
+      const files = project.files.filter((f) => loops(f.ast).some((l) => l.quoted)).map((f) => f.path);
+      rewrite(
+        project,
+        files,
+        (text) =>
+          text.replace(/(loop\(\s*\w+\s*,\s*)"(?!"")((?:[^"\\\n]|\\.)*)"/g, (whole, head: string, cond: string) => {
+            // Inside the quotes, \" was a quote and \\ a backslash; in parentheses they're written as they are.
+            return `${head}(${cond.replace(/\\(.)/g, "$1")})`;
+          }),
+        (a, b) => JSON.stringify(loops(a).map((l) => l.expr)) === JSON.stringify(loops(b).map((l) => l.expr)),
+      );
+    },
+  },
+  {
+    id: "gate-arrow",
+    since: "1.9.0",
+    title: "A => after a gate's condition does nothing",
+    detail:
+      "|? (cond) => was allowed and did nothing: a gate stops the run when the condition is false, and doesn't choose what runs next. It is a warning now. --write removes the =>. If you meant to do something only in some cases and carry on either way, that's a branch: |? { (cond) => Call(), else => Call() }.",
+    find(project) {
+      return project.files.flatMap((f) => stagesOf(f.ast).filter((s) => s.kind === "gate" && s.arrow).map((s) => ({ file: f.path, line: s.loc?.line, message: `|? (${(s as { condition: string }).condition}) =>` })));
+    },
+    async apply(project) {
+      const files = project.files.filter((f) => stagesOf(f.ast).some((s) => s.kind === "gate" && s.arrow)).map((f) => f.path);
+      rewrite(
+        project,
+        files,
+        (text) => text.replace(/^(\s*\|\?\s*\(.*\))[ \t]*=>[ \t]*$/gm, "$1"),
+        (a, b) => stagesOf(a).length === stagesOf(b).length && !stagesOf(b).some((s) => s.kind === "gate" && s.arrow),
+      );
+    },
+  },
+  {
+    id: "result-type-checked",
+    since: "1.9.0",
+    title: "Result<T> is checked as T",
+    detail:
+      "Before 1.9.0, Result<T> was accepted but T was ignored, so -> Result<Reply> checked nothing. Now the output is checked as T, the same as -> Reply, and a run whose output doesn't match fails with a SchemaValidationError. Check that each pipeline's output matches; to keep it unchecked, write -> Result. Result takes one type: Result<A, B> is an error.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const p of file.ast.pipelines) {
+          const where = [p.returnType, ...p.params.map((x) => x.type)].filter((t) => /\bResult\s*</.test(t));
+          for (const t of where) out.push({ file: file.path, line: p.loc?.line, message: `${p.name}: ${t}` });
+        }
+        for (const sc of file.ast.schemas) {
+          for (const f of sc.fields) if (/\bResult\s*</.test(f.type)) out.push({ file: file.path, line: sc.loc?.line, message: `schema ${sc.name}: ${f.name}: ${f.type}` });
         }
       }
       return out;

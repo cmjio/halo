@@ -559,7 +559,12 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
 
   const diags = await check(ast);
   for (const d of diags) console.error(formatDiag(d, rel));
-  if (diags.some((d) => d.severity === "error")) return 1;
+  if (diags.some((d) => d.severity === "error")) {
+    // A file that ran on an older Halo and doesn't load now: halo migrate may fix it.
+    const hint = await migrationHint(process.cwd());
+    if (hint) console.error(yellow(`! ${hint}`));
+    return 1;
+  }
 
   const mock = flags.bools.has("mock");
   const mocksPath = last(flags, "mocks");

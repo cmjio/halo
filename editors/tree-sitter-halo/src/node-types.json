@@ -1064,6 +1064,10 @@
       "required": true,
       "types": [
         {
+          "type": "binary_condition",
+          "named": true
+        },
+        {
           "type": "binding",
           "named": true
         },
@@ -1085,6 +1089,10 @@
         },
         {
           "type": "call_expr",
+          "named": true
+        },
+        {
+          "type": "comparison",
           "named": true
         },
         {
@@ -1140,11 +1148,19 @@
           "named": true
         },
         {
+          "type": "not_condition",
+          "named": true
+        },
+        {
           "type": "null",
           "named": true
         },
         {
           "type": "number",
+          "named": true
+        },
+        {
+          "type": "paren_condition",
           "named": true
         },
         {

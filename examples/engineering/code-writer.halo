@@ -47,7 +47,7 @@ pipeline WriteCode(task: String, workdir: String, test_file: String, target_file
     |> Box.run(command: "grep -v '^```' {{target_file}} > .code.tmp; mv .code.tmp {{target_file}}; set -o pipefail; bun test {{test_file}} 2>&1 | tail -60") as result
 
     // 4. Failing? The coder sees the test output and tries again
-    |<> loop(Coder, "context.data.result.exitCode != 0", max: 4) as fixes
+    |<> loop(Coder, (context.data.result.exitCode != 0), max: 4) as fixes
 
     // 5. Green: bring the file home
     |> Box.download(from: target_file, to: "{{workdir}}/{{target_file}}") as written

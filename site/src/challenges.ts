@@ -164,27 +164,25 @@ pipeline Story(idea: String) -> Result:
     id: "gate",
     track: "Flow",
     icon: "traffic-lights",
-    title: "Only when it matters",
-    goal: "Translate the greeting only when the language isn't English.",
-    hint: "A gate skips the rest of the pipeline when its condition is false: `|? (lang != \"en\")`.",
+    title: "Stop when there's nothing to do",
+    goal: "Greet nobody when the name is empty: stop the run before the Greeter is asked.",
+    hint: "A gate stops the run when its condition is false, so nothing after it runs: `|? (name != \"\")`. (To do something only sometimes and carry on either way, that's a branch: see \"Pick a path\".)",
     starter: `agent Greeter [anthropic/claude-haiku-4-5]
-agent Translator [anthropic/claude-haiku-4-5]
 
-pipeline Hello(name: String, lang: String) -> Result:
+pipeline Hello(name: String) -> Result:
   name
     |> Greeter.prompt("Write a one-line greeting for {{name}}.")
-    |> Translator.prompt("Translate this into {{lang}}: {{context.current}}")
+    |> System.Print()
 `,
     solution: `agent Greeter [anthropic/claude-haiku-4-5]
-agent Translator [anthropic/claude-haiku-4-5]
 
-pipeline Hello(name: String, lang: String) -> Result:
+pipeline Hello(name: String) -> Result:
   name
+    |? (name != "")
     |> Greeter.prompt("Write a one-line greeting for {{name}}.")
-    |? (lang != "en")
-    |> Translator.prompt("Translate this into {{lang}}: {{context.current}}")
+    |> System.Print()
 `,
-    check: (i) => clean(i) && (has(i, "gate") || has(i, "branch")),
+    check: (i) => clean(i) && has(i, "gate"),
   },
   {
     id: "parallel",
@@ -275,7 +273,7 @@ pipeline Digest(reviews: List) -> Result:
     icon: "repeat",
     title: "Try, try again",
     goal: "If the joke is longer than 200 characters, send it back to the comedian, up to 3 times.",
-    hint: "Bind the joke with `as joke`, then add `|<> loop(Comedian, \"context.data.joke.length > 200\", max: 3)`.",
+    hint: "Bind the joke with `as joke`, then add `|<> loop(Comedian, (context.data.joke.length > 200), max: 3)`.",
     starter: `agent Comedian [anthropic/claude-haiku-4-5, temp: 1.0]
 
 pipeline Joke(topic: String) -> Result:
@@ -288,7 +286,7 @@ pipeline Joke(topic: String) -> Result:
 pipeline Joke(topic: String) -> Result:
   topic
     |> Comedian.prompt("Tell a short joke about {{topic}}.") as joke
-    |<> loop(Comedian, "context.data.joke.length > 200", max: 3)
+    |<> loop(Comedian, (context.data.joke.length > 200), max: 3)
     |> System.Print()
 `,
     check: (i) => clean(i) && has(i, "loop"),
@@ -635,7 +633,7 @@ pipeline Brief(topic: String) -> Result:
   topic
     |> Researcher.prompt("Find three facts about {{topic}}.", tool: Search) as facts
     |> Writer.prompt("Write a short brief from these facts: {{facts}}") as brief
-    |<> loop(Writter, "context.data.brief.length > 500", max: 2)
+    |<> loop(Writter, (context.data.brief.length > 500), max: 2)
     |> System.Prnt()
 `,
     solution: `policy Budget : MaxSpend(0.20)
@@ -652,7 +650,7 @@ pipeline Brief(topic: String) -> Result:
   topic
     |> Researcher.prompt("Find three facts about {{topic}}.", tool: Search) as facts
     |> Writer.prompt("Write a short brief from these facts: {{facts}}") as brief
-    |<> loop(Writer, "context.data.brief.length > 500", max: 2)
+    |<> loop(Writer, (context.data.brief.length > 500), max: 2)
     |> System.Print()
 `,
     check: (i) => clean(i) && has(i, "loop") && calls(i).some((c) => c.callee === "Researcher") && calls(i).some((c) => c.callee === "System"),

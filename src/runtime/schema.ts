@@ -1,6 +1,6 @@
 /**
  * Output validation for `pipeline P(...) -> Type`: a declared schema, or a built-in
- * type like `Number` or `Array<String>`. `Result`, `Any` and undeclared names aren't checked.
+ * type like `Number` or `Array<String>`. `Result<T>` is checked as T; bare `Result`, `Any` and undeclared names aren't.
  *
  * Field types: String, Number, Integer, Boolean, Array / List (optionally
  * `Array<T>`), Object / JSON / Any, or another schema's name (nested).
@@ -68,8 +68,9 @@ function check(value: unknown, type: string, path: string, lookup: Lookup): stri
     case "Map":
       return value !== null && typeof value === "object" && !Array.isArray(value) ? undefined : `${path} should be an object, got ${describe(value)}`;
     case "Any":
-    case "Result":
       return undefined;
+    case "Result":
+      return args[0] ? check(value, args[0], path, lookup) : undefined;
   }
   const schema = lookup(base);
   // A file, unless the program has its own schema of that name.
@@ -130,6 +131,9 @@ function fromText(text: string, base: string): unknown {
  */
 export function validateReturn(type: string, output: unknown, lookup: Lookup): unknown {
   if (!type) return output;
+  // `Result<T>` is the output checked as T; bare `Result` is unchecked.
+  const wrapped = parseType(type);
+  if (wrapped.base === "Result" && wrapped.args[0]) return validateReturn(wrapped.args[0], output, lookup);
   const { base } = parseType(type);
   const schema = lookup(base);
   if (schema && base === type.trim()) return validateSchema(schema, output, lookup);

@@ -161,9 +161,9 @@ Triggers parallel execution. Runs multiple nodes concurrently, merging outputs w
 
 | Field | Value |
 |---|---|
-| **Definition** | While the condition (a string) holds, jump back to the agent's most recent stage so it can try again |
+| **Definition** | While the condition holds, jump back to the agent's most recent stage so it can try again |
 | **Limit** | `max: n` (default 3); then the run fails with `LoopLimitError` |
-| **Example** | `\|<> loop(SWE, "context.data.Shell.run.exitCode != 0", max: 3) as retries` |
+| **Example** | `\|<> loop(SWE, (context.data.Shell.run.exitCode != 0), max: 3) as retries` |
 
 ### `~>` — Listen (Events)
 

@@ -80,8 +80,22 @@ export { validate, producedKeys, type Diagnostic, type ValidateOptions } from ".
 export { parseDuration } from "./builtins.js";
 import { parseDuration } from "./builtins.js";
 
+/** What to say about `|x`, an operator Halo doesn't have. */
+function badOperator(op: string): string {
+  const STAGES = "|> call, |? gate or branch, |* fan-out or each, |! yield, |<> loop, ~> listen";
+  if (op === "|") return `"|" on its own isn't an operator. A stage starts with one of: ${STAGES}. (Types can't be combined with | yet; use a schema.)`;
+  const guess: Record<string, string> = { "|<": "|<> loop(...)", "|-": "|>", "|=": "|>", "|)": "|>", "|]": "|>", "|.": "|>", "|~": "~> listen(...)", "|^": "|<> loop(...)", "|&": "|* { ... }", "|+": "|* { ... }" };
+  const near = guess[op] ?? (/^\|[a-z]/i.test(op) ? `|> ${op.slice(1)}(...)` : undefined);
+  return `"${op}" is not a stage operator${near ? `; did you mean ${near}?` : ""} A stage starts with one of: ${STAGES}`;
+}
+
 class CollectingErrorListener extends BaseErrorListener {
   errors: string[] = [];
+  /** Set after a mistyped operator: what the parser says after it is about the same mistake. */
+  stop = false;
+  constructor(private readonly lines: string[] = []) {
+    super();
+  }
 
   override syntaxError<S extends Token, T extends ATNSimulator>(
     _recognizer: Recognizer<T>,
@@ -92,6 +106,17 @@ class CollectingErrorListener extends BaseErrorListener {
     _e: RecognitionException | null,
   ): void {
     const near = offendingSymbol?.text;
+    if (offendingSymbol?.type === HaloLexer.BAD_OP) {
+      // One clear message per mistyped operator; the errors that follow from it are noise.
+      if (!this.errors.some((e) => e.startsWith(`[${line}:${charPositionInLine}]`))) {
+        // The whole word as written (`|map`), not just the two characters the token holds.
+        const word = /^\|[^\s(]*/.exec(this.lines[line - 1]?.slice(charPositionInLine) ?? "")?.[0] || near || "|";
+        this.errors.push(`[${line}:${charPositionInLine}] ${badOperator(word.length > 1 && /^\|[^a-z]/i.test(word) ? word.slice(0, 2) : word)}`);
+      }
+      this.stop = true;
+      return;
+    }
+    if (this.stop) return;
     const suffix = near != null && near !== "<EOF>" ? ` near "${near}"` : "";
     this.errors.push(`[${line}:${charPositionInLine}] ${msg}${suffix}`);
   }
@@ -100,7 +125,7 @@ class CollectingErrorListener extends BaseErrorListener {
 function makeParser(source: string) {
   const input = CharStream.fromString(source);
   const lexer = new HaloLexer(input);
-  const listener = new CollectingErrorListener();
+  const listener = new CollectingErrorListener(source.split("\n"));
   lexer.removeErrorListeners();
   lexer.addErrorListener(listener);
   const parser = new HaloParser(new CommonTokenStream(lexer));
@@ -314,7 +339,7 @@ class Walker {
       return { ...this.call(ctx.callExpr()), bind: bindName(ctx.binding()), loc };
     }
     if (ctx instanceof GateOpContext) {
-      return { kind: "gate", condition: this.sourceText(ctx.condExpr()), expr: this.orExpr(ctx.condExpr().orExpr()), loc };
+      return { kind: "gate", condition: this.sourceText(ctx.condExpr()), expr: this.orExpr(ctx.condExpr().orExpr()), ...(ctx.getText().endsWith("=>") ? { arrow: true as const } : {}), loc };
     }
     if (ctx instanceof InterruptOpContext) {
       const argList = this.args(ctx.callArgs());
@@ -350,15 +375,28 @@ class Walker {
       };
     }
     if (ctx instanceof LoopOpContext) {
-      const raw = (ctx.STRING() ?? ctx.TRIPLE_STRING())!.getText();
-      const condition = raw.startsWith('"""') ? raw.slice(3, -3).trim() : unquote(raw);
-      const parsed = parseCondition(condition);
+      const cond = ctx.loopCondition();
+      const written = cond.condExpr();
+      let condition: string;
+      let expr: CondExpr | undefined;
+      let errors: string[] = [];
+      if (written) {
+        condition = this.sourceText(written);
+        expr = this.orExpr(written.orExpr());
+      } else {
+        const raw = (cond.STRING() ?? cond.TRIPLE_STRING())!.getText();
+        condition = raw.startsWith('"""') ? raw.slice(3, -3).trim() : unquote(raw);
+        const parsed = parseCondition(condition);
+        expr = parsed.expr;
+        errors = parsed.errors;
+      }
       return {
         kind: "loop",
         target: ctx.IDENTIFIER().getText(),
         condition,
-        expr: parsed.expr,
-        conditionErrors: parsed.errors.length ? parsed.errors : undefined,
+        expr,
+        ...(written ? {} : { quoted: true as const }),
+        conditionErrors: errors.length ? errors : undefined,
         options: this.args(ctx.callArgs()),
         bind: bindName(ctx.binding()),
         loc,

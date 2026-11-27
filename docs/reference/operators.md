@@ -20,7 +20,9 @@ A tool call with no positional arguments receives the flowing value as its first
 
 ## Gate `|? (cond)`
 
-If the condition is false, the run stops. Its status is `"halted"` and `context.meta.halted` records the stage and condition. A halt is not an error. A trailing `=>` is allowed: `|? (cond) =>`.
+If the condition is false, the run stops: nothing after the gate runs. Its status is `"halted"` and `context.meta.halted` records the stage and condition. A halt is not an error.
+
+A gate is "stop unless", not "skip the next stage". To do something only in some cases and carry on either way, use a [branch](#branch). A `=>` after a gate's condition (`|? (cond) =>`) does nothing, and the validator warns about it.
 
 ```halo
 agent Scorer [openai/gpt-4o-mini]
@@ -122,7 +124,7 @@ pipeline Approve(request: String) -> Result:
 
 Halo does not subscribe to Slack. Your server receives the event (for example, from a Slack webhook) and calls `signal()`.
 
-## Loop `|<> loop(Agent, "cond", max: n)`
+## Loop `|<> loop(Agent, (cond), max: n)`
 
 While the condition holds, the run jumps back to that agent's most recent earlier stage and continues from there with the current value. That value is usually a failing result the agent should fix. On each retry the agent is shown what the check saw and its own previous answer, so it can try something different instead of repeating itself. While looping, `context.data.loop` holds `{ target, iteration, condition }`. After `max` tries (default 3), the run fails with a `LoopLimitError`. When the loop exits, the `as` binding is the number of times it went back.
 
@@ -136,7 +138,24 @@ pipeline FixTests(task: String) -> Result:
   task
     |> Coder.write_code("Write sum.ts exporting sum(a, b). Reply with only the code.") as code
     |> Shell.run(command: "printf '%s' {{code}} > sum.ts && bun test sum.test.ts") as tests
-    |<> loop(Coder, "context.data.tests.exitCode != 0", max: 3) as attempts
+    |<> loop(Coder, (context.data.tests.exitCode != 0), max: 3) as attempts
 ```
 
-On each pass, `Coder` gets the failing `tests` result (stdout, stderr, exitCode) as its input. Agents can't edit files themselves. Here the Bash stage writes the agent's answer to disk, and `{{code}}` is shell-quoted when it is inserted. The condition is a string that uses the same syntax as gates. The validator parses it.
+On each pass, `Coder` gets the failing `tests` result (stdout, stderr, exitCode) as its input. Agents can't edit files themselves. Here the Bash stage writes the agent's answer to disk, and `{{code}}` is shell-quoted when it is inserted. The condition is written in parentheses, the same as a gate's. The older form, the condition in quotes (`loop(Coder, "context.data.tests.exitCode != 0")`), still works. `max` is the only option; any other is an error.
+
+## Mistyped operators
+
+Every stage starts with one of the operators above. Anything else that starts with `|` is an error that names it, with the one you probably meant:
+
+```
+"|<" is not a stage operator; did you mean |<> loop(...)? A stage starts with one of: |> call, |? gate or branch, |* fan-out or each, |! yield, |<> loop, ~> listen
+```
+
+## Reserved
+
+These aren't in the language yet. They are kept free so that adding them later doesn't change what any program means:
+
+- `|` on its own, for union types (`String | Number`). Today it's an error; use a schema.
+- `T?` after a type, for an optional value.
+- `?` after a call, for anything at all. `|?` is the gate and the branch, and a second meaning of `?` would read as one of them.
+- `|` followed by any other character, for future stage operators.

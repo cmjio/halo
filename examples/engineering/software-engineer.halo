@@ -107,7 +107,7 @@ pipeline AutoRemediate(incident: Incident) -> Result:
          ) as history
        }
 
-    // Step 3: Gate — only auto-fix if confidence > 85%
+    // Step 3: Gate — stop here (no auto-fix) unless confidence > 85%
     |? (context.data.diagnosis.confidence > 85)
 
     // Step 4: Write the fix in a sandbox, and run the tests there

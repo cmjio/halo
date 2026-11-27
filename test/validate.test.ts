@@ -63,13 +63,37 @@ describe("validate", () => {
           x |> M.prompt()`),
     ).toEqual([
       'Policy "G": Tone(...) is not enforced by the runtime yet',
-      'Policy "G": Block(Gossip) is not a detectable category and is not enforced',
-      'Policy "G": unknown rule Frobnicate(...) is ignored',
+      'Policy "G": Block(Gossip) is not a category it can detect (it knows Profanity, DestructiveOps, PromptInjection, PII, SSN, CreditCard, Email, Phone, APIKey, IPAddress, Markdown)',
+      'Policy "G": Frobnicate(...) is not a policy rule (rules: Block, Redact, MaxWords, MaxChars, MaxTokens, MaxSpend, LogViolation, Enforce, Require, MatchRegex, Validate, AllowHosts, AllowFiles, AllowSecrets, AllowMedia, AllowWallet, ApproveWallet, AllowTools, DenyTools, AllowEffects, ApproveTools, ApproveEffects, DenyArgs)',
       '@shadow(Nobody) on "M": "Nobody" is not a defined agent or model, so it will never run',
       "@timeout needs one duration, e.g. @timeout(30s)",
       "@retry needs a count and optional delay, e.g. @retry(3, 2s)",
-      "Unknown directive @fast is ignored",
+      "@fast is not a directive (directives: @timeout, @retry, @checkpoint, @shadow, @correct, @cascade, @thread, @expect)",
     ]);
+  });
+
+  test("a misspelled rule, category, directive or tool in a policy is an error, with what was meant", () => {
+    const errors = messages(
+      `policy B : maxspend(0.25) & MaxSpnd(1) & Block(PromptInjecton) & AllowTools("Cod.read")
+        tool Code : Workspace(".")
+        agent M [openai/gpt-4o]
+          requires B
+        @retyr(2)
+        pipeline S(x: String) -> Result:
+          x |> M.prompt()`,
+      "error",
+    );
+    expect(errors).toEqual([
+      'Policy "B": maxspend(...) is not a policy rule; did you mean MaxSpend?',
+      'Policy "B": MaxSpnd(...) is not a policy rule; did you mean MaxSpend?',
+      'Policy "B": Block(PromptInjecton) is not a category it can detect; did you mean PromptInjection?',
+      'Policy "B": AllowTools(Cod.read) names "Cod", which is not a declared tool; did you mean Code?',
+      "@retyr is not a directive; did you mean @retry?",
+    ]);
+    // A tool name nothing like a declared one may come from a file that uses this policy: still a warning.
+    expect(messages(`policy P : AllowTools("Jira.*")
+agent M [openai/gpt-4o]
+  requires P`, "warning")).toContain('Policy "P": AllowTools(Jira.*) names "Jira", which is not a declared tool');
   });
 
   test("diagnostics carry source lines", () => {

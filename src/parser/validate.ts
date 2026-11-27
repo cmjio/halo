@@ -177,18 +177,25 @@ class Validator {
       if (includes(UNENFORCED_RULES, rule.name)) {
         this.add("warning", `Policy "${g.name}": ${rule.name}(...) is not enforced by the runtime yet`, g.loc);
       } else if (!includes(ENFORCED_RULES, rule.name)) {
-        this.add("warning", `Policy "${g.name}": unknown rule ${rule.name}(...) is ignored`, g.loc);
+        // A misspelled rule would do nothing at all: a policy that silently doesn't apply is worse than one that doesn't load.
+        const near = didYouMean(rule.name, [...ENFORCED_RULES, ...UNENFORCED_RULES]);
+        this.add("error", `Policy "${g.name}": ${rule.name}(...) is not a policy rule${near ? `; did you mean ${near}?` : ` (rules: ${ENFORCED_RULES.join(", ")})`}`, g.loc, rule.name);
       } else if (rule.name === "Block" || rule.name === "Redact") {
         const known: readonly string[] = rule.name === "Block" ? BLOCK_CATEGORIES : REDACT_CATEGORIES;
         for (const cat of rule.args) {
-          if (!known.includes(cat)) this.add("warning", `Policy "${g.name}": ${rule.name}(${cat}) is not a detectable category and is not enforced`, g.loc);
+          if (!known.includes(cat)) {
+            const near = didYouMean(cat, known);
+            this.add("error", `Policy "${g.name}": ${rule.name}(${cat}) is not a category it can detect${near ? `; did you mean ${near}?` : ` (it knows ${known.join(", ")})`}`, g.loc, cat);
+          }
         }
       } else if (rule.name === "Require" && !rule.args.every((a) => includes(REQUIRE_CHECKS, a))) {
-        this.add("warning", `Policy "${g.name}": Require(${rule.args.join(", ")}) is not enforced; only Require(${REQUIRE_CHECKS.join(" | ")}) is checked`, g.loc);
+        const bad = rule.args.find((a) => !includes(REQUIRE_CHECKS, a))!;
+        const near = didYouMean(bad, REQUIRE_CHECKS);
+        this.add("error", `Policy "${g.name}": Require(${bad}) is not something it can check${near ? `; did you mean ${near}?` : `; it checks ${REQUIRE_CHECKS.join(", ")} (for a person's approval, use |! yield)`}`, g.loc, bad);
       } else if (rule.name === "Validate" && rule.args.length !== 3) {
         this.add("error", `Policy "${g.name}": Validate needs a field, an operator, and a value, e.g. Validate("amount", "<=", "context.data.limit")`, g.loc);
       } else if (rule.name === "Enforce" && !rule.args.every((a) => a.toUpperCase() === "JSON")) {
-        this.add("warning", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) is not enforced; only Enforce(JSON) is checked`, g.loc);
+        this.add("error", `Policy "${g.name}": Enforce(${rule.args.join(", ")}) can't be checked; only Enforce(JSON) is`, g.loc);
       } else if (rule.name === "MatchRegex" && !validRegex(rule.args[0] ?? "")) {
         this.add("error", `Policy "${g.name}": MatchRegex(${rule.args[0] ?? ""}) is not a valid regular expression`, g.loc);
       } else if (rule.name === "AllowHosts") {
@@ -210,7 +217,12 @@ class Validator {
         if (!rule.args.length) this.add("error", `Policy "${g.name}": ${rule.name}(...) names wallet items or fields, e.g. ${rule.name}("Card", "Me.email")`, g.loc);
         for (const p of rule.args) {
           if (!WALLET_PATTERN.test(p)) this.add("error", `Policy "${g.name}": ${rule.name}(${p}) should name a Vault, or a Vault's field: "Card", "Card.number" or "Card.*"`, g.loc);
-          else if (p !== "*" && this.tools.get(p.split(".")[0]!)?.provider !== "Vault") this.add("warning", `Policy "${g.name}": ${rule.name}(${p}): ${p.split(".")[0]} is not a Vault tool declared here`, g.loc);
+          else if (p !== "*" && this.tools.get(p.split(".")[0]!)?.provider !== "Vault") {
+            const vault = p.split(".")[0]!;
+            const near = this.tools.has(vault) ? undefined : didYouMean(vault, [...this.tools.values()].filter((x) => x.provider === "Vault").map((x) => x.name));
+            if (near) this.add("error", `Policy "${g.name}": ${rule.name}(${p}): ${vault} is not a Vault tool; did you mean ${near}?`, g.loc, vault);
+            else this.add("warning", `Policy "${g.name}": ${rule.name}(${p}): ${vault} is not a Vault tool declared here`, g.loc, vault);
+          }
         }
       } else if (includes(TOOL_RULES, rule.name)) {
         this.checkToolRule(g, rule);
@@ -315,7 +327,10 @@ class Validator {
       v === undefined ? undefined : v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map((i) => literal(i)) : v.kind === "null" ? null : { kind: v.kind };
     for (const a of t.argList) {
       if (!a.name) this.add("error", `Tool "${t.name}": Vault takes named settings, like Vault(source: "keychain", fields: [...], hosts: [...])`, t.loc);
-      else if (!KNOWN.includes(a.name)) this.add("warning", `Tool "${t.name}": Vault has no setting "${a.name}" (it has ${KNOWN.join(", ")})`, t.loc);
+      else if (!KNOWN.includes(a.name)) {
+        const near = didYouMean(a.name, KNOWN);
+        this.add("error", `Tool "${t.name}": Vault has no setting "${a.name}"${near ? `; did you mean ${near}?` : ` (it has ${KNOWN.join(", ")})`}`, t.loc, a.name);
+      }
     }
     for (const p of walletItemProblems(t.name, (k) => literal(t.argList.find((a) => a.name === k)?.value))) this.add("error", `Tool "${t.name}" (Vault): ${p}`, t.loc);
   }
@@ -349,7 +364,11 @@ class Validator {
     const patterns = rule.name === "DenyArgs" ? args.slice(0, 1) : args;
     for (const pattern of patterns) {
       const tool = splitToolPath(pattern).tool;
-      if (tool !== "*" && !this.tools.has(tool) && !this.sandboxTools.has(tool)) this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc);
+      if (tool !== "*" && !this.tools.has(tool) && !this.sandboxTools.has(tool)) {
+        const near = didYouMean(tool, [...this.tools.keys(), ...this.sandboxTools]);
+        if (near) this.add("error", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool; did you mean ${near}?`, g.loc, tool);
+        else this.add("warning", `Policy "${g.name}": ${rule.name}(${pattern}) names "${tool}", which is not a declared tool`, g.loc, tool);
+      }
     }
   }
 
@@ -429,7 +448,8 @@ class Validator {
 
   private checkDirective(d: { name: string; value: string; args?: string[] }, loc: Loc | undefined, on: "agent" | "pipeline") {
     if (!includes(DIRECTIVES, d.name)) {
-      this.add("warning", `Unknown directive @${d.name} is ignored`, loc);
+      const near = didYouMean(d.name, DIRECTIVES);
+      this.add("error", `@${d.name} is not a directive${near ? `; did you mean @${near}?` : ` (directives: ${DIRECTIVES.map((x) => "@" + x).join(", ")})`}`, loc, d.name);
       return;
     }
     const args = d.value ? d.value.split(/\s*,\s*/) : [];
@@ -476,6 +496,10 @@ class Validator {
    */
   private checkTypeName(type: string, what: string, loc?: Loc) {
     const known = [...SCHEMA_TYPES, ...this.schemas.keys()];
+    // `Result<T>` is a pipeline's output checked as T: one type inside, or none (`Result` is unchecked).
+    for (const m of type.matchAll(/\bResult\s*<([^<>]*(?:<[^<>]*>[^<>]*)*)>/g)) {
+      if (splitTypeArgs(m[1]!).length !== 1) this.add("error", `${what}: Result<...> takes one type, the output's (Result<Reply>); it has no error type, because a failed run is an error, not a value`, loc, "Result");
+    }
     for (const t of type.split(/[<>,\s]+/).filter(Boolean)) {
       if (known.includes(t)) continue;
       const near = known.find((k) => nearMiss(t, k));
@@ -638,13 +662,14 @@ class Validator {
       }
       case "gate":
         this.checkCond(stage.expr, s, params, data, stage.loc);
+        if (stage.arrow) this.add("warning", `Pipeline "${s.name}": the => after |? (${stage.condition}) does nothing; a gate only stops the run when the condition is false. Remove it (to choose between calls, use |? { (cond) => Call(), else => Call() })`, stage.loc, "=>");
         break;
       case "loop":
         if (!this.agents.has(stage.target)) this.add("error", `Pipeline "${s.name}": loop(${stage.target}, ...) needs an agent to retry with, but "${stage.target}" is not an agent`, stage.loc);
         for (const e of stage.conditionErrors ?? []) this.add("error", `Pipeline "${s.name}": loop condition "${stage.condition}" is not valid: ${e}`, stage.loc);
         if (stage.expr) this.checkCond(stage.expr, s, params, data, stage.loc);
         for (const o of stage.options) {
-          if (o.name !== "max") this.add("warning", `Pipeline "${s.name}": loop(...) has no option "${o.name ?? "(positional)"}" (only max: n)`, stage.loc);
+          if (o.name !== "max") this.add("error", `Pipeline "${s.name}": loop(...) has no option "${o.name ?? "(positional)"}"${o.name && didYouMean(o.name, ["max"]) ? "; did you mean max?" : " (only max: n)"}`, stage.loc, o.name);
           else if (o.value.kind !== "number" ? ["string", "bool", "null", "list"].includes(o.value.kind) : !Number.isInteger(o.value.value) || o.value.value < 1) {
             this.add("error", `Pipeline "${s.name}": loop(${stage.target}, ...) max must be a whole number of at least 1`, stage.loc);
           }
@@ -898,7 +923,10 @@ const UNSAFE_NAMES = new Set(["__proto__", "prototype", "constructor"]);
 /** `Array<String>` → `Array` */
 function baseType(type: string): string {
   const lt = type.indexOf("<");
-  return (lt < 0 ? type : type.slice(0, lt)).trim();
+  const base = (lt < 0 ? type : type.slice(0, lt)).trim();
+  // `Result<T>` is T, checked.
+  if (base === "Result" && lt >= 0) return baseType(type.slice(lt + 1, type.lastIndexOf(">")));
+  return base;
 }
 
 type Kind = "string" | "number" | "integer" | "boolean" | "list" | "object" | "schema" | "media" | "any";
@@ -927,6 +955,26 @@ function kindOf(base: string, schemas: Map<string, SchemaDeclaration>): Kind {
 }
 
 /** A likely typo: the same name in another case, or within an edit or two (one for short names). */
+/** `A, Map<B, C>` → ["A", "Map<B, C>"]: the top-level arguments of a type. */
+function splitTypeArgs(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of s) {
+    if (ch === "<") depth++;
+    if (ch === ">") depth--;
+    if (ch === "," && depth === 0) (out.push(cur.trim()), (cur = ""));
+    else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+/** The known name `written` is most likely a misspelling of (any case, a letter or two off), if any. */
+function didYouMean(written: string, known: readonly string[]): string | undefined {
+  return known.find((k) => k.toLowerCase() === written.toLowerCase()) ?? known.find((k) => nearMiss(written, k));
+}
+
 function nearMiss(written: string, known: string): boolean {
   if (written.toLowerCase() === known.toLowerCase()) return true;
   const limit = Math.min(written.length, known.length) <= 4 ? 1 : 2;

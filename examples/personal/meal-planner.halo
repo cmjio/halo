@@ -35,7 +35,7 @@ pipeline PlanMeals(pantry: List, diet: String, allergens: String, days: Number) 
     // 2. Check in code: grep exits 0 when an allergen appears anywhere in the plan
     //    (pipefail, so the exit code is grep's and not sort's)
     |> Shell.run(command: "set -o pipefail; echo {{plan}} | grep -i -o -E {{allergens}} | sort -u") as allergen_check
-    |<> loop(Chef, "context.data.allergen_check.exitCode == 0", max: 3) as replans
+    |<> loop(Chef, (context.data.allergen_check.exitCode == 0), max: 3) as replans
 
     // 3. The checked plan
     |> System.Pick(context.data.plan, fields: ["meals", "shopping_list"])

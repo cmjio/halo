@@ -94,7 +94,7 @@ pipeline MorningBriefing(date: String, company_name: String) -> Result:
          competitor_updates: context.data.competitors
        ) as trends
 
-    // Step 3: Gate — if nothing significant changed, skip detailed report
+    // Step 3: Gate — stop here (no brief) unless something significant changed
     |? (context.data.analyze_trends.notable_changes > 0)
 
     // Step 4: Compose executive brief (max 500 words enforced by policy)

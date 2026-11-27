@@ -1,7 +1,10 @@
 // ============================================================
-// STEP 6: Gates - Conditional Execution
-// Learn: Skip pipeline stages with `|? (condition)`
-// Condition uses variables or context from previous stages
+// STEP 6: Gates and branches - deciding what happens next
+// Learn: `|? (condition)` is a gate. When the condition is false, the run STOPS
+//        there: its status is "halted" (not an error) and nothing after it runs.
+// Learn: `|? { (condition) => Call(), else => Call() }` is a branch. It runs the
+//        first call whose condition holds, and the run carries on either way.
+// Rule of thumb: a gate is "stop unless", a branch is "if ... else".
 // `as name` stores a stage's result at context.data.name
 // ============================================================
 
@@ -13,8 +16,12 @@ agent Greeter [gemini-3-1-pro, temp: 0.7]
 
 pipeline ConditionalHello(name: String, lang: String) -> Result:
   name
+    // Gate: with no name there's nobody to greet, so stop here.
+    |? (name != "")
     |> Greeter.prompt("Write a warm, 1-sentence greeting for {{name}}.") as greeting
-    // Gate: Only translate if target language is not English
-    |? (lang != "en")
-    |> Greeter.prompt("Translate this greeting into the language with code {{lang}}:", context.data.greeting)
+    // Branch: translate unless the language is English. Either way the greeting is printed.
+    |? {
+         (lang != "en") => Greeter.prompt("Translate this greeting into the language with code {{lang}}:", context.data.greeting),
+         else => System.Value(context.data.greeting)
+       }
     |> System.Print()

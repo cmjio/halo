@@ -1614,7 +1614,7 @@ export class HaloRuntime {
   }
 
   /**
-   * `|<> loop(Agent, "cond", max: n)`: while the condition holds, jump back to the
+   * `|<> loop(Agent, (cond), max: n)`: while the condition holds, jump back to the
    * agent's most recent stage so it can try again with the current value (e.g. a
    * failing build's output). Returns the stage to jump to, or undefined to go on.
    */
@@ -1631,7 +1631,7 @@ export class HaloRuntime {
     const max = Number(this.resolveArgs({ argList: stage.options }, ctx).named.max ?? 3);
     if (!Number.isInteger(max) || max < 1) throw new HaloError(`loop(${stage.target}): max must be a whole number of at least 1`, { code: "LOOP_MAX" });
     if (done >= max) {
-      throw new LoopLimitError(`loop(${stage.target}) gave up after ${max} ${max === 1 ? "try" : "tries"}: "${stage.condition}" is still true`);
+      throw new LoopLimitError(`loop(${stage.target}) gave up after ${max} ${max === 1 ? "try" : "tries"}: (${stage.condition}) is still true`);
     }
     const to = ctx.pipeline.pipeline.findLastIndex((s, j) => j < index && s.kind === "call" && s.callee === stage.target);
     if (to < 0) throw new HaloError(`loop(${stage.target}, ...) needs an earlier ${stage.target} stage to go back to`, { code: "LOOP_TARGET_NOT_FOUND" });

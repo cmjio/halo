@@ -58,7 +58,7 @@ pipeline AuditScreen(screen: JSON) -> Result:
         standard: "WCAG2x-AA"
       )
 
-    // Step 3: Gate — only continue if issues found
+    // Step 3: Gate — stop here unless the audit found issues
     |? (context.data.Auditor.analyze.issue_count > 0)
 
     // Step 4: Generate design tokens

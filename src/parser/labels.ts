@@ -12,6 +12,6 @@ export function stageLabel(stage: PipelineStage): string {
     case "each": return `|* each(${stage.item} in ${render(stage.list)}) => ${stageLabel(stage.call)}`;
     case "interrupt": return "|! yield";
     case "listen": return `~> listen(${stage.target})`;
-    case "loop": return `|<> loop(${stage.target}, "${stage.condition}")`;
+    case "loop": return `|<> loop(${stage.target}, (${stage.condition}))`;
   }
 }

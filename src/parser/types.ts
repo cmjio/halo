@@ -185,6 +185,8 @@ export interface GateStage {
   /** Condition source text, without the surrounding parentheses. */
   condition: string;
   expr: CondExpr;
+  /** Written with a `=>` after the condition, which does nothing (the validator says so). */
+  arrow?: true;
   loc?: Loc;
 }
 
@@ -241,7 +243,7 @@ export interface ListenStage {
 }
 
 /**
- * `|<> loop(Agent, "condition")`: while the condition holds, ask the agent to
+ * `|<> loop(Agent, (condition))`: while the condition holds, ask the agent to
  * fix the current value and re-run the stages since the loop's start.
  */
 export interface LoopStage {
@@ -250,9 +252,11 @@ export interface LoopStage {
   target: string;
   /** The agent as written, when the linker qualified `target`. */
   alias?: string;
-  /** Condition source text, as written in the string. */
+  /** Condition source text: inside `( )`, or inside the quotes of the older string form. */
   condition: string;
   expr?: CondExpr;
+  /** Written as a quoted string (`"cond"`) rather than `(cond)`. */
+  quoted?: true;
   /** Syntax errors in the condition string, if any. */
   conditionErrors?: string[];
   /** Options such as `max: 3`. */

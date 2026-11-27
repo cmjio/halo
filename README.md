@@ -95,7 +95,7 @@ halo test pipelines/fix.halo -p FixIssue --arg number=42 --mocks samples/mocks.j
 | `\|? { (cond) => A(), else => B() }` | Branch: run the first matching arm |
 | `\|* { A(), B() }` | Fan out: run calls in parallel; the result is the list |
 | `\|* each(item in list, concurrency: 2, limit: 5) => Call()` | One call per item (the first 5), in parallel |
-| `\|<> loop(Agent, "cond", max: 3)` | While the condition holds, go back to the agent's stage (e.g. until tests pass) |
+| `\|<> loop(Agent, (cond), max: 3)` | While the condition holds, go back to the agent's stage (e.g. until tests pass) |
 | `\|! yield(msg: "...")` | Ask a human |
 | `~> listen(Slack.Reaction)` | Wait for an external event |
 
@@ -252,7 +252,7 @@ Checked on every prompt (input) and answer (output) of agents that `requires` th
 - `LogViolation()`
 - Tool rules, for tool calls an agent chooses: `AllowTools("Files.*")`, `DenyTools("Files.delete")`, `AllowEffects(read)`, `ApproveTools(...)` / `ApproveEffects(write, external)` (a person approves first), `DenyArgs("Shell.run", "command", "^(?!bun test)")`
 
-`Tone`, `Anonymize`, other `Require(...)` checks, and other categories need a model to judge them and are **not enforced yet**; `validate` warns wherever they're used.
+`Tone`, `Anonymize` and `MaxDensity` need a model to judge them and are **not enforced yet**; `validate` warns wherever they're used. Anything else a policy can't check (an unknown rule like `maxspend`, a category it can't detect, `Require(Approver)`) is an error, with the name you probably meant, so a misspelled rule never runs as no rule at all.
 
 ## Tooling
 

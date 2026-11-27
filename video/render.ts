@@ -34,7 +34,7 @@ const OPS = [
   `|> Writer.explain(topic) as draft`,
   `|? (review.approved == true)`,
   `|* each(i in issues) => Label()`,
-  `|<> loop(Fixer, "tests fail", max: 3)`,
+  `|<> loop(Fixer, (tests.exitCode != 0), max: 3)`,
   `|! yield(msg: "Publish this?")`,
   `~> listen(Slack.Reaction)`,
 ];

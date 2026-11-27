@@ -53,7 +53,7 @@ agent Author [anthropic/claude-sonnet-4-5, temp: 0.2]
       |? { (cond) => Call(), else => Call() }   branch
       |* { A.x() as a, B.y() as b }        parallel calls
       |* each(item in list) => Call(item)  one call per item; each(item in list, limit: 5) takes the first 5
-      |<> loop(Agent, "cond", max: 3)      go back to the agent's stage while the condition (a string) holds
+      |<> loop(Agent, (cond), max: 3)      go back to the agent's stage while the condition holds
       |! yield(msg: "Approve?", [context.data.x]) as answer   ask a human; check context.data.answer.approved
       System.Print(x), System.Value(x) (makes x the flowing value),
       System.Pick(x, fields: ["a", "b.c"]) (keeps fields of an object or of each object in a list)
@@ -83,7 +83,7 @@ pipeline AuthorPipeline(request: String, save_as: String) -> Result:
        """) as check
 
     // 3. Errors? The author gets the validator's messages and tries again
-    |<> loop(Author, "context.data.check.exitCode != 0", max: 4) as fixes
+    |<> loop(Author, (context.data.check.exitCode != 0), max: 4) as fixes
 
     // 4. You approve before it's saved
     |! yield(msg: "Save this pipeline to {{save_as}}?", [context.data.draft, context.data.check.stdout]) as review

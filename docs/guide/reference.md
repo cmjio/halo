@@ -56,7 +56,7 @@ See [Policies](../stdlib/policies.md) for each rule and which ones are enforced.
 schema Name { field: Type, other: Array<Type> }
 ```
 
-Field types: `String`, `Number`, `Integer`, `Boolean`, `Array`/`List` (optionally `Array<T>`), `Object`/`JSON`/`Any`, or another schema. When a pipeline declares `-> SchemaName`, its output is checked against that schema. See [Types & Schemas](../reference/types.md).
+Field types: `String`, `Number`, `Integer`, `Boolean`, `Array`/`List` (optionally `Array<T>`), `Object`/`JSON`/`Any`, or another schema. When a pipeline declares `-> SchemaName` (or `-> Result<SchemaName>`), its output is checked against that schema. See [Types & Schemas](../reference/types.md).
 
 ## `pipeline`
 
@@ -70,7 +70,7 @@ pipeline Name(param: Type, ...) -> ReturnType:
 
 Directives on a pipeline: `@timeout`, `@retry`, `@correct`, `@expect("cond", ...)` (hard checks on the output; see [Directives](../reference/compiler-directives.md#expect)), `@checkpoint` (a snapshot after every stage, for `halo history` and `halo rewind`), and `@thread(input)` (state kept between runs, read as `context.thread` and changed with `Thread.set`, `Thread.append` and `Thread.clear`; see [Thread State](./thread-state.md)).
 
-A pipeline starts with an expression (a parameter, a literal, or a `context.…` path) or directly with an operator. Parameter types are labels and are not checked at runtime. The return type is checked only when it names a declared `schema`. `Result` is a common placeholder.
+A pipeline starts with an expression (a parameter, a literal, or a `context.…` path) or directly with an operator. Parameter types are labels and are not checked at runtime. The return type is checked when the run finishes: a declared `schema`, a built-in type (`String`, `Array<Reply>`), or `Result<T>`, which is checked as `T`. Bare `Result` is a common placeholder and isn't checked.
 
 ### Calls
 
@@ -105,7 +105,7 @@ If an agent call passes no inputs and its instructions have no `{{…}}` placeho
 | `\|* each(item in list, concurrency: n) => Call() as xs` | map over a list |
 | `\|! yield(msg, ...) as answer` | ask a human |
 | `~> listen(Source.Event) as event` | wait for an event |
-| `\|<> loop(Agent, "cond", max: n) as tries` | retry an earlier agent stage |
+| `\|<> loop(Agent, (cond), max: n) as tries` | retry an earlier agent stage |
 
 Conditions support `==`, `!=`, `>`, `>=`, `<`, `<=`, `&&`, `||`, `!`, and parentheses. Details are in [Pipe Operators](../reference/operators.md).
 

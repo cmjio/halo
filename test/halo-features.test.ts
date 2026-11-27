@@ -110,17 +110,17 @@ describe("validator: Halo checks", () => {
     expect(messages(src, "error").slice(1)).toEqual([
       `Pipeline "P": loop(T, ...) needs an agent to retry with, but "T" is not an agent`,
       expect.stringContaining(`Pipeline "P": loop condition "x ==" is not valid:`),
+      `Pipeline "P": loop(...) has no option "tries" (only max: n)`,
     ]);
     expect(messages(src, "error")[0]).toBe(`Schema "S": field "b": "Strng" is not a type; did you mean "String"?`);
     expect(messages(src, "warning")).toEqual([
       `Schema "S": field "c": "Widget" is not a declared schema, so it isn't checked (declare \`schema Widget { ... }\`, or use String, Number, Integer, Boolean, Array, List, Object, Map, JSON, Any, Result, Image, Document, Audio, Video)`,
-      `Pipeline "P": loop(...) has no option "tries" (only max: n)`,
     ]);
   });
 
   test("Require() checks JSON/XML/Citation only; Validate needs three arguments", () => {
     expect(messages(`policy P : Require(JSON) & Require(Approver) & Validate("amount", "<=")`)).toEqual([
-      `Policy "P": Require(Approver) is not enforced; only Require(JSON | XML | Citation) is checked`,
+      `Policy "P": Require(Approver) is not something it can check; it checks JSON, XML, Citation (for a person's approval, use |! yield)`,
       `Policy "P": Validate needs a field, an operator, and a value, e.g. Validate("amount", "<=", "context.data.limit")`,
     ]);
   });
@@ -308,7 +308,7 @@ describe("|<> loop", () => {
     const r = rt(src, { "SWE.write_code": "code", Shell: { exitCode: 1 }, "SWE.summarize": "x" });
     const err = await r.execute("Fix", { task: "t" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LoopLimitError);
-    expect((err as Error).message).toBe(`loop(SWE) gave up after 3 tries: "context.data.Shell.run.exitCode != 0" is still true`);
+    expect((err as Error).message).toBe(`loop(SWE) gave up after 3 tries: (context.data.Shell.run.exitCode != 0) is still true`);
   });
 
   test("a max that isn't a whole number of at least 1 is an error, not an endless loop", async () => {

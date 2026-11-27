@@ -88,7 +88,7 @@ pipeline AutoTest(pr: PullRequest) -> Result:
         results: context.data.TestRunner.execute
       )
 
-    // Step 4: Gate — only flag flaky tests if failures found
+    // Step 4: Gate — stop here unless there were failures to look at
     |? (context.data.TestArchitect.analyze_results.failure_count > 0)
 
     // Step 5: Detect flaky patterns

@@ -8,7 +8,7 @@ Halo is a **declarative**, pipeline-oriented language for expressing AI workflow
 
 ### Types and state
 
-Halo is dynamically typed and statically validated (`halo validate`). Parameter and return types are written as `String`, `Number`, `Integer`, `Boolean`, `Array` / `List` (optionally `Array<T>`), `Object` / `JSON` / `Map`, `Any`, `Result` (unchecked, like `Any`), or a declared `schema`. The validator checks type names, fields read from schema-typed parameters, and values passed to pipelines whose types it can see (literals and parameters). At runtime, a pipeline's output is checked against its return type.
+Halo is dynamically typed and statically validated (`halo validate`). Parameter and return types are written as `String`, `Number`, `Integer`, `Boolean`, `Array` / `List` (optionally `Array<T>`), `Object` / `JSON` / `Map`, `Any`, `Result` (unchecked, like `Any`), `Result<T>` (checked as `T`), or a declared `schema`. The validator checks type names, fields read from schema-typed parameters, and values passed to pipelines whose types it can see (literals and parameters). At runtime, a pipeline's output is checked against its return type.
 
 #### The Global State (`context`)
 
@@ -24,7 +24,7 @@ Halo is dynamically typed and statically validated (`halo validate`). Parameter 
 
 ### `policy`: the rules
 
-Checked on an agent's prompt (input) and answer (output) for every agent that `requires` the policy. All rules are deterministic; rules that would need a model to judge them (e.g. `Tone`) are recognized but not enforced, and `halo validate` warns about them.
+Checked on an agent's prompt (input) and answer (output) for every agent that `requires` the policy. All rules are deterministic; rules that would need a model to judge them (e.g. `Tone`) are recognized but not enforced, and `halo validate` warns about them. An unknown rule, a category no rule can detect, or a `Require`/`Enforce` argument it can't check is a validation error.
 
 ```halo
 policy Privacy : Redact(PII) & Block(PromptInjection)
@@ -155,7 +155,7 @@ Every agent in a package (exported file or not) must use a slot that its `halo.j
 | `\|? { ... }` | Branch | Run the first arm whose condition holds (if/else) |
 | `\|* { A(), B() }` | Fan-out | Run calls in parallel. The result is the list of outputs |
 | `\|* each(x in list) => Call()` | Each | Run one call per list item, in parallel |
-| `\|<> loop(Agent, "cond")` | Loop | While the condition holds, go back to the agent's stage |
+| `\|<> loop(Agent, (cond))` | Loop | While the condition holds, go back to the agent's stage |
 | `\|! yield(...)` | Interrupt | Ask a human |
 | `~> listen(Source.Event)` | Listen | Wait for an external event |
 
@@ -205,14 +205,14 @@ Keywords (`tool`, `context`, `pipeline`, ...) can be used as named-argument keys
 
 |> SWE.write_code()
 |> Shell.run(command: "bun test")
-|<> loop(SWE, "context.data.Shell.run.exitCode != 0", max: 3) as retries
+|<> loop(SWE, (context.data.Shell.run.exitCode != 0), max: 3) as retries
 ```
 
 **Branch** (`|? { ... }`) checks arms in order and runs the first one whose condition holds; `else` (last) matches anything. Each arm is one call. For several steps, call another pipeline; a gate inside that pipeline ends just that pipeline early, and the branch gets its last value. The arm's result becomes the flowing value and the `as` binding. If nothing matches and there is no `else`, the value passes through unchanged.
 
 **Each** (`|* each(item in list) => Call(...)`) runs the call once per item, up to `concurrency` (default 4) at a time, and keeps the input order. Inside the call, the item is available as `item`, `{{item.field}}`, and the flowing value, and its position as `index`. The loop variable doesn't exist after the loop. The result list is stored at the `as` binding and at `context.data.<Callee>.<method>`. If any item fails, the stage fails.
 
-**Loop** (`|<> loop(Agent, "cond", max: n)`) checks its condition (written as a string) when reached. While it holds, the run jumps back to the agent's most recent stage, so the agent sees the current value (e.g. the failing test output) and tries again. After `max` tries (default 3) the run fails with a `LoopLimitError`. When the condition is false the run continues, and `as` binds the number of retries.
+**Loop** (`|<> loop(Agent, (cond), max: n)`) checks its condition when reached (written in parentheses, like a gate's; the older quoted form `"cond"` still works). While it holds, the run jumps back to the agent's most recent stage, so the agent sees the current value (e.g. the failing test output) and tries again. After `max` tries (default 3) the run fails with a `LoopLimitError`. When the condition is false the run continues, and `as` binds the number of retries.
 
 ## Human-in-the-Loop
 

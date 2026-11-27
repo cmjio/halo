@@ -34,7 +34,7 @@ describe("CLI", () => {
 
   test("validate --strict fails on warnings", () => {
     const file = join(work, "warns.halo");
-    writeFileSync(file, `policy P : Redact(SalaryData)\nagent A [openai/gpt-4o]\n  requires P\npipeline S(x: String) -> Result:\n  x |> A.go()\n`);
+    writeFileSync(file, `policy P : Tone("calm")\nagent A [openai/gpt-4o]\n  requires P\npipeline S(x: String) -> Result:\n  x |> A.go()\n`);
     expect(cli("validate", file, "--strict").code).toBe(1);
     expect(cli("validate", file).code).toBe(0);
   });
@@ -102,11 +102,11 @@ pipeline S(x: String) -> Result:
   }, 30_000);
 
   test("run --json returns the full result", () => {
-    const r = cli("run", "examples/learn/06-gates.halo", "--args", '{"name":"Ana","lang":"en"}', "--mock", "--json");
+    const r = cli("run", "examples/learn/06-gates.halo", "--args", '{"name":"","lang":"en"}', "--mock", "--json");
     const result = JSON.parse(r.out);
     expect(result.status).toBe("halted");
-    expect(result.context.meta.halted.condition).toBe('lang != "en"');
-    expect(r.err).toContain("Halted at stage 2");
+    expect(result.context.meta.halted.condition).toBe('name != ""');
+    expect(r.err).toContain("Halted at stage 1");
   });
 
   test("missing arguments are explained", () => {

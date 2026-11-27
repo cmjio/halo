@@ -89,8 +89,12 @@ pipelineOp
     | FANOUT '{' fanoutItem (',' fanoutItem)* ','? '}' binding?  # fanoutOp
     | FANOUT 'each' '(' IDENTIFIER 'in' callValue (',' callArgs)? ')' '=>' callExpr binding?  # eachOp
     | LISTEN 'listen' '(' callValue ')' binding?                 # listenOp
-    | LOOP 'loop' '(' IDENTIFIER ',' (STRING | TRIPLE_STRING) (',' callArgs)? ')' binding?  # loopOp
+    | LOOP 'loop' '(' IDENTIFIER ',' loopCondition (',' callArgs)? ')' binding?  # loopOp
     ;
+
+// `loop(Coder, (context.data.tests.exitCode != 0))`, the same form a gate takes. A quoted condition
+// (`"context.data.tests.exitCode != 0"`) is the older spelling and still works.
+loopCondition: '(' condExpr ')' | STRING | TRIPLE_STRING;
 
 binding: 'as' name;
 
@@ -169,6 +173,9 @@ INTERRUPT: '|!';
 GATE: '|?';
 LISTEN: '~>';
 PIPE: '|>';
+// Anything else that starts with `|` (`|<`, `|-`, `|map`, a bare `|`): a token of its own, so the error
+// can name the operator instead of dropping the rest of the pipeline. Never valid in the grammar.
+BAD_OP: '|' ~[|\r\n \t]? ;
 
 BOOL: 'true' | 'false';
 NULL: 'null';
