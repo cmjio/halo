@@ -83,8 +83,8 @@ export function toolsOf(text: string, path?: string, overrides?: Map<string, str
 /** The methods a tool has, if its provider lists them without asking a server. */
 export function methodsOf(tool: ToolRef, lookup: ProviderLookup = builtin): ToolMethod[] | undefined {
   const info = lookup(tool.provider) ?? builtin(tool.provider);
-  if (Array.isArray(info?.methods)) return info.methods;
   if (info?.methodsFor) return info.methodsFor((k) => tool.config(k));
+  if (Array.isArray(info?.methods)) return info.methods;
   return undefined;
 }
 

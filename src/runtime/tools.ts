@@ -118,7 +118,7 @@ export interface ProviderInfo {
   /** The methods a tool of this provider has. A function for providers that ask a server (MCP). */
   methods?: ToolMethod[] | ((ctx: ToolInfoContext, services: ToolServices) => Promise<ToolMethod[]>);
   /** The methods for a declaration's settings as written, without asking anything (for `halo plan`, when `methods` depends on them). */
-  methodsFor?(config: (name: string) => unknown): ToolMethod[];
+  methodsFor?(config: (name: string | number) => unknown): ToolMethod[];
 }
 
 export interface ToolServices {

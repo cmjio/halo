@@ -15,11 +15,11 @@ Every kind has the same methods, so an agent or pipeline doesn't need to know wh
 | Method | Arguments | Returns | Effect |
 |---|---|---|---|
 | `run` | `command`, `cwd`, `env`, `timeout_ms` (default 120000) | `{ command, stdout, stderr, exitCode, timedOut, json? }` | external |
-| `read` | `path` | `{ path, content, bytes, encoding }` (`base64` for binary files) | read |
-| `write` | `path`, `content` | `{ path, bytes }` (folders are created) | external |
-| `list` | `path` (default: home) | `{ path, entries: [{ name, type }] }` | read |
-| `upload` | `from` (local), `to` (remote) | `{ from, to, bytes }` | external |
-| `download` | `from` (remote), `to` (local) | `{ from, to, bytes }` | write |
+| `read` | `path`, `timeout_ms` | `{ path, content, bytes, encoding }` (`base64` for binary files) | read |
+| `write` | `path`, `content`, `timeout_ms` | `{ path, bytes }` (folders are created) | external |
+| `list` | `path` (default: home), `timeout_ms` (default 30000) | `{ path, entries: [{ name, type }] }` | read |
+| `upload` | `from` (local), `to` (remote), `timeout_ms` | `{ from, to, bytes }` | external |
+| `download` | `from` (remote), `to` (local), `timeout_ms` | `{ from, to, bytes }` | write |
 | `info` | | `{ backend, host }` or `{ backend, id }` | read |
 | `diff` | `path` (only under it) | `{ files: [{ path, status }], patch }`: what changed since the sandbox started | read |
 | `apply` | `to` (local, default: the `from:` folder), `path` | `{ to, written, deleted }`: the changes, written back here | write |
@@ -28,6 +28,9 @@ Every kind has the same methods, so an agent or pipeline doesn't need to know wh
 - Commands run in a shell on the remote computer. Remote paths are relative to the home folder.
 - When stdout is JSON, it's also returned parsed, as `json`.
 - `upload` and `download` use local paths inside `root:` (default `.`); a path can't leave it.
+- `upload` won't send a credential file (`.env`, a private key like `id_ed25519` or `*.pem`, `.npmrc`, `.netrc`, `credentials.json`...) and `download` won't write one here, unless the declaration names it: `allowFiles: ["deploy/.env"]` (or, for a sandbox, `files:` names it exactly). A symlink to one counts as one. That way an agent that is talked into it can't copy your keys to a host.
+- `timeout_ms` is 120000 unless the call or the declaration sets it (`timeout_ms:` on the declaration is the default for every method). A file that takes longer fails with `TIMEOUT`.
+- A file over 50 MB can't be read or downloaded. The check is made as the file arrives, so a huge file isn't read into memory first.
 - In a pipeline, `{{placeholders}}` in `command` are shell-quoted, like in `Bash`: `Box.run(command: "grep {{term}} app.log")` is safe whatever `term` holds. Other arguments, like `path`, are filled in as written.
 
 ## Sandbox agents
@@ -246,7 +249,50 @@ tool Box : Remote("ssh://deploy@10.0.0.5:2222", key: "~/.ssh/ci_ed25519")
 tool Box : Remote("staging")                       // a Host alias from ~/.ssh/config
 ```
 
-Halo runs the `ssh` on this machine, so your keys, agent and `~/.ssh/config` all apply. It never prompts for anything (`BatchMode`), and host keys are checked against `known_hosts` as usual. For a new host that isn't in `known_hosts` yet, `accept_new_hosts: true` trusts its key the first time; a key that later changes is still refused. Each call is its own connection. Other options: `key:`, `connect_timeout:` (seconds, default 15), `cwd:` (the default folder for `run`), `ssh:` (the ssh program).
+Halo runs the `ssh` on this machine, so your keys, your agent and the host aliases in `~/.ssh/config` (`HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump`) all apply. It never prompts for anything (`BatchMode`). Each call is its own connection. Other options: `key:`, `connect_timeout:` (seconds, default 15), `cwd:` (the default folder for `run`), `timeout_ms:`, `ssh:` (the ssh program).
+
+`diff`, `apply` and `keep` are for sandboxes, so an agent isn't offered them on a machine over SSH. `halo plan` shows where each SSH tool goes: the host, the login and port (or that `~/.ssh/config` decides), which key, and how the host's key is checked.
+
+### What your ssh config can't change
+
+Some settings in `~/.ssh/config` would hand the remote host more than a place to run commands. Halo sets these on every call, and ssh takes the first value it gets, so a `Host *` block can't turn them back on:
+
+| Setting | Halo's value | Why |
+|---|---|---|
+| `StrictHostKeyChecking` | `yes` (`accept-new` with `accept_new_hosts: true`) | `no` would connect to whoever answers |
+| `ForwardAgent`, `ForwardX11`, `GSSAPIDelegateCredentials` | `no` | the host could use your keys or credentials to log in elsewhere as you |
+| `ClearAllForwardings`, `Tunnel` | `yes`, `no` | no ports or tunnels open between the host and this machine |
+| `PermitLocalCommand`, `RemoteCommand`, `RequestTTY`, `EscapeChar` | `no`, `none`, `no`, `none` | nothing runs here, and the command is the one Halo sends |
+| `ControlMaster`, `ControlPath`, `ControlPersist` | `no`, `none`, `no` | each call is its own connection, not one shared with your other ssh sessions |
+| `VerifyHostKeyDNS` | `no` | a host key is trusted only from known_hosts or `hostKey:` |
+
+ssh also gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SSH_AUTH_SOCK`, `KRB5CCNAME`, `TMPDIR`, `LANG`, `LC_ALL` and `LC_CTYPE` from Halo's environment. So `SendEnv *` in a config file can't send your API keys to the host.
+
+### Host keys
+
+By default the host's key must already be in `known_hosts`, and a key that doesn't match is refused. Three ways to say which key to trust:
+
+```halo
+tool Box : Remote("deploy@build.example.com", hostKey: "SHA256:rqHBoqTqavuOg1MchxTFBTtPkCiMS3pyWA4UzaE4tn8")
+tool Box : Remote("deploy@build.example.com", hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBk1FqzfEaSaOw2sMCLMRc3M6tAORun7UnfSdL3H8rya")
+tool Box : Remote("deploy@build.example.com", knownHosts: "ci/known_hosts")
+```
+
+- `hostKey:` trusts only that key, and ignores `known_hosts`. Give a fingerprint (on the host, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`) or the public key itself. A list (`hostKey: ["SHA256:…", "SHA256:…"]`) trusts any of them, for when a key is being replaced. With a fingerprint, pin the kind of key ssh asks for first (usually ed25519); with a public key, Halo asks for that kind. Needs OpenSSH 8.5 or later on this machine.
+- `knownHosts:` checks keys against only that file (`ssh-keyscan host > ci/known_hosts`, then check what it holds).
+- `accept_new_hosts: true` trusts a host's key the first time Halo connects to it, and refuses a key that later changes. That first connection could be to someone else, so `halo validate` warns about it unless `knownHosts:` is set too. It can't go with `hostKey:`.
+
+### Exit codes and retries
+
+ssh exits 255 both when it can't connect and when the remote command itself exits 255. Halo tells them apart: the remote shell prints a marker before the command starts.
+
+- No marker: ssh never got as far as running anything. The error says it couldn't reach the host, and `@retry` may try again.
+- The command started and exited 255: that is its result (`exitCode: 255`), like any other exit code.
+- The command started and then the connection dropped: the error says it may have run, and it is never retried, since running it again could do its work twice.
+
+### Files
+
+`write` (and `upload`) writes to a new file next to the target, then renames it over the target. A reader never sees half a file, and a write that is cut short leaves the old file as it was. The new file keeps the old one's permissions. A symlink at the path is replaced by the file, not written through.
 
 The host must look like a host. Anything starting with `-`, or containing spaces or shell characters, is refused, so a value can't turn into an ssh option. To reach a host literally named `e2b` or `daytona`, write `ssh://e2b`.
 

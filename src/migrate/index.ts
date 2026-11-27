@@ -486,6 +486,62 @@ export const MIGRATIONS: Migration[] = [
       return out;
     },
   },
+  {
+    id: "remote-ssh-pinned",
+    since: "1.12.0",
+    title: "Remote over SSH ignores ~/.ssh/config settings that hand the host more than a shell",
+    detail:
+      "Halo now sets StrictHostKeyChecking yes (accept-new with accept_new_hosts: true), ForwardAgent no, ForwardX11 no, ClearAllForwardings yes, ControlMaster no and PermitLocalCommand no on every ssh call, and gives ssh only PATH, HOME, USER, LOGNAME, SSH_AUTH_SOCK, KRB5CCNAME, TMPDIR and LANG/LC_*, so a Host * block in ~/.ssh/config can't turn these back on and SendEnv can't send your API keys. Host aliases (HostName, User, Port, IdentityFile, ProxyJump) still work. A host that only worked because of StrictHostKeyChecking no now fails until its key is in known_hosts, or pinned with hostKey: \"SHA256:…\"; a remote command that used your forwarded agent (git clone over ssh on the host) needs a deploy key there. A remote command that exits 255 now returns exitCode 255 instead of failing as \"couldn't reach\", and a connection that drops while a command runs is no longer retried. write replaces a file by renaming a new one over it (a symlink there is replaced, not written through). Listed: each Remote tool that reaches a machine over SSH.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const tool of file.ast.tools) {
+          if (tool.provider !== "Remote") continue;
+          const spec = tool.argList.find((a) => !a.name)?.value;
+          if (spec?.kind !== "string" || /^(e2b|daytona|docker|auto)$/i.test(spec.value.trim())) continue;
+          out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} (${spec.value}): ssh now ignores StrictHostKeyChecking no, ForwardAgent, port forwards, ControlMaster and SendEnv from your ssh config` });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "remote-credential-files",
+    since: "1.12.0",
+    title: "Remote upload and download refuse credential files unless allowFiles: names them",
+    detail:
+      "An agent could be talked into Box.upload(from: \".env\") or a private key, sending it to the host or sandbox. Now upload refuses a credential file (.env, id_*, *.pem, *.key, .npmrc, .netrc, credentials.json...), or a symlink to one, and download won't write one here, unless the declaration names it: allowFiles: [\"deploy/.env\"] (for a sandbox, files: naming it exactly also works). Listed: Remote tools whose pipelines upload or download a path that looks like a credential file.",
+    find(project) {
+      const out: Finding[] = [];
+      const cred = /(?:^|[\/"])(?:\.env(?:\.[\w.-]+)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|[\w.-]+\.(?:pem|key|p12|pfx)|\.npmrc|\.netrc|\.pypirc|credentials(?:\.json)?)"/;
+      for (const file of project.files) {
+        const remotes = new Set(file.ast.tools.filter((t) => t.provider === "Remote" && !t.argList.some((a) => a.name === "allowFiles")).map((t) => t.name));
+        if (!remotes.size) continue;
+        const text = readFileSync(join(project.root, file.path), "utf8").split("\n");
+        text.forEach((line, i) => {
+          const m = /(\w+)\.(upload|download)\(/.exec(line);
+          if (m && remotes.has(m[1]!) && cred.test(line) && !/\.env\.(example|sample|template)/.test(line)) out.push({ file: file.path, line: i + 1, message: `${m[1]}.${m[2]} names a credential file: add allowFiles: [...] to ${m[1]}'s declaration if it should` });
+        });
+      }
+      return out;
+    },
+  },
+  {
+    id: "bash-ssh-options",
+    since: "1.12.0",
+    title: "A Bash placeholder in an ssh option that runs a command, or in a remote path, is refused",
+    detail:
+      "ssh runs -o ProxyCommand=, LocalCommand= and KnownHostsCommand= through a shell on this machine, turns -J into such a command, and scp and rsync can hand a remote path (host:{{f}}) to the remote host's shell; sftp reads a heredoc as its commands. These commands now fail before they run. Write the option out or put it under a Host alias in ~/.ssh/config (ProxyJump for a jump host), use a fixed remote path, and write ./{{f}} for a local scp path.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const d of validate(file.ast)) {
+          if (d.severity === "warning" && /ssh's \w+ option|is the value of (?:ssh|scp|sftp|rsync) |part of (?:ssh|scp|sftp)'s options|in a remote path|starts an scp path|commands sftp reads/.test(d.message)) out.push({ file: file.path, line: d.line, message: d.message });
+        }
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {

@@ -15,13 +15,13 @@
  *   tool Box   : Remote("deploy@host") / ("e2b")   run, read, write, list, upload, download, info
  */
 
-import type { JsonSchema, ProviderInfo, ToolProvider } from "../tools.js";
+import type { JsonSchema, ProviderInfo, ToolMethod, ToolProvider } from "../tools.js";
 import { calc } from "./calc.js";
 import { clock } from "./clock.js";
 import { codeRunner } from "./code.js";
 import { data } from "./data.js";
 import { gitProvider } from "./git.js";
-import { remote } from "./remote.js";
+import { backendOf, remote } from "./remote.js";
 import { webSearch } from "./search.js";
 import { SKILLS_INFO, skills } from "./skills.js";
 import { documents } from "./documents.js";
@@ -67,6 +67,31 @@ const sqlParams: JsonSchema = {
 };
 const listArg: JsonSchema = { type: "array", description: "A list of records." };
 const whereArg: JsonSchema = { type: ["object", "string"], description: "Conditions, all of which must hold: { path: value } or { path: { op: value } }, or text like \"total > 100 && status == 'paid'\"." };
+
+const SANDBOX_ONLY = new Set(["diff", "apply", "keep"]);
+
+const REMOTE_METHODS: ToolMethod[] = [
+  {
+    name: "run",
+    description: "Run a shell command on the remote computer. Returns { stdout, stderr, exitCode, timedOut } (and json, when stdout is JSON).",
+    params: object({
+      command: { type: "string", description: "A shell command, e.g. \"ls -la\" or \"python3 app.py\"." },
+      cwd: { type: "string", description: "Folder to run it in." },
+      env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables for this command." },
+      timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 },
+    }, ["command"]),
+    effect: "external",
+  },
+  { name: "read", description: "Read a file on the remote computer: { path, content, bytes, encoding } (base64 for binary files).", params: object({ path: { type: "string" }, timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 } }, ["path"]), effect: "read" },
+  { name: "write", description: "Write text to a file on the remote computer, creating folders as needed.", params: object({ path: { type: "string" }, content: { type: "string" }, timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 } }, ["path", "content"]), effect: "external" },
+  { name: "list", description: "List a folder on the remote computer: { path, entries: [{ name, type }] }.", params: object({ path: { type: "string", description: "Default: the home folder." }, timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 } }), effect: "read" },
+  { name: "upload", description: "Copy a local file (inside the tool's root) to the remote computer.", params: object({ from: { type: "string", description: "Local path." }, to: { type: "string", description: "Remote path (default: the same path)." }, timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 } }, ["from"]), effect: "external" },
+  { name: "download", description: "Copy a file from the remote computer to a local path inside the tool's root.", params: object({ from: { type: "string", description: "Remote path." }, to: { type: "string", description: "Local path (default: the file's name)." }, timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 } }, ["from"]), effect: "write" },
+  { name: "info", description: "Which computer this is: { backend, host } or { backend, id }.", params: object({}), effect: "read" },
+  { name: "diff", description: "What changed in the sandbox since it started (from the files it was given with from:, or from empty): { files: [{ path, status }], patch } as a unified diff.", params: object({ path: { type: "string", description: "Only changes under this folder." } }), effect: "read" },
+  { name: "apply", description: "Copy the sandbox's changes (diff) back to the local folder it was given (from:), or to: another folder inside the tool's root. Deleted files are deleted there too.", params: object({ to: { type: "string" }, path: { type: "string", description: "Only changes under this folder." } }), effect: "write" },
+  { name: "keep", description: "After a fan-out whose branches each forked the Docker sandbox: carry on from branch fork's sandbox.", params: object({ fork: { type: "integer", minimum: 0 } }, ["fork"]), effect: "external" },
+];
 
 export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
   Transcribe: TRANSCRIBE_INFO,
@@ -409,27 +434,9 @@ export const LOCAL_PROVIDER_INFO: Record<string, ProviderInfo> = {
 
   Remote: {
     description: "A remote computer: a machine reached over SSH, or a fresh sandbox (E2B, Daytona, or a local Docker container) kept for the run and deleted after. Commands run in a shell there; paths there are relative to the home folder.",
-    methods: [
-      {
-        name: "run",
-        description: "Run a shell command on the remote computer. Returns { stdout, stderr, exitCode, timedOut } (and json, when stdout is JSON).",
-        params: object({
-          command: { type: "string", description: "A shell command, e.g. \"ls -la\" or \"python3 app.py\"." },
-          cwd: { type: "string", description: "Folder to run it in." },
-          env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables for this command." },
-          timeout_ms: { type: "integer", minimum: 1000, maximum: 3600000 },
-        }, ["command"]),
-        effect: "external",
-      },
-      { name: "read", description: "Read a file on the remote computer: { path, content, bytes, encoding } (base64 for binary files).", params: object({ path: { type: "string" } }, ["path"]), effect: "read" },
-      { name: "write", description: "Write text to a file on the remote computer, creating folders as needed.", params: object({ path: { type: "string" }, content: { type: "string" } }, ["path", "content"]), effect: "external" },
-      { name: "list", description: "List a folder on the remote computer: { path, entries: [{ name, type }] }.", params: object({ path: { type: "string", description: "Default: the home folder." } }), effect: "read" },
-      { name: "upload", description: "Copy a local file (inside the tool's root) to the remote computer.", params: object({ from: { type: "string", description: "Local path." }, to: { type: "string", description: "Remote path (default: the same path)." } }, ["from"]), effect: "external" },
-      { name: "download", description: "Copy a file from the remote computer to a local path inside the tool's root.", params: object({ from: { type: "string", description: "Remote path." }, to: { type: "string", description: "Local path (default: the file's name)." } }, ["from"]), effect: "write" },
-      { name: "info", description: "Which computer this is: { backend, host } or { backend, id }.", params: object({}), effect: "read" },
-      { name: "diff", description: "What changed in the sandbox since it started (from the files it was given with from:, or from empty): { files: [{ path, status }], patch } as a unified diff.", params: object({ path: { type: "string", description: "Only changes under this folder." } }), effect: "read" },
-      { name: "apply", description: "Copy the sandbox's changes (diff) back to the local folder it was given (from:), or to: another folder inside the tool's root. Deleted files are deleted there too.", params: object({ to: { type: "string" }, path: { type: "string", description: "Only changes under this folder." } }), effect: "write" },
-      { name: "keep", description: "After a fan-out whose branches each forked the Docker sandbox: carry on from branch fork's sandbox.", params: object({ fork: { type: "integer", minimum: 0 } }, ["fork"]), effect: "external" },
-    ],
+    methods: REMOTE_METHODS,
+    // A machine over SSH has no baseline to diff against or forks to keep: those always fail there.
+    methodsFor: (config) => (backendOf(config(0)) === "ssh" ? REMOTE_METHODS.filter((m) => !SANDBOX_ONLY.has(m.name)) : REMOTE_METHODS),
   },
 };
+

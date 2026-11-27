@@ -142,7 +142,10 @@ class Validator {
       const known = includes(TOOL_PROVIDERS, t.provider) || this.options.toolProviders?.includes(t.provider);
       if (!known) this.add("warning", `Tool "${t.name}" uses unknown provider "${t.provider}" (register it with runtime.registerToolProvider)`, t.loc);
       if (t.provider === "SQLite") this.checkSqliteTool(t);
-      if (t.provider === "Remote") this.checkRemoteSecrets(t);
+      if (t.provider === "Remote") {
+        this.checkRemoteSecrets(t);
+        this.checkRemoteHostKeys(t);
+      }
       if (t.provider === "Bash") this.checkBashEnv(t);
       if (t.provider === "MCP") this.checkMcp(t);
       this.checkArgRules(t);
@@ -260,6 +263,15 @@ class Validator {
         this.add("error", `Policy "${g.name}": ${rule.name} needs a numeric limit`, g.loc);
       }
     }
+  }
+
+  /** A Remote over SSH: accept_new_hosts trusts a first connection to anyone; hostKey: pins instead. */
+  private checkRemoteHostKeys(t: ParseResult["tools"][number]) {
+    const arg = (name: string) => t.argList.find((a) => a.name === name)?.value;
+    const accept = arg("accept_new_hosts");
+    if (accept?.kind !== "bool" || accept.value !== true) return;
+    if (arg("hostKey")) this.add("error", `Tool "${t.name}": hostKey: pins the host's key, so accept_new_hosts: has nothing to do; drop it`, t.loc);
+    else if (!arg("knownHosts")) this.add("warning", `Tool "${t.name}": accept_new_hosts: true trusts whatever key a host shows the first time Halo connects to it, so that first connection could be to someone else; pin the key with hostKey: "SHA256:…" (ssh-keygen -lf on the host's key) or knownHosts: instead`, t.loc);
   }
 
   /** A Remote's secrets: names environment variables; Env.X there would hand over the value itself. */

@@ -65,6 +65,54 @@ describe("a value a second shell would parse is refused", () => {
   });
 });
 
+describe("ssh, scp, rsync and sftp: values they run or hand to a shell are refused", () => {
+  // Each is refused before the command starts, so nothing here reaches a host.
+  const cases: Array<[string, string]> = [
+    ["ssh -o ProxyCommand={{x}} example.invalid true", "ProxyCommand option, which ssh runs"],
+    ["ssh -oProxyCommand={{x}} example.invalid true", "ProxyCommand option"],
+    ["ssh -o 'LocalCommand {{x}}' example.invalid true", "LocalCommand option"],
+    ["ssh -o KnownHostsCommand={{x}} example.invalid true", "KnownHostsCommand option"],
+    ["ssh -o {{x}} example.invalid true", "can set any ssh option"],
+    ["ssh example.invalid -o ProxyCommand={{x}}", "ProxyCommand option"],
+    ["ssh -J {{x}} example.invalid true", "-J, which ssh turns into a ProxyCommand"],
+    ["ssh -F {{x}} example.invalid true", "-F, which picks the config file"],
+    ["ssh -{{x}} example.invalid true", "part of ssh's options"],
+    ['v={{x}}; ssh -o "ProxyCommand=$v" example.invalid true', "stored in $v, which is in ssh's ProxyCommand option"],
+    ["scp -o ProxyCommand={{x}} a example.invalid:b", "ProxyCommand option"],
+    ["scp a example.invalid:b -S {{x}}", "-S, the program scp runs"],
+    ["scp example.invalid:{{x}} .", "in a remote path"],
+    ["scp {{x}} example.invalid:/tmp/", "write ./{{x}} for a local file"],
+    ["rsync -av example.invalid:{{x}} .", "in a remote path"],
+    ["rsync -e {{x}} a example.invalid:b", "rsync -e/--rsh"],
+    ["rsync -avze{{x}} a example.invalid:b", "rsync -e/--rsh"],
+    ["rsync --rsh={{x}} a example.invalid:b", "rsync -e/--rsh"],
+    ["rsync --rsync-path={{x}} a example.invalid:b", "--rsync-path"],
+    ['sftp example.invalid <<< "get {{x}}"', "commands sftp reads on stdin"],
+    ["sftp -b - example.invalid <<EOF\nget {{x}}\nEOF", "commands sftp reads on stdin"],
+  ];
+  for (const [command, error] of cases) {
+    test(command, async () => {
+      await expect(run(command, `x; touch ${PWN}`)).rejects.toThrow(error);
+      expect(warnings(command).join("\n")).toContain("as shell code");
+      expect(readdirSync(dir)).toEqual([]);
+    });
+  }
+
+  test("the value of -J isn't read as an option, so the fix isn't `-J --`", async () => {
+    await expect(run("ssh -J {{x}} example.invalid true", "jump.example.com")).rejects.toThrow("ProxyJump for -J");
+    await expect(run("ssh -J {{x}} example.invalid true", "jump.example.com")).rejects.not.toThrow("-J --");
+  });
+
+  test("values ssh only reads as data are fine", async () => {
+    for (const command of ["ssh -p {{x}} example.invalid true", "ssh -l {{x}} example.invalid true", "ssh -o Port={{x}} example.invalid true", "ssh -- {{x}} true", "scp ./{{x}} example.invalid:/tmp/", "rsync -av ./{{x}} example.invalid:dest/"]) {
+      expect(warnings(command)).toEqual([]);
+    }
+    // A host that could start with "-" still needs --.
+    await expect(run("ssh {{x}} true", `-oProxyCommand=touch ${PWN}`)).rejects.toThrow("(ssh -- {{x}})");
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
 describe("a value that would be read as an option is refused", () => {
   test("git log --oneline {{x}} with --output=FILE", async () => {
     const target = join(dir, "CLOBBERED");

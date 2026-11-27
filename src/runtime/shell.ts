@@ -338,8 +338,24 @@ const WRAPPERS = new Set(["sudo", "doas", "env", "exec", "command", "builtin", "
 const PREFIXES = new Set(["if", "then", "elif", "else", "do", "while", "until", "!", "{", "fi", "done", "}", "esac"]);
 /** Commands whose arguments aren't options, or whose options do no harm. */
 const NO_OPTIONS = new Set(["echo", "for", "case", "select", "in", "[[", "((", "[", "test", ":", "true", "false", "function"]);
-/** ssh options that take a value. */
-const SSH_ARG = new Set("BbcDEeFIiJLlmOoPpQRSWw");
+/** The options of ssh, scp and sftp that take a value. */
+const SSH_ARGS: Record<string, Set<string>> = {
+  ssh: new Set("BbcDEeFIiJLlmOoPpQRSWw"),
+  scp: new Set("cDFiJloPSX"),
+  sftp: new Set("BbcDFiJloPRSsX"),
+};
+/**
+ * Options whose value is run on this machine, or picks what is: -J becomes a ProxyCommand a
+ * local shell runs, -F a config file (which can hold one), -I/-S/-D a library or program, and
+ * sftp's -s, with a "/", a program the remote shell runs.
+ */
+const SSH_RUNS_ARG: Record<string, Record<string, string>> = {
+  ssh: { J: "-J, which ssh turns into a ProxyCommand that a shell on this machine runs", F: "-F, which picks the config file ssh reads, and a config file can run commands (ProxyCommand)", I: "-I, a library ssh loads" },
+  scp: { J: "-J, which ssh turns into a ProxyCommand that a shell on this machine runs", F: "-F, which picks the config file ssh reads, and a config file can run commands (ProxyCommand)", S: "-S, the program scp runs", D: "-D, the program scp runs" },
+  sftp: { J: "-J, which ssh turns into a ProxyCommand that a shell on this machine runs", F: "-F, which picks the config file ssh reads, and a config file can run commands (ProxyCommand)", S: "-S, the program sftp runs", D: "-D, the program sftp runs", s: "-s, which the remote host can run as a command" },
+};
+/** ssh -o options whose value is run (by a shell here or there, or as a library), or that read more config. */
+const SSH_RUNS_OPTION = new Set(["proxycommand", "localcommand", "knownhostscommand", "remotecommand", "proxyjump", "pkcs11provider", "securitykeyprovider", "include", "match"]);
 const ASSIGNMENT = /^([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=/;
 const REDIRECT = /\d*(<<<|<<-|<<|&>>|&>|>>|<>|>\||<&|>&|<\(|>\(|<|>)/y;
 
@@ -588,6 +604,8 @@ export function reparseChecks(cmd: string): { spots: Map<number, SpotCheck>; run
     /** Is word j the command, or the command a wrapper (sudo, env, xargs ...) runs? */
     const runs = (j: number) => j === n || WRAPPERS.has(name ?? "");
     let positional = Infinity;
+    /** Words that are an option's value, which getopt never reads as an option. */
+    let skip = new Set<number>();
 
     for (let j = n; j < words.length; j++) {
       const word = base(words[j]);
@@ -600,20 +618,143 @@ export function reparseChecks(cmd: string): { spots: Map<number, SpotCheck>; run
         );
         break;
       }
-      if (word === "ssh" && runs(j)) {
-        let k = j + 1;
-        for (; k < words.length; k++) {
-          const opt = literal(cmd, words[k]);
-          if (!opt?.startsWith("-") || opt === "-") break;
-          if (opt === "--") {
-            k++;
-            break;
+      if ((word === "ssh" || word === "scp" || word === "sftp" || word === "rsync") && runs(j)) {
+        const prog = word;
+        /** A word with its quotes taken out (placeholders and $ left in). */
+        const unq = (w: Word) => cmd.slice(w.start, w.end).replace(/\\(.)|['"]/g, "$1");
+        const dynamic = (w: Word) => /\{\{|\$/.test(cmd.slice(w.start, w.end));
+        const optionValue = (letter: string, w: Word, text: string) => {
+          if (!dynamic(w)) return;
+          if (letter === "o") {
+            const key = text.split(/[=\s]/)[0] ?? "";
+            if (/\{\{|\$/.test(key)) {
+              refuse(
+                [w],
+                (p) => `${p} is the value of ${prog} -o, which can set any ssh option, ProxyCommand (a command this machine runs) included, so it can't be escaped; write the option name yourself, e.g. -o Port=${p}`,
+                (p, v) => `${p} is stored in $${v}, which is the value of ${prog} -o, which can set any ssh option, ProxyCommand included; write the option name yourself`,
+              );
+            } else if (SSH_RUNS_OPTION.has(key.toLowerCase())) {
+              refuse(
+                [w],
+                (p) => `${p} is in ssh's ${key} option, which ssh runs as a command (through a shell) or loads, so it can't be escaped; write the option out in full, or put it in ~/.ssh/config under a Host alias`,
+                (p, v) => `${p} is stored in $${v}, which is in ssh's ${key} option, which ssh runs as a command (through a shell) or loads, so it can't be escaped; write the option out in full`,
+              );
+            }
+            return;
           }
-          const letters = [...opt.slice(1)];
-          const takes = letters.findIndex((l) => SSH_ARG.has(l));
-          if (takes === letters.length - 1) k++;
+          const what = SSH_RUNS_ARG[prog]?.[letter];
+          if (what) {
+            refuse(
+              [w],
+              (p) => `${p} is the value of ${prog} ${what}, so it can't be escaped; write the value out, or put it in ~/.ssh/config under a Host alias (ProxyJump for -J)`,
+              (p, v) => `${p} is stored in $${v}, which is the value of ${prog} ${what}, so it can't be escaped; write the value out`,
+            );
+          }
+        };
+        /** Walk options from word `from`; returns the index after them, and whether `--` ended them. */
+        const options = (from: number, until: (k: number) => boolean): { at: number; ended: boolean } => {
+          const takes = SSH_ARGS[prog] ?? new Set<string>();
+          let k = from;
+          for (; k < words.length && !until(k); k++) {
+            const t = unq(words[k]!);
+            if (!t.startsWith("-") || t === "-") break;
+            if (t === "--") return { at: k + 1, ended: true };
+            if (t.startsWith("-{{") || t.startsWith("-$")) {
+              refuse(
+                [words[k]!],
+                (p) => `${p} is part of ${prog}'s options, so it could be any option, -o ProxyCommand=… (a command this machine runs) included; write the options yourself`,
+                (p, v) => `${p} is stored in $${v}, which is part of ${prog}'s options, so it could be any option; write the options yourself`,
+              );
+              continue;
+            }
+            for (let i = 1; i < t.length; i++) {
+              if (!takes.has(t[i]!)) continue;
+              const attached = t.slice(i + 1);
+              if (attached) optionValue(t[i]!, words[k]!, attached);
+              else if (k + 1 < words.length) {
+                k++;
+                optionValues.add(k);
+                optionValue(t[i]!, words[k]!, unq(words[k]!));
+              }
+              break;
+            }
+          }
+          return { at: k, ended: false };
+        };
+        const optionValues = new Set<number>();
+        skip = optionValues;
+
+        if (prog !== "ssh") {
+          // scp, sftp and rsync: options can come anywhere (GNU getopt), so look at every word.
+          let ended = false;
+          const operands: Word[] = [];
+          for (let k = j + 1; k < words.length; k++) {
+            const t = unq(words[k]!);
+            if (!ended && prog === "rsync") {
+              // -e/--rsh, --rsync-path and -M/--remote-option: the value is the rest of the word or the next one.
+              const m = /^--(rsh|rsync-path|remote-option)(?:=(.*)|$)/.exec(t) ?? /^-[A-Za-z]*?([eM])(.*)$/.exec(t);
+              if (m) {
+                let value: Word | undefined = words[k];
+                if (!m[2]) {
+                  value = words[k + 1];
+                  if (value) optionValues.add(++k);
+                }
+                const flag = m[1] === "rsh" || m[1] === "e" ? "-e/--rsh, the command rsync runs to reach the host" : m[1] === "rsync-path" ? "--rsync-path, which the remote host's shell runs" : "-M/--remote-option, which the remote host's shell reads";
+                if (value && dynamic(value)) {
+                  refuse(
+                    [value],
+                    (p) => `${p} is the value of rsync ${flag}, so it can't be escaped; write the value out`,
+                    (p, v) => `${p} is stored in $${v}, which is the value of rsync ${flag}, so it can't be escaped; write the value out`,
+                  );
+                }
+                continue;
+              }
+            }
+            if (!ended && t === "--") {
+              ended = true;
+              continue;
+            }
+            if (!ended && t.startsWith("-") && t !== "-" && prog !== "rsync") {
+              k = options(k, (x) => x > k).at - 1;
+              continue;
+            }
+            if (!t.startsWith("-") || ended) operands.push(words[k]!);
+          }
+          if (prog !== "sftp") {
+            for (const w of operands) {
+              const t = unq(w);
+              const p = placeholders(w.start, w.end)[0];
+              if (!p) continue;
+              const before = t.slice(0, t.indexOf(p.name));
+              const remotePath = prog === "rsync" ? /^[^/:]*:(?!:)/.test(before) && !/^rsync:\/\//i.test(before) : /^[^/]*:/.test(before);
+              if (remotePath) {
+                refuse(
+                  [w],
+                  (q) => `${q} is in a remote path, which ${prog} can hand to the remote host's shell (${prog === "scp" ? "scp -O, and copies between two hosts" : "rsync over ssh"}), so it can't be escaped; copy to a fixed path and move it with a command that takes the name on stdin`,
+                  (q, v) => `${q} is stored in $${v}, which is in a remote path that ${prog} can hand to the remote host's shell, so it can't be escaped; use a fixed path`,
+                );
+              } else if (prog === "scp" && before === "") {
+                refuse(
+                  [w],
+                  (q) => `${q} starts an scp path, and a value with a ":" in it (host:$(…)) would turn it into a remote path the remote host's shell can read; write ./${q} for a local file`,
+                  (q, v) => `${q} is stored in $${v}, which starts an scp path, where a ":" makes it a remote path; write ./$${v}`,
+                );
+              }
+            }
+          } else {
+            refuse(
+              c.stdin,
+              (p) => `${p} is in the commands sftp reads on stdin, where a line break in the value adds a command (and ! runs a shell on this machine), so it can't be escaped; use scp with a fixed remote path instead`,
+              (p, v) => `${p} is stored in $${v}, which is in the commands sftp reads on stdin, so it can't be escaped; use scp with a fixed remote path instead`,
+            );
+          }
+          break;
         }
-        const remote = words.slice(k + 1);
+
+        const { at: k, ended } = options(j + 1, () => false);
+        // ssh reads options after the host too, unless -- came before it.
+        const after = ended ? k + 1 : options(k + 1, () => false).at;
+        const remote = words.slice(after);
         if (remote.length) runsCode.add("ssh");
         refuse(
           remote,
@@ -680,6 +821,7 @@ export function reparseChecks(cmd: string): { spots: Map<number, SpotCheck>; run
     for (let k = n + 1; k < words.length && k < positional; k++) {
       const w = words[k]!;
       if (literal(cmd, w) === "--") break;
+      if (skip.has(k)) continue;
       if (name === "printf" && k > n + 1) break;
       const first = placeholders(w.start, w.end)[0];
       if (!first || !/^(?:["']|\$')*$/.test(cmd.slice(w.start, first.at)) || spots.has(first.at)) continue;
