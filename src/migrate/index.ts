@@ -432,6 +432,24 @@ export const MIGRATIONS: Migration[] = [
       return hooks.filter((h) => h.secret && !h.secretInQuery).map((h) => ({ file: "halo.json", message: `webhook /hooks/${h.path}: send the secret as x-halo-secret, or add "secretInQuery": true` }));
     },
   },
+  {
+    id: "env-values-masked",
+    since: "1.12.0",
+    title: "A value read from Env is masked when a tool sends it back",
+    detail:
+      "A service that echoes a key it was sent (an error page quoting the Authorization header) put the key in the terminal, telemetry, recordings and the model's context. Halo now replaces each value it read from Env.NAME with [secret NAME] in tool results and errors. Values under 8 characters, numbers, booleans, words like us-east-1, host names, paths and plain URLs are left alone unless the variable's name says it's a secret. A pipeline that compared a tool's result with such a value (an account ID it also sends) now sees [secret NAME]. Listed: Env variables read by tools whose names don't say they're secrets. Redact(APIKey) also finds more kinds of secret (Bearer tokens, passwords in URLs, named hex secrets).",
+    find(project) {
+      const out: Finding[] = [];
+      const secret = /KEY|TOKEN|SECRET|PASS|PWD|AUTH|CRED|PRIVATE|SIGN|SALT|DSN|WEBHOOK|COOKIE|SESSION/i;
+      for (const file of project.files) {
+        for (const tool of file.ast.tools) {
+          const names = new Set([...JSON.stringify([tool.argList, tool.rules ?? []]).matchAll(/Env\.(\w+)|"path":\["Env","(\w+)"/g)].map((m) => m[1] ?? m[2]!));
+          for (const n of names) if (!secret.test(n)) out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} reads Env.${n}: if a service sends its value back, the run sees [secret ${n}]` });
+        }
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {
