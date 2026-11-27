@@ -9,7 +9,6 @@
  * DenyArgs) run on the tool calls an agent chooses, before they run.
  */
 
-import { posix } from "node:path";
 import { aKind, type MediaKind } from "./media-ref.js";
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
 import { HaloError, PolicyViolation } from "./errors.js";
@@ -211,8 +210,15 @@ function asciiDigit(d: string): string {
 export function normalizePath(value: string): string {
   // Not a path: no slash, spaces (a command), or a URL (its // is part of it).
   if (!value.includes("/") || /\s/.test(value) || /^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
-  const normalized = posix.normalize(value.replace(/\\/g, "/"));
-  return normalized.replace(/^(\.\/)+/, "") || ".";
+  // By hand rather than node:path: this file also runs in the browser (the site's playground).
+  const parts: string[] = [];
+  const absolute = value.startsWith("/");
+  for (const part of value.replace(/\\/g, "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === ".." && parts.length && parts.at(-1) !== "..") parts.pop();
+    else if (part !== ".." || !absolute) parts.push(part);
+  }
+  return (absolute ? "/" : "") + parts.join("/") || (absolute ? "/" : ".");
 }
 
 /**
