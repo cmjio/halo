@@ -55,10 +55,29 @@ Every MCP tool also has three built-in methods that a pipeline can call. These t
 | `apiKey:` | Sent as `Authorization: Bearer ...` (HTTP only). |
 | `headers:` | Extra HTTP headers, e.g. `headers: { "X-Org": "acme" }` (HTTP only). |
 | `env:` | Names of environment variables the stdio server may see, e.g. `env: ["GITHUB_TOKEN"]`, read from the runtime's environment (`RuntimeConfig.env`, which defaults to the process environment), like `Env.NAME`. Or a record of values: `env: { LOG_LEVEL: "warn" }`. |
-| `cwd:` | Working directory for the stdio server. |
+| `cwd:` | Working folder for the stdio server, relative to the folder Halo runs in. Without it, the server starts in a private empty folder (see below). Write `cwd: "."` to run it in the project. |
 | `timeout_ms:` | How long one request may take. The default is 60000. |
+| `wallet_safe:` | `true` lets a local server share a program with a [wallet](../../stdlib/wallet.md), when you know it can't be steered into running commands. |
+
+Any other setting is an error, with the name it was close to: `MCP("...", timeout: 5)` asks whether you meant `timeout_ms`.
 
 A stdio server gets a clean environment: `PATH`, `HOME`, and only the variables you list in `env:`. Your other secrets are not passed to it. It still runs as your user, with your files and network: a stdio server is a program you install and run, so only use servers you trust.
+
+#### Where a stdio server runs
+
+Bun, and many dotenv libraries, load `.env` from the folder a program starts in. If a server started in your project, it could read `HALO_API_KEY` and the rest of your `.env`, even though `env:` doesn't pass them. So, unless the declaration sets `cwd:`, Halo starts each stdio server in a new empty folder that only you can read, and removes it when the server exits.
+
+The command still means your project's files. Before it starts, Halo makes its relative paths absolute, against the folder Halo runs in:
+
+- a program named by a path: `./bin/server`, `dist/server.js`
+- an argument that is `.` or `..`, or starts with `./` or `../`, also after `--flag=`
+- any other argument that names a file or folder in the project, such as `server.ts` in `bun server.ts`
+
+A bare program name such as `npx`, `uvx` or `bun` is still found on `PATH`. So `MCP("bun ./server.ts")` and `MCP("npx -y @modelcontextprotocol/server-filesystem .")` work as before.
+
+Some servers need to start in the project: one that finds its modules or settings from the folder it starts in (`python -m pkg`, `uv run`, a binary in `node_modules/.bin`). Give those `cwd: "."`. When `cwd:` is the project folder and the command is `bun`, Halo adds `--no-env-file`, so Bun still skips the project's `.env`. Other runtimes in the project folder may load it: keep the keys a server shouldn't see out of `.env`, or don't use `cwd: "."` for it.
+
+The empty folder doesn't help against a library that searches for `.env` from the server script's own folder (python-dotenv's default). A server script that lives in your project can still find the project's `.env` that way.
 
 Halo opens one connection per declaration and reuses it across calls and runs. If a stdio server exits, Halo restarts it on the next call. Halo connects with protocol version `2025-06-18` and also works with servers that answer with `2025-03-26` or `2024-11-05`.
 

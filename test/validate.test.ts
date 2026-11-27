@@ -258,3 +258,30 @@ describe("parser: syntax added for the runtime", () => {
     ]);
   });
 });
+
+describe("MCP settings", () => {
+  const P = `pipeline S(x: String) -> Result:\n  x |> T.list_tools()`;
+  test("the settings the client reads are fine", () => {
+    expect(messages(`tool T : MCP("bun ./server.ts", env: ["GITHUB_TOKEN"], cwd: ".", timeout_ms: 5000, max_ms: 60000, wallet_safe: true)\n${P}`)).toEqual([]);
+    expect(messages(`tool T : MCP(url: "https://x.example/mcp", apiKey: Env.KEY, headers: "x")\n${P}`, "error")).toEqual([]);
+  });
+
+  test("an unknown setting is an error, with the name it was close to", () => {
+    const all = "command, url, apiKey, headers, env, cwd, timeout_ms, max_ms, wallet_safe";
+    expect(messages(`tool T : MCP("npx -y server", timeout: 5, oauth: true, apikey: Env.K)\n${P}`, "error")).toEqual([
+      `Tool "T": MCP has no setting "timeout" (it has ${all})`,
+      `Tool "T": MCP has no setting "oauth" (it has ${all})`,
+      'Tool "T": MCP has no setting "apikey"; did you mean apiKey?',
+    ]);
+    expect(messages(`tool T : MCP("npx -y server", timeot_ms: 5)\n${P}`, "error")).toEqual(['Tool "T": MCP has no setting "timeot_ms"; did you mean timeout_ms?']);
+  });
+
+  test("a second positional, a bad timeout and Env.X in env: are errors", () => {
+    expect(messages(`tool T : MCP("npx", "-y server", timeout_ms: "5s", max_ms: 0, env: [Env.TOKEN])\n${P}`, "error")).toEqual([
+      expect.stringContaining("MCP takes one server"),
+      'Tool "T": timeout_ms: is a number of milliseconds, e.g. timeout_ms: 120000',
+      'Tool "T": max_ms: must be more than 0',
+      'Tool "T": env: lists names in quotes, like env: ["DATABASE_URL"]; Env.TOKEN is the value, not the name',
+    ]);
+  });
+});
