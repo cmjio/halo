@@ -13,7 +13,7 @@ import { getCompletions } from "./completions.js";
 import { getHover } from "./hover.js";
 import { getDefinition } from "./definition.js";
 import { getSignatureHelp, type ProviderLookup } from "./tools.js";
-import { loadPackageProviders } from "../registry/resolver.js";
+import { loadPackageInfo } from "../registry/resolver.js";
 import { projectRoot } from "../linker/node.js";
 import type { ProviderInfo } from "../runtime/tools.js";
 import { getDocumentHighlights, getDocumentSymbols, getReferences, getRename, prepareRename } from "./symbols.js";
@@ -91,11 +91,11 @@ function lookupFor(path: string | undefined): ProviderLookup | undefined {
   if (!cached || Date.now() - cached.at > 60_000) {
     const entry = { at: Date.now(), info: cached?.info ?? new Map<string, ProviderInfo>() };
     packageInfo.set(root, entry);
-    loadPackageProviders(root)
-      .then((loaded) => {
-        entry.info = new Map(loaded.filter((p) => p.info).map((p) => [p.name, p.info!]));
-      })
-      .catch(() => {});
+    // Never loadPackageProviders here: that imports a package's module or starts its MCP server,
+    // and opening a file in an editor must not run code from the project it came with.
+    try {
+      entry.info = new Map(loadPackageInfo(root).map((p) => [p.name, p.info]));
+    } catch {}
   }
   const info = packageInfo.get(root)!.info;
   return (provider) => info.get(provider);

@@ -295,7 +295,7 @@ describe("a program with a wallet", () => {
 
   test("the first problem, only when a browser has a wallet", () => {
     expect(walletProgramProblem([tool(`tool S : Bash()`)])).toBeUndefined();
-    expect(walletProgramProblem([chrome("wallet: [Card]"), tool(`tool S : Bash()`)])).toBe(`Tool "S" runs shell commands as you, so it can't be in the same program as a wallet (Web has wallet:). Put the work that needs it in a separate .halo file`);
+    expect(walletProgramProblem([chrome("wallet: [Card]"), tool(`tool S : Bash()`)])).toBe(`Tool "S" runs shell commands as you, so it can't be in the same program as a wallet (Web has wallet:). Put the work that needs it in a separate .halo file, run in a separate process (its own halo run, or its own halo serve with its own stateDir)`);
   });
 
   test("AllowWallet narrows across policies; ApproveWallet adds up", () => {
@@ -344,7 +344,7 @@ describe("halo validate: the wallet", () => {
 
   test("no tool that runs commands as you in the same program", () => {
     expect(errors(`${VAULT}\n${WEB}\ntool Sh : Bash()`)).toEqual([
-      `Tool "Sh" runs shell commands as you, so it can't be in the same program as a wallet (Web has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file`,
+      `Tool "Sh" runs shell commands as you, so it can't be in the same program as a wallet (Web has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file, run in a separate process (its own halo run, or its own halo serve with its own stateDir)`,
     ]);
   });
 

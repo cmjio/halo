@@ -7,6 +7,7 @@ import { HaloRuntime, useTool, type MockRequest } from "../src/runtime/runtime";
 import { TOOL_PROVIDERS } from "../src/parser/builtins";
 import { checkManifest, ManifestError, permissionsOf } from "../src/registry/manifest";
 import { DEFAULT_REGISTRY, install, installFromLock, loadInstalled, pack, publish, readLock, search, uninstall } from "../src/registry/packages";
+import { writeTrust } from "../src/registry/trust";
 import { plan } from "../src/plan";
 
 const tmp = mkdtempSync(join(tmpdir(), "halo-registry-"));
@@ -131,7 +132,7 @@ describe("v1 registries and installs (kept for Halo 0.8 lockfiles and registries
     await expect(installFromLock({ root: other, builtins })).rejects.toThrow(/halo install --trust/);
     await installFromLock({ root: other, builtins }, { trust: true });
     expect((await loadInstalled(other)).map((p) => p.name)).toEqual(["Ticker"]);
-    rmSync(join(other, ".halo/trust.json"));
+    writeTrust(other, {});
     await expect(loadInstalled(other)).rejects.toThrow(/hasn't trusted this version/);
   });
 

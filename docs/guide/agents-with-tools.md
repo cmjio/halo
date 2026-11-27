@@ -56,7 +56,7 @@ The model sees each method as a function named `Tool__method` (for example `Code
 | `max_steps` | The agent's brackets, or the call | 10 |
 | `tool_result_chars` | The agent's brackets, or the call | 16000 |
 
-A tool result is turned into text (JSON for anything that isn't a string) and cut at `tool_result_chars`. It then passes through the agent's input policies, because it is input to the model: `Redact` replaces what it matches, and a `Block` match replaces the whole result with a note saying it was withheld. The `tool` event (and so Studio's telemetry) gets the result with the agent's `Redact` and `Block` policies applied in the same way. [Recordings](./plan-and-replay.md#recordings) keep the result as the tool returned it, unredacted.
+A tool result is turned into text (JSON for anything that isn't a string) and cut at `tool_result_chars`. It then passes through the agent's input policies, because it is input to the model: `Redact` replaces what it matches, and a `Block` match replaces the whole result with a note saying it was withheld. The `tool` event (and so Studio's telemetry) gets the result with the agent's `Redact` and `Block` policies applied in the same way. [Recordings](./plan-and-replay.md#recordings) keep it the same way, so no secret the model never saw ends up in `.halo`; a replay applies the policies again and gets the same text. A search result (`Workspace.search`, `Git.grep`) also loses any line those policies would change, rather than showing it redacted: whether a line matched is enough to spell a secret out one guess at a time.
 
 A tool call an agent chooses gets only the arguments the model gave. The pipeline's flowing value is never added to it.
 

@@ -15,6 +15,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { dirname, join } from "node:path";
 import { HaloError } from "./errors.js";
 import { useTool, type MockRequest, type RecordedCall, type RunResult } from "./runtime.js";
+import { privateDir } from "./private-files.js";
 
 export interface Recording {
   runId: string;
@@ -34,10 +35,10 @@ export class Recorder {
   constructor(dir: string, readonly runId: string) {
     if (!/^[\w-]+$/.test(runId)) throw new HaloError(`Invalid run id "${runId}"`);
     this.path = join(dir, `${runId}.jsonl`);
-    mkdirSync(dirname(this.path), { recursive: true });
+    privateDir(dirname(this.path));
   }
   private write(line: Line) {
-    appendFileSync(this.path, JSON.stringify(line) + "\n");
+    appendFileSync(this.path, JSON.stringify(line) + "\n", { mode: 0o600 });
   }
   start(pipeline: string, args: Record<string, unknown>) {
     if (!existsSync(this.path)) this.write({ start: { runId: this.runId, pipeline, args, startedAt: new Date().toISOString() } });

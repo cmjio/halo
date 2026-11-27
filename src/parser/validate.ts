@@ -46,6 +46,7 @@ import { PARAMETERISED_SQL_PROVIDERS, sqlArgProblem } from "./sql.js";
 import { parseCondition } from "./index.js";
 import { splitToolPath } from "../linker/names.js";
 import { WALLET_PATTERN, walletItemProblems, walletNames, walletUnsafeTool } from "../runtime/wallet-rules.js";
+import { reparseChecks } from "../runtime/shell.js";
 
 /** The calls a stage makes (a fan-out's, an each's, every branch arm's). */
 function stageCalls(st: PipelineStage): CallStage[] {
@@ -277,7 +278,7 @@ class Validator {
     const browser = [...walletTools][0]!;
     for (const t of tools) {
       const why = walletUnsafeTool(t);
-      if (why) this.add("error", `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser} has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file`, t.loc);
+      if (why) this.add("error", `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser} has wallet:): it could read the wallet's source directly. Put the work that needs it in a separate .halo file, run in a separate process (its own halo run, or its own halo serve with its own stateDir)`, t.loc);
     }
     // Where a wallet is used: a call to the browser, an agent that equips it, or a pipeline that does either.
     const walletAgents = new Set(this.ast.agents.filter((a) => (a.equips ?? []).some((e) => walletTools.has(e))).map((a) => a.name));
@@ -786,7 +787,13 @@ class Validator {
       return;
     }
     const cmd = arg.value.value;
-    if (/\b(?:eval|(?:ba|z|da)?sh\s+-c)\s+\{\{/.test(cmd) || /\{\{[^}]*\}\}[^\n;&]*\|\s*(?:ba|z|da)?sh\b/.test(cmd)) warn("runs a {{placeholder}}'s value as shell code (eval, sh -c, or | sh); pass it as data instead");
+    // bash -c '...{{x}}', eval, ssh host ...: a second shell parses the value; the run refuses these.
+    const { spots, runsCode } = reparseChecks(cmd);
+    const reparsed = [...spots.values()].filter((s) => s.reparse);
+    for (const s of reparsed) warn(`runs ${s.name}'s value as shell code, so the run will refuse it: ${s.reparse}`);
+    if (!reparsed.length && (/\b(?:eval|(?:ba|z|da)?sh\s+-c)\s+\{\{/.test(cmd) || /\{\{[^}]*\}\}[^\n;&]*\|\s*(?:ba|z|da)?sh\b/.test(cmd))) warn("runs a {{placeholder}}'s value as shell code (eval, sh -c, or | sh); pass it as data instead");
+    // A value can reach eval through a variable or a file in ways the run can't follow.
+    if (runsCode.includes("eval") && /\{\{/.test(cmd) && !reparsed.length) warn("uses eval in a command with a {{placeholder}}; if the value reaches eval (through a variable, a file, or a command's output), it runs as shell code, so check the value with a policy or gate first, or don't use eval");
   }
 
   /** System calls whose arguments are wrong in a way the runtime would only find when it gets there. */

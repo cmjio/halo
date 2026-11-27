@@ -72,7 +72,10 @@ export function captureWalletEnv(env: Record<string, string | undefined>): void 
     if (env === process.env) wipeNative(name);
     delete env[name];
   }
-  if (env === process.env) hideSecretsFromProc();
+  if (env === process.env) {
+    hideSecretsFromProc();
+    keepMemoryPrivate();
+  }
 }
 
 /** Variables that hold credentials: provider keys, tokens, passwords. */
@@ -116,6 +119,31 @@ function hideSecretsFromProc(): void {
   } catch {
     // leave it: the wallet's own values were already moved out of process.env
   }
+}
+
+
+let memoryPrivate = false;
+
+/**
+ * Keep this process's memory from programs it starts. A Bash or Code tool runs as the same user,
+ * and on Linux (where Yama's ptrace_scope is 0, as in most containers) a same-user process can
+ * read /proc/<halo>/mem and find every key Halo holds: provider keys, the serve token, wallet
+ * values. A process that isn't "dumpable" can't be read that way, and the flag doesn't pass to
+ * its children (exec makes them dumpable again), so tools run as before. Linux only; best effort.
+ */
+export function keepMemoryPrivate(): void {
+  if (memoryPrivate || process.platform !== "linux") return;
+  memoryPrivate = true;
+  try {
+    const ffi = require("bun:ffi") as typeof import("bun:ffi");
+    for (const name of ["libc.so.6", "libc.so", "libc.musl-x86_64.so.1", "libc.musl-aarch64.so.1"]) {
+      try {
+        const lib = ffi.dlopen(name, { prctl: { args: ["int", "u64", "u64", "u64", "u64"], returns: "int" } });
+        lib.symbols.prctl(4 /* PR_SET_DUMPABLE */, 0, 0, 0, 0);
+        return;
+      } catch {}
+    }
+  } catch {}
 }
 
 let libc: { getenv(name: Buffer): number | null } | null | undefined;

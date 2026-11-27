@@ -1,8 +1,8 @@
 /**
- * halo.lock (v2: `lockfileVersion: 2`, `packages`; v1: `tools`) and .halo/trust.json.
+ * halo.lock (v2: `lockfileVersion: 2`, `packages`; v1: `tools`).
  *
- * Trust is never read from the lockfile: it is this machine's record of the exact checksums
- * it agreed to run code from.
+ * Trust is never read from the lockfile or from anything else in the project: it is this
+ * machine's record of the exact checksums it agreed to run code from (trust.ts).
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { LOCK_FILE, PACKAGES_DIR, type LockfileV2 } from "./contract.js";
 import type { Lockfile } from "./packages.js";
 
+/** The old in-project trust file: ignored, kept only so callers can name it. */
 export const TRUST_FILE = ".halo/trust.json";
 
 export type AnyLock = { version: 2; lock: LockfileV2 } | { version: 1; lock: Lockfile } | { version: 0 };
@@ -48,18 +49,5 @@ export function writeLockV2(root: string, lock: LockfileV2) {
 export const packageDir = (root: string, name: string) => join(root, PACKAGES_DIR, ...name.split("/"));
 export const PACKAGE_FILE = "package.halotool";
 
-/** Checksums this machine trusts to run their code, by package name. */
-export function readTrust(root: string): Record<string, string> {
-  const path = join(root, TRUST_FILE);
-  if (!existsSync(path)) return {};
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-export function writeTrust(root: string, trust: Record<string, string>) {
-  mkdirSync(join(root, ".halo"), { recursive: true });
-  writeFileSync(join(root, TRUST_FILE), JSON.stringify(trust, null, 2) + "\n");
-}
+// Trust is this machine's, not the project's: see trust.ts.
+export { readTrust, writeTrust } from "./trust.js";

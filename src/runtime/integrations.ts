@@ -94,7 +94,11 @@ export const bash: ToolProvider = async (call, services) => {
   if (typeof command !== "string" || !command.trim()) {
     throw new HaloError(`${call.tool.name}.${call.method} needs command: "...", e.g. ${call.tool.name}.run(command: "bun test")`, { code: "TOOL_ARGUMENT" });
   }
-  const timeoutMs = Number(call.named.timeout_ms ?? call.config("timeout_ms") ?? 120_000);
+  // A call may ask for less time than the tool's limit, never more: a model choosing the call
+  // could otherwise keep a command running for as long as it liked.
+  const limit = Number(call.config("timeout_ms") ?? 120_000);
+  const asked = call.named.timeout_ms === undefined ? limit : Number(call.named.timeout_ms);
+  const timeoutMs = Number.isFinite(asked) && asked > 0 ? Math.min(asked, limit) : limit;
   const env = bashEnv(call, services?.env ?? process.env);
   const proc = Bun.spawn(["bash", "-c", command], { cwd: (call.config("cwd") as string | undefined) ?? process.cwd(), env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const kill = () => proc.kill();

@@ -476,7 +476,7 @@ export function walletProgramProblem(tools: Iterable<ToolDecl>): string | undefi
   if (!browser) return undefined;
   for (const t of all) {
     const why = walletUnsafeTool(t);
-    if (why) return `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser.name} has wallet:). Put the work that needs it in a separate .halo file`;
+    if (why) return `Tool "${t.name}" ${why}, so it can't be in the same program as a wallet (${browser.name} has wallet:). Put the work that needs it in a separate .halo file, run in a separate process (its own halo run, or its own halo serve with its own stateDir)`;
   }
   return undefined;
 }

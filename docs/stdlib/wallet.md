@@ -171,7 +171,9 @@ A program (a `.halo` file and what it imports) that has a browser with a wallet 
 
 These are checked when the program loads, so a pipeline that never uses the browser can't run them either. A folder written as `"./docs"` that is really a link out of the project is caught when a run starts. `Git` counts too, since git runs a repository's hooks.
 
-Research with a shell in one file, and book with a wallet in another.
+Research with a shell in one file, and book with a wallet in another. Under `halo serve`, which runs every file it serves in one process, the two files also need separate processes: a server that loads both refuses to start, and names them. Run a separate `halo serve` for each, with its own `stateDir`.
+
+The browser itself is driven over a pipe (`--remote-debugging-pipe`), not a debugging port, so no other program on the machine can attach to it and read what it typed.
 
 `halo validate` also refuses wallet use where it would run more than once:
 - inside `|*` or `|* each` (best-of-N is a fan-out);

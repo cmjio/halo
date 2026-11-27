@@ -17,8 +17,9 @@
  * every time they load.
  *
  * Trust (letting a package run its own code) is never read from halo.lock, which
- * is shared and can be edited in a pull request: it is recorded on this machine,
- * in .halo/trust.json, for the exact checksum that was trusted.
+ * is shared and can be edited in a pull request, or from anything else in the
+ * project: it is recorded on this machine, outside every project (trust.ts), for
+ * the exact checksum that was trusted.
  */
 
 import { createHash } from "node:crypto";
@@ -26,6 +27,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join, relative, resolve } from "node:path";
 import { checkManifest, MANIFEST_FILE, ManifestError, permissionsOf, safeRelative, type Permissions, type ToolManifest } from "./manifest.js";
 import { httpProvider, mcpPackageProvider, moduleProvider, type BuiltProvider } from "./providers.js";
+// Checksums this machine trusts to run their code, by package name: kept outside the project (trust.ts).
+import { readTrust, writeTrust } from "./trust.js";
 
 export const PACKAGE_FORMAT = "halo-tool/1";
 export const REGISTRY_FORMAT = "halo-registry/1";
@@ -199,16 +202,6 @@ export function readLock(root: string): Lockfile {
   return { tools: lock.tools ?? {} };
 }
 
-/** Checksums this machine trusts to run their code, by package name. */
-function readTrust(root: string): Record<string, string> {
-  const path = join(root, TRUST_FILE);
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
-}
-
-function writeTrust(root: string, trust: Record<string, string>) {
-  mkdirSync(join(root, ".halo"), { recursive: true });
-  writeFileSync(join(root, TRUST_FILE), JSON.stringify(trust, null, 2) + "\n");
-}
 
 /** A registry as halo.lock names it: "default" for the one that ships with Halo, so the lock works on any machine. */
 const isDefault = (index: string) => index === DEFAULT_REGISTRY || index === HOSTED_REGISTRY || (!/^https?:/.test(index) && resolve(index) === BUNDLED_REGISTRY);

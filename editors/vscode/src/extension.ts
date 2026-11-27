@@ -44,12 +44,17 @@ export function activate(context: ExtensionContext) {
     clientOptions
   );
 
-  // Start the client. This will also launch the server
-  client.start();
+  // In Restricted Mode the server doesn't start: it reads the project's installed packages, and a
+  // folder nobody has trusted yet shouldn't get that far. It starts once the folder is trusted.
+  if (workspace.isTrusted) {
+    client.start();
+  } else {
+    context.subscriptions.push(workspace.onDidGrantWorkspaceTrust(() => client.start()));
+  }
 }
 
 export function deactivate(): Thenable<void> | undefined {
-  if (!client) {
+  if (!client || !client.isRunning()) {
     return undefined;
   }
   return client.stop();

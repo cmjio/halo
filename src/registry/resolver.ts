@@ -19,6 +19,10 @@ import { PACKAGE_FILE, packageDir, readAnyLock, readTrust } from "./lockfile.js"
 import { loadInstalled, type LoadedProvider } from "./packages.js";
 import { httpProvider, mcpPackageProvider, moduleProvider, type BuiltProvider } from "./providers.js";
 import { TOOL_PROVIDERS } from "../parser/builtins.js";
+import type { ProviderInfo } from "../runtime/tools.js";
+import { hasLegacyTrust } from "./trust.js";
+
+const LEGACY_HINT = " (trust kept in a project's .halo/trust.json no longer counts: it is this machine's, in ~/.config/halo/trust.json)";
 
 export type { LoadedProvider };
 
@@ -79,13 +83,13 @@ export function installedResolver(root: string): PackageResolver {
   };
 }
 
-async function buildProvider(name: string, providerName: string, spec: NonNullable<PackageData["manifest"]["providers"]>[string], dir: string, trusted: boolean): Promise<BuiltProvider> {
+async function buildProvider(name: string, providerName: string, spec: NonNullable<PackageData["manifest"]["providers"]>[string], dir: string, trusted: boolean, legacy = false): Promise<BuiltProvider> {
   if (spec.kind === "http") return httpProvider(providerName, spec);
   if (spec.kind === "mcp") {
-    if (spec.command && !trusted) throw new PackageError(`Package ${name} starts a command, and this machine hasn't trusted this version; run \`halo install --trust\``);
+    if (spec.command && !trusted) throw new PackageError(`Package ${name} starts a command, and this machine hasn't trusted this version; run \`halo install --trust\`${legacy ? LEGACY_HINT : ""}`);
     return mcpPackageProvider(spec);
   }
-  if (!trusted) throw new PackageError(`Package ${name} runs its own code, and this machine hasn't trusted this version; run \`halo install --trust\``);
+  if (!trusted) throw new PackageError(`Package ${name} runs its own code, and this machine hasn't trusted this version; run \`halo install --trust\`${legacy ? LEGACY_HINT : ""}`);
   return moduleProvider(join(dir, spec.entry), providerName, spec);
 }
 
@@ -93,7 +97,7 @@ async function buildProvider(name: string, providerName: string, spec: NonNullab
  * Every installed package's providers, registered as `@scope/name#Provider`, and also under the
  * bare provider name for direct dependencies when no other direct dependency (or built-in)
  * has that name, so `tool Pay : Stripe()` keeps working. Module providers and stdio MCP
- * servers load only for packages this machine trusted (.halo/trust.json, by checksum).
+ * servers load only for packages this machine trusted (its trust file, by checksum; see trust.ts).
  */
 export async function loadPackageProviders(root: string): Promise<LoadedProvider[]> {
   const any = readAnyLock(root);
@@ -101,6 +105,7 @@ export async function loadPackageProviders(root: string): Promise<LoadedProvider
   if (any.version === 0) return [];
   const lock = any.lock;
   const trust = readTrust(root);
+  const legacy = hasLegacyTrust(root);
   const verified = Object.keys(lock.packages).map((name) => [name, verifyInstalled(root, name, lock)] as const);
   const owners = new Map<string, Set<string>>();
   for (const [name, v] of verified) {
@@ -111,9 +116,37 @@ export async function loadPackageProviders(root: string): Promise<LoadedProvider
   const out: LoadedProvider[] = [];
   for (const [name, v] of verified) {
     for (const [providerName, spec] of Object.entries(v.pkg.manifest.providers ?? {})) {
-      const built = await buildProvider(name, providerName, spec, v.dir, trust[name] === v.sha256);
+      const built = await buildProvider(name, providerName, spec, v.dir, trust[name] === v.sha256, legacy);
       out.push({ name: qualifiedProvider(name, providerName), packageName: name, ...built });
       if (bare.get(providerName) === name) out.push({ name: providerName, packageName: name, ...built });
+    }
+  }
+  return out;
+}
+
+/**
+ * What an editor may know about the installed packages' providers, without running any of their
+ * code: an http provider is data, so its methods are listed; a module or MCP provider only shows
+ * its declared description, since its methods come from its own code or server. The language
+ * server uses this, never loadPackageProviders, so opening a file can't start a package.
+ */
+export function loadPackageInfo(root: string): Array<{ name: string; info: ProviderInfo }> {
+  const any = readAnyLock(root);
+  if (any.version !== 2) return [];
+  const lock = any.lock;
+  const verified = Object.keys(lock.packages).map((name) => [name, verifyInstalled(root, name, lock)] as const);
+  const owners = new Map<string, Set<string>>();
+  for (const [name, v] of verified) {
+    if (!lock.packages[name]!.direct) continue;
+    for (const p of Object.keys(v.pkg.manifest.providers ?? {})) owners.set(p, (owners.get(p) ?? new Set()).add(name));
+  }
+  const bare = unambiguous(owners);
+  const out: Array<{ name: string; info: ProviderInfo }> = [];
+  for (const [name, v] of verified) {
+    for (const [providerName, spec] of Object.entries(v.pkg.manifest.providers ?? {})) {
+      const info: ProviderInfo = spec.kind === "http" ? httpProvider(providerName, spec).info : { description: spec.description };
+      out.push({ name: qualifiedProvider(name, providerName), info });
+      if (bare.get(providerName) === name) out.push({ name: providerName, info });
     }
   }
   return out;

@@ -48,6 +48,7 @@ import { AdapterRegistry, type LLMMedia, type LLMMessage, type LLMRequest, type 
 import { adoptMedia, collectMedia, dataUriBytes, fetchMedia, filesFromLabels, isMediaRef, youtubeRef, MEDIA_TYPES, MediaBytes, MediaError, megabytes, mediaLabel, mediaTokens, MemoryBlobStore, mint, type BlobStore, type MediaKind, type MediaRef } from "./media.js";
 import { CostTracker, LLMRouter, type RouterConfig } from "./router.js";
 import { PolicyEngine, type PolicyHooks, type Violation } from "./policies.js";
+import { costAt, missingPriceMessage, priceOf, type Prices } from "./prices.js";
 import { BUILTIN_PROVIDER_INFO } from "./provider-info.js";
 import { closeMcpClients } from "./mcp.js";
 import { closeChromeSessions } from "./providers/chrome.js";
@@ -184,6 +185,8 @@ export interface CallRecord {
   tokens?: { prompt: number; completion: number };
   attempts: number;
   mocked: boolean;
+  /** False when Halo had no price for the model, so `cost` is a rough estimate. */
+  priced?: false;
   /** For a tool call an agent chose: that agent. */
   agent?: string;
 }
@@ -393,7 +396,7 @@ export class FileRunStore implements RunStore {
 export type RuntimeEvent =
   | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number; stopped?: true }
   | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
-  | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; media?: MediaRef[]; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean }
+  | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; media?: MediaRef[]; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean; priced?: false }
   | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean; sent?: MediaRef[] }
   /** A tool call an agent chose, and what happened to it: run, approved and run, declined by a person, refused by a policy, or failed. */
   | { type: "agent_tool"; pipeline: string; runId: string; agent: string; target: string; args: unknown; decision: "allowed" | "approved" | "declined" | "refused" | "error"; detail?: string }
@@ -467,6 +470,12 @@ export interface RuntimeConfig {
   serving?: boolean;
   /** Append each wallet event (never a value) to this file as a JSON line, e.g. ".halo/wallet.log". */
   walletLog?: string;
+  /**
+   * Model prices in USD per million tokens, by model as written in the .halo file (halo.json
+   * "prices"), e.g. { "vllm/my-model": { input: 0, output: 0 } }. They win over
+   * the adapters' own tables. Under MaxSpend, a call to a model with no price is refused.
+   */
+  prices?: Prices;
 }
 
 // ── Internals ─────
@@ -1961,7 +1970,31 @@ export class HaloRuntime {
   /** The most a call can cost: its prompt plus a full reply. */
   private estimateCall(model: string, prompt: string, system: string | undefined, options: LLMOptions): number {
     const adapter = this.adapterRegistry.findAdapter(model);
-    return adapter?.estimateCost?.(model, estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media), options.maxTokens ?? DEFAULT_MAX_TOKENS) ?? 0;
+    const input = estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media);
+    const output = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+    const price = this.priceFor(model, input, adapter);
+    return price ? costAt(price, input, output) : (adapter?.estimateCost?.(model, input, output) ?? 0);
+  }
+
+  /** A model's exact price (halo.json "prices" first, then its adapter's table), or undefined. */
+  private priceFor(model: string, inputTokens: number, adapter = this.adapterRegistry.findAdapter(model)) {
+    return priceOf(model, inputTokens, adapter, this.config.prices);
+  }
+
+  /** Refuse a call under MaxSpend to a model Halo has no price for: the limit couldn't be kept. */
+  private refuseUnpriced(agent: Agent, model: string, ctx: ExecutionContext): never {
+    const hooks = this.guardHooks(ctx);
+    // The MaxSpend rule's policy (and whether it logs), as the guard reports it.
+    let policy = "MaxSpend";
+    let log = false;
+    try {
+      this.guard.refuseOverBudget(agent, { ...hooks, onViolation: (v, l) => ((policy = v.policy), (log = !!l)) });
+    } catch {
+      // Only its policy name was wanted.
+    }
+    const message = missingPriceMessage(model);
+    hooks.onViolation({ policy, rule: "MaxSpend", message, phase: "budget" }, log);
+    throw new PolicyViolation(message, policy, "MaxSpend");
   }
 
   /**
@@ -2000,9 +2033,13 @@ export class HaloRuntime {
   private fitBudget(agent: Agent, model: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext, again = false): LLMOptions | Promise<void> {
     const limit = this.limitFor(agent, ctx);
     const adapter = this.adapterRegistry.findAdapter(model);
-    if (limit === undefined || !adapter?.estimateCost) return options;
-    const input = adapter.estimateCost(model, estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media), 0);
-    const perToken = adapter.estimateCost(model, 0, 1_000_000) / 1_000_000;
+    // No adapter: the call fails with that error before anything is sent.
+    if (limit === undefined || !adapter) return options;
+    const inputTokens = estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media);
+    const price = this.priceFor(model, inputTokens, adapter);
+    if (!price) this.refuseUnpriced(agent, model, ctx);
+    const input = costAt(price, inputTokens, 0);
+    const perToken = price.out / 1000;
     const wanted = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     const flight = this.flight(ctx);
     const room = limit - this.spent(ctx) - input;
@@ -2433,6 +2470,7 @@ export class HaloRuntime {
     }
     if (wallet?.policyApproval) decision = "approved";
     report(decision);
+    result = this.withoutGuardedMatches(agent, result);
     // Images and documents in the result go to the model with it, if the agent's policies allow them.
     const files = collectMedia(result).filter((m) => this.holds(ctx, m.sha256));
     const refused = this.guard.mediaRefusal(agent, files);
@@ -2445,6 +2483,19 @@ export class HaloRuntime {
       if (!(err instanceof PolicyViolation)) throw err;
       return `[withheld: this result was blocked by policy "${err.policy}": ${err.message}]`;
     }
+  }
+
+  /**
+   * A search result (`{ matches: [{ text }] }`, from Workspace.search or Git.grep) without the
+   * lines the agent's Redact or Block rules would touch. Showing such a line redacted still says it
+   * matched, and a model can rebuild a secret from match / no match one character at a time.
+   */
+  private withoutGuardedMatches(agent: Agent, result: unknown): unknown {
+    if (!isPlainObject(result) || !Array.isArray(result.matches) || !this.guard.hasContentRules(agent)) return result;
+    const matches = result.matches as unknown[];
+    const kept = matches.filter((m) => !(isPlainObject(m) && typeof m.text === "string" && this.guard.guardsText(agent, m.text)));
+    if (kept.length === matches.length) return result;
+    return { ...result, matches: kept };
   }
 
   /**
@@ -2584,7 +2635,7 @@ export class HaloRuntime {
           return { value, model, cost: 0, tokens: undefined, mocked: true, toolCalls: undefined, rawMessage: undefined };
         }
         const r = await this.callLLM(model, prompt, system, options, signal, turn);
-        return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false, toolCalls: r.toolCalls, rawMessage: r.rawMessage };
+        return { value: r.text as unknown, model: r.model, cost: r.cost, tokens: r.tokens, mocked: false, toolCalls: r.toolCalls, rawMessage: r.rawMessage, priced: r.priced };
       });
     } catch (err) {
       // A call cut off mid-flight (another branch failed, or a timeout) may still be billed:
@@ -2602,13 +2653,15 @@ export class HaloRuntime {
     const { result, attempts } = outcome;
 
     const latencyMs = Math.round(performance.now() - t0);
+    // A call to a model with no price was counted at a rough estimate: say so.
+    const unpriced = (result as { priced?: false }).priced === false ? { priced: false as const } : {};
     ctx.meta.cost += result.cost;
     if (ctx.parent) this.unsettle(ctx, result.cost);
     if (result.tokens) {
       ctx.meta.tokens.prompt += result.tokens.prompt;
       ctx.meta.tokens.completion += result.tokens.completion;
     }
-    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked });
+    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind, model: result.model, latencyMs, cost: result.cost, tokens: result.tokens, attempts, mocked: result.mocked, ...unpriced });
     const value = typeof result.value === "string" ? parseOutput(result.value) : result.value;
     const toolCalls = result.toolCalls;
     if (kind !== "shadow") this.record({ kind: "agent", target, value: result.value, ...(toolCalls?.length ? { toolCalls: toolCalls.map((c) => ({ name: c.name, args: c.args })) } : {}), fingerprint, cost: result.cost });
@@ -2618,7 +2671,7 @@ export class HaloRuntime {
       const text = shown === value ? result.value : formatValue(shown);
       if (typeof result.value === "string" && result.value) this.emit({ type: "token", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, target, text: typeof text === "string" ? text : formatValue(text) });
       const output = toolCalls?.length ? { ...(result.value ? { text: shown } : {}), toolCalls: toolCalls.map((c) => ({ name: c.name, args: this.guard.forLog(agent, c.args) })) } : shown;
-      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt: turn ? turn.shown : prompt, ...(options.media?.length ? { media: options.media } : {}), output, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked });
+      this.emit({ type: "llm", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, agent: agent.name, model: result.model, system, prompt: turn ? turn.shown : prompt, ...(options.media?.length ? { media: options.media } : {}), output, latencyMs, cost: result.cost, tokens: result.tokens, mocked: result.mocked, ...unpriced });
     }
     return { value, text: typeof result.value === "string" ? result.value : undefined, tokens: result.tokens, toolCalls, rawMessage: result.rawMessage };
   }
@@ -2710,9 +2763,12 @@ export class HaloRuntime {
     }
     const parsed = adapter.parseResponse(await res.json());
     const tokens = { prompt: parsed.usage?.promptTokens ?? 0, completion: parsed.usage?.completionTokens ?? 0 };
-    const cost = adapter.estimateCost?.(model, tokens.prompt, tokens.completion) ?? 0;
+    // What the provider says it billed, else the model's price, else (no price) a rough estimate.
+    const price = parsed.cost === undefined ? this.priceFor(model, tokens.prompt, adapter) : undefined;
+    const priced = parsed.cost !== undefined || !!price;
+    const cost = parsed.cost ?? (price ? costAt(price, tokens.prompt, tokens.completion) : (adapter.estimateCost?.(model, tokens.prompt, tokens.completion) ?? 0));
     this.costTracker.recordUsage(model, cost);
-    return { text: parsed.text, model, cost, tokens, toolCalls: parsed.toolCalls, rawMessage: parsed.rawMessage };
+    return { text: parsed.text, model, cost, tokens, toolCalls: parsed.toolCalls, rawMessage: parsed.rawMessage, ...(priced ? {} : { priced: false as const }) };
   }
 
   /**
@@ -2934,11 +2990,13 @@ export class HaloRuntime {
     }
 
     const latencyMs = Math.round(performance.now() - t0);
-    this.record({ kind: "tool", target, value: result.value, fingerprint });
-    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: this.displayName(chosenBy) } : {}) });
     // A result an agent chose to fetch is logged as its policies let it out (as the agent itself sees it).
     const chooser = chosenBy ? this.agents.get(chosenBy) : undefined;
     const output = chooser ? this.guard.forLog(chooser, result.value) : result.value;
+    // The recording keeps it the same way: the model only ever saw it through those policies, so a
+    // replay (which applies them again) gives it the same text, and no raw secret sits in .halo.
+    this.record({ kind: "tool", target, value: output, fingerprint });
+    ctx.meta.calls.push({ pipeline: this.displayName(ctx.pipeline.name), stage: ctx.stageIndex, target: this.displayName(target), kind: "tool", latencyMs, cost: 0, attempts, mocked: result.mocked, ...(chosenBy ? { agent: this.displayName(chosenBy) } : {}) });
     // The files the call sent, so Studio can show what left the run.
     const sent = collectMedia(args, named);
     this.emit({ type: "tool", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method, output, latencyMs, mocked: result.mocked, ...(sent.length ? { sent } : {}) });

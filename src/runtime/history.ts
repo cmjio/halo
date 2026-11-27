@@ -15,6 +15,7 @@ import { appendFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { HaloError } from "./errors.js";
 import type { RunSnapshot } from "./runtime.js";
+import { privateDir } from "./private-files.js";
 
 export interface Step {
   /** 1-based, and equal to the trace's length after this stage. */
@@ -77,7 +78,7 @@ export async function appendStep(corePath: string, snap: RunSnapshot): Promise<v
   const entry = snap.trace.at(-1);
   if (!entry) return;
   const path = stepsPathFor(corePath);
-  mkdirSync(dirname(path), { recursive: true });
+  privateDir(dirname(path));
   const keys = await lastWritten(path);
   const set: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(snap.data)) {
@@ -106,7 +107,7 @@ export async function appendStep(corePath: string, snap: RunSnapshot): Promise<v
     ...(snap.loopFeedback ? { loopFeedback: snap.loopFeedback } : {}),
     ...(snap.sandboxes ? { sandboxes: snap.sandboxes } : {}),
   };
-  await appendFile(path, JSON.stringify(step) + "\n");
+  await appendFile(path, JSON.stringify(step) + "\n", { mode: 0o600 });
 }
 
 export async function readSteps(path: string): Promise<Step[]> {

@@ -101,7 +101,7 @@ A webhook takes JSON, a form post (`application/x-www-form-urlencoded`, as an ob
 
 The JSON body becomes the pipeline's arguments: fields that match parameter names are passed by name, and a pipeline with a single parameter that isn't in the body gets the whole body (handy for GitHub or Stripe events).
 
-With a `secret`, a request must either carry it in an `x-halo-secret` header (or `?secret=`), or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup. It still refuses requests a web page sends through someone's browser: an `Origin` other than localhost or `publicUrl`, and, when listening on localhost, a `Host` that isn't (DNS rebinding).
+With a `secret`, a request must either carry it in an `x-halo-secret` header, or be signed GitHub-style with `x-hub-signature-256`. Requests without it get `401`. A secret in the URL (`?secret=`) is refused with `401` too, because URLs end up in access logs, proxies and browser history; for a sender that can only put it in the URL, set `"secretInQuery": true` on that webhook (`{ "path": "legacy", "pipeline": "Handle", "secret": "Env.LEGACY_SECRET", "secretInQuery": true }`) and keep that secret to that one sender. If the secret names a variable that is empty or not set, the server refuses to start rather than accept unsigned requests. A webhook with no `secret` at all is open to anyone who can reach it, and the server warns about it at startup. It still refuses requests a web page sends through someone's browser: an `Origin` other than localhost or `publicUrl`, and, when listening on localhost, a `Host` that isn't (DNS rebinding).
 
 ### Inbound email
 
@@ -209,7 +209,7 @@ A [`Slack` tool](../../stdlib/tools.md#slack) that posts `buttons:` during a run
 
 ## HTTP API
 
-Every `/api` request needs `Authorization: Bearer <token>` when a token is set. `POST` requests must be `Content-Type: application/json`.
+Every `/api` request needs `Authorization: Bearer <token>` when a token is set (only the header: a `?token=` in the request's URL is not accepted, since URLs end up in logs; Halo Studio takes `?token=` from its own page's address, in the browser, and sends it as the header). `POST` requests must be `Content-Type: application/json`.
 
 | Request | Does |
 |---|---|
@@ -348,7 +348,9 @@ curl -X POST localhost:8080/api/runs/$RUN/resume -H 'Content-Type: application/j
 - `/mcp` has the same `Origin`, `Host` and JSON checks as `/api`, and needs the token when one is set (see [MCP](../integrations/mcp.md#http)).
 - `/slack/actions` accepts only requests signed with `slack.signingSecret`.
 - What Halo sends your app (run callbacks, `Handoff` items) is signed with a secret you set; check it as [Run callbacks](#run-callbacks) shows.
+- Every file it serves runs in this one process. So a file whose browser has a [wallet](../../stdlib/wallet.md) can't be served alongside a file with a tool that runs commands or code as you (`Bash`, `Code`, `Git`, a local `MCP` server...): it refuses to start and names both files. Serve them from separate processes, each `halo serve` with its own `stateDir`.
 - Approval links are signed with the token, or with a random secret kept in `.halo/serve-secret`. Deleting that file invalidates outstanding links.
+- The state folder is this user's alone: Halo makes it (and `.halo` above recordings and checkpoints) readable only by you (`0700`, files `0600`), because it holds paused runs, recordings and that secret. On a machine other people log in to, someone who could read it could forge an approval.
 - Put it behind HTTPS (a reverse proxy such as Caddy) when it's reachable from the internet, and set `publicUrl` to that address.
 
 ## Running it in production

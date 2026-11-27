@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, statSync, truncateSync } from "node:fs";
 import { appendFile, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { RunSnapshot } from "./runtime.js";
+import { privateDir, privateFile } from "./private-files.js";
 
 interface LogExtent {
   trace: number;
@@ -30,7 +31,7 @@ const written = new Map<string, LogExtent>();
 export const logPathFor = (corePath: string) => corePath.replace(/\.json$/, "") + ".log.jsonl";
 
 export async function writeSnapshot(corePath: string, snapshot: RunSnapshot, logPath = logPathFor(corePath)): Promise<void> {
-  mkdirSync(dirname(corePath), { recursive: true });
+  privateDir(dirname(corePath));
   const { trace, meta, ...rest } = snapshot;
   const { calls, ...metaRest } = meta;
   const prev = written.get(logPath);
@@ -41,12 +42,14 @@ export async function writeSnapshot(corePath: string, snapshot: RunSnapshot, log
   const chunk = lines.length ? `${lines.join("\n")}\n` : "";
   if (extend) {
     if (statSync(logPath).size > prev.bytes) truncateSync(logPath, prev.bytes);
-    if (chunk) await appendFile(logPath, chunk);
+    if (chunk) await appendFile(logPath, chunk, { mode: 0o600 });
   } else {
     await Bun.write(logPath, chunk);
+    privateFile(logPath);
   }
   const log = { trace: trace.length, calls: calls.length, bytes: from.bytes + Buffer.byteLength(chunk) };
   await Bun.write(corePath, JSON.stringify({ ...rest, meta: metaRest, log } satisfies Core));
+  privateFile(corePath);
   written.set(logPath, log);
 }
 

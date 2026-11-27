@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { StateStore } from "./state-mirror.js";
+import { LEGACY_TRUST_FILE, readTrust, writeTrust } from "../registry/trust.js";
 
 export class ProjectError extends Error {}
 
@@ -39,9 +40,9 @@ const blobKey = (sha: string) => `project/blobs/${sha}`;
 /** Written into the folder a project was pulled to: which version it holds, and the files that came with it. */
 export const PULLED_FILE = ".halo-project.json";
 
-/** Never pushed, whatever git says: secrets, state, and what a build makes. Installed packages and their trust file are the exception inside .halo. */
+/** Never pushed, whatever git says: secrets, state, and what a build makes. Installed packages are the exception inside .halo. */
 const NEVER = /(^|\/)(\.git|node_modules|\.DS_Store)(\/|$)|(^|\/)\.env(\.[^/]*)?$|(^|\/)\.halo-project\.json$/;
-const inState = (path: string) => /^\.halo\//.test(path) && !/^\.halo\/(packages\/|trust\.json$)/.test(path);
+const inState = (path: string) => /^\.halo\//.test(path) && !/^\.halo\/packages\//.test(path);
 
 const sha256 = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
 const posix = (p: string) => p.split(sep).join("/");
@@ -69,7 +70,6 @@ export function projectFiles(root: string): string[] {
   else walk(root, false);
   // Installed tool packages are ignored by git, but the server needs them as they were checked here.
   walk(join(root, ".halo", "packages"), true);
-  if (existsSync(join(root, ".halo", "trust.json"))) out.add(".halo/trust.json");
   return [...out].filter(safePath).sort();
 }
 
@@ -95,6 +95,16 @@ export async function pushProject(root: string, store: StateStore, halo: string,
     const content = new Uint8Array(readFileSync(full));
     const sha = sha256(content);
     files[path] = { sha256: sha, size: content.length, ...(statSync(full).mode & 0o111 ? { executable: true } : {}) };
+    data.set(sha, content);
+    bytes += content.length;
+  }
+  // The packages this machine trusts for this project go with it, so the server that pulls it
+  // runs the same code. They come from this user's trust file, never from a file in the project.
+  const trust = readTrust(root);
+  if (Object.keys(trust).length) {
+    const content = new TextEncoder().encode(JSON.stringify(trust, null, 2) + "\n");
+    const sha = sha256(content);
+    files[LEGACY_TRUST_FILE] = { sha256: sha, size: content.length };
     data.set(sha, content);
     bytes += content.length;
   }
@@ -175,6 +185,14 @@ export async function pullProject(store: StateStore, dir: string, version?: stri
   mkdirSync(dir, { recursive: true });
   let written = 0;
   for (const [path, info] of Object.entries(manifest.files)) {
+    // The pusher's trust goes into this machine's trust file for this folder: pulling from your
+    // own store is how a server agrees to run what you trusted. It is never written into the project.
+    if (path === LEGACY_TRUST_FILE) {
+      const content = await store.get(blobKey(info.sha256));
+      if (!content || sha256(content) !== info.sha256) throw new ProjectError(`Version ${version}: the stored copy of ${path} is missing or damaged: push again`);
+      writeTrust(dir, JSON.parse(new TextDecoder().decode(content)) as Record<string, string>);
+      continue;
+    }
     if (!safePath(path)) throw new ProjectError(`Version ${version} lists "${path}", which is not a path inside a project`);
     const full = join(dir, ...path.split("/"));
     if (existsSync(full) && statSync(full).isFile() && sha256(new Uint8Array(readFileSync(full))) === info.sha256) continue;

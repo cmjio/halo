@@ -110,7 +110,7 @@ claude mcp add --transport http halo http://localhost:8080/mcp --header "Authori
 ```
 
 - It has the same browser checks as `/api`: a request with an `Origin` other than localhost or `publicUrl` is refused, the `Host` header must be localhost, the address it listens on, or `publicUrl`'s host (which stops DNS rebinding), and a `POST` must be `Content-Type: application/json`. Refused requests get `403`.
-- Then it uses the API token: when one is set, a request needs `Authorization: Bearer <token>` (or `?token=`), or it gets `401`. **Without a token, any program that can reach the port can run your pipelines**: on localhost, any program on the machine.
+- Then it uses the API token: when one is set, a request needs `Authorization: Bearer <token>`, or it gets `401` (a token in the URL is refused: URLs end up in logs). **Without a token, any program that can reach the port can run your pipelines**: on localhost, any program on the machine.
 - It is stateless and returns JSON, not server-sent streams. Batches work.
 - `"mcp": false` in `halo.json` turns it off.
 

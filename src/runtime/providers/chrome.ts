@@ -10,8 +10,8 @@
  *
  * Unlike Browser(), it runs the page's JavaScript and can click and type. It
  * needs Chrome, Chromium, Edge or Brave installed (or `chrome:` / CHROME_PATH),
- * and adds no npm dependency: it launches the browser with a remote-debugging
- * port and talks CDP over Bun's built-in WebSocket.
+ * and adds no npm dependency: it launches the browser with --remote-debugging-pipe
+ * and talks CDP over that pipe (no TCP port another process could attach to).
  *
  * Each (tool, run) gets its own browser with a fresh profile, kept between calls
  * so a run can open a page, fill a form and read the result. Idle browsers close
@@ -35,7 +35,7 @@
  */
 
 import { MediaBytes } from "../media.js";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { HaloError, TimeoutError } from "../errors.js";
@@ -104,27 +104,72 @@ export function findChrome(explicit?: unknown): string | undefined {
 
 type Listener = (method: string, params: any, sessionId?: string) => void;
 
+/**
+ * CDP over the pipe Chrome opens with --remote-debugging-pipe: Halo writes to the browser's fd 3 and
+ * reads its fd 4, each message JSON ending in a NUL byte. There is no TCP listener and no
+ * DevToolsActivePort file, so no other process on the machine can attach to the browser (and read
+ * what a page was typed into).
+ */
 class Cdp {
   private nextId = 1;
   private pending = new Map<number, { resolve(v: any): void; reject(e: Error): void; timer: Timer }>();
   readonly listeners = new Set<Listener>();
   closed = false;
+  private sink: ReturnType<ReturnType<typeof Bun.file>["writer"]>;
 
-  constructor(private ws: WebSocket) {
-    ws.addEventListener("message", (ev) => {
-      const msg = JSON.parse(String(ev.data));
-      if (msg.id !== undefined) {
-        const p = this.pending.get(msg.id);
-        if (!p) return;
-        this.pending.delete(msg.id);
-        clearTimeout(p.timer);
-        if (msg.error) p.reject(new HaloError(`Chrome: ${msg.error.message}${msg.error.data ? ` (${msg.error.data})` : ""}`));
-        else p.resolve(msg.result ?? {});
-      } else if (msg.method) {
-        for (const l of this.listeners) l(msg.method, msg.params ?? {}, msg.sessionId);
+  /** `toChrome` and `fromChrome` are this process's ends of the browser's fd 3 and fd 4. */
+  constructor(
+    private toChrome: number,
+    private fromChrome: number,
+  ) {
+    this.sink = Bun.file(toChrome).writer();
+    void this.read();
+  }
+
+  private async read() {
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for await (const chunk of Bun.file(this.fromChrome).stream()) {
+        let from = buf.length;
+        buf += decoder.decode(chunk, { stream: true });
+        for (let i = buf.indexOf("\0", from); i >= 0; i = buf.indexOf("\0", from)) {
+          const raw = buf.slice(0, i);
+          buf = buf.slice(i + 1);
+          from = 0;
+          if (raw) this.dispatch(raw);
+        }
       }
-    });
-    ws.addEventListener("close", () => this.fail(new HaloError("Chrome closed the connection")));
+    } catch {}
+    // The browser closed its end (it exited): fail what's waiting, and release both descriptors.
+    this.fail(new HaloError("Chrome closed the connection"));
+    try {
+      await this.sink.end();
+    } catch {}
+    for (const fd of [this.toChrome, this.fromChrome]) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+  }
+
+  private dispatch(raw: string) {
+    let msg: any;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (msg.id !== undefined) {
+      const p = this.pending.get(msg.id);
+      if (!p) return;
+      this.pending.delete(msg.id);
+      clearTimeout(p.timer);
+      if (msg.error) p.reject(new HaloError(`Chrome: ${msg.error.message}${msg.error.data ? ` (${msg.error.data})` : ""}`));
+      else p.resolve(msg.result ?? {});
+    } else if (msg.method) {
+      for (const l of this.listeners) l(msg.method, msg.params ?? {}, msg.sessionId);
+    }
   }
 
   private fail(err: Error) {
@@ -146,26 +191,21 @@ class Cdp {
         reject(new TimeoutError(`Chrome did not answer ${method} within ${timeoutMs}ms`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      try {
+        this.sink.write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
+        void Promise.resolve(this.sink.flush()).catch(() => {});
+      } catch (e) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(new HaloError(`Chrome: could not send ${method}: ${(e as Error).message}`));
+      }
     });
   }
 
+  /** Stop sending; the descriptors are released once the browser exits and its end closes. */
   close() {
     this.closed = true;
-    try {
-      this.ws.close();
-    } catch {}
   }
-}
-
-async function connect(url: string, timeoutMs: number): Promise<WebSocket> {
-  const ws = new WebSocket(url);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new TimeoutError(`Could not connect to Chrome at ${url}`)), timeoutMs);
-    ws.addEventListener("open", () => (clearTimeout(timer), resolve()), { once: true });
-    ws.addEventListener("error", () => (clearTimeout(timer), reject(new HaloError(`Could not connect to Chrome at ${url}`))), { once: true });
-  });
-  return ws;
 }
 
 // ── Sessions ──
@@ -234,8 +274,6 @@ interface Session {
   wallet?: WalletState;
   /** Hand-overs so far, so each one is its own question. */
   handovers: number;
-  /** The port the browser's DevTools endpoint listens on (on this machine). */
-  debugPort: number;
 }
 
 const sessions = new Map<string, Promise<Session>>();
@@ -302,7 +340,10 @@ function allowList(call: ToolCall): string[] | undefined {
   return list;
 }
 
-/** Whether `url` may be opened (exported for tests): http(s) only, and a host on the allow list when there is one. Never the browser's own DevTools endpoint. */
+/**
+ * Whether `url` may be opened (exported for tests): http(s) only, and a host on the allow list when there is one.
+ * `debugPort` refuses a DevTools endpoint on this machine; Halo's own browsers have none (they talk over a pipe).
+ */
 export function urlAllowed(url: string, allow?: string[], debugPort?: number): boolean {
   let u: URL;
   try {
@@ -399,7 +440,8 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
   const headless = call.config("headless") !== false || process.env.HALO_TEST_HEADLESS === "1";
   const args = [
     ...(headless ? ["--headless=new"] : []),
-    "--remote-debugging-port=0",
+    // CDP over fds 3 and 4: no TCP listener, no DevToolsActivePort file.
+    "--remote-debugging-pipe",
     `--user-data-dir=${dir}`,
     "--no-first-run",
     "--no-default-browser-check",
@@ -416,8 +458,8 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
   ];
   let proc: ReturnType<typeof Bun.spawn>;
   try {
-    // Chrome's stderr is kept, so a launch that fails can say why.
-    proc = Bun.spawn([path, ...args], { stdin: "ignore", stdout: "ignore", stderr: "pipe", env: { ...process.env } });
+    // Chrome's stderr is kept, so a launch that fails can say why. fd 3 is what Chrome reads, fd 4 what it writes.
+    proc = Bun.spawn([path, ...args], { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env: { ...process.env } });
   } catch (e) {
     rmSync(dir, { recursive: true, force: true });
     throw new HaloError(`Tool "${call.tool.name}" could not start ${path}: ${(e as Error).message}`, { code: "TOOL_CONFIG" });
@@ -429,25 +471,31 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
   })().catch(() => {});
   const why = () => (stderr.trim() ? `; Chrome said: ${stderr.trim().split("\n").slice(-6).join(" | ")}` : "");
 
-  try {
-    // Chrome writes its port and browser WebSocket path here once it's listening.
-    const portFile = join(dir, "DevToolsActivePort");
-    // A first start on a cold machine (fonts, profile, GPU probing) can take a while.
-    const launchMs = Number(call.config("launch_timeout_ms") ?? 45_000);
-    const deadline = Date.now() + launchMs;
-    let lines: string[] = [];
-    while (Date.now() < deadline) {
-      if (proc.exitCode !== null) throw new HaloError(`${path} exited (code ${proc.exitCode}) before it was ready${why()}`, { code: "TOOL_CONFIG" });
-      if (existsSync(portFile)) {
-        lines = readFileSync(portFile, "utf8").trim().split("\n");
-        if (lines.length >= 2) break;
-      }
-      await sleep(50);
-    }
-    if (lines.length < 2) throw new TimeoutError(`${path} did not open a debugging port within ${Math.round(launchMs / 1000)}s (launch_timeout_ms)${why()}`);
-    const cdp = new Cdp(await connect(`ws://127.0.0.1:${lines[0]}${lines[1]}`, 10_000));
+  const [toChrome, fromChrome] = [proc.stdio[3], proc.stdio[4]];
+  if (typeof toChrome !== "number" || typeof fromChrome !== "number") {
+    proc.kill("SIGKILL");
+    await proc.exited.catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+    throw new HaloError(`Tool "${call.tool.name}" could not open a DevTools pipe to ${path}`, { code: "TOOL_CONFIG" });
+  }
+  const cdp = new Cdp(toChrome, fromChrome);
 
-    const { targetInfos } = await cdp.send("Target.getTargets");
+  try {
+    // A first start on a cold machine (fonts, profile, GPU probing) can take a while. Chrome answers on
+    // the pipe once it's ready; until then the command waits in the pipe.
+    const launchMs = Number(call.config("launch_timeout_ms") ?? 45_000);
+    const ready = cdp.send("Target.getTargets", {}, undefined, launchMs);
+    const outcome = await Promise.race([
+      ready.then((r) => ({ r }), (e: Error) => ({ e })),
+      proc.exited.then(() => ({ exited: true as const })),
+    ]);
+    if ("exited" in outcome) throw new HaloError(`${path} exited (code ${proc.exitCode}) before it was ready${why()}`, { code: "TOOL_CONFIG" });
+    if ("e" in outcome) {
+      if (proc.exitCode !== null) throw new HaloError(`${path} exited (code ${proc.exitCode}) before it was ready${why()}`, { code: "TOOL_CONFIG" });
+      if (outcome.e instanceof TimeoutError) throw new TimeoutError(`${path} did not answer on its DevTools pipe within ${Math.round(launchMs / 1000)}s (launch_timeout_ms)${why()}`);
+      throw outcome.e;
+    }
+    const { targetInfos } = outcome.r;
     const page = (targetInfos as any[]).find((t) => t.type === "page");
     const targetId: string = page?.targetId ?? (await cdp.send("Target.createTarget", { url: "about:blank" })).targetId;
     const { sessionId: sid } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
@@ -469,7 +517,6 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
       queue: Promise.resolve(),
       children: new Map(),
       handovers: 0,
-      debugPort: Number(lines[0]),
     };
 
     const autoAttach = (sessionId: string) =>
@@ -507,7 +554,7 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
       } else if (method === "Fetch.requestPaused") {
         // Navigations to hosts outside `allow:` are refused before the request leaves the browser.
         const main = !p.frameId || p.frameId === s.frameId;
-        if (!main || urlAllowed(p.request.url, s.allow, s.debugPort)) {
+        if (!main || urlAllowed(p.request.url, s.allow)) {
           void cdp.send("Fetch.continueRequest", { requestId: p.requestId }, s.sid).catch(() => {});
         } else {
           s.blocked.push(p.request.url);
@@ -525,6 +572,7 @@ async function launch(call: ToolCall, key: string): Promise<Session> {
     live.add(s);
     return s;
   } catch (e) {
+    cdp.close();
     proc.kill("SIGKILL");
     await proc.exited.catch(() => {});
     rmSync(dir, { recursive: true, force: true });
@@ -727,7 +775,7 @@ async function settle(c: Ctx, graceMs = 150): Promise<void> {
 async function checkLocation(c: Ctx): Promise<void> {
   const url = await currentUrl(c);
   const blocked = c.s.blocked.splice(0);
-  if (!blocked.length && (url === "about:blank" || urlAllowed(url, c.s.allow, c.s.debugPort))) {
+  if (!blocked.length && (url === "about:blank" || urlAllowed(url, c.s.allow))) {
     if (url !== "about:blank") c.s.lastGood = url;
     return;
   }
@@ -762,7 +810,7 @@ function cap(text: string, n: number, s?: Session): string {
 async function checkedSummary(c: Ctx, withText: boolean): Promise<Record<string, unknown>> {
   const out = await summary(c, withText);
   const url = String(out.url);
-  if (c.s.blocked.length || (url !== "about:blank" && !urlAllowed(url, c.s.allow, c.s.debugPort))) await checkLocation(c);
+  if (c.s.blocked.length || (url !== "about:blank" && !urlAllowed(url, c.s.allow))) await checkLocation(c);
   return out;
 }
 
@@ -1189,7 +1237,7 @@ async function fillSecrets(c: Ctx, fields: Record<string, unknown>): Promise<Rec
     for (const [selector, ref] of entries) plans.push(await planField(c, selector, ref, items));
     const used = [...new Set(plans.map((p) => p.item))];
     for (const item of used) {
-      if (!urlAllowed(topLink.url, c.s.allow, c.s.debugPort)) throw new HaloError(`${name}: the page ${topLink.url} isn't one this browser may be on`, { code: "TOOL_ARGUMENT" });
+      if (!urlAllowed(topLink.url, c.s.allow)) throw new HaloError(`${name}: the page ${topLink.url} isn't one this browser may be on`, { code: "TOOL_ARGUMENT" });
       if (!item.hosts.some((h) => hostMatches(topLink.host, h))) {
         throw new HaloError(`${name}: ${item.name} may be typed only on pages on ${item.hosts.join(", ")}; this page is on ${topLink.host || topLink.url}`, { code: "TOOL_ARGUMENT" });
       }
@@ -1413,7 +1461,7 @@ async function run(c: Ctx): Promise<unknown> {
       await policyGate(c);
       const raw = need(call, "a url", call.named.url ?? call.positional[0]).trim();
       const url = /^[a-z][a-z0-9+.-]*:/i.test(raw) && !/^[^:/]+:\d/.test(raw) ? raw : `https://${raw}`;
-      if (!urlAllowed(url, s.allow, s.debugPort)) {
+      if (!urlAllowed(url, s.allow)) {
         const why = !/^https?:/i.test(url) ? "only http and https pages can be opened" : s.allow && !urlAllowed(url, s.allow) ? `its host is not in allow: [${s.allow.join(", ")}]` : "it is this browser's own DevTools endpoint";
         throw new HaloError(`${call.tool.name}.open: refused ${url}, ${why}`, { code: "TOOL_ARGUMENT" });
       }

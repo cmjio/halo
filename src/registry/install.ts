@@ -193,7 +193,7 @@ export async function installProject(options: InstallOptions): Promise<InstallRe
     } else delete trust[r.name];
   }
   for (const name of [...removed, ...migrated]) if (!lock.packages[name]) delete trust[name];
-  if (Object.keys(trust).length || existsSync(join(root, ".halo/trust.json"))) writeTrust(root, trust);
+  if (Object.keys(trust).length || Object.keys(readTrust(root)).length) writeTrust(root, trust);
 
   if (migrated.length) {
     const next = { ...readProjectConfig(root) } as Record<string, unknown>;

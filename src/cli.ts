@@ -39,6 +39,7 @@ import { TOOL_PROVIDERS } from "./parser/builtins.js";
 import { AGENT_PRESETS } from "./runtime/presets.js";
 import { findSkill, skillCatalog, skillFiles } from "./runtime/skills.js";
 import { formatPlan, plan, type PlanOptions } from "./plan.js";
+import { pricesProblem, type Prices } from "./runtime/prices.js";
 import { checkFence } from "./fence.js";
 import { compareReport, compareRuns, defaultJudgeModel, haloJudge, recordingsFor, type Outcome } from "./compare.js";
 import { evolve, EvolveApplyError, evolvePrBody, haloProposer, prepareApply, writeEvolveDir, describeScore, type EvolveRecord, type Variant } from "./evolve.js";
@@ -595,6 +596,7 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     // Images and documents a run is given or makes, by hash.
     blobs: new FileBlobStore(".halo/blobs"),
     media: (await haloConfig()).media,
+    prices: (await haloConfig()).prices,
     // Mock runs keep thread state in memory, so they never change a real thread.
     threadPath: mock ? ":memory:" : THREADS,
     onEvent: (e) => {
@@ -931,7 +933,8 @@ async function cmdPlan(flags: Flags): Promise<number> {
   registerInstalled(rt, await installed());
   const target = last(flags, "pipeline");
   const names = target ? [pickStream(ast, target).name] : entryPipelines(ast).map((p) => p.name);
-  const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider) }));
+  const prices = (await haloConfig()).prices;
+  const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider), prices }));
   if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));
   else console.log(plans.map((p) => formatPlan(p, { bold, dim, red, yellow })).join("\n\n"));
   return diags.some((d) => d.severity === "error") ? 1 : 0;
@@ -1006,8 +1009,9 @@ async function cmdCompare(flags: Flags): Promise<number> {
   const recordings = recordingsFor(RECORDINGS, pipeline, number("runs", 20));
   if (!recordings.length) fail(`No recorded runs of ${pipeline} in ${RECORDINGS}. Run it with halo run (which records by default) first.`);
 
+  const prices = (await haloConfig()).prices;
   const runtime = () => {
-    const rt = new HaloRuntime({ apiKey: last(flags, "api-key"), logger: { log() {}, warn() {} }, threadPath: ":memory:" });
+    const rt = new HaloRuntime({ apiKey: last(flags, "api-key"), logger: { log() {}, warn() {} }, threadPath: ":memory:", prices });
     registerInstalled(rt, providers);
     return rt;
   };
@@ -1070,6 +1074,8 @@ async function cmdCompare(flags: Flags): Promise<number> {
 interface HaloConfig {
   recordings?: { keep?: number };
   media?: { transcribe?: string; transcribeModel?: string };
+  /** Model prices in USD per million tokens, by model as written in .halo files (MaxSpend needs one for every model). */
+  prices?: Prices;
   evolve?: { proposer?: string; judge?: string; models?: string[]; maxCostRatio?: number; holdout?: number; concurrency?: number; criteria?: Record<string, string> };
 }
 
@@ -1078,11 +1084,15 @@ function haloConfig(): Promise<HaloConfig> {
   haloConfigCache ??= (async () => {
     const f = Bun.file("halo.json");
     if (!(await f.exists())) return {};
+    let config: HaloConfig;
     try {
-      return (await f.json()) as HaloConfig;
+      config = (await f.json()) as HaloConfig;
     } catch (err) {
       fail(`halo.json is not valid JSON: ${err instanceof Error ? err.message : err}`);
     }
+    const bad = pricesProblem(config.prices);
+    if (bad) fail(`halo.json: ${bad}`);
+    return config;
   })();
   return haloConfigCache;
 }
@@ -1121,8 +1131,9 @@ async function cmdEvolve(flags: Flags): Promise<number> {
   const providers = await installed();
   const quiet = new HaloRuntime({ logger: { log() {}, warn() {} } });
   registerInstalled(quiet, providers);
+  const prices = (await haloConfig()).prices;
   const runtime = () => {
-    const rt = new HaloRuntime({ apiKey: last(flags, "api-key"), logger: { log() {}, warn() {} }, threadPath: ":memory:" });
+    const rt = new HaloRuntime({ apiKey: last(flags, "api-key"), logger: { log() {}, warn() {} }, threadPath: ":memory:", prices });
     registerInstalled(rt, providers);
     return rt;
   };
@@ -1427,7 +1438,7 @@ async function cmdMcp(flags: Flags): Promise<number> {
     const rel = relative(process.cwd(), file);
     if (ast.errors.length) fail(`Parse errors in ${rel}`);
     if (checkLinked(linked, await validateOptions()).some((d) => d.severity === "error")) fail(`${rel} has errors; run halo validate`);
-    const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs"), serving: true, walletLog: ".halo/wallet.log" }).load(ast);
+    const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs"), serving: true, walletLog: ".halo/wallet.log", prices: (await haloConfig()).prices }).load(ast);
     registerInstalled(rt, providers);
     runtimes.push(rt);
     for (const decl of entryPipelines(ast)) entries.set(decl.name, { rt, decl, file: rel });

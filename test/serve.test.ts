@@ -419,7 +419,8 @@ describe("halo serve", () => {
       expect((await fetch(`${s.url}/api/pipelines`)).status).toBe(401);
       expect((await fetch(`${s.url}/api/pipelines`, { headers: { Authorization: "Bearer nope" } })).status).toBe(401);
       expect((await fetch(`${s.url}/api/pipelines`, { headers: { Authorization: "Bearer tok" } })).status).toBe(200);
-      expect((await fetch(`${s.url}/api/pipelines?token=tok`)).status).toBe(200);
+      // Not in the URL: it would end up in logs and proxies
+      expect((await fetch(`${s.url}/api/pipelines?token=tok`)).status).toBe(401);
       // Approval links are signed, so they work without the token
       const runId = s.start("Draft", { topic: "t" }, "test");
       await s.settled(runId);

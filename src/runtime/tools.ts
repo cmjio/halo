@@ -339,17 +339,90 @@ const vectorStore: ToolProvider = async (call, services) => {
 
 const READ_ONLY_SQL = /^\s*(?:select|with|show|explain|values|table)\b/i;
 
+/**
+ * Whether SQL holds more than one statement: a `;` with anything but space or comments after it,
+ * outside quotes ('…' with '' and E'…\'…'), quoted names ("…"), dollar quotes ($tag$…$tag$) and
+ * comments (-- and nested /* *\/). A read-only tool refuses those: `SELECT 1; COMMIT; UPDATE …`
+ * would end the read-only transaction and then write.
+ */
+export function hasStackedStatements(sql: string): boolean {
+  // Whether \ escapes a quote in '…' depends on the server's standard_conforming_strings, so
+  // read it both ways and count it as stacked if either reading finds a second statement.
+  return stacked(sql, false) || stacked(sql, true);
+}
+
+function stacked(sql: string, backslashEscapes: boolean): boolean {
+  let i = 0;
+  let ended = false;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i]!;
+    if (c === "-" && sql[i + 1] === "-") {
+      while (i < n && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && sql[i + 1] === "*") {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") (depth++, (i += 2));
+        else if (sql[i] === "*" && sql[i + 1] === "/") (depth--, (i += 2));
+        else i++;
+      }
+      continue;
+    }
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (ended) return true;
+    if (c === ";") {
+      ended = true;
+      i++;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      const escapes = c === "'" && (backslashEscapes || (/[eE]/.test(sql[i - 1] ?? "") && !/\w/.test(sql[i - 2] ?? "")));
+      i++;
+      while (i < n) {
+        if (escapes && sql[i] === "\\") i += 2;
+        else if (sql[i] === c && sql[i + 1] === c) i += 2;
+        else if (sql[i] === c) break;
+        else i++;
+      }
+      i++;
+      continue;
+    }
+    if (c === "$") {
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
+      if (tag) {
+        const close = sql.indexOf(tag[0], i + tag[0].length);
+        i = close < 0 ? n : close + tag[0].length;
+        continue;
+      }
+    }
+    i++;
+  }
+  return false;
+}
+
 const postgres: ToolProvider = async (call, services) => {
   const url = call.config(0);
   if (typeof url !== "string" || !url) throw new HaloError(`Tool "${call.tool.name}" needs a connection URL, e.g. PostgreSQL(Env.DB_URI)`);
   const text = call.named.sql ?? call.named.query ?? call.positional[0];
   if (typeof text !== "string") throw new HaloError(`${call.tool.name}.${call.method} needs a SQL string (sql: "SELECT ...")`);
-  // Zero-trust default: only reads, unless the tool is declared with readOnly: false.
-  if (call.config("readOnly") !== false && !READ_ONLY_SQL.test(text)) {
-    throw new HaloError(`Tool "${call.tool.name}" is read-only; declare it with readOnly: false to allow: ${text.slice(0, 80)}`);
-  }
   const list = call.named.params;
-  const rows = await services.sql(url).unsafe(text, Array.isArray(list) ? list : list === undefined ? [] : [list]);
+  const params = Array.isArray(list) ? list : list === undefined ? [] : [list];
+  // Zero-trust default: only reads, unless the tool is declared with readOnly: false.
+  if (call.config("readOnly") !== false) {
+    if (!READ_ONLY_SQL.test(text)) throw new HaloError(`Tool "${call.tool.name}" is read-only; declare it with readOnly: false to allow: ${text.slice(0, 80)}`);
+    if (hasStackedStatements(text)) throw new HaloError(`Tool "${call.tool.name}" is read-only and runs one statement at a time; this SQL has more than one: ${text.slice(0, 80)}`, { code: "TOOL_ARGUMENT" });
+    // The database enforces it, not the first word: `WITH x AS (DELETE …) SELECT` and
+    // `EXPLAIN ANALYZE UPDATE …` start like reads. A read-only transaction refuses every write.
+    const rows = await services.sql(url).begin("read only", (tx) => tx.unsafe(text, params));
+    return [...(rows as Iterable<unknown>)];
+  }
+  const rows = await services.sql(url).unsafe(text, params);
   return [...rows];
 };
 

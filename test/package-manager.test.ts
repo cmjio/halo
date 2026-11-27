@@ -12,6 +12,7 @@ import { RegistryClient, versionDocOf } from "../src/registry/client";
 import { resolveGraph, ResolveError } from "../src/registry/resolve";
 import { installProject } from "../src/registry/install";
 import { readAnyLock, readLockV2 } from "../src/registry/lockfile";
+import { writeTrust } from "../src/registry/trust";
 import { installedProviderNames, installedResolver, loadPackageProviders } from "../src/registry/resolver";
 import { install as installV1 } from "../src/registry/packages";
 import { DEFAULT_REGISTRY } from "../src/registry/config";
@@ -571,7 +572,7 @@ describe("installing", () => {
     writeFileSync(join(other, "halo.lock"), readFileSync(join(root, "halo.lock")));
     await expect(installProject({ root: other, registry: reg })).rejects.toThrow(/--trust/);
     await installProject({ root: other, registry: reg, trust: true });
-    rmSync(join(other, ".halo/trust.json"));
+    writeTrust(other, {});
     await expect(loadPackageProviders(other)).rejects.toThrow(/hasn't trusted this version/);
   });
 

@@ -88,6 +88,8 @@ export interface LLMResponse {
     completionTokens?: number;
     totalTokens?: number;
   };
+  /** What the provider says it billed for this call, in USD, when it says (OpenRouter's usage.cost). */
+  cost?: number;
   raw?: unknown;
 }
 
@@ -140,7 +142,14 @@ export interface ProviderAdapter {
   /** Parse provider response to standard format */
   parseResponse(response: unknown): LLMResponse;
 
-  /** Estimate cost in USD for a request (used for cost tracking and MaxSpend) */
+  /**
+   * The model's price in USD per 1,000 tokens (in and out), for a call with this many input
+   * tokens, or undefined when the adapter doesn't know this exact model. MaxSpend uses it,
+   * and refuses calls to a model without one (see prices.ts).
+   */
+  price?(modelId: string, inputTokens: number): { in: number; out: number } | undefined;
+
+  /** A guess at the cost in USD, for reporting a call to a model with no price. Never used to keep MaxSpend. */
   estimateCost?(modelId: string, inputTokens: number, outputTokens: number): number;
 
   /** List available models (optional) */
@@ -166,6 +175,19 @@ function stripPrefix(model: string, prefixes: string[]): string {
   for (const p of prefixes) if (model.startsWith(p)) return model.slice(p.length);
   return model;
 }
+
+/**
+ * A model's exact price from a table, after its provider prefix and a dated snapshot suffix
+ * ("-20250929", "-2024-08-06") or "-latest" are taken off. No guessing from families: a
+ * model not in the table has no price.
+ */
+function exactPrice(costs: Costs, model: string, prefixes: string[]): { in: number; out: number } | undefined {
+  const id = stripPrefix(model, prefixes);
+  const bare = id.replace(/-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/, "");
+  return Object.hasOwn(costs, id) ? costs[id] : Object.hasOwn(costs, bare) ? costs[bare] : undefined;
+}
+
+const perMTok = (input: number, output: number) => ({ in: input / 1000, out: output / 1000 });
 
 /** Tool arguments arrive as a JSON string from most APIs; a model that writes bad JSON gets an empty object plus the text. */
 function parseArgs(raw: unknown): Record<string, unknown> {
@@ -289,6 +311,11 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     };
   }
 
+  /** A generic OpenAI-compatible server lists no prices: give them in halo.json "prices". */
+  price(_modelId: string, _inputTokens?: number): { in: number; out: number } | undefined {
+    return undefined;
+  }
+
   estimateCost(_modelId: string, _inputTokens: number, _outputTokens: number): number {
     return 0;
   }
@@ -312,14 +339,19 @@ export class OpenAIAdapter extends OpenAICompatibleAdapter {
     return body;
   }
 
+  private static costs: Costs = {
+    "gpt-4o-mini": { in: 0.00015, out: 0.0006 },
+    "gpt-4o": { in: 0.005, out: 0.015 },
+    "gpt-4-turbo": { in: 0.01, out: 0.03 },
+    "gpt-3.5-turbo": { in: 0.0015, out: 0.002 },
+  };
+
+  override price(modelId: string): { in: number; out: number } | undefined {
+    return exactPrice(OpenAIAdapter.costs, modelId, this.prefixes);
+  }
+
   override estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
-    const costs: Costs = {
-      "gpt-4o-mini": { in: 0.00015, out: 0.0006 },
-      "gpt-4o": { in: 0.005, out: 0.015 },
-      "gpt-4-turbo": { in: 0.01, out: 0.03 },
-      "gpt-3.5-turbo": { in: 0.0015, out: 0.002 },
-    };
-    return perK(lookupCost(costs, stripPrefix(modelId, this.prefixes), { in: 0.01, out: 0.03 }), inputTokens, outputTokens);
+    return perK(lookupCost(OpenAIAdapter.costs, stripPrefix(modelId, this.prefixes), { in: 0.01, out: 0.03 }), inputTokens, outputTokens);
   }
 }
 
@@ -384,7 +416,42 @@ export class AnthropicAdapter implements ProviderAdapter {
     };
   }
 
+  /** USD per million tokens (input, output), from platform.claude.com/docs/en/about-claude/pricing. */
+  private static costs: Costs = {
+    "claude-fable-5-2": perMTok(8, 40),
+    "claude-mythos-5-2": perMTok(8, 40),
+    "claude-fable-5-1": perMTok(10, 50),
+    "claude-mythos-5-1": perMTok(10, 50),
+    "claude-fable-5": perMTok(10, 50),
+    "claude-mythos-5": perMTok(10, 50),
+    "claude-opus-5-5": perMTok(4, 20),
+    "claude-opus-5": perMTok(5, 25),
+    "claude-opus-4-8": perMTok(5, 25),
+    "claude-opus-4-7": perMTok(5, 25),
+    "claude-opus-4-6": perMTok(5, 25),
+    "claude-opus-4-5": perMTok(5, 25),
+    "claude-opus-4-1": perMTok(15, 75),
+    "claude-opus-4": perMTok(15, 75),
+    "claude-opus-4-0": perMTok(15, 75),
+    "claude-sonnet-5-5": perMTok(2, 10),
+    "claude-sonnet-5": perMTok(2, 10),
+    "claude-sonnet-4-6": perMTok(3, 15),
+    "claude-sonnet-4-5": perMTok(3, 15),
+    "claude-sonnet-4": perMTok(3, 15),
+    "claude-sonnet-4-0": perMTok(3, 15),
+    "claude-haiku-4-5": perMTok(1, 5),
+  };
+
+  price(modelId: string, inputTokens: number): { in: number; out: number } | undefined {
+    const id = stripPrefix(modelId, this.prefixes).replace(/-(\d{8}|latest)$/, "");
+    // Haiku 5.5 is priced by the request's prompt: all its input tokens, over 100,000 or not.
+    if (id === "claude-haiku-5-5") return inputTokens > 100_000 ? perMTok(0.5, 2.5) : perMTok(0.1, 0.5);
+    return exactPrice(AnthropicAdapter.costs, id, []);
+  }
+
   estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
+    const known = this.price(modelId, inputTokens);
+    if (known) return perK(known, inputTokens, outputTokens);
     const model = stripPrefix(modelId, this.prefixes);
     const family = /opus/.test(model) ? { in: 0.015, out: 0.075 } : /haiku/.test(model) ? { in: 0.0008, out: 0.004 } : { in: 0.003, out: 0.015 };
     return perK(family, inputTokens, outputTokens);
@@ -524,14 +591,19 @@ export class GoogleAdapter implements ProviderAdapter {
     };
   }
 
+  private static costs: Costs = {
+    "gemini-1.5-flash": { in: 0.000075, out: 0.0003 },
+    "gemini-1.5-pro": { in: 0.00125, out: 0.005 },
+  };
+
+  price(modelId: string): { in: number; out: number } | undefined {
+    return exactPrice(GoogleAdapter.costs, this.modelName(modelId), []);
+  }
+
   estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
-    const costs: Costs = {
-      "gemini-1.5-flash": { in: 0.000075, out: 0.0003 },
-      "gemini-1.5-pro": { in: 0.00125, out: 0.005 },
-    };
     const model = this.modelName(modelId);
     const fallback = /flash/.test(model) ? { in: 0.0003, out: 0.0025 } : { in: 0.00125, out: 0.01 };
-    return perK(lookupCost(costs, model, fallback), inputTokens, outputTokens);
+    return perK(lookupCost(GoogleAdapter.costs, model, fallback), inputTokens, outputTokens);
   }
 }
 
@@ -599,8 +671,15 @@ export class OpenRouterAdapter extends OpenAICompatibleAdapter {
     });
   }
 
+  /** OpenRouter says what it billed in usage.cost (USD): that is the call's cost. */
+  override parseResponse(json: unknown): LLMResponse {
+    const parsed = super.parseResponse(json);
+    const cost = (json as { usage?: { cost?: unknown } } | null)?.usage?.cost;
+    return typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { ...parsed, cost } : parsed;
+  }
+
   override estimateCost(_modelId: string, inputTokens: number, outputTokens: number): number {
-    // Varies by routed model; rough mid-tier estimate.
+    // Varies by routed model; rough mid-tier estimate, for reporting only (no price, so MaxSpend refuses these models).
     return perK({ in: 0.003, out: 0.015 }, inputTokens, outputTokens);
   }
 }
@@ -735,8 +814,13 @@ export class OllamaAdapter implements ProviderAdapter {
     };
   }
 
+  /** Local models are free: a known price of nothing, so MaxSpend lets them run. */
+  price(_modelId: string): { in: number; out: number } {
+    return { in: 0, out: 0 };
+  }
+
   estimateCost(_modelId: string, _inputTokens: number, _outputTokens: number): number {
-    return 0; // Local models are free!
+    return 0;
   }
 }
 

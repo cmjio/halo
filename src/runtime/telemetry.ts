@@ -12,6 +12,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { RuntimeEvent } from "./runtime.js";
+import { privateDir, privateFile } from "./private-files.js";
 
 /** Row types Studio understands. */
 export type TelemetryType = "stream_start" | "stream_end" | "node_start" | "node_end" | "llm_call" | "tool_call" | "error" | "event";
@@ -98,8 +99,9 @@ export class SqliteTelemetry {
   private insert;
 
   constructor(readonly path = ".halo/telemetry.db", private keepRuns = 100) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+    if (path !== ":memory:") privateDir(dirname(path));
     this.db = new Database(path, { create: true });
+    if (path !== ":memory:") for (const f of [path, `${path}-wal`, `${path}-shm`]) privateFile(f);
     // WAL: Studio reads while runs write, and each event doesn't wait for a full sync.
     if (path !== ":memory:") this.db.run("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
     this.db.run(`CREATE TABLE IF NOT EXISTS telemetry (

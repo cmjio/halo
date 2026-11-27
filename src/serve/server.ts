@@ -31,6 +31,7 @@ import { mailFromRaw } from "../runtime/mail/provider.js";
 import { mockEverything, splitMocks } from "../runtime/mocks.js";
 import { SIGNATURE_HEADER, signBody } from "../runtime/signing.js";
 import { SqliteTelemetry } from "../runtime/telemetry.js";
+import { walletNames, walletUnsafeTool } from "../runtime/wallet-rules.js";
 import { answerToEvent, APPROVED, formatValue, isPlainObject } from "../runtime/values.js";
 import { checkTimeZone, CronError, nextSlot, parseCron, slotsBetween, type CronSchedule } from "./cron.js";
 import { parseDuration } from "../parser/builtins.js";
@@ -46,6 +47,7 @@ import { pausePath } from "../registry/hosted.js";
 import { checkPackageHeader, consumerKeys, keyOf, loadServedPackage, PACKAGE_KEYS_ENV, PackageServeError, UsageLog, type ServedPackage, type UsageRow } from "./package.js";
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
+import { privateDir, privateFile } from "../runtime/private-files.js";
 
 /** halo.json (all optional). Strings like "Env.NAME" are read from the environment. */
 export interface ServeConfig {
@@ -66,8 +68,10 @@ export interface ServeConfig {
    * `twilio`: the Twilio auth token ("Env.TWILIO_AUTH_TOKEN"): the request's signature is checked,
    * and the pipeline gets the message as { from, to, text, media }. `reply: true` answers the
    * sender with the run's output when it is text and ready within 10 seconds.
+   * `secretInQuery: true` also accepts the secret as ?secret= (for senders that can't set a header;
+   * URLs end up in logs and proxies, so it's off by default and x-halo-secret is required).
    */
-  webhooks?: Array<{ path: string; pipeline: string; secret?: string; twilio?: string; reply?: boolean }>;
+  webhooks?: Array<{ path: string; pipeline: string; secret?: string; twilio?: string; reply?: boolean; secretInQuery?: boolean }>;
   /**
    * `slack`: a Slack incoming-webhook URL, to announce paused runs.
    * `webhook`: your app's URL. Halo POSTs there when a run completes, halts, fails or pauses,
@@ -111,6 +115,8 @@ export interface ServeConfig {
   recordings?: { serve?: boolean; keep?: number };
   /** How files reach models that can't take them: `transcribe` ("openai" or "gemini") for audio. */
   media?: { transcribe?: string; transcribeModel?: string };
+  /** Model prices in USD per million tokens, by model as written in .halo files (see RuntimeConfig.prices). */
+  prices?: RuntimeConfig["prices"];
   /** Defaults for `halo evolve` and Studio's Evolve tab. */
   evolve?: EvolveConfig;
 }
@@ -351,7 +357,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   /** What was deployed, when the host says: an image tag or digest, a commit. */
   const build = env.HALO_BUILD?.trim() || undefined;
   const stateDir = resolve(options.stateDir ?? ".halo");
-  mkdirSync(stateDir, { recursive: true });
+  // Paused runs, recordings, telemetry and the link-signing secret: this user's alone.
+  privateDir(stateDir);
   // A host without a lasting disk gets its state back from the store, before anything reads the folder.
   const storeAt = fromEnv(options.state?.store) ?? env.HALO_STATE_STORE;
   if (options.state?.store !== undefined && !storeAt) throw new ServeError(`state.store "${options.state.store}" is empty or not set`);
@@ -395,7 +402,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const secretFile = join(stateDir, "serve-secret");
   let signingKey = token;
   if (!signingKey) {
-    if (!existsSync(secretFile)) await Bun.write(secretFile, randomBytes(32).toString("hex"));
+    if (!existsSync(secretFile)) writeFileSync(secretFile, randomBytes(32).toString("hex"), { mode: 0o600 });
+    privateFile(secretFile);
     signingKey = (await Bun.file(secretFile).text()).trim();
   }
   // A link answers one particular pause of one run, so it can't be replayed on a later pause.
@@ -437,6 +445,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (e.type === "run" || e.type === "paused" || (e.type === "stage" && e.status === "end")) mirror?.touch();
   };
   const files = collectHaloFiles(options.files?.length ? options.files : ["."]);
+  /** The programs this process loads, by file: a wallet in one is only as safe as every other one here. */
+  const loaded: Array<{ rel: string; ast: ParseResult }> = [];
   if (!files.length) throw new ServeError(`No .halo files found in ${(options.files ?? ["."]).join(", ")}`);
   for (const file of files) {
     const rel = relative(process.cwd(), file) || file;
@@ -455,15 +465,33 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     }
     const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
     if (!own.length) continue;
-    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, walletLog: join(stateDir, "wallet.log"), ...options.runtime, ...recorder, env, runStore, progressStore, onEvent, serving: true }).load(ast);
+    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, ...recorder, env, runStore, progressStore, onEvent, serving: true }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
+    loaded.push({ rel, ast });
     if (options.dryRun) mockForDryRun(runtime, ast);
     for (const decl of own) {
       const prev = entries.get(decl.name);
       if (prev) throw new ServeError(`Pipeline "${decl.name}" is declared in both ${prev.file} and ${rel}`);
       entries.set(decl.name, { name: decl.name, file: rel, runtime, decl, ast, path: resolve(file) });
+    }
+  }
+
+  // Each program is checked on its own (a wallet can't share one with Bash, Code...), but every file
+  // served here runs in this one process: a tool in another file that runs commands as you could read
+  // the wallet's source (the Keychain, 1Password, the environment) just as well.
+  for (const w of loaded) {
+    const browser = w.ast.tools.find((t) => walletNames(t));
+    if (!browser) continue;
+    for (const o of loaded) {
+      if (o === w) continue;
+      const unsafe = o.ast.tools.find((t) => walletUnsafeTool(t));
+      if (!unsafe) continue;
+      throw new ServeError(
+        `${w.rel} has a wallet (${browser.name} has wallet:), and ${o.rel} has tool "${unsafe.name}", which ${walletUnsafeTool(unsafe)}. ` +
+          `Every file served here runs in one process, so they can't be served together: serve them from separate processes (a separate halo serve for each, with its own stateDir)`,
+      );
     }
   }
 
@@ -480,7 +508,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     let rt = dryRuntimes.get(e.path);
     if (!rt) {
       // Thread state stays in memory, so a rehearsal never changes a real thread.
-      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, walletLog: join(stateDir, "wallet.log"), ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:", serving: true }).load(e.ast);
+      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:", serving: true }).load(e.ast);
       for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
       mockForDryRun(rt, e.ast);
       dryRuntimes.set(e.path, rt);
@@ -528,7 +556,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const stateOf = (key: string) => (scheduleState[key] ??= { skipped: 0, missed: 0 });
   /** Which schedule started each run, so its outcome is recorded when the run ends (again, after a resume). */
   const scheduledRuns = new Map<string, string>();
-  const webhooks = new Map<string, { pipeline: string; secret?: string; twilio?: string; reply?: boolean }>();
+  const webhooks = new Map<string, { pipeline: string; secret?: string; twilio?: string; reply?: boolean; secretInQuery?: boolean }>();
   for (const w of options.webhooks ?? []) {
     entry(w.pipeline);
     const path = w.path.replace(/^\/+|\/+$/g, "");
@@ -539,7 +567,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const twilio = fromEnv(w.twilio);
     if (w.twilio !== undefined && !twilio) throw new ServeError(`Webhook /hooks/${path} has twilio "${w.twilio}", but it is empty or not set`);
     if (secret === undefined && twilio === undefined) logger.warn(`[halo] Webhook /hooks/${path} has no secret: anyone who can reach this server can start ${w.pipeline}`);
-    webhooks.set(path, { pipeline: w.pipeline, secret, twilio, reply: w.reply === true });
+    webhooks.set(path, { pipeline: w.pipeline, secret, twilio, reply: w.reply === true, secretInQuery: w.secretInQuery === true });
   }
   const slackUrl = fromEnv(options.notify?.slack);
   const callbackUrl = fromEnv(options.notify?.webhook);
@@ -1039,9 +1067,11 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
       },
     });
   };
-  const authorized = (req: Request, url: URL) => {
+  const authorized = (req: Request, _url: URL) => {
     if (!token) return true;
-    const header = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? url.searchParams.get("token") ?? "";
+    // Only the header: a token in the URL (?token=) ends up in access logs, proxies and browser history.
+    // (Studio reads ?token= from its own page's address, client-side, and sends it as this header.)
+    const header = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
     return safeEqual(header, token);
   };
 
@@ -1192,7 +1222,7 @@ ${files}
     root: resolve(options.root ?? process.cwd()),
     pipelines: () => [...entries.values()].map((e) => ({ name: e.name, file: e.file, decl: e.decl, ast: e.ast, path: e.path })),
     runtime: () => {
-      const rt = new HaloRuntime({ logger: { log() {}, warn() {} }, ...options.runtime, onEvent: undefined, recorder: undefined, env, threadPath: ":memory:" });
+      const rt = new HaloRuntime({ logger: { log() {}, warn() {} }, prices: options.prices, ...options.runtime, onEvent: undefined, recorder: undefined, env, threadPath: ":memory:" });
       for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
       return rt;
     },
@@ -1367,9 +1397,14 @@ ${files}
           }
           if (target.secret) {
             const ghSig = req.headers.get("x-hub-signature-256");
+            const given = req.headers.get("x-halo-secret");
+            // ?secret= only where the config allows it: a secret in the URL ends up in logs and proxies.
+            if (!ghSig && given === null && url.searchParams.has("secret") && !target.secretInQuery) {
+              return json({ error: `Send the webhook secret in the x-halo-secret header, not ?secret= (or set "secretInQuery": true on /hooks/${hook[1]} for a sender that can only use the URL)` }, 401);
+            }
             const ok = ghSig
               ? safeEqual(ghSig, `sha256=${createHmac("sha256", target.secret).update(raw).digest("hex")}`)
-              : safeEqual(req.headers.get("x-halo-secret") ?? url.searchParams.get("secret") ?? "", target.secret);
+              : safeEqual(given ?? (target.secretInQuery ? url.searchParams.get("secret") : null) ?? "", target.secret);
             if (!ok) return json({ error: "Bad webhook secret or signature" }, 401);
           } else {
             // With no secret, at least keep other sites' pages (through the user's browser) out:

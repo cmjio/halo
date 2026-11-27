@@ -38,8 +38,17 @@ function optional(call: ToolCall, name: string, value: unknown): string | undefi
   return value === undefined || value === null || value === "" ? undefined : safe(call, name, value);
 }
 
+/**
+ * Settings a repository's own config could use to run a program on an ordinary git call:
+ * switched off for every call, so a .git/config something wrote can't run code through a
+ * read-only status or log. (Workspace tools also refuse to touch .git; this is the second wall.)
+ */
+const SECRET_PATHSPECS = [".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", ".netrc", ".pgpass", ".npmrc", ".pypirc", "credentials", "credentials.json", ".git-credentials"].map((g) => `:(exclude,glob,icase)**/${g}`);
+
+const HARDENED = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "core.pager=cat", "-c", "core.editor=true", "-c", "sequence.editor=true", "-c", "protocol.ext.allow=never"];
+
 async function git(call: ToolCall, root: string, args: string[], okCodes = [0]): Promise<string> {
-  const proc = Bun.spawn(["git", "-C", root, "-c", "core.quotepath=off", "-c", "color.ui=never", "--no-pager", ...args], {
+  const proc = Bun.spawn(["git", "-C", root, ...HARDENED, "-c", "core.quotepath=off", "-c", "color.ui=never", "--no-pager", ...args], {
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
@@ -193,7 +202,10 @@ export const gitProvider: ToolProvider = async (call) => {
       if (n.ignore_case === true) args.push("-i");
       args.push("-e", pattern);
       const path = optional(call, "path", n.path);
-      args.push("--", ...(path ? [path] : []));
+      // Environment files, keys and credential files are left out unless the tool is declared secrets: true
+      // (whether a search matched at all can spell out a secret).
+      const excludes = call.config("secrets") === true ? [] : SECRET_PATHSPECS;
+      args.push("--", ...(path ? [path] : excludes.length ? ["."] : []), ...excludes);
       const out = await git(call, root, args, [0, 1]);
       const matches = out
         .split("\n")

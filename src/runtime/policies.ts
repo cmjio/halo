@@ -9,6 +9,7 @@
  * DenyArgs) run on the tool calls an agent chooses, before they run.
  */
 
+import { posix } from "node:path";
 import { aKind, type MediaKind } from "./media-ref.js";
 import type { PolicyDeclaration, PolicyRule, Agent } from "../parser/types.js";
 import { HaloError, PolicyViolation } from "./errors.js";
@@ -132,6 +133,8 @@ const INJECTION: RegExp[] = [
   /\b(?:act\s+as|pretend\s+(?:to\s+be|you\s+are|you're)|roleplay\s+as)\b[\s\S]{0,40}\b(?:with(?:out)?\s+(?:no|any)\s+(?:restrictions|rules|limits|filters|guidelines)|unrestricted|unfiltered|uncensored|jailbroken)\b/i,
   /\b(?:developer|god|admin|DAN|jailbreak)\s+mode\s+(?:enabled|activated|on)\b|\benable\s+(?:developer|god|admin|DAN|jailbreak)\s+mode\b/i,
   // The same "ignore previous instructions" in a few other languages (accents are folded away before this runs).
+  // "earlier guidance is void", "the previous rules no longer apply"
+  /\b(?:previous|prior|earlier|above|preceding|existing|original|initial|old|all)\s+(?:\w+\s+){0,2}(?:guidance|instructions?|rules|directions|directives?|prompts?|guidelines|constraints)\s+(?:is|are|have\s+been|has\s+been)\s+(?:now\s+)?(?:void|null|invalid|cancel+ed|revoked|obsolete|superseded|lifted|withdrawn|no\s+longer\s+(?:valid|apply|applies|in\s+effect))/i,
   /\b(?:ignora|olvida)\w*\s+(?:todas?\s+)?(?:las\s+)?instrucciones\s+(?:anteriores|previas)/i,
   /\b(?:ignore|oublie)\w*\s+(?:toutes\s+)?(?:les\s+)?instructions\s+(?:precedentes|anterieures)/i,
   /\b(?:ignorier|vergiss)\w*\s+(?:alle\s+)?(?:vorherigen|bisherigen|obigen)\s+(?:anweisungen|instruktionen|regeln)/i,
@@ -141,15 +144,21 @@ const INJECTION: RegExp[] = [
 const DESTRUCTIVE: RegExp[] = [
   // SQL
   /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX|VIEW|USER|ROLE|COLLECTION)|TRUNCATE(?:\s+TABLE)?\s+\w+|DELETE\s+FROM|ALTER\s+TABLE\s+\S+\s+DROP)\b/i,
+  // An UPDATE with no WHERE changes every row.
+  /\bUPDATE\s+[\w."`\[\]]+\s+SET\b(?![^;]*\bWHERE\b)/i,
   /\b(?:FLUSHALL|FLUSHDB)\b|\.(?:dropDatabase|drop)\(\s*\)|\.deleteMany\(\s*\{\s*\}\s*\)/i,
   // Shell: rm -rf in any spelling, find -delete, dd onto a device, shred, mkfs, the fork bomb
   /\brm\s+(?:-[a-z]*r[a-z]*|-[a-z]*R[a-z]*|--recursive)\b/i,
+  // ...with the recursive flag anywhere among its arguments: rm -f -r, rm -v --recursive
+  /\brm\b(?=[^\n;|&]*\s(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)\b)/,
+  // Recursive deletes from code: Python, Perl, Node, Ruby, Go, Rust
+  /\bshutil\.rmtree\b|\b(?:File::Path::)?(?:rmtree|remove_tree)\s*\(|\bfs(?:\.promises)?\.(?:rm|rmdir)(?:Sync)?\s*\([^)]*recursive\s*:\s*true|\brimraf\b|\bFileUtils\.(?:rm_r|rm_rf|remove_dir)\b|\bos\.RemoveAll\s*\(|\bremove_dir_all\s*\(/i,
   /\bfind\b[^\n|;&]*\s-delete\b|\bdd\b[^\n|;&]*\bof=\/dev\/|>\s*\/dev\/(?:sd|nvme|hd|disk)|\bshred\s+-|\bmkfs\b|\bwipefs\b|:\(\)\s*\{\s*:\|:&\s*\};:/i,
   /\bchmod\s+-R\s+0?777\s+\/|\bchown\s+-R\b[^\n]*\s\/(?:\s|$)/i,
   // Windows
   /\b(?:format\s+[a-z]:|del\s+\/[sq]\b|rd\s+\/s\b|rmdir\s+\/s\b|Remove-Item\b[^\n]*-Recurse)/i,
   // git
-  /\bgit\s+push\b[^\n;&|]*(?:\s-f\b|\s--force\b|\s--force-with-lease\b|\s\+\S)|\bgit\s+reset\s+--hard\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+branch\s+-D\b|\bgit\s+filter-branch\b/i,
+  /\bgit\s+push\b[^\n;&|]*(?:\s-[a-zA-Z]*f[a-zA-Z]*\b|\s--force\b|\s--force-with-lease\b|\s--mirror\b|\s--delete\b|\s-d\b|\s\+\S|\s:[^\s:]\S*)|\bgit\s+reset\s+--hard\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+branch\s+-D\b|\bgit\s+filter-branch\b/i,
   // Cloud and infrastructure
   /\bterraform\s+destroy\b|\bkubectl\s+delete\b|\bhelm\s+(?:uninstall|delete)\b|\baws\s+s3\s+(?:rm\b[^\n]*--recursive|rb\b)|\baws\s+\S+\s+delete-|\bgcloud\b[^\n]*\bdelete\b|\baz\b[^\n]*\bdelete\b|\bdocker\s+(?:system|volume)\s+prune\b/i,
 ];
@@ -192,6 +201,18 @@ function asciiDigit(d: string): string {
   let zero = d.codePointAt(0)!;
   while (/\p{Nd}/u.test(String.fromCodePoint(zero - 1)) && d.codePointAt(0)! - zero < 9) zero--;
   return String((d.codePointAt(0)! - zero) % 10);
+}
+
+/**
+ * A path as the tool will use it: `./.git/config` and `src/../.git/config` are `.git/config`,
+ * so a DenyArgs pattern written against the plain path can't be walked past. Values that don't
+ * look like a path (no slash, spaces, or a URL) are left as they are.
+ */
+export function normalizePath(value: string): string {
+  // Not a path: no slash, spaces (a command), or a URL (its // is part of it).
+  if (!value.includes("/") || /\s/.test(value) || /^[a-z][a-z0-9+.-]*:/i.test(value)) return value;
+  const normalized = posix.normalize(value.replace(/\\/g, "/"));
+  return normalized.replace(/^(\.\/)+/, "") || ".";
 }
 
 /**
@@ -494,6 +515,23 @@ export class PolicyEngine {
   }
 
   /** `text` with the agent's Redact rules applied and nothing blocked: for text the agent already wrote, sent back to it. */
+  /**
+   * Whether the agent's Redact or Block rules would touch this text: a search result line that
+   * holds a secret. Such lines are left out of search results altogether, because whether a search
+   * matched at all is enough to rebuild a secret one character at a time.
+   */
+  guardsText(agent: Agent, text: string): boolean {
+    const rules = this.rulesFor(agent);
+    for (const b of rules) if (b.rule.name === "Redact" && redact(text, b.rule.args) !== text) return true;
+    for (const b of rules) if (b.rule.name === "Block" && this.blocks(b, text)) return true;
+    return false;
+  }
+
+  /** Whether the agent has any Redact or Block rule. */
+  hasContentRules(agent: Agent): boolean {
+    return this.rulesFor(agent).some((b) => b.rule.name === "Redact" || b.rule.name === "Block");
+  }
+
   redactOnly(agent: Agent, text: string): string {
     let out = text;
     for (const b of this.rulesFor(agent)) if (b.rule.name === "Redact") out = redact(out, b.rule.args);
@@ -575,7 +613,7 @@ export class PolicyEngine {
       const values = argValues(field === undefined ? args : isRecord(args) ? args[field] : undefined);
       // A missing argument is checked as "", so an allow-list pattern like ^(?!bun test) also refuses its absence.
       if (field !== undefined && !values.length) values.push("");
-      const hit = values.find((v) => [v, normalizeForScan(v), unescapeJson(v)].some((t) => re.test(t)));
+      const hit = values.find((v) => [v, normalizeForScan(v), unescapeJson(v), normalizePath(v)].some((t) => re.test(t)));
       if (hit !== undefined) this.violate(b, `${target} was refused: ${field ? `its ${field}` : "an argument"} matches /${regex}/`, "tool", hooks);
     }
     const approver = rules.find(
@@ -625,11 +663,23 @@ function redactText(text: string, categories: string[]): string {
 }
 
 /** Whether a category's detector finds something in any reading of the text. */
+/** Categories that are also looked for in text spelled out one character at a time, or reversed. */
+const SPELLED_OUT = new Set(["APIKey", "CreditCard", "SSN"]);
+
+/** Runs of single characters joined by a separator ("s k - a n t", "4.2.4.2") put back together, and the text reversed. */
+function spelledOut(text: string): string[] {
+  const joined = text.replace(/(?:\S[ \t.·_,|]{1,3}){7,}\S/g, (run) => run.replace(/[ \t.·_,|]+/g, ""));
+  const reversed = [...text].reverse().join("");
+  return joined === text ? [reversed] : [joined, reversed, [...joined].reverse().join("")];
+}
+
 function detects(category: string, text: string, depth = 0): boolean {
   const detector = DETECTORS[category]!;
   const plain = unescapeJson(text);
   const views = [text, normalizeForScan(text), plain, normalizeForScan(plain)];
   if (WORD_CATEGORIES.has(category)) views.push(wordView(views[3]!));
+  // A key written with a space (or dot, dash) between its characters, or backwards, is still the key.
+  if (SPELLED_OUT.has(category)) views.push(...spelledOut(views[3]!));
   if (views.some((t) => detector.test(t))) return true;
   // Decoded base64 or hex is read the same way, one level deep (base64 inside base64 too).
   return depth < 2 && encodedRuns(views[3]!).some(({ decoded }) => detects(category, decoded, depth + 1));

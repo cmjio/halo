@@ -12,6 +12,13 @@
     "vscode": "^1.75.0"
   },
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode Halo highlights .halo files but doesn't start its language server, which reads the project's installed packages."
+    },
+    "virtualWorkspaces": false
+  },
   "activationEvents": [
     "onLanguage:halo"
   ],

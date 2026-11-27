@@ -119,6 +119,7 @@ pipeline ReviewBranch(base: String) -> Result:
 
 - Git runs directly, never through a shell. A ref or path that starts with `-` is refused, so a value can't become an option, and paths always follow `--`.
 - `commit` and `checkout` fail unless the tool is declared with `write: true`. `commit` skips hooks and signing; `author:` on the declaration sets the author.
+- Every call switches off what a repository's own config could use to run a program: `core.fsmonitor`, hooks (`core.hooksPath`), an external diff, a pager or editor, and `ext::` remotes. So a `.git/config` that something else wrote can't run code through a read-only `status` or `log`. (A `Workspace` can't write `.git` at all; see [Local Tools](./local-tools.md).)
 - Outputs are cut at `max_chars` (100,000) with `truncated: true`.
 
 ## `WebSearch`

@@ -30,6 +30,55 @@ const MAX_MATCHES = 200;
 const MAX_VISITS = 50_000;
 /** Folders skipped by list / glob / search (unless the path names one directly). */
 const SKIP = new Set(["node_modules", ".git"]);
+/**
+ * Files glob and search leave out unless the tool is declared `secrets: true`: environment
+ * files, private keys and credential files. A search that only says whether a line matched still
+ * tells a model a secret one character at a time, whatever Redact does to the line it returns.
+ */
+const SECRET_FILE = /^(?:\.env(?:\..*)?|.*\.(?:pem|key|p12|pfx|jks|keystore)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|\.netrc|\.pgpass|\.npmrc|\.pypirc|credentials(?:\.json)?|\.git-credentials)$/i;
+const isSecretFile = (rel: string) => SECRET_FILE.test(rel.slice(rel.lastIndexOf("/") + 1));
+
+/** How long a regex search may run before it is stopped, so a pattern that backtracks forever can't stall every run. */
+const REGEX_BUDGET_MS = 5_000;
+/** Lines sent to the regex worker at a time. */
+const REGEX_BATCH_BYTES = 8_000_000;
+
+const REGEX_WORKER = `self.onmessage = (e) => {
+  const { source, flags, lines, max } = e.data;
+  let re;
+  try { re = new RegExp(source, flags); } catch (err) { postMessage({ error: String(err && err.message || err) }); return; }
+  const hits = [];
+  for (let i = 0; i < lines.length && hits.length < max; i++) if (re.test(lines[i])) hits.push(i);
+  postMessage({ hits });
+};`;
+let regexWorkerUrl: string | undefined;
+
+/**
+ * Run a model's regex over lines on a worker thread: a pattern like ^(a+)+$ can take minutes on
+ * one line, and on the main thread that would stop every run in the process. The worker is
+ * stopped when the time is up, and the search fails.
+ */
+async function regexHits(call: ToolCall, source: string, flags: string, lines: string[], max: number, deadline: number): Promise<number[]> {
+  regexWorkerUrl ??= URL.createObjectURL(new Blob([REGEX_WORKER], { type: "application/javascript" }));
+  const worker = new Worker(regexWorkerUrl);
+  try {
+    return await new Promise<number[]>((done, fail) => {
+      const timer = setTimeout(() => fail(argError(call, `the regex took longer than ${REGEX_BUDGET_MS / 1000}s and was stopped: use a simpler pattern (nested repeats like (a+)+ can take forever)`)), Math.max(1, deadline - Date.now()));
+      worker.onmessage = (e: MessageEvent<{ hits?: number[]; error?: string }>) => {
+        clearTimeout(timer);
+        if (e.data.error) fail(argError(call, `bad regex: ${e.data.error}`));
+        else done(e.data.hits ?? []);
+      };
+      worker.onerror = (e) => {
+        clearTimeout(timer);
+        fail(argError(call, `regex search failed: ${e.message}`));
+      };
+      worker.postMessage({ source, flags, lines, max });
+    });
+  } finally {
+    worker.terminate();
+  }
+}
 
 const METHODS = ["read", "write", "edit", "list", "glob", "search", "delete", "mkdir"];
 
@@ -106,7 +155,21 @@ export function confine(call: ToolCall, root: string, path: unknown, keepLast = 
   }
   if (!within(root, real)) throw argError(call, `"${path}" resolves outside the workspace (through a symlink)`);
   const abs = join(real, ...rest);
+  insideGit(call, path, abs);
   return { abs, rel: relative(root, abs).split(sep).join("/") || "." };
+}
+
+/**
+ * A repository's .git folder is code: its config names programs git runs (core.fsmonitor,
+ * hooks, filters), so writing .git/config is running a command at the next git call, even a
+ * read-only one. Paths inside a .git folder are refused unless the tool is declared `git: true`.
+ * The resolved path is checked, so `./.git`, `src/../.git` and a different case all count.
+ */
+function insideGit(call: ToolCall, path: string, abs: string): void {
+  if (call.config("git") === true) return;
+  if (abs.split(sep).some((part) => part.toLowerCase() === ".git")) {
+    throw argError(call, `"${path}" is inside a .git folder, which a Workspace can't read or change (git runs programs named in it). Declare the tool with git: true if it must`);
+  }
 }
 
 /** Byte-sniff for binary content: a NUL in the first 8KB. */
@@ -240,15 +303,17 @@ export const workspace: ToolProvider = async (call) => {
       const glob = new Bun.Glob(pattern);
       const matches: string[] = [];
       // Matched against walked paths, so a pattern with ../ or an absolute path simply matches nothing.
+      const secrets = call.config("secrets") === true;
       const cut = walk(root, root, 64, (e) => {
-        if (e.type !== "dir" && glob.match(e.rel)) matches.push(e.rel);
+        if (e.type !== "dir" && glob.match(e.rel) && (secrets || !isSecretFile(e.rel))) matches.push(e.rel);
         return matches.length < MAX_ENTRIES;
       });
       return { pattern, matches, ...(cut ? { truncated: true } : {}) };
     }
 
     case "search": {
-      const pattern = need(call, "pattern: (the text to find)", named.pattern ?? named.query ?? call.positional[0]);
+      // Only `pattern`: another name for it would get past a DenyArgs written against "pattern".
+      const pattern = need(call, "pattern: (the text to find)", named.pattern ?? call.positional[0]);
       const ignoreCase = named.ignore_case === true;
       let re: RegExp;
       try {
@@ -262,9 +327,21 @@ export const workspace: ToolProvider = async (call) => {
       const startStat = lstatOrNull(start);
       if (!startStat) throw argError(call, `no file or folder "${startRel}"`);
       let cut = false;
+      const secrets = call.config("secrets") === true;
       if (startStat.isFile()) files.push({ rel: startRel, abs: start, type: "file", depth: 0 });
-      else cut = walk(root, start, 64, (e) => (e.type === "file" && (!filter || filter.match(e.rel)) && files.push(e), true));
+      else cut = walk(root, start, 64, (e) => (e.type === "file" && (!filter || filter.match(e.rel)) && (secrets || !isSecretFile(e.rel)) && files.push(e), true));
       const matches: Array<{ path: string; line: number; text: string }> = [];
+      // A plain-text search can't backtrack, so it runs here; a model's regex runs on a worker, against a deadline.
+      const deadline = Date.now() + REGEX_BUDGET_MS;
+      let batch: Array<{ path: string; line: number; text: string }> = [];
+      let batchBytes = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        const hits = await regexHits(call, re.source, re.flags, batch.map((l) => l.text), MAX_MATCHES - matches.length, deadline);
+        for (const i of hits) matches.push({ ...batch[i]!, text: batch[i]!.text.slice(0, 300) });
+        batch = [];
+        batchBytes = 0;
+      };
       for (const f of files) {
         if (matches.length >= MAX_MATCHES) break;
         // Symlinked files are never followed (walk reports them as "symlink"), and big or binary files are skipped.
@@ -273,10 +350,17 @@ export const workspace: ToolProvider = async (call) => {
         const bytes = new Uint8Array(await file.arrayBuffer());
         if (looksBinary(bytes)) continue;
         const lines = new TextDecoder().decode(bytes).split("\n");
-        for (let i = 0; i < lines.length && matches.length < MAX_MATCHES; i++) {
-          if (re.test(lines[i]!)) matches.push({ path: f.rel, line: i + 1, text: lines[i]!.slice(0, 300) });
+        if (named.regex !== true) {
+          for (let i = 0; i < lines.length && matches.length < MAX_MATCHES; i++) {
+            if (re.test(lines[i]!)) matches.push({ path: f.rel, line: i + 1, text: lines[i]!.slice(0, 300) });
+          }
+          continue;
         }
+        for (let i = 0; i < lines.length; i++) batch.push({ path: f.rel, line: i + 1, text: lines[i]! });
+        batchBytes += bytes.length;
+        if (batchBytes >= REGEX_BATCH_BYTES) await flush();
       }
+      if (matches.length < MAX_MATCHES) await flush();
       return { pattern, matches, ...(cut || matches.length >= MAX_MATCHES ? { truncated: true } : {}) };
     }
 

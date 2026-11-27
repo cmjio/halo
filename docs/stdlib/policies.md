@@ -20,7 +20,7 @@ agent Refunder [openai/gpt-4o-mini]
 | `Redact(cat, ...)` | prompt, answer, and tool calls | Replaces matches with `[REDACTED:<cat>]` |
 | `MaxWords(n)`, `MaxChars(n)` | answer | Fails above the limit |
 | `MaxTokens(n)` | answer | Fails if the provider reports more than `n` completion tokens |
-| `MaxSpend(usd)` | before and after each call | Fails once the **run's** cost reaches the limit. Each call's reply is capped (`max_tokens`, sent even to providers with no default) so the call fits in what is left, and calls in flight count at their most, so parallel calls (`|*`, `each`) can't overshoot it: a call that doesn't fit waits for those in flight to finish, and near the limit replies get shorter. If a run fails, calls already sent still count in its cost |
+| `MaxSpend(usd)` | before and after each call | Fails once the **run's** cost reaches the limit. Each call's reply is capped (`max_tokens`, sent even to providers with no default) so the call fits in what is left, and calls in flight count at their most, so parallel calls (`|*`, `each`) can't overshoot it: a call that doesn't fit waits for those in flight to finish, and near the limit replies get shorter. If a run fails, calls already sent still count in its cost. It needs each model's exact price: a call to a model Halo has no price for is refused before it is sent. See [Model prices](#model-prices) |
 | `Require(JSON)`, `Enforce(JSON)` | answer | Fails unless the answer is JSON. An answer that wraps its JSON in prose or a ```` ```json ```` fence counts, and the JSON is what the agent returns |
 | `Require(XML)` | answer | Fails unless the answer is well-formed XML |
 | `Require(Citation)` | answer | Fails unless the answer cites like `[1]` or `[doc_id]` |
@@ -36,7 +36,9 @@ Both apply everywhere text crosses the agent's boundary, so a model talked into 
 - **In:** the prompt, a `system:` given on the call (it can carry pipeline data), the results of tools it calls, and its own rejected answer when `@correct` sends it back (redacted, or withheld if a `Block` rule would stop it). The agent's declared `system` and skills are your text and are sent as written.
 - **Out:** the answer, and the arguments of every tool call the agent chooses. A call whose arguments a `Block` rule matches is refused (a violation with `phase: "tool"`), and `Redact` masks the arguments before the tool sees them.
 
-They also read the text the ways a model can be asked to disguise it: look-alikes folded (fullwidth and other-script digits, accents, invisible characters, Cyrillic and Greek letters that look Latin, dash and space look-alikes, soft hyphens), HTML entities and `%` escapes decoded, digits spread out or split by `_`, `/`, `*` or HTML tags (`1 2 3 - 4 5 - 6 7 8 9`), emails spelled out (`bob [at] example [dot] com`, `bob at example dot com`), defanged IPs (`10[.]0[.]0[.]1`), and base64 or hex runs decoded. The word categories (`PromptInjection`, `DestructiveOps`, `Profanity`) also read the text with comments and tags removed (`DROP/**/TABLE`), spread-out letters joined (`I-g-n-o-r-e`), and digits for letters undone (`1gn0re`). Objects are read field by field (keys and numbers too), and an output's redacted or blocked text is what telemetry and Studio keep.
+**`Block` and `Redact` are filters, so they're best-effort.** They catch the common spellings and the disguises below, but someone determined can always word an instruction or a command another way. Use them to catch the obvious, and keep what must never happen behind structure: `ApproveEffects(write, external)` so a person says yes first, a [sandbox](./remote.md) for code, a database role that can only read, and tool rules (`AllowTools`, `DenyArgs`, `Fixed`) that limit what a call can be at all.
+
+They also read the text the ways a model can be asked to disguise it: a key, card or SSN spelled out one character at a time (`s k - a n t - …`) or written backwards, look-alikes folded (fullwidth and other-script digits, accents, invisible characters, Cyrillic and Greek letters that look Latin, dash and space look-alikes, soft hyphens), HTML entities and `%` escapes decoded, digits spread out or split by `_`, `/`, `*` or HTML tags (`1 2 3 - 4 5 - 6 7 8 9`), emails spelled out (`bob [at] example [dot] com`, `bob at example dot com`), defanged IPs (`10[.]0[.]0[.]1`), and base64 or hex runs decoded. The word categories (`PromptInjection`, `DestructiveOps`, `Profanity`) also read the text with comments and tags removed (`DROP/**/TABLE`), spread-out letters joined (`I-g-n-o-r-e`), and digits for letters undone (`1gn0re`). Objects are read field by field (keys and numbers too), and an output's redacted or blocked text is what telemetry and Studio keep.
 
 ### Images and documents
 
@@ -49,7 +51,7 @@ The detectors are patterns, so they are one layer, not a guarantee: they can't s
 | Category | `Block` | `Redact` | Detects |
 |---|---|---|---|
 | `PromptInjection` | ✓ | | "ignore previous instructions", "new instructions:", chat-template role markers, "reveal the system prompt", "you are now DAN", the same in Spanish, French, German, Portuguese and Italian… |
-| `DestructiveOps` | ✓ | | `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, `rm -r`/`-rf`/`--recursive`, `find -delete`, `dd of=/dev/…`, `git push --force`, `git reset --hard`, `git clean -f`, `mkfs`, `terraform destroy`, `kubectl delete`, `aws s3 rm --recursive`… |
+| `DestructiveOps` | ✓ | | `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, an `UPDATE … SET` with no `WHERE`, `rm` with `-r`/`-R`/`--recursive` anywhere among its flags, `shutil.rmtree` and the other languages' recursive deletes, `find -delete`, `dd of=/dev/…`, `git push --force`/`-f`/`--mirror`/`--delete`, `git reset --hard`, `git clean -f`, `mkfs`, `terraform destroy`, `kubectl delete`, `aws s3 rm --recursive`… |
 | `Profanity` | ✓ | | a short English word list |
 | `Markdown` | ✓ | | bold, headings, code fences |
 | `PII` | ✓ | ✓ | SSN, credit card, email, and phone |
@@ -57,6 +59,35 @@ The detectors are patterns, so they are one layer, not a guarantee: they can't s
 | `IPAddress` | ✓ | ✓ | IPv4 addresses |
 
 The detectors are regular expressions. They catch common patterns, not every possible variant.
+
+### Model prices
+
+`MaxSpend` counts each call at its model's price. Halo looks for one in this order:
+
+1. What the provider says it billed, when it says (OpenRouter's `usage.cost`). This counts after the call.
+2. `"prices"` in halo.json, in USD per million tokens, keyed by the model as you wrote it in the `.halo` file.
+3. Halo's own table: the Claude models on [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing) (Haiku 5.5 at its higher price when the prompt is over 100,000 tokens), a few OpenAI and Gemini models, and `ollama/` models, which are free.
+
+```json
+{
+  "prices": {
+    "openrouter/acme/big-model": { "input": 2.5, "output": 10 },
+    "vllm/my-model": { "input": 0, "output": 0 }
+  }
+}
+```
+
+The table matches a model only by its exact id (a dated snapshot like `-20250929` counts as its model). It doesn't guess from a name: `anthropic/claude-3-5-sonnet` has no price, and nor does any OpenRouter, Together, Replicate or other OpenAI-compatible model until you add one.
+
+Under `MaxSpend`, a call to a model with no price is refused before it is sent, since the limit couldn't be kept:
+
+```
+MaxSpend can't be enforced: Halo has no price for openrouter/openai/o1-pro. Add it to "prices" in halo.json, in USD per million tokens: {"prices": {"openrouter/openai/o1-pro": {"input": ..., "output": ...}}}
+```
+
+It is a violation like any other (`rule: "MaxSpend"`, `phase: "budget"`). Without `MaxSpend` such a call still runs, and its cost is a rough estimate: its `llm` event and its entry in the run's calls say `priced: false`. `halo plan` says "no price" for these models, and leaves the run's worst case unknown.
+
+Prices change. Halo's table is what the pricing page said when this Halo was released; add a model to `"prices"` to use a newer price, or a discount you have.
 
 ## Tool rules
 

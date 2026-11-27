@@ -11,6 +11,7 @@ import { applyPreset } from "./runtime/presets.js";
 import { withSandbox } from "./runtime/sandbox-agents.js";
 import type { Agent, CallStage, ParseResult, PipelineDeclaration, PipelineStage } from "./parser/types.js";
 import { AdapterRegistry } from "./runtime/adapter.js";
+import { costAt, priceOf, type Prices } from "./runtime/prices.js";
 import { toolMatches } from "./runtime/policies.js";
 import type { ProviderInfo, ToolEffect, ToolMethod } from "./runtime/tools.js";
 import { stageLabel } from "./parser/labels.js";
@@ -57,6 +58,8 @@ export interface Plan {
 export interface PlanOptions {
   providerInfo(provider: string): ProviderInfo | undefined;
   adapters?: AdapterRegistry;
+  /** halo.json "prices" (USD per million tokens, by model), which win over the adapters' tables. */
+  prices?: Prices;
 }
 
 const DEFAULT_MAX_TOKENS = 4096;
@@ -128,13 +131,17 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
 
   const callCost = (agent: Agent, stage: CallStage, turns: number) => {
     const adapter = adapters.findAdapter(agent.modelId);
-    if (!adapter?.estimateCost) return undefined;
     const written = stage.argList.map((a) => (a.value.kind === "string" ? a.value.value : "")).join(" ") + (agent.system ?? "");
     const maxTokens = Number(stage.namedArgs.max_tokens ?? agent.params.max_tokens ?? DEFAULT_MAX_TOKENS);
     const input = Math.ceil(written.length / 3) + ASSUMED_INPUT_TOKENS;
     // Each turn of a tool conversation resends the conversation so far: count it growing by a reply per turn.
     let total = 0;
-    for (let t = 0; t < turns; t++) total += adapter.estimateCost(agent.modelId, input + t * maxTokens, maxTokens);
+    // Only an exact price counts (a model's price can depend on the prompt's size).
+    for (let t = 0; t < turns; t++) {
+      const price = priceOf(agent.modelId, input + t * maxTokens, adapter, options.prices);
+      if (!price) return undefined;
+      total += costAt(price, input + t * maxTokens, maxTokens);
+    }
     return total;
   };
 
@@ -203,6 +210,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
       }
       if (toolset.length) step.notes.push(`chooses its own calls, up to ${maxSteps} steps`);
       step.maxCost = callCost(agent, stage, toolset.length ? maxSteps + 1 : 1);
+      if (step.maxCost === undefined) step.notes.push(`no price for ${agent.modelId}${rulesOf(agent).some((r) => r.name === "MaxSpend") ? ": MaxSpend will refuse its calls (add it to \"prices\" in halo.json)" : ` (add it to "prices" in halo.json)`}`);
       steps.push(step);
       return;
     }
@@ -250,7 +258,9 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
 
   const multiplier = (times?: string) => (times?.match(/×(\d+)/g) ?? []).reduce((n, m) => n * Number(m.slice(1)), 1);
   const costs = steps.filter((s) => s.maxCost !== undefined);
-  const maxCost = unbounded ? undefined : costs.reduce((sum, s) => sum + s.maxCost! * multiplier(s.times), 0);
+  // A model with no price makes the worst case unknown: leaving it out would understate it.
+  const unpriced = [...new Set(steps.filter((s) => (s.kind === "model" || s.kind === "agent-tools") && s.maxCost === undefined).map((s) => s.model!))];
+  const maxCost = unbounded || unpriced.length ? undefined : costs.reduce((sum, s) => sum + s.maxCost! * multiplier(s.times), 0);
   const spendLimits = [...agents.values()].flatMap((a) => rulesOf(a).filter((r) => r.name === "MaxSpend").map((r) => ({ agent: a.name, policy: r.policy, limit: Number(r.args[0]) })));
   // MaxSpend counts the whole run's spend, so the highest limit among the calling agents bounds it.
   const callers = new Set(steps.filter((s) => s.agent).map((s) => s.agent!));
@@ -269,7 +279,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
     })),
     maxCost,
     cappedAt,
-    costNote: unbounded ? "depends on how many items `each` gets" : costs.length < steps.filter((s) => s.kind === "model" || s.kind === "agent-tools").length ? "some models have no price list" : undefined,
+    costNote: unbounded ? "depends on how many items `each` gets" : unpriced.length ? `no price for ${unpriced.join(", ")}` : undefined,
     spendLimits: spendLimits.map((l) => ({ ...l, agent: show(l.agent), policy: show(l.policy) })),
   };
 }
@@ -279,7 +289,7 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
   const lines: string[] = [color.bold(`Plan for ${p.pipeline}`), ""];
   const tag = (e: string) => (e === "external" ? color.red("external") : e === "wallet" ? color.red("wallet") : e === "write" ? color.yellow("write") : e === "read" ? "read" : color.dim("unknown"));
   for (const s of p.steps) {
-    const cost = s.maxCost !== undefined ? color.dim(` ≤ $${s.maxCost.toFixed(4)}`) : "";
+    const cost = s.maxCost !== undefined ? color.dim(` ≤ $${s.maxCost.toFixed(4)}`) : s.kind === "model" || s.kind === "agent-tools" ? color.yellow(" no price") : "";
     lines.push(`  ${s.at.padEnd(6)} ${s.label}${s.model ? color.dim(` [${s.model}]`) : ""}${s.times ? color.dim(` (${s.times})`) : ""}${cost}`);
     for (const e of s.effects) lines.push(`         ${e.via ? "may call" : "calls"} ${e.target}: ${tag(e.effect)}${e.approval ? color.yellow(` · needs approval (${e.approval})`) : ""}`);
     for (const n of s.notes) lines.push(color.dim(`         ${n}`));
@@ -293,7 +303,7 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
   lines.push(`${color.bold("Needs a person's approval:")} ${approved.length ? approved.join(", ") : "nothing"}`);
   if (unknown.length) lines.push(`${color.bold("Effects not described:")} ${unknown.join(", ")}`);
   const capped = p.cappedAt !== undefined && (p.maxCost === undefined || p.cappedAt < p.maxCost) ? `, but MaxSpend stops the run at $${p.cappedAt.toFixed(2)}` : "";
-  lines.push(`${color.bold("Worst-case model cost:")} ${p.maxCost !== undefined ? `$${p.maxCost.toFixed(4)}` : "unbounded"}${capped}${p.costNote ? color.dim(` (${p.costNote})`) : ""}`);
+  lines.push(`${color.bold("Worst-case model cost:")} ${p.maxCost !== undefined ? `$${p.maxCost.toFixed(4)}` : p.costNote?.startsWith("no price") ? "unknown" : "unbounded"}${capped}${p.costNote ? color.dim(` (${p.costNote})`) : ""}`);
   for (const l of p.spendLimits) lines.push(`${color.bold("Spend limit:")} ${l.agent} stops once the run has spent $${l.limit.toFixed(2)} (policy ${l.policy})`);
   return lines.join("\n");
 }

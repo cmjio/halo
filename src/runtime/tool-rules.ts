@@ -24,7 +24,10 @@ export const TOOL_ARG_RULES = ["Fixed", "Match", "Locked", "Unlocked"] as const;
 /** Arguments a model may not set unless the tool says `Unlocked(...)`, by provider. */
 export const DEFAULT_LOCKED: Record<string, string[]> = {
   // A POST tool is bound to the address it declares; the path under it is the author's to choose.
-  POST: ["path"],
+  // `query:` is a raw query string: a model could put any parameter in it, past Locked, Fixed and Match.
+  POST: ["path", "query"],
+  GET: ["query"],
+  REST: ["query"],
 };
 
 export interface ArgRules {
@@ -101,6 +104,15 @@ export function constrain(tool: ToolDeclaration, method: string, named: Record<s
       throw new ToolRuleViolation(`${target} was refused: ${name} is fixed by the tool (Fixed("${name}", …)) and can't be set to ${shown(named[name]).slice(0, 80)}`, tool.name, "Fixed");
     }
     out[name] = fixed;
+  }
+  // A raw query string can't set an argument the rules govern, whoever writes it: the URL and the
+  // body are often merged by the server, so `query: "amount=99999"` would get past Match("amount").
+  if (typeof out.query === "string" && out.query) {
+    for (const key of new Set(new URLSearchParams(out.query).keys())) {
+      if (rules.fixed.has(key) || rules.match.has(key) || (byModel && rules.locked.has(key))) {
+        throw new ToolRuleViolation(`${target} was refused: ${key} can't be set through query: (the tool has a rule for ${key}); pass it as its own argument`, tool.name, rules.fixed.has(key) ? "Fixed" : rules.match.has(key) ? "Match" : "Locked");
+      }
+    }
   }
   for (const [name, patterns] of rules.match) {
     // A missing argument is checked as "", so a pattern that needs something also needs the argument.
