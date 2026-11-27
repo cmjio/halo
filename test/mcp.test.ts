@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "../src/parser/index.js";
+import { formatPlan, plan } from "../src/plan.js";
 import type { ToolDeclaration } from "../src/parser/types.js";
 import { HaloRuntime, type RuntimeEvent } from "../src/runtime/runtime.js";
 import { HaloError } from "../src/runtime/errors.js";
@@ -206,6 +207,38 @@ describe("MCP client over stdio", () => {
     // `sleep` never answers initialize.
     const err: any = await mcpProvider(call({ 0: "sleep 5", timeout_ms: 200 }, "echo", { text: "x" }), services).catch((e: any) => e);
     expect(err.code).toBe("TIMEOUT");
+  });
+});
+
+describe("halo plan and MCP tools", () => {
+  const src = (rules: string) => `tool Git : MCP("npx -y @modelcontextprotocol/server-github")
+policy G : MaxSteps(5)${rules}
+agent Bot [openai/gpt-4o-mini]
+  equips Git
+  requires G
+pipeline P(x: String) -> Result:
+  x |> Git.list_issues(repo: x) |> Bot.tend("Tend {{x}}", tools: [Git])`;
+  const shown = (rules = "") => {
+    const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
+    return plan(parse(src(rules)), "P", { providerInfo: (p) => rt.toolProviderInfo(p) });
+  };
+
+  test("an MCP tool's methods and effects are unknown, and unknown is never 'nothing'", () => {
+    const p = shown();
+    const text = formatPlan(p);
+    expect(text).toContain("calls Git.list_issues: unknown");
+    expect(text).toContain("its server says what this does only at run time");
+    expect(text).toContain("may call Git.*: unknown");
+    expect(text).toContain("Git's methods, and what they do, are unknown until its server is asked at run time");
+    expect(text).toContain("Acts on the world without asking: maybe Git.list_issues, Git.* (effect unknown)");
+    expect(text).not.toContain("Acts on the world without asking: nothing");
+    expect(text).toContain("Effects unknown: Git.list_issues, Git.*");
+  });
+
+  test("ApproveTools for the whole tool counts as asking", () => {
+    const text = formatPlan(shown(` & ApproveTools("Git")`));
+    expect(text).toContain("may call Git.*: unknown · needs approval (G)");
+    expect(text).toContain("Acts on the world without asking: maybe Git.list_issues (effect unknown)");
   });
 });
 

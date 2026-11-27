@@ -98,7 +98,7 @@ Halo opens one connection per declaration and reuses it across calls and runs. I
 
 Annotations are hints from the server, and a server can say anything. A server that marks a destructive tool `readOnlyHint: true` gets past `AllowEffects(read)`. To rely on a policy, name tools: `AllowTools("Git.list_pull_requests", "Git.get_pull_request")`.
 
-`halo plan` doesn't start servers, so it can't list an MCP tool's methods or their effects. It shows them as `Git.*`, with the effect not described.
+`halo plan` doesn't start servers, so it can't list an MCP tool's methods or their effects. It shows them as `Git.*: unknown`, and its summary counts them as `maybe Git.* (effect unknown)` under "Acts on the world without asking", never as nothing. A rule that sends every call of the tool to a person, such as `ApproveTools("Git")`, counts as asking.
 
 ## Exposing pipelines as MCP tools
 
