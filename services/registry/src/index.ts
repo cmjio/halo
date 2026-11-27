@@ -2,7 +2,7 @@
  * halo-registry: the Halo package registry at registry.halolang.com.
  *
  *   v1/*            the JSON API (src/registry/contract.ts lists every route)
- *   /, /@s/n, /@s/n/v/<version>   package pages (HTML)
+ *   /, /@s, /@s/n, /@s/n/v/<version>   browse, publisher and package pages (HTML)
  *
  * D1 (DB) holds accounts, scopes and versions; R2 (PACKAGES) holds the package files.
  * See services/registry/README.md and proposals/halo-registry.md.
@@ -13,7 +13,7 @@ import { authenticate, createToken, deleteToken, listTokens, pollDevice, startDe
 import type { Ctx, Env } from "./env.ts";
 import { CORS_HEADERS, errorResponse, fail, HttpError, json, now, secured, withHeaders } from "./http.ts";
 import { deleteDistTag, deprecate, getDoc, getFile, getIndex, publish, putDistTag, search, yank } from "./packages.ts";
-import { homePage, packagePage } from "./pages.ts";
+import { homePage, packagePage, scopePage } from "./pages.ts";
 import { getStats } from "./stats.ts";
 import { createScope, deleteMember, getScopeDoc, putMember, verifyScope } from "./scopes.ts";
 
@@ -80,6 +80,7 @@ async function route(req: Request, env: Env, ctx: Ctx): Promise<Response> {
   if (path === "" || path === "index.html") return homePage(url, env);
   if ((r = m(`${PKG}/v/${SEG}`))) return packagePage(env, ctx, packageName(r[1]!), r[2]!);
   if ((r = m(PKG))) return packagePage(env, ctx, packageName(r[1]!));
+  if ((r = m("(@[^/]+)"))) return scopePage(env, ctx, r[1]!);
   if (path === "robots.txt") return new Response("User-agent: *\nDisallow: /v1/\n", { headers: { "content-type": "text/plain" } });
   return new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
 }

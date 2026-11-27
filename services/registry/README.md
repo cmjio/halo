@@ -26,7 +26,7 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `../../src/registry/check.ts` | Not in this folder: `checkPackageFiles`, shared with the CLI. Runs the linker's `analyzePackage` on the package's `.halo` files and returns the exports, the permissions and the problems that refuse a publish (syntax errors, hard-coded models in a package that isn't hosted, undeclared model slots, names declared twice in exported files, `use` outside the package or its dependencies, no README, hosted pipelines without interfaces). `halo publish` runs the same function, so the client refuses what the server refuses. |
 | `src/markdown.ts` | A small Markdown renderer that escapes all raw HTML and drops unsafe links. Inline syntax is one left-to-right scan of the raw text: only `anchor()` writes an attribute, from a URL taken from the source and checked by `safeUrl` (http(s), mailto or relative; no quotes, angle brackets, backticks, backslashes, whitespace or controls). Finished HTML is never fed back into a URL. |
 | `src/stats.ts` | Stats: downloads from `downloads_daily`, and dependents. Dependents follow each package's latest version only; one recursive CTE (over `json_each` of the dependencies) finds the edges that lead to the package, and a breadth-first search over them gives depths and shortest chains, so cycles end. |
-| `src/pages.ts` | The HTML pages. No scripts, no external assets; dark-mode aware. |
+| `src/pages.ts` | The HTML pages: home, browse (filters from `browsePackages` in `packages.ts`), publisher and package pages. A package page leads with what it can do (computed permissions, and what it can't), then model slots, README, exports (hosted interfaces with signatures), versions and dependents. No scripts, no external assets; dark-mode aware. |
 | `src/endpoints.ts` | Hosted endpoints must be https on a public host (no localhost, loopback, private, link-local, `.local`/`.internal` names, or bare IPs in those ranges, IPv4 or IPv6). The shared `hostedEndpointConcern` runs first, then a stricter pass. `ALLOW_LOCAL_HOSTED_ENDPOINTS=true` turns it off for local registries; the e2e test sets it with `wrangler dev --var`. |
 | `src/env.ts` | The bindings, typed structurally, so the code also type-checks and runs under `bun test`. |
 
@@ -49,7 +49,7 @@ One Worker, three Cloudflare products. No Durable Objects or Queues.
 | `POST v1/scopes`, `GET v1/scopes/@s` | create an org scope `{ scope }` → `ScopeDoc` (needs a full token) |
 | `PUT`/`DELETE v1/scopes/@s/members/<login>` | `{ role: "owner" \| "publisher" }` |
 | `POST v1/scopes/@s/verify` | `{ domain }` → `{ record, value, verified }` |
-| `GET /`, `/?q=`, `/@s/n`, `/@s/n/v/<version>` | HTML pages |
+| `GET /`, `/?q=&kind=&hosted=1&verified=1&sort=&page=`, `/@s`, `/@s/n`, `/@s/n/v/<version>` | HTML pages: home, browse and search (filtered by export kind, hosted, verified), publisher, package |
 
 ## Publishing and races
 

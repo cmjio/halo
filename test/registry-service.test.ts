@@ -468,7 +468,7 @@ describe("scopes", () => {
     expect(((await (await h.call("GET", "v1/scopes/@acme")).json()) as { verified: string }).verified).toBe("acme.com");
     // ...is purged, so the badge shows.
     expect(((await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc).verified).toBe("acme.com");
-    expect(await (await h.call("GET", "@acme/zendesk")).text()).toContain("verified: acme.com");
+    expect(await (await h.call("GET", "@acme/zendesk")).text()).toContain("✓ acme.com");
     // Only owners verify.
     const other = await h.login("eve", 3);
     expect((await h.call("POST", "v1/scopes/@acme/verify", { token: other, json: { domain: "acme.com" } })).status).toBe(403);
@@ -762,7 +762,7 @@ describe("yank, deprecate, dist-tags", () => {
     let doc = (await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc;
     expect(doc.versions["1.0.0"]!.deprecated).toBe("Use 2.x");
     expect(doc.versions["2.0.0"]!.deprecated).toBeUndefined();
-    expect(await (await h.call("GET", "@acme/zendesk/v/1.0.0")).text()).toContain("deprecated: Use 2.x");
+    expect(await (await h.call("GET", "@acme/zendesk/v/1.0.0")).text()).toContain("<b>Deprecated.</b> <span>Use 2.x");
 
     expect((await h.call("POST", "v1/packages/@acme/zendesk/deprecate", { token, json: { range: "1.0.0", message: "" } })).status).toBe(200);
     doc = (await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc;
@@ -863,6 +863,52 @@ describe("pages", () => {
 
     expect((await h.call("GET", "@acme/nope")).status).toBe(404);
     expect((await h.call("GET", "@acme/support-kit/v/9.9.9")).status).toBe(404);
+  });
+
+  test("browse: filter by export kind, sort, and counts on the filters", async () => {
+    const h = harness();
+    await setupAcme(h);
+    const home = await (await h.call("GET", "")).text();
+    expect(home).toContain("Most installed");
+    expect(home).toContain('href="/?kind=pipelines"');
+
+    const pipelines = await (await h.call("GET", "?kind=pipelines")).text();
+    expect(pipelines).toContain('href="/@acme/support-kit"');
+    expect(pipelines).not.toContain('href="/@acme/zendesk"');
+    expect(pipelines).toContain("1 package");
+
+    const all = await (await h.call("GET", "?sort=name")).text();
+    expect(all.indexOf('href="/@acme/support-kit"')).toBeLessThan(all.indexOf('href="/@acme/zendesk"'));
+    expect(all).toContain("2 packages");
+
+    // Unknown filters are ignored rather than reaching SQL.
+    const odd = await h.call("GET", "?kind=tools')--&sort=drop&page=-3");
+    expect(odd.status).toBe(200);
+    expect(await (await h.call("GET", "?verified=1")).text()).toContain("Nothing matches.");
+  });
+
+  test("publisher page lists a scope's packages; unknown scopes are 404", async () => {
+    const h = harness();
+    await setupAcme(h);
+    const res = await h.call("GET", "@acme");
+    expect(res.status).toBe(200);
+    const page = await res.text();
+    expect(page).toContain('href="/@acme/support-kit"');
+    expect(page).toContain('href="/@acme/zendesk"');
+    expect(page).toContain("<b>2</b>packages");
+    expect(page).toContain("Unverified");
+    expect((await h.call("GET", "@nobody")).status).toBe(404);
+    expect(await (await h.call("GET", "@acme/zendesk")).text()).toContain('href="/@acme"');
+  });
+
+  test("permissions say what a package can and can't do", async () => {
+    const h = harness();
+    await setupAcme(h);
+    const page = await (await h.call("GET", "@acme/zendesk")).text();
+    expect(page).toContain("Reads environment variables");
+    expect(page).toContain("It can't");
+    expect(page).toContain("Run its own code (it's declarations only)");
+    expect(page).toContain("Worked out by the registry");
   });
 
   test("README HTML is escaped: no script, no event handlers, no javascript: links", async () => {
@@ -1515,14 +1561,14 @@ describe("security", () => {
     const doc = await getDocNow();
     expect(doc.versions["1.1.0"]!.yanked).toBe("broken auth");
     expect(doc.distTags.latest).toBe("1.0.0");
-    expect(await (await h.call("GET", "@acme/zendesk/v/1.1.0")).text()).toContain("yanked: broken auth");
+    expect(await (await h.call("GET", "@acme/zendesk/v/1.1.0")).text()).toContain("<b>Yanked.</b> <span>broken auth");
     expect(await (await h.call("GET", "@acme/zendesk")).text()).toContain("v1.0.0 · latest");
 
     await inColo(otherColo, async () => {
       expect((await h.call("POST", "v1/packages/@acme/zendesk/deprecate", { token, json: { range: "<1.1.0", message: "Use 1.1" } })).status).toBe(200);
     });
     expect((await getDocNow()).versions["1.0.0"]!.deprecated).toBe("Use 1.1");
-    expect(await (await h.call("GET", "@acme/zendesk/v/1.0.0")).text()).toContain("deprecated: Use 1.1");
+    expect(await (await h.call("GET", "@acme/zendesk/v/1.0.0")).text()).toContain("<b>Deprecated.</b> <span>Use 1.1");
 
     await inColo(otherColo, async () => {
       expect((await h.call("PUT", "v1/packages/@acme/zendesk/dist-tags/beta", { token, json: { version: "1.0.0" } })).status).toBe(200);
@@ -1585,6 +1631,6 @@ describe("security", () => {
     expect(verifiedAt()).toBeNull();
     expect(((await (await h.call("GET", "v1/scopes/@acme")).json()) as { verified?: string }).verified).toBeUndefined();
     expect(((await (await h.call("GET", "v1/packages/@acme/zendesk.json")).json()) as PackageDoc).verified).toBeUndefined();
-    expect(await (await h.call("GET", "@acme/zendesk")).text()).not.toContain("verified: acme.dev");
+    expect(await (await h.call("GET", "@acme/zendesk")).text()).not.toContain("✓ acme.dev");
   });
 });

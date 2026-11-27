@@ -229,11 +229,6 @@ export async function getIndex(env: Env): Promise<Response> {
   });
 }
 
-export async function recentPackages(env: Env, limit = 20): Promise<PackageSummary[]> {
-  const { results } = await env.DB.prepare(`${SUMMARY_SELECT} ORDER BY p.updated_at DESC LIMIT ?`).bind(limit).all<SummaryRow>();
-  return results.map(toSummary);
-}
-
 /** FTS5 query from free text: every word must match (as a prefix), so "zen desk" finds "zendesk-desk". */
 function ftsQuery(q: string): string | undefined {
   const words = q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -263,6 +258,145 @@ export async function searchPackages(env: Env, q: string, limit: number, offset:
     env.DB.prepare(`SELECT COUNT(*) AS n FROM packages_fts WHERE packages_fts MATCH ?`).bind(match).first<{ n: number }>(),
   ]);
   return { results: rows.results.map(toSummary), total: total?.n ?? 0 };
+}
+
+// ── Browsing (the HTML pages only; the API's summaries stay as they are) ──
+
+export const EXPORT_KINDS = ["pipelines", "agents", "tools", "providers", "schemas", "policies", "stores", "skills"] as const satisfies readonly (keyof PackageExports)[];
+export type ExportKind = (typeof EXPORT_KINDS)[number];
+export const isExportKind = (k: string): k is ExportKind => (EXPORT_KINDS as readonly string[]).includes(k);
+
+/** A summary plus what a card needs from the latest version: what it exports and what it touches. */
+export interface PackageCard extends PackageSummary {
+  /** How many of each kind the latest version exports; kinds with none are left out. */
+  exports: Partial<Record<ExportKind, number>>;
+  /** Host of the latest version's hosted pipelines. */
+  hostedBy?: string;
+  runsCode: boolean;
+  /** Hosts the latest version contacts (hosted endpoints included). */
+  network: number;
+  deprecated?: string;
+}
+
+export type BrowseSort = "relevance" | "downloads" | "updated" | "name";
+
+export interface BrowseOptions {
+  q?: string;
+  kind?: ExportKind;
+  hosted?: boolean;
+  verified?: boolean;
+  /** `@acme`: only that scope's packages. */
+  scope?: string;
+  sort?: BrowseSort;
+  limit: number;
+  offset?: number;
+}
+
+export interface BrowseResult {
+  results: PackageCard[];
+  total: number;
+  /** Counts for the filter chips, over the search and scope but ignoring the other filters. */
+  facets: { all: number; hosted: number; verified: number; kinds: Record<ExportKind, number> };
+}
+
+interface CardRow extends SummaryRow {
+  exports: string | null;
+  permissions: string | null;
+  hosted: string | null;
+  deprecated: string | null;
+}
+
+const CARD_SELECT = `SELECT p.id, p.name, p.description, p.keywords, p.updated_at, s.verified_domain, dt.version AS latest,
+  (SELECT COALESCE(SUM(count), 0) FROM downloads_daily dl WHERE dl.package_id = p.id) AS downloads,
+  lv.exports, lv.permissions, lv.hosted, lv.deprecated
+  FROM packages p JOIN scopes s ON s.id = p.scope_id
+  LEFT JOIN dist_tags dt ON dt.package_id = p.id AND dt.tag = 'latest'
+  LEFT JOIN versions lv ON lv.package_id = p.id AND lv.version = dt.version`;
+
+function toCard(r: CardRow): PackageCard {
+  const exports = r.exports ? (JSON.parse(r.exports) as PackageExports) : undefined;
+  const perms = r.permissions ? (JSON.parse(r.permissions) as PackagePermissions) : undefined;
+  let hostedBy: string | undefined;
+  if (r.hosted) {
+    try {
+      hostedBy = new URL((JSON.parse(r.hosted) as HostedRow).endpoint).host;
+    } catch {
+      hostedBy = undefined;
+    }
+  }
+  const counts: Partial<Record<ExportKind, number>> = {};
+  for (const k of EXPORT_KINDS) if (exports?.[k]?.length) counts[k] = exports[k].length;
+  return {
+    ...toSummary(r),
+    exports: counts,
+    ...(hostedBy ? { hostedBy } : {}),
+    runsCode: !!perms?.code,
+    network: new Set([...(perms?.network ?? []), ...(perms?.hosted ?? [])]).size,
+    ...(r.deprecated ? { deprecated: r.deprecated } : {}),
+  };
+}
+
+/** Headline numbers for the home page. */
+export async function registryTotals(env: Env): Promise<{ packages: number; publishers: number; downloads: number }> {
+  const r = await env.DB.prepare(
+    `SELECT COUNT(*) AS packages, COUNT(DISTINCT scope_id) AS publishers, (SELECT COALESCE(SUM(count), 0) FROM downloads_daily) AS downloads FROM packages`,
+  ).first<{ packages: number; publishers: number; downloads: number }>();
+  return r ?? { packages: 0, publishers: 0, downloads: 0 };
+}
+
+/** Search, filter and sort packages for the browse pages. The filters are SQL, so they scale with the registry. */
+export async function browsePackages(env: Env, o: BrowseOptions): Promise<BrowseResult> {
+  const match = o.q ? ftsQuery(o.q) : undefined;
+  const base: string[] = [];
+  const baseBinds: unknown[] = [];
+  if (o.scope) {
+    base.push(`c.name LIKE ? ESCAPE '\\'`);
+    baseBinds.push(`${o.scope.replace(/[\\%_]/g, "\\$&")}/%`);
+  }
+  const filters: string[] = [];
+  if (o.kind) filters.push(`json_array_length(c.exports, '$.${o.kind}') > 0`); // o.kind is one of EXPORT_KINDS
+  if (o.hosted) filters.push(`c.hosted IS NOT NULL`);
+  if (o.verified) filters.push(`c.verified_domain IS NOT NULL`);
+  const hits = match ? `, hits AS (SELECT rowid AS id, bm25(packages_fts, 10.0, 4.0, 6.0, 1.0) AS rank FROM packages_fts WHERE packages_fts MATCH ?)` : "";
+  const join = match ? `JOIN hits h ON h.id = c.id` : "";
+  const head = `WITH c AS (${CARD_SELECT})${hits} SELECT`;
+  const headBinds = match ? [match] : [];
+  const where = (conds: string[]) => (conds.length ? `WHERE ${conds.join(" AND ")}` : "");
+
+  const sort = o.sort === "relevance" && !match ? "downloads" : (o.sort ?? (match ? "relevance" : "downloads"));
+  const exact = (o.q ?? "").trim().toLowerCase();
+  const order = {
+    relevance: { sql: `(c.name = ? OR c.name = '@' || ?) DESC, h.rank, c.downloads DESC`, binds: [exact, exact] },
+    downloads: { sql: `c.downloads DESC, c.updated_at DESC`, binds: [] },
+    updated: { sql: `c.updated_at DESC`, binds: [] },
+    name: { sql: `c.name`, binds: [] },
+  }[sort];
+
+  const kindSums = EXPORT_KINDS.map((k) => `COALESCE(SUM(json_array_length(c.exports, '$.${k}') > 0), 0) AS ${k}`).join(", ");
+  const [rows, count, facets] = await Promise.all([
+    env.DB.prepare(`${head} c.* FROM c ${join} ${where([...base, ...filters])} ORDER BY ${order.sql} LIMIT ? OFFSET ?`)
+      .bind(...headBinds, ...baseBinds, ...order.binds, o.limit, o.offset ?? 0)
+      .all<CardRow>(),
+    env.DB.prepare(`${head} COUNT(*) AS n FROM c ${join} ${where([...base, ...filters])}`)
+      .bind(...headBinds, ...baseBinds)
+      .first<{ n: number }>(),
+    env.DB.prepare(
+      `${head} COUNT(*) AS all_, COALESCE(SUM(c.hosted IS NOT NULL), 0) AS hosted, COALESCE(SUM(c.verified_domain IS NOT NULL), 0) AS verified, ${kindSums} FROM c ${join} ${where(base)}`,
+    )
+      .bind(...headBinds, ...baseBinds)
+      .first<Record<string, number>>(),
+  ]);
+  const f = facets ?? {};
+  return {
+    results: rows.results.map(toCard),
+    total: count?.n ?? 0,
+    facets: {
+      all: f.all_ ?? 0,
+      hosted: f.hosted ?? 0,
+      verified: f.verified ?? 0,
+      kinds: Object.fromEntries(EXPORT_KINDS.map((k) => [k, f[k] ?? 0])) as Record<ExportKind, number>,
+    },
+  };
 }
 
 export async function search(url: URL, env: Env): Promise<Response> {
