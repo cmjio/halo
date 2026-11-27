@@ -185,6 +185,16 @@ describe("Git", () => {
     expect((await g("grep", { pattern: "new" })).matches).toEqual([{ path: "b.txt", line: 1, text: "new" }]);
     expect((await g("blame", { path: "a.txt", ref: "HEAD" })).lines[0]).toMatchObject({ line: 1, author: "T", text: "one" });
   });
+  test("grep regex: \\d, \\w and \\s work on every git; \\b and \\1 are refused, not silently empty", async () => {
+    writeFileSync(join(repo, "c.txt"), "id 42\nfoo_bar baz\n");
+    expect((await g("grep", { pattern: String.raw`id\s\d+`, regex: true })).matches).toEqual([{ path: "c.txt", line: 1, text: "id 42" }]);
+    expect((await g("grep", { pattern: String.raw`\w+_[\w]+`, regex: true })).matches).toEqual([{ path: "c.txt", line: 2, text: "foo_bar baz" }]);
+    expect((await g("grep", { pattern: String.raw`[[:digit:]]\d`, regex: true })).matches).toEqual([{ path: "c.txt", line: 1, text: "id 42" }]);
+    await expect(g("grep", { pattern: String.raw`\bbaz`, regex: true })).rejects.toThrow("POSIX");
+    await expect(g("grep", { pattern: String.raw`(a)\1`, regex: true })).rejects.toThrow("POSIX");
+    // Plain text is searched as written.
+    expect((await g("grep", { pattern: String.raw`\d` })).matches).toEqual([]);
+  });
   test("values can't become options", async () => {
     await expect(g("log", { ref: "--output=/tmp/x" })).rejects.toMatchObject({ code: "TOOL_ARGUMENT" });
     await expect(g("diff", { path: "-p" })).rejects.toMatchObject({ code: "TOOL_ARGUMENT" });

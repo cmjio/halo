@@ -17,6 +17,7 @@ import { HaloError } from "../errors.js";
 import type { ToolCall, ToolProvider } from "../tools.js";
 import { explicitFirst, intArg, str, unknownMethod } from "./common.js";
 import { parseDelimited, rowsToRecords } from "./documents.js";
+import { safeRegex, type SafeRegex } from "../safe-regex.js";
 
 const METHODS = ["get", "pick", "filter", "sort", "limit", "group", "count", "aggregate", "unique", "flatten", "join", "diff", "from_csv", "to_csv"];
 const MAX_CSV_CHARS = 20_000_000;
@@ -119,13 +120,17 @@ function test(call: ToolCall, actual: unknown, op: string, expected: unknown): b
     case "ends_with":
       return typeof actual === "string" && actual.toLowerCase().endsWith(String(expected).toLowerCase());
     case "matches": {
-      let re: RegExp;
+      let re: SafeRegex;
       try {
-        re = new RegExp(String(expected), "i");
+        re = safeRegex(String(expected), { ignoreCase: true });
       } catch {
         throw argError(call, `"${str(expected)}" is not a valid regular expression`);
       }
-      return typeof actual === "string" && re.test(actual);
+      if (typeof actual !== "string") return false;
+      const matched = re.test(actual);
+      // A row the pattern can't be decided on is an error, not a silently dropped row.
+      if (matched === undefined) throw argError(call, `the regex "${str(expected)}" took too long on a row and was stopped: use a simpler pattern (nested repeats like (a+)+ can take forever)`);
+      return matched;
     }
     case "exists":
       return (actual !== undefined && actual !== null) === (expected !== false);

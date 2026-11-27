@@ -26,6 +26,47 @@ function argError(call: ToolCall, message: string): HaloError {
   return new HaloError(`${call.tool.name}.${call.method}: ${message}`, { code: "TOOL_ARGUMENT" });
 }
 
+const POSIX_CLASS: Record<string, [inside: string, outside: string]> = {
+  d: ["0-9", "[0-9]"],
+  D: ["", "[^0-9]"],
+  w: ["[:alnum:]_", "[[:alnum:]_]"],
+  W: ["", "[^[:alnum:]_]"],
+  s: ["[:space:]", "[[:space:]]"],
+  S: ["", "[^[:space:]]"],
+};
+
+/**
+ * A grep regex as POSIX ERE, which is what git grep -E reads. Its \d, \w and \s are not portable
+ * (macOS's git matches nothing for them), so they are written as classes. Any other backslash
+ * before a letter or digit (\b, \1) has no portable meaning: an error, not a search that silently
+ * finds nothing.
+ */
+export function posixPattern(call: ToolCall, pattern: string): string {
+  let out = "";
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]!;
+    if (c === "\\" && i + 1 < pattern.length) {
+      const n = pattern[++i]!;
+      const cls = POSIX_CLASS[n];
+      if (cls && (!inClass || cls[0])) out += inClass ? cls[0] : cls[1];
+      else if (/[A-Za-z0-9]/.test(n)) throw argError(call, `\\${n} isn't part of POSIX extended regex (git grep -E): use a class like [0-9] or [[:alpha:]] instead`);
+      else out += c + n;
+      continue;
+    }
+    const named = inClass && pattern.startsWith("[:", i) ? pattern.indexOf(":]", i + 2) : -1;
+    if (named > 0) {
+      out += pattern.slice(i, named + 2);
+      i = named + 1;
+      continue;
+    }
+    if (inClass) inClass = c !== "]" || out.endsWith("[") || out.endsWith("[^");
+    else if (c === "[") inClass = true;
+    out += c;
+  }
+  return out;
+}
+
 /** A ref or path from the model or a pipeline: never an option, never a NUL. */
 function safe(call: ToolCall, name: string, value: unknown): string {
   const s = need(call, name, value);
@@ -200,7 +241,7 @@ export const gitProvider: ToolProvider = async (call) => {
       if (/[\0\n\r]/.test(pattern)) throw argError(call, "pattern can't contain control characters");
       const args = ["grep", "-n", "-I", "--untracked", n.regex === true ? "-E" : "-F"];
       if (n.ignore_case === true) args.push("-i");
-      args.push("-e", pattern);
+      args.push("-e", n.regex === true ? posixPattern(call, pattern) : pattern);
       const path = optional(call, "path", n.path);
       // Environment files, keys and credential files are left out unless the tool is declared secrets: true
       // (whether a search matched at all can spell out a secret).
