@@ -143,7 +143,7 @@ Runs started over `/mcp` appear in Studio and the API like any other run.
 | paused | A message such as `Paused waiting for yield, run id 4f1c…`. Under `halo serve`, answer it with the approval link, Studio, or the HTTP API. Under `halo mcp`, the run is saved in `.halo/runs` (in the folder `halo mcp` started in): continue it with `halo resume <file> <runId> --payload approve`. |
 | halted or failed | A tool error (`isError: true`) with the reason and the run id |
 
-If the client cancels a call (or, over HTTP, drops the request), Halo aborts the run.
+If the client cancels a call (or, over HTTP, drops the request), Halo aborts the run. A request id belongs to the caller that sent it: the API token, or under `halo serve --package` each consumer key. So a `notifications/cancelled` stops only that caller's own call with that id, never another client's.
 
 Neither `halo mcp` nor `/mcp` asks anyone at `|! yield`, `~> listen`, or a tool call that needs approval: the run pauses. A tool call that needs approval inside a fan-out, `each`, branch, or called pipeline fails with `APPROVAL_NEEDED` (see [Approvals](../agents-with-tools.md#approvals)).
 
@@ -157,6 +157,7 @@ const server = createMcpServer({
   call: async (name, args) => ({ status: "completed", output: `hello ${args.name}`, runId: crypto.randomUUID() }),
 });
 
-Bun.serve({ routes: { "/mcp": (req) => server.handleHttp(req) } }); // Streamable HTTP
-// or: await serveMcpStdio(server);                                // stdio
+// Streamable HTTP. Check who is calling first, and pass it: a request id (for cancelling) is that caller's own.
+Bun.serve({ routes: { "/mcp": (req) => server.handleHttp(req, callerOf(req)) } });
+// or, over stdio: await serveMcpStdio(server);
 ```

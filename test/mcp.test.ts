@@ -284,6 +284,38 @@ describe("MCP server", () => {
     }
   });
 
+  test("a caller can cancel only its own calls, even when another uses the same id", async () => {
+    const aborted: string[] = [];
+    const waiting = createMcpServer({
+      list: () => [{ name: "Wait", params: [{ name: "who", type: "String" }] }],
+      call: (_name, args, signal) =>
+        new Promise((resolve) => {
+          const done = setTimeout(() => resolve({ status: "completed", output: `${args.who} finished`, runId: String(args.who) }), 400);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(done);
+            aborted.push(String(args.who));
+            resolve({ status: "failed", runId: String(args.who), error: "cancelled" });
+          });
+        }),
+    });
+    const post = (caller: string, body: unknown) => waiting.handleHttp(new Request("http://localhost/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), caller);
+    const call = (caller: string) => post(caller, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "Wait", arguments: { who: caller } } }).then((r) => r.json() as Promise<any>);
+    const cancel = (caller: string) => post(caller, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 1 } });
+    const a = call("consumer:a");
+    const b = call("consumer:b");
+    await Bun.sleep(50);
+    // B cancels "its" request 1: A's request 1 keeps running.
+    expect((await cancel("consumer:b")).status).toBe(202);
+    expect(aborted).toEqual(["consumer:b"]);
+    expect((await b).result.isError).toBe(true);
+    expect((await a).result.content[0].text).toBe("consumer:a finished");
+    // A caller that cancels nothing of its own stops nothing.
+    const c = call("consumer:c");
+    await cancel("consumer:d");
+    expect((await c).result.content[0].text).toBe("consumer:c finished");
+    expect(aborted).toEqual(["consumer:b"]);
+  });
+
   test("stdio: newline-delimited JSON-RPC in, answers out", async () => {
     const lines: string[] = [];
     const input = new Response(

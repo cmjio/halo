@@ -1274,7 +1274,8 @@ ${files}
       if (options.mcp === false) return json({ error: "Not found", code: "not_found" }, 404);
       const bad = checkPackageHeader(req, m, false);
       if (bad) return json(bad.body, bad.status);
-      return callerKey.run(who, () => mcp.handleHttp(req));
+      // A request id is the caller's own: one consumer can't cancel another's run.
+      return callerKey.run(who, () => mcp.handleHttp(req, consumer ? `consumer:${consumer}` : "owner"));
     }
     const startRun = path.match(/^\/api\/pipelines\/(\w+)\/runs$/);
     if (startRun && req.method === "POST") {
@@ -1455,7 +1456,7 @@ ${files}
           const refusedMcp = crossSite(req, url);
           if (refusedMcp) return json({ error: refusedMcp }, 403);
           if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
-          return mcp.handleHttp(req);
+          return mcp.handleHttp(req, "owner");
         }
 
         if (!path.startsWith("/api/")) return new Response("Not found", { status: 404 });

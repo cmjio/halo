@@ -23,10 +23,14 @@ export interface McpPipelineSource {
 }
 
 export interface McpServer {
-  /** Answer one JSON-RPC message; undefined for notifications and responses. */
-  handleMessage(msg: unknown, signal?: AbortSignal): Promise<object | undefined>;
-  /** Streamable HTTP: mount at /mcp. */
-  handleHttp(req: Request): Promise<Response>;
+  /**
+   * Answer one JSON-RPC message; undefined for notifications and responses. `caller` says who
+   * sent it (a token, a consumer key): a request id means something only to the caller that
+   * used it, so one caller's notifications/cancelled can't stop another's call.
+   */
+  handleMessage(msg: unknown, signal?: AbortSignal, caller?: string): Promise<object | undefined>;
+  /** Streamable HTTP: mount at /mcp. Pass who the request comes from, once it is authenticated. */
+  handleHttp(req: Request, caller?: string): Promise<Response>;
 }
 
 type Id = string | number;
@@ -91,20 +95,23 @@ function outputText(output: unknown): string {
 }
 
 export function createMcpServer(source: McpPipelineSource, info: { name: string; version: string } = { name: "halo", version: pkg.version }): McpServer {
-  /** In-flight tools/call requests, so notifications/cancelled can stop them. */
-  const inflight = new Map<Id, AbortController>();
+  /** In-flight tools/call requests, by caller and id, so notifications/cancelled can stop them. */
+  const inflight = new Map<string, Set<AbortController>>();
+  const callKey = (caller: string, id: unknown) => `${caller}\u0000${typeof id}:${String(id)}`;
 
   const ok = (id: Id, result: unknown) => ({ jsonrpc: "2.0", id, result });
   const fail = (id: Id | null, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
-  async function callTool(id: Id, params: any, signal?: AbortSignal): Promise<object> {
+  async function callTool(id: Id, params: any, signal: AbortSignal | undefined, caller: string): Promise<object> {
     const name = params?.name;
     if (typeof name !== "string") return fail(id, INVALID_PARAMS, "tools/call needs a tool name");
     if (!source.list().some((p) => p.name === name)) return fail(id, INVALID_PARAMS, `Unknown tool: ${name}`);
     const args = params.arguments ?? {};
     if (typeof args !== "object" || Array.isArray(args)) return fail(id, INVALID_PARAMS, "tools/call arguments must be an object");
     const controller = new AbortController();
-    inflight.set(id, controller);
+    const key = callKey(caller, id);
+    const running = inflight.get(key) ?? new Set<AbortController>();
+    inflight.set(key, running.add(controller));
     const both = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     try {
       const run = await source.call(name, args, both);
@@ -126,18 +133,20 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     } catch (err) {
       return ok(id, { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true });
     } finally {
-      inflight.delete(id);
+      running.delete(controller);
+      if (!running.size) inflight.delete(key);
     }
   }
 
-  async function handleMessage(raw: unknown, signal?: AbortSignal): Promise<object | undefined> {
+  async function handleMessage(raw: unknown, signal?: AbortSignal, caller = ""): Promise<object | undefined> {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail(null, INVALID_REQUEST, "Invalid request");
     const msg = raw as { jsonrpc?: string; id?: Id | null; method?: unknown; params?: any };
     // Responses to requests we never send: ignore.
     if (typeof msg.method !== "string") return undefined;
     const isRequest = msg.id !== undefined && msg.id !== null;
     if (!isRequest) {
-      if (msg.method === "notifications/cancelled") inflight.get(msg.params?.requestId)?.abort(new Error("cancelled by the client"));
+      // Only the caller that sent the request can cancel it: another caller's id 1 is a different call.
+      if (msg.method === "notifications/cancelled") for (const c of inflight.get(callKey(caller, msg.params?.requestId)) ?? []) c.abort(new Error("cancelled by the client"));
       return undefined;
     }
     const id = msg.id as Id;
@@ -158,7 +167,7 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
             tools: source.list().map((p) => ({ name: p.name, description: p.description ?? `Run the ${p.name} pipeline.`, inputSchema: inputSchema(p.params) })),
           });
         case "tools/call":
-          return await callTool(id, msg.params, signal);
+          return await callTool(id, msg.params, signal, caller);
         default:
           return fail(id, METHOD_NOT_FOUND, `Method not found: ${msg.method}`);
       }
@@ -167,7 +176,7 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     }
   }
 
-  async function handleHttp(req: Request): Promise<Response> {
+  async function handleHttp(req: Request, caller = ""): Promise<Response> {
     if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
     // Guard against DNS rebinding: a browser page from another origin can't drive the server.
     const origin = req.headers.get("origin");
@@ -190,10 +199,10 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     }
     if (Array.isArray(body)) {
       if (!body.length) return Response.json(fail(null, INVALID_REQUEST, "Empty batch"), { status: 400 });
-      const answers = (await Promise.all(body.map((m) => handleMessage(m, req.signal)))).filter((a) => a !== undefined);
+      const answers = (await Promise.all(body.map((m) => handleMessage(m, req.signal, caller)))).filter((a) => a !== undefined);
       return answers.length ? Response.json(answers) : new Response(null, { status: 202 });
     }
-    const answer = await handleMessage(body, req.signal);
+    const answer = await handleMessage(body, req.signal, caller);
     return answer ? Response.json(answer) : new Response(null, { status: 202 });
   }
 
