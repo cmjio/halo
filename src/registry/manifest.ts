@@ -30,12 +30,30 @@ export interface HttpMethodSpec {
 }
 
 export interface HttpAuth {
-  /** bearer: Authorization: Bearer <key>; header: <name>: <key>; query: ?<name>=<key>; basic: user:key from two variables. */
-  type: "bearer" | "header" | "query" | "basic" | "none";
-  /** The environment variable(s) holding the secret (basic: [user, password]). A declaration's `apiKey:` overrides it. */
+  /**
+   * bearer: Authorization: Bearer <key>; header: <name>: <key>; query: ?<name>=<key>; basic: user:key
+   * from two variables; oauth: a token from Halo's OAuth broker (the tool is its own connection:
+   * `halo auth login <Tool>`).
+   */
+  type: "bearer" | "header" | "query" | "basic" | "none" | "oauth";
+  /**
+   * The environment variable(s) holding the secret (basic: [user, password]). A declaration's `apiKey:` overrides it.
+   * For oauth: [the client id's variable, the client secret's variable (optional)]; `clientId:` and `clientSecret:` on the declaration override them.
+   */
   env?: string | string[];
   /** The header or query parameter name, for header/query auth. */
   name?: string;
+  /** oauth: the endpoints. https, on the base URL's host or a host in `authHosts`. */
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  deviceUrl?: string;
+  revokeUrl?: string;
+  /** oauth: the scopes asked for. */
+  scopes?: string[];
+  /** oauth: "authorization_code" (default), "client_credentials" or "device". */
+  grant?: "authorization_code" | "client_credentials" | "device";
+  /** oauth: the hosts its endpoints may be on, besides the base URL's (install shows them). */
+  authHosts?: string[];
 }
 
 export interface HttpProviderSpec {
@@ -144,12 +162,38 @@ export function checkProviders(providersBlock: unknown, reserved: Iterable<strin
   }
 }
 
+/** An oauth auth block: its endpoints are https and on the API's host or one it lists, and its grant is one Halo has. */
+function checkOAuth(auth: HttpAuth, baseUrl: string, at: string, bad: (m: string) => void) {
+  const grant = auth.grant ?? "authorization_code";
+  if (!["authorization_code", "client_credentials", "device"].includes(grant)) bad(`${at}.grant must be authorization_code, client_credentials or device`);
+  if (auth.authHosts !== undefined && (!Array.isArray(auth.authHosts) || auth.authHosts.some((h) => typeof h !== "string" || !/^[a-z0-9.-]+$/i.test(h)))) bad(`${at}.authHosts lists host names`);
+  if (auth.scopes !== undefined && (!Array.isArray(auth.scopes) || auth.scopes.some((s) => typeof s !== "string"))) bad(`${at}.scopes lists scopes as strings`);
+  let apiHost = "";
+  try {
+    apiHost = new URL(baseUrl.replace(/\{\{\s*\w+\s*\}\}/g, "x")).hostname;
+  } catch {}
+  const hosts = new Set([apiHost, ...(auth.authHosts ?? [])]);
+  for (const k of ["authorizeUrl", "tokenUrl", "deviceUrl", "revokeUrl"] as const) {
+    const v = auth[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string" || !isWebUrl(v)) {
+      bad(`${at}.${k} must be an https URL`);
+      continue;
+    }
+    if (!hosts.has(new URL(v).hostname)) bad(`${at}.${k} is on ${new URL(v).hostname}, which is neither the API's host nor in authHosts`);
+  }
+  if (!auth.tokenUrl) bad(`${at}.tokenUrl is required for oauth`);
+  if (grant === "authorization_code" && !auth.authorizeUrl) bad(`${at}.authorizeUrl is required for the authorization_code grant`);
+  if (grant === "device" && !auth.deviceUrl) bad(`${at}.deviceUrl is required for the device grant`);
+}
+
 function checkHttp(p: HttpProviderSpec, at: string, bad: (m: string) => void) {
   // `{{site}}` placeholders may fill a tenant's subdomain or part of the path.
   if (typeof p.baseUrl !== "string" || !isWebUrl(p.baseUrl.replace(/\{\{\s*\w+\s*\}\}/g, "x"))) bad(`${at}.baseUrl must be an https URL (http only for localhost)`);
   const auth = p.auth;
   if (auth) {
-    if (!["bearer", "header", "query", "basic", "none"].includes(auth.type)) bad(`${at}.auth.type must be bearer, header, query, basic, or none`);
+    if (!["bearer", "header", "query", "basic", "none", "oauth"].includes(auth.type)) bad(`${at}.auth.type must be bearer, header, query, basic, oauth, or none`);
+    if (auth.type === "oauth") checkOAuth(auth, p.baseUrl, `${at}.auth`, bad);
     for (const e of [auth.env ?? []].flat()) if (!ENV.test(e)) bad(`${at}.auth.env: "${e}" is not an environment variable name`);
     if ((auth.type === "header" || auth.type === "query") && !auth.name) bad(`${at}.auth.name is required for ${auth.type} auth`);
     if (auth.type === "basic" && (!Array.isArray(auth.env) || auth.env.length !== 2)) bad(`${at}.auth.env must name two variables (user, password) for basic auth`);
@@ -199,6 +243,8 @@ export function permissionsOf(m: ToolManifest): Permissions {
     if (p.kind === "http") {
       network.add(hostOf(p.baseUrl));
       for (const e of [p.auth?.env ?? []].flat()) env.add(e);
+      // OAuth endpoints are hosts the package's sign-in reaches.
+      if (p.auth?.type === "oauth") for (const u of [p.auth.authorizeUrl, p.auth.tokenUrl, p.auth.deviceUrl, p.auth.revokeUrl]) if (u) network.add(hostOf(u));
     } else if (p.kind === "mcp") {
       if (p.url) network.add(new URL(p.url).hostname);
       if (p.command) {

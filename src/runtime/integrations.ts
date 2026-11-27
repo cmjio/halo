@@ -19,7 +19,18 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { HaloError, HttpError } from "./errors.js";
 import { email } from "./mail/provider.js";
 import { SIGNATURE_HEADER, signBody } from "./signing.js";
-import type { ToolCall, ToolProvider } from "./tools.js";
+import type { ToolCall, ToolProvider, ToolServices } from "./tools.js";
+import { authFetch } from "./oauth.js";
+
+/**
+ * How a service's client sends: with the tool's OAuth connection (`auth:`), only to the service's
+ * own origin, else with the token header it declares (`headers()` is called only then).
+ */
+function client(call: ToolCall, services: ToolServices, origin: string, headers: () => Record<string, string>): { send: typeof fetch; auth: Record<string, string> } {
+  const signed = authFetch(call, services, origin);
+  if (signed) return { send: ((url: string | URL, init?: RequestInit) => signed(url, init)) as typeof fetch, auth: {} };
+  return { send: services.fetch, auth: headers() };
+}
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : JSON.stringify(v);
@@ -233,8 +244,9 @@ export const fileStore: ToolProvider = async (call) => {
 
 // ── Slack ──
 
-export const slack: ToolProvider = async (call, { fetch }) => {
-  const auth = { Authorization: `Bearer ${token(call, "SLACK_BOT_TOKEN")}`, "Content-Type": "application/json; charset=utf-8" };
+export const slack: ToolProvider = async (call, services) => {
+  const { send: fetch, auth: key } = client(call, services, "https://slack.com", () => ({ Authorization: `Bearer ${token(call, "SLACK_BOT_TOKEN")}` }));
+  const auth = { ...key, "Content-Type": "application/json; charset=utf-8" };
   switch (call.method) {
     case "post":
     case "send":
@@ -307,13 +319,14 @@ export const handoff: ToolProvider = async (call, { fetch }) => {
 
 // ── GitHub ──
 
-export const github: ToolProvider = async (call, { fetch }) => {
+export const github: ToolProvider = async (call, services) => {
   const method = call.method === "execute" ? String(call.named.method ?? "") : call.method;
   const repo = need(call, `repo: "owner/name"`, call.named.repo ?? call.config("repo"));
+  const { send: fetch, auth } = client(call, services, "https://api.github.com", () => ({ Authorization: `Bearer ${token(call, "GITHUB_TOKEN")}` }));
   const api = async (path: string, verb: string, body?: unknown) => {
     const res = await fetch(`https://api.github.com/repos/${repo}${path}`, {
       method: verb,
-      headers: { Authorization: `Bearer ${token(call, "GITHUB_TOKEN")}`, Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28" },
+      headers: { ...auth, Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28" },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: call.signal,
     });
@@ -351,11 +364,13 @@ export const github: ToolProvider = async (call, { fetch }) => {
 
 // ── Linear ──
 
-export const linear: ToolProvider = async (call, { fetch }) => {
+export const linear: ToolProvider = async (call, services) => {
+  // A personal API key goes bare in Authorization; an OAuth token as Bearer (the broker's way).
+  const { send: fetch, auth } = client(call, services, "https://api.linear.app", () => ({ Authorization: token(call, "LINEAR_TOKEN") }));
   const gql = async (query: string, variables: Record<string, unknown>) => {
     const res = await fetch("https://api.linear.app/graphql", {
       method: "POST",
-      headers: { Authorization: token(call, "LINEAR_TOKEN"), "Content-Type": "application/json" },
+      headers: { ...auth, "Content-Type": "application/json" },
       body: JSON.stringify({ query, variables }),
       signal: call.signal,
     });
@@ -378,11 +393,13 @@ export const linear: ToolProvider = async (call, { fetch }) => {
 
 // ── Figma ──
 
-export const figma: ToolProvider = async (call, { fetch }) => {
+export const figma: ToolProvider = async (call, services) => {
   const method = call.method === "execute" ? String(call.named.method ?? "") : call.method;
   const file = need(call, "file: (the file key from its URL)", call.named.file ?? call.config("file"));
+  // A personal access token goes in X-Figma-Token; an OAuth token as Bearer.
+  const { send: fetch, auth } = client(call, services, "https://api.figma.com", () => ({ "X-Figma-Token": token(call, "FIGMA_TOKEN") }));
   const get = async (path: string) =>
-    json(await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(file)}${path}`, { headers: { "X-Figma-Token": token(call, "FIGMA_TOKEN") }, signal: call.signal }), "Figma");
+    json(await fetch(`https://api.figma.com/v1/files/${encodeURIComponent(file)}${path}`, { headers: auth, signal: call.signal }), "Figma");
   switch (method) {
     case "get_file":
       return get(`?depth=${Number(call.named.depth ?? 2)}`);

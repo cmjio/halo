@@ -16,6 +16,7 @@
 import { parseDuration } from "../../parser/builtins.js";
 import { HaloError, HttpError } from "../errors.js";
 import type { ToolCall, ToolProvider, ToolServices } from "../tools.js";
+import { authFetch, type OAuthConnection } from "../oauth.js";
 import { ImapError, ImapSession, type ImapSearch } from "./imap.js";
 import { buildMessage, parseAddress, parseMessage, validAddress, type ParsedMessage } from "./mime.js";
 import { sendSmtp, SmtpError } from "./smtp.js";
@@ -125,55 +126,79 @@ function asMime(call: ToolCall, m: Outgoing): string {
 
 // ── Tokens for Gmail and Outlook ──
 
-const tokens = new Map<string, { token: string; until: number }>();
+//
+// Every OAuth token comes from the broker (oauth.ts): through `auth:` (an OAuth declaration), or
+// from the declaration's own settings (a refresh token in Env, an app's client secret), which the
+// broker treats as a connection named after the tool. A refresh token the provider rotates is kept
+// in the token store, so the next refresh spends the new one, not the one in the environment.
 
-async function oauthToken(services: ToolServices, call: ToolCall, url: string, form: Record<string, string>, label: string): Promise<string> {
-  const key = `${url}\n${JSON.stringify(form)}`;
-  const cached = tokens.get(key);
-  if (cached && cached.until > Date.now() + 60_000) return cached.token;
-  const res = await services.fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(form).toString(), signal: call.signal });
-  const out = await readJson(res, `${label} sign-in`);
-  if (typeof out.access_token !== "string") throw new HaloError(`${label} sign-in for tool "${call.tool.name}" returned no access token`, { code: "TOOL_CONFIG" });
-  tokens.set(key, { token: out.access_token, until: Date.now() + (Number(out.expires_in) || 3600) * 1000 });
-  return out.access_token;
-}
+/** A fetch that signs requests for one mail API's origin. */
+type Send = (url: string | URL, init?: RequestInit) => Promise<Response>;
+
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GMAIL_ORIGIN = "https://gmail.googleapis.com";
+const GRAPH_ORIGIN = "https://graph.microsoft.com";
 
 /** How a Gmail tool signs in: an app password (then it is SMTP and IMAP), or OAuth (then the Gmail API). */
 function gmailMode(call: ToolCall): "password" | "oauth" {
-  return setting(call, "accessToken") || setting(call, "clientId") ? "oauth" : "password";
+  return setting(call, "accessToken") || setting(call, "clientId") || call.config("auth") ? "oauth" : "password";
 }
 
-async function gmailToken(call: ToolCall, services: ToolServices): Promise<string> {
+/** A fetch with a token someone pasted (accessToken:), sent only to the mail API's own origin. */
+function withGiven(services: ToolServices, token: string, origin: string): Send {
+  return (url, init = {}) => {
+    if (new URL(String(url)).origin !== origin) throw new HaloError(`a mail token is only sent to ${origin}`, { code: "AUTH_ORIGIN" });
+    return services.fetch(url, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } });
+  };
+}
+
+/** The connection a mail tool's own settings describe, for the broker (the tool's name is its name). */
+function settingsConnection(call: ToolCall, services: ToolServices, c: Omit<OAuthConnection, "name" | "project" | "scopes"> & { scopes?: string[] }): OAuthConnection {
+  return { name: call.tool.name, project: services.oauth?.project ?? process.cwd(), scopes: [], ...c };
+}
+
+function gmail(call: ToolCall, services: ToolServices): Send {
   const given = setting(call, "accessToken");
-  if (given) return given;
-  return oauthToken(
-    services,
-    call,
-    "https://oauth2.googleapis.com/token",
-    { grant_type: "refresh_token", refresh_token: secret(call, "a refresh token"), client_id: setting(call, "clientId")!, client_secret: setting(call, "clientSecret") ?? bad(call, "Gmail with clientId also needs clientSecret:") },
-    "Google",
-  );
+  if (given) return withGiven(services, given, GMAIL_ORIGIN);
+  const viaAuth = authFetch(call, services, GMAIL_ORIGIN);
+  if (viaAuth) return viaAuth;
+  const conn = settingsConnection(call, services, {
+    provider: "google",
+    grant: "authorization_code",
+    clientId: setting(call, "clientId")!,
+    clientSecret: setting(call, "clientSecret") ?? bad(call, "Gmail with clientId also needs clientSecret:"),
+    tokenUrl: GOOGLE_TOKEN_URL,
+    refreshToken: secret(call, "a refresh token"),
+  });
+  return authFetch(call, services, GMAIL_ORIGIN, conn)!;
 }
 
-/** A Graph token and the mailbox it is for: "/me" for a person's token, "/users/<address>" for an app's. */
-async function graph(call: ToolCall, services: ToolServices): Promise<{ token: string; base: string }> {
+/** A Graph fetch and the mailbox it is for: "/me" for a person's token, "/users/<address>" for an app's. */
+function graph(call: ToolCall, services: ToolServices): { send: Send; base: string } {
   const user = setting(call, "user");
-  const root = "https://graph.microsoft.com/v1.0";
+  const root = `${GRAPH_ORIGIN}/v1.0`;
+  const mailbox = (person: boolean) => (person ? `${root}/me` : `${root}/users/${encodeURIComponent(user!)}`);
   const given = setting(call, "accessToken");
-  if (given) return { token: given, base: user ? `${root}/users/${encodeURIComponent(user)}` : `${root}/me` };
-  const clientId = setting(call, "clientId") ?? bad(call, `Outlook needs clientId: and tenant: (an app registration), or accessToken:`);
+  if (given) return { send: withGiven(services, given, GRAPH_ORIGIN), base: mailbox(!user) };
+  const declared = services.oauth?.connection(call.tool);
+  if (declared) {
+    const app = declared.grant === "client_credentials";
+    if (app && !user) bad(call, `Outlook as an app needs user: (the mailbox, e.g. user: "support@contoso.com")`);
+    return { send: authFetch(call, services, GRAPH_ORIGIN, declared)!, base: mailbox(!app) };
+  }
+  const clientId = setting(call, "clientId") ?? bad(call, `Outlook needs clientId: and tenant: (an app registration), auth: (an OAuth connection), or accessToken:`);
   const tenant = setting(call, "tenant") ?? "common";
-  const url = `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`;
+  const tokenUrl = `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`;
   const refresh = setting(call, "refreshToken");
   if (refresh) {
-    const clientSecret: Record<string, string> = typeof call.config(0) === "string" && call.config(0) ? { client_secret: String(call.config(0)) } : {};
-    const token = await oauthToken(services, call, url, { grant_type: "refresh_token", refresh_token: refresh, client_id: clientId, ...clientSecret }, "Microsoft");
-    return { token, base: `${root}/me` };
+    const clientSecret = typeof call.config(0) === "string" && call.config(0) ? String(call.config(0)) : undefined;
+    const conn = settingsConnection(call, services, { provider: "microsoft", grant: "authorization_code", clientId, ...(clientSecret ? { clientSecret } : {}), tokenUrl, refreshToken: refresh });
+    return { send: authFetch(call, services, GRAPH_ORIGIN, conn)!, base: mailbox(true) };
   }
   if (!user) bad(call, `Outlook as an app needs user: (the mailbox, e.g. user: "support@contoso.com")`);
   if (tenant === "common") bad(call, "Outlook as an app needs tenant: (your directory's id or domain)");
-  const token = await oauthToken(services, call, url, { grant_type: "client_credentials", client_id: clientId, client_secret: secret(call, "the app's client secret"), scope: "https://graph.microsoft.com/.default" }, "Microsoft");
-  return { token, base: `${root}/users/${encodeURIComponent(user!)}` };
+  const conn = settingsConnection(call, services, { provider: "microsoft", grant: "client_credentials", clientId, clientSecret: secret(call, "the app's client secret"), tokenUrl, scopes: ["https://graph.microsoft.com/.default"] });
+  return { send: authFetch(call, services, GRAPH_ORIGIN, conn)!, base: mailbox(false) };
 }
 
 // ── SMTP and IMAP settings ──
@@ -222,8 +247,8 @@ function login(call: ToolCall) {
 async function send(call: ToolCall, via: Via, services: ToolServices): Promise<unknown> {
   const { fetch } = services;
   const key = call.idempotencyKey;
-  const post = async (label: string, url: string, headers: Record<string, string>, body: string | FormData) => {
-    const res = await fetch(url, { method: "POST", headers, body, signal: call.signal });
+  const post = async (label: string, url: string, headers: Record<string, string>, body: string | FormData, via: Send = fetch) => {
+    const res = await via(url, { method: "POST", headers, body, signal: call.signal });
     return { res, out: await readJson(res, `${label} send`) };
   };
   const m = outgoing(call, via === "smtp" || via === "imap" || via === "gmail" || via === "outlook" ? setting(call, "user") : undefined);
@@ -285,7 +310,7 @@ async function send(call: ToolCall, via: Via, services: ToolServices): Promise<u
     return { sent: true, to, delivered: r.delivered ?? [], queued: r.queued ?? [], bounced: r.permanent_bounces ?? [] };
   }
   if (via === "outlook") {
-    const g = await graph(call, services);
+    const g = graph(call, services);
     const people = (list: string[]) => list.map((a) => ({ emailAddress: parseAddress(a) }));
     const message = {
       subject: m.subject,
@@ -296,12 +321,12 @@ async function send(call: ToolCall, via: Via, services: ToolServices): Promise<u
       ...(m.bcc.length ? { bccRecipients: people(m.bcc) } : {}),
       ...(m.replyTo.length ? { replyTo: people(m.replyTo) } : {}),
     };
-    await post("Outlook", `${g.base}/sendMail`, { Authorization: `Bearer ${g.token}`, "Content-Type": "application/json" }, JSON.stringify({ message, saveToSentItems: true }));
+    await post("Outlook", `${g.base}/sendMail`, { "Content-Type": "application/json" }, JSON.stringify({ message, saveToSentItems: true }), g.send);
     return { sent: true, to };
   }
   if (via === "gmail" && gmailMode(call) === "oauth") {
     const raw = Buffer.from(asMime(call, m)).toString("base64url");
-    const { out } = await post("Gmail", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { Authorization: `Bearer ${await gmailToken(call, services)}`, "Content-Type": "application/json" }, JSON.stringify({ raw }));
+    const { out } = await post("Gmail", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { "Content-Type": "application/json" }, JSON.stringify({ raw }), gmail(call, services));
     return { sent: true, id: out.id, to };
   }
   // SMTP: a server of your own, an IMAP mailbox's outgoing server, or Gmail with an app password.
@@ -390,14 +415,14 @@ async function withImap<T>(call: ToolCall, via: Via, work: (s: ImapSession) => P
 const READ_METHODS = ["list", "search", "inbox", "unread", "read", "get", "mark"];
 
 async function mailbox(call: ToolCall, via: Via, services: ToolServices): Promise<unknown> {
-  const { fetch } = services;
   const method = call.method === "get" ? "read" : ["search", "inbox", "unread"].includes(call.method) ? "list" : call.method;
   const id = () => need(call, "id: (a message's id, from list)", call.named.id ?? (call.implicitInput ? undefined : call.positional[0]));
   const markRead = () => !(call.named.read === false || call.named.read === "false" || call.named.unread === true);
 
   if (via === "outlook") {
-    const g = await graph(call, services);
-    const auth = { Authorization: `Bearer ${g.token}` };
+    const g = graph(call, services);
+    const fetch = g.send;
+    const auth = {};
     if (method === "mark") {
       const res = await fetch(`${g.base}/messages/${encodeURIComponent(id())}`, { method: "PATCH", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ isRead: markRead() }), signal: call.signal });
       await readJson(res, "Outlook mark");
@@ -439,7 +464,8 @@ async function mailbox(call: ToolCall, via: Via, services: ToolServices): Promis
   }
 
   if (via === "gmail" && gmailMode(call) === "oauth") {
-    const auth = { Authorization: `Bearer ${await gmailToken(call, services)}` };
+    const fetch = gmail(call, services);
+    const auth = {};
     const root = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
     const one = async (messageId: string, whole: boolean): Promise<MailMessage> => {
       const out = await readJson(await fetch(`${root}/${encodeURIComponent(messageId)}?format=raw`, { headers: auth, signal: call.signal }), "Gmail read");

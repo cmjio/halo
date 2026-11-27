@@ -11,7 +11,28 @@ import { collectMedia, inlineFiles, multipartBody, type MediaRef } from "../runt
 import { HaloError, HttpError } from "../runtime/errors.js";
 import { MCP_INFO, mcpProvider } from "../runtime/mcp.js";
 import type { JsonSchema, ProviderInfo, ToolCall, ToolMethod, ToolProvider, ToolServices } from "../runtime/tools.js";
-import type { HttpMethodSpec, HttpProviderSpec, McpProviderSpec, ProviderSpec } from "./manifest.js";
+import type { HttpAuth, HttpMethodSpec, HttpProviderSpec, McpProviderSpec, ProviderSpec } from "./manifest.js";
+import { authFetch, connectionFrom, type OAuthConnection } from "../runtime/oauth.js";
+
+/**
+ * The OAuth connection a package tool is: the manifest's endpoints, scopes and grant, with the
+ * client from the declaration (`clientId:`, `clientSecret:`) or the variables the manifest names.
+ */
+export function packageConnection(name: string, auth: HttpAuth, config: (k: string) => unknown, env: Record<string, string | undefined>, project: string): OAuthConnection {
+  const [idVar, secretVar] = [auth.env ?? []].flat();
+  const pick = (k: string, v: string | undefined) => config(k) ?? (v ? env[v] || process.env[v] : undefined);
+  const given: Record<string, unknown> = {
+    clientId: pick("clientId", idVar),
+    clientSecret: pick("clientSecret", secretVar),
+    scopes: config("scopes") ?? auth.scopes ?? [],
+    grant: config("grant") ?? auth.grant,
+    authorizeUrl: auth.authorizeUrl,
+    tokenUrl: auth.tokenUrl,
+    deviceUrl: auth.deviceUrl,
+    revokeUrl: auth.revokeUrl,
+  };
+  return connectionFrom(name, (k) => given[k], project);
+}
 
 export interface BuiltProvider {
   provider: ToolProvider;
@@ -82,9 +103,16 @@ export function httpProvider(providerName: string, spec: HttpProviderSpec): Buil
 
     const headers: Record<string, string> = { Accept: "application/json", ...(spec.headers ?? {}) };
     const auth = spec.auth ?? { type: "none" as const };
+    // OAuth: the declaration's own `auth:` (a connection of the consumer's), else the tool is its own
+    // connection, built from the manifest. The broker signs requests to the API's origin only.
+    let send: (url: URL, init: RequestInit) => Promise<Response> = (u, init) => services.fetch(u, init);
+    const own = auth.type === "oauth" ? (services.oauth?.connection(call.tool) ?? packageConnection(call.tool.name, auth, (k) => call.config(k), services.env ?? process.env, services.oauth?.project ?? process.cwd())) : undefined;
+    if (own) send = authFetch(call, services, url.origin, own)!;
     const declared = call.config("apiKey") ?? call.config(0);
     const key = typeof declared === "string" && declared ? declared : secret(call, services, typeof auth.env === "string" ? auth.env : undefined);
-    if (auth.type !== "none" && auth.type !== "basic" && !key) {
+    if (auth.type === "oauth") {
+      // The broker adds the header.
+    } else if (auth.type !== "none" && auth.type !== "basic" && !key) {
       throw new HaloError(`Tool "${call.tool.name}" needs an API key: set ${auth.env ?? "it"}, or declare ${providerName}(apiKey: Env.NAME)`, { code: "TOOL_CONFIG" });
     }
     if (auth.type === "bearer") headers.Authorization = `Bearer ${key}`;
@@ -117,7 +145,7 @@ export function httpProvider(providerName: string, spec: HttpProviderSpec): Buil
       body = JSON.stringify(await inlineFiles(args, read));
     }
 
-    const res = await services.fetch(url, { method: method.http.method, headers, body, signal: call.signal });
+    const res = await send(url, { method: method.http.method, headers, body, signal: call.signal });
     const text = await res.text();
     const label = `${call.tool.name}.${call.method} (${method.http.method} ${url.origin}${url.pathname})`;
     if (!res.ok) throw new HttpError(`${label} failed (${res.status}): ${text.slice(0, 500)}`, res.status, text);
@@ -131,6 +159,7 @@ export function httpProvider(providerName: string, spec: HttpProviderSpec): Buil
   const info: ProviderInfo = {
     description: spec.description,
     methods: spec.methods.map((m): ToolMethod => ({ name: m.name, description: m.description, effect: m.effect, params: paramsOf(m) })),
+    ...(spec.auth?.type === "oauth" ? { oauth: (name: string, config: (k: string) => unknown, env: Record<string, string | undefined>, project: string) => packageConnection(name, spec.auth!, config, env, project) } : {}),
   };
   return { provider, info };
 }

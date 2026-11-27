@@ -71,10 +71,11 @@ export function startFakeOAuth(opts: FakeOAuthOptions = {}) {
   };
   const err = (status: number, error: string, description?: string) => Response.json({ error, ...(description ? { error_description: description } : {}) }, { status });
 
+  let issuer = "";
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    async fetch(req) {
+    async fetch(req): Promise<Response> {
       const url = new URL(req.url);
       const form = req.method === "POST" && (req.headers.get("content-type") ?? "").includes("form") ? Object.fromEntries(new URLSearchParams(await req.text())) : undefined;
       state.requests.push({ path: url.pathname, method: req.method, ...(form ? { form } : {}), authorization: req.headers.get("authorization") });
@@ -180,7 +181,7 @@ export function startFakeOAuth(opts: FakeOAuthOptions = {}) {
       return new Response("not found", { status: 404 });
     },
   });
-  const issuer = `http://127.0.0.1:${server.port}`;
+  issuer = `http://127.0.0.1:${server.port}`;
   return {
     issuer,
     url: issuer,

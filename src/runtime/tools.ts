@@ -14,6 +14,7 @@ import { mcpProvider } from "./mcp.js";
 import { LOCAL_PROVIDERS } from "./providers/index.js";
 import { chromeProvider } from "./providers/chrome.js";
 import { vaultProvider, type WalletItem, type WalletLimits } from "./wallet.js";
+import { authFetch, type OAuthConnection, type ToolAuth } from "./oauth.js";
 
 export interface ToolCall {
   tool: ToolDeclaration;
@@ -119,6 +120,11 @@ export interface ProviderInfo {
   methods?: ToolMethod[] | ((ctx: ToolInfoContext, services: ToolServices) => Promise<ToolMethod[]>);
   /** The methods for a declaration's settings as written, without asking anything (for `halo plan`, when `methods` depends on them). */
   methodsFor?(config: (name: string) => unknown): ToolMethod[];
+  /**
+   * For a provider whose tools are their own OAuth connection (a package's `"type": "oauth"`): the
+   * connection a tool declared as `tool <name> : Provider(...)` makes, from its settings.
+   */
+  oauth?(name: string, config: (name: string) => unknown, env: Record<string, string | undefined>, project: string): OAuthConnection;
 }
 
 export interface ToolServices {
@@ -145,6 +151,8 @@ export interface ToolServices {
   serving?: boolean;
   /** Report how far a long call has got (an MCP server's progress notifications), as a run event. */
   progress?(p: { progress: number; total?: number; message?: string }): void;
+  /** OAuth: the connection a tool's `auth:` names, and the broker that signs its requests (see oauth.ts). */
+  oauth?: ToolAuth;
 }
 
 export type ToolProvider = (call: ToolCall, services: ToolServices) => Promise<unknown>;
@@ -208,9 +216,17 @@ function buildUrl(call: ToolCall, defaultPath: string): URL {
   return url;
 }
 
-function authHeaders(call: ToolCall): Record<string, string> {
+/** The static key header, for a tool without `auth:` (with it, the broker adds the token). */
+function authHeaders(call: ToolCall, oauth: boolean): Record<string, string> {
+  if (oauth) return {};
   const key = call.config("apiKey");
   return typeof key === "string" && key ? { Authorization: `Bearer ${key}` } : {};
+}
+
+/** How an HTTP tool sends: through its OAuth connection (to its own origin only), else plain fetch. */
+function sender(call: ToolCall, services: ToolServices): { send: (url: URL, init: RequestInit) => Promise<Response>; oauth: boolean } {
+  const signed = authFetch(call, services, fixedPrefix(call.template0 ?? baseUrl(call)).origin);
+  return signed ? { send: signed, oauth: true } : { send: (url, init) => services.fetch(url, init), oauth: false };
 }
 
 /** Parse a response. A tool declared with `allowNotFound: true` returns null on 404 (for APIs that 404 when nothing matches). */
@@ -234,11 +250,12 @@ function fileReader(call: ToolCall, services: ToolServices): (ref: MediaRef) => 
   };
 }
 
-const rest: ToolProvider = async (call, { fetch }) => {
+const rest: ToolProvider = async (call, services) => {
   if (collectMedia(call.named, call.positional).length) throw new HaloError(`${call.tool.name}: a GET request can't carry a file; declare a POST tool to send one`, { code: "TOOL_ARGUMENT" });
   const url = buildUrl(call, call.viaAgent || PLAIN_METHODS.has(call.method.toLowerCase()) ? "" : call.method);
   for (const [k, v] of Object.entries(params(call))) url.searchParams.set(k, str(v));
-  const res = await fetch(url, { method: "GET", headers: authHeaders(call), signal: call.signal });
+  const { send, oauth } = sender(call, services);
+  const res = await send(url, { method: "GET", headers: authHeaders(call, oauth), signal: call.signal });
   return readResponse(res, `GET ${url.origin}${url.pathname}`, call);
 };
 
@@ -269,7 +286,8 @@ const post: ToolProvider = async (call, services) => {
   if (mode !== "json" && mode !== "form" && mode !== "multipart") throw new HaloError(`Tool "${call.tool.name}": body is "json", "form" or "multipart", not ${JSON.stringify(mode)}`, { code: "TOOL_CONFIG" });
   const read = fileReader(call, services);
   let body: string | URLSearchParams | FormData;
-  const headers: Record<string, string> = { ...authHeaders(call), ...(key.header ? { [key.header]: call.idempotencyKey! } : {}) };
+  const { send, oauth } = sender(call, services);
+  const headers: Record<string, string> = { ...authHeaders(call, oauth),...(key.header ? { [key.header]: call.idempotencyKey! } : {}) };
   if (mode === "multipart") {
     body = await multipartBody(fields, read);
   } else if (mode === "form") {
@@ -280,7 +298,7 @@ const post: ToolProvider = async (call, services) => {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(await inlineFiles(fields, read, as));
   }
-  const res = await services.fetch(url, { method: "POST", headers, body, signal: call.signal });
+  const res = await send(url, { method: "POST", headers, body, signal: call.signal });
   return readResponse(res, `POST ${url.origin}${url.pathname}`, call);
 };
 
@@ -438,6 +456,10 @@ export const BUILTIN_PROVIDERS: Record<string, ToolProvider> = {
   MCP: mcpProvider,
   Chrome: chromeProvider,
   Vault: vaultProvider,
+  // An OAuth declaration is a connection other tools name with `auth:`; it has no methods.
+  OAuth: async (call) => {
+    throw new HaloError(`"${call.tool.name}" is an OAuth connection, not a tool to call: give it to a tool with auth: ${call.tool.name}`, { code: "TOOL_METHOD" });
+  },
   ...LOCAL_PROVIDERS,
   ...INTEGRATIONS,
 };

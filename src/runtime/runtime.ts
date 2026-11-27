@@ -71,6 +71,7 @@ import { MEDIA_INFO, MEDIA_PROVIDER, MEDIA_TOOL, mediaProvider, type Transcriber
 import { clock, isService, TRANSCRIBE_KEYS, TRANSCRIBE_SERVICES, transcriptionCost, transcriptText } from "./providers/transcribe.js";
 import { aKind, kinds } from "./media-ref.js";
 import { SecretRegistry } from "./secret-mask.js";
+import { authName, connectEvent, connectionFrom, defaultBroker, isAuthRequired, type OAuthConnection, type TokenBroker } from "./oauth.js";
 import { HttpError, HaloError, LoopLimitError, PolicyViolation, RunStoppedError, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
@@ -235,6 +236,12 @@ export interface RunMeta {
   resumes?: number;
   /** USD a person added to every MaxSpend limit for this run (`extendBudget`). Kept through checkpoints, resumes and rewinds. */
   budgetAdded?: number;
+  /**
+   * Who started the run, when the host says: `halo serve` sets "operator" (its token holder, through
+   * the API, Studio or its own schedules) or "consumer:<name>". Until serve knows people, a connect
+   * link (`/connect/...`) is offered only for an operator's runs.
+   */
+  owner?: string;
 }
 
 export interface TraceEntry {
@@ -479,6 +486,10 @@ export interface RuntimeConfig {
    * the adapters' own tables. Under MaxSpend, a call to a model with no price is refused.
    */
   prices?: Prices;
+  /** The OAuth token broker (default: the one this process shares). */
+  broker?: TokenBroker;
+  /** The project whose OAuth connections the runs use (their tokens are kept for it). Default: the working directory. */
+  projectRoot?: string;
 }
 
 // ── Internals ─────
@@ -934,13 +945,14 @@ export class HaloRuntime {
    * accepts references a run made before (a replay of recorded arguments); "files" allows all
    * of that and a path on this machine (the CLI: the person's own machine).
    */
-  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string; idempotencyKey?: string; dryRun?: boolean; media?: MediaTrust } = {}): Promise<RunResult> {
+  async run(pipelineName: string, args: Record<string, unknown> = {}, options: { signal?: AbortSignal; runId?: string; idempotencyKey?: string; dryRun?: boolean; media?: MediaTrust; owner?: string } = {}): Promise<RunResult> {
     const pipeline = this.pipelines.get(pipelineName);
     if (!pipeline) throw new HaloError(`Pipeline "${pipelineName}" not found`, { code: "PIPELINE_NOT_FOUND" });
     const ctx = this.newContext(pipeline, args, 0, options.signal);
     if (options.runId) ctx.meta.runId = options.runId;
     if (options.idempotencyKey) ctx.meta.idempotencyKey = options.idempotencyKey;
     if (options.dryRun) ctx.meta.dryRun = true;
+    if (options.owner) ctx.meta.owner = options.owner;
     this.walletFolders(ctx);
     await this.adoptArgs(ctx, options.media);
     return this.runTop(ctx, 0);
@@ -1307,6 +1319,12 @@ export class HaloRuntime {
         await this.runStore.finished?.(runId);
         throw err;
       };
+      // Waiting for a connection: the stage that needed it runs again (an agent picks up its
+      // conversation at the call that needed it; a yield(connect:) checks the connection again,
+      // and pauses again if it still isn't there). The payload is not used.
+      if (snap.waitingFor.startsWith("connect:")) {
+        return { pipeline: snap.pipeline, result: this.runTop(ctx, snap.nextStage).then(done, failed) };
+      }
       // An agent waiting for approval of a tool call: its stage runs again, picking up its conversation with the answer.
       // A tool stage waiting for its provider's approval (a wallet fill the pipeline makes itself) runs again too.
       if (snap.waitingFor === "approval") {
@@ -1560,7 +1578,12 @@ export class HaloRuntime {
   private async executePipeline(ctx: ExecutionContext, start: number): Promise<RunResult["status"]> {
     try {
       return await this.executeStages(ctx, start);
-    } catch (err) {
+    } catch (caught) {
+      let err = caught;
+      // A connection that needs a person (not connected, or its grant was revoked) pauses the run
+      // at the top-level stage it reached, instead of failing it; connecting and resuming runs that
+      // stage again, its tool calls with the same idempotency keys.
+      if (isAuthRequired(err) && ctx.depth === 0 && !ctx.signal.aborted) err = new Pause(connectEvent(err.connection), err.message);
       if (!(err instanceof Pause)) throw err;
       // No handler for this yield/listen: save the run so signal() can continue it.
       const i = ctx.stageIndex;
@@ -2215,7 +2238,7 @@ export class HaloRuntime {
         }
       } catch (err) {
         // A run paused for approval mid-conversation resumes on the model that was answering.
-        if (err instanceof Pause) {
+        if (err instanceof Pause || isAuthRequired(err)) {
           const paused = ctx.sessions?.[ctx.stageIndex];
           if (paused && tier > 0) paused.tier = tier;
           throw err;
@@ -2247,7 +2270,7 @@ export class HaloRuntime {
 
   /** Whether `@cascade` should try a bigger model after this failure. A spent budget, a stopped run, or a loop limit never moves up. */
   private escalates(err: unknown, ctx: ExecutionContext): boolean {
-    if (ctx.signal.aborted || err instanceof Pause || err instanceof LoopLimitError) return false;
+    if (ctx.signal.aborted || err instanceof Pause || err instanceof LoopLimitError || isAuthRequired(err)) return false;
     if (err instanceof PolicyViolation && err.rule === "MaxSpend") return false;
     return true;
   }
@@ -2399,8 +2422,9 @@ export class HaloRuntime {
       try {
         content = await this.agentTool(agent, kit, call, ctx, hooks, resultChars, media);
       } catch (err) {
-        if (err instanceof Pause && err.waitingFor === "approval") {
-          // Keep the conversation and the calls still to run, so approving picks up right here.
+        // Keep the conversation and the calls still to run, so approving (or connecting) picks up right here.
+        const connecting = isAuthRequired(err) && ctx.depth === 0 && !ctx.branch;
+        if ((err instanceof Pause && err.waitingFor === "approval") || connecting) {
           (ctx.sessions ??= {})[ctx.stageIndex] = { messages: copy(messages), pending: calls.slice(i), step: steps.done };
         }
         throw err;
@@ -2467,7 +2491,8 @@ export class HaloRuntime {
     try {
       result = await this.toolCall(entry.tool, entry.method.name, [], args as Record<string, unknown>, ctx, true, agent.name, wallet);
     } catch (err) {
-      if (ctx.signal.aborted || err instanceof Pause) throw err;
+      // A connection that needs a person pauses the run; the model never sees why.
+      if (ctx.signal.aborted || err instanceof Pause || isAuthRequired(err)) throw err;
       // A wallet value may have gone somewhere it shouldn't: the run stops, rather than the model carrying on.
       if (err instanceof HaloError && err.code === "WALLET_INCIDENT") throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -2923,6 +2948,13 @@ export class HaloRuntime {
         return this.ask(ctx, { target, key: req.key, message: req.message, attachments: [], named: req.named, ...(req.wallet ? { wallet: req.wallet } : {}) }, chosenBy ?? tool.name, `${tool.name} needs a person's approval`);
       },
       walletEvent: (e: WalletEvent) => this.walletEvent(ctx, e),
+      oauth: {
+        broker: this.broker,
+        project: this.projectRoot,
+        connection: (t) => this.connectionFor(t, ctx),
+        // A token is masked wherever the run's output goes, like a key read from Env.
+        secret: (name, value) => this.envSecrets.add(name, value),
+      },
       progress: (p) => {
         if (tool) this.emit({ type: "tool_progress", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method: method ?? "", ...p });
       },
@@ -2945,6 +2977,34 @@ export class HaloRuntime {
         return db;
       },
     };
+  }
+
+  private get broker(): TokenBroker {
+    return this.config.broker ?? defaultBroker();
+  }
+
+  private get projectRoot(): string {
+    return this.config.projectRoot ?? process.cwd();
+  }
+
+  /**
+   * The OAuth connection a tool's `auth:` names, built from that `OAuth(...)` declaration (its Env
+   * settings read now, so a resumed run sees today's values). Undefined for a tool without `auth:`.
+   */
+  private connectionFor(tool: ToolDeclaration, ctx: ExecutionContext): OAuthConnection | undefined {
+    const name = authName(tool);
+    if (name === undefined) return undefined;
+    return this.oauthConnection(name, ctx, tool.name);
+  }
+
+  /** The connection an `OAuth(...)` declaration describes, by its name. */
+  private oauthConnection(name: string, ctx: ExecutionContext, user?: string): OAuthConnection {
+    const decl = this.tools.get(name);
+    if (!decl || decl.provider !== "OAuth") {
+      throw new HaloError(`${user ? `Tool "${this.displayName(user)}": auth: ` : ""}${this.displayName(name)} is not an OAuth declaration (declare it with tool ${this.displayName(name)} : OAuth(provider: ..., clientId: ...))`, { code: "TOOL_CONFIG" });
+    }
+    const { config } = this.toolConfig(decl, ctx);
+    return connectionFrom(this.displayName(name), (k) => config(k), this.projectRoot);
   }
 
   /** A tool declaration's own args, resolved when read (so an unused key is never needed). */
@@ -3195,6 +3255,8 @@ export class HaloRuntime {
   // ── Human-in-the-loop ──
 
   private async interrupt(stage: InterruptStage, ctx: ExecutionContext): Promise<void> {
+    const connect = stage.argList.find((a) => a.name === "connect");
+    if (connect) return this.connectStage(stage, connect.value, ctx);
     const { positional, named } = this.resolveArgs(stage, ctx);
     const req: InterruptRequest = { pipeline: ctx.pipeline.name, attachments: [], args: positional, named, current: ctx.current, context: this.snapshot(ctx) };
 
@@ -3234,6 +3296,34 @@ export class HaloRuntime {
     const answer = await work;
     this.record({ kind: "yield", target: "yield", value: answer });
     this.deliver(stage, ctx, answer, "yield");
+  }
+
+  /**
+   * `|! yield(connect: Google, msg: "...")`: go on at once if Google's connection works (a token
+   * can be had, refreshing if need be), else pause with `waitingFor: "connect:Google"` until someone
+   * connects it and resumes the run, which checks again. The response is `{ connected, account }`,
+   * never a token.
+   */
+  private async connectStage(stage: InterruptStage, value: Value, ctx: ExecutionContext): Promise<void> {
+    const name = value.kind === "ref" ? value.path.join(".") : value.kind === "string" ? value.value : "";
+    const msgArg = stage.argList.find((a) => a.name === "msg" || a.name === "message");
+    const msg = msgArg ? formatValue(this.resolveValue(msgArg.value, ctx)) : undefined;
+    const mock = this.mockFor("yield");
+    if (mock) {
+      const answer = await mock({ target: "yield", kind: "yield", args: [], named: { connect: this.displayName(name), ...(msg ? { msg } : {}) }, input: ctx.current });
+      this.record({ kind: "yield", target: "yield", value: answer });
+      return this.deliver(stage, ctx, answer, "yield");
+    }
+    const conn = this.oauthConnection(name, ctx);
+    try {
+      await this.broker.token(conn, { fetch: this.fetch, signal: ctx.signal });
+    } catch (err) {
+      if (!isAuthRequired(err)) throw err;
+      if (ctx.depth > 0) throw new HaloError(`Pipeline "${ctx.pipeline.name}" reached |! yield(connect: ${conn.name}) inside a called pipeline, which can't pause; connect it first with halo auth login ${conn.name}`);
+      throw new Pause(connectEvent(conn.name), msg ? `${msg} (${err.message})` : err.message);
+    }
+    const account = this.broker.info(conn)?.account;
+    this.deliver(stage, ctx, { connected: true, connection: conn.name, ...(account ? { account } : {}) }, "yield");
   }
 
   /** Store a human's (or event source's) response for a yield or listen stage. */
