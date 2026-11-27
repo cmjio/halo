@@ -2997,6 +2997,21 @@ export class HaloRuntime {
     return this.oauthConnection(name, ctx, tool.name);
   }
 
+  /**
+   * The OAuth connection a declaration of the loaded program describes, by name, with its Env
+   * settings read now (for `halo serve`'s /connect, and anything else that signs a person in).
+   * Throws when there is no such OAuth declaration.
+   */
+  connection(name: string): OAuthConnection {
+    const pipeline = { name: "", params: [], pipeline: [], directives: [] } as unknown as PipelineDeclaration;
+    return this.oauthConnection(name, this.newContext(pipeline, {}, 0));
+  }
+
+  /** The token broker this runtime's tools use. */
+  get tokenBroker(): TokenBroker {
+    return this.broker;
+  }
+
   /** The connection an `OAuth(...)` declaration describes, by its name. */
   private oauthConnection(name: string, ctx: ExecutionContext, user?: string): OAuthConnection {
     const decl = this.tools.get(name);
