@@ -183,7 +183,8 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect: "external" }], notes: [`hosted by ${text("package")}: sends its inputs to ${host}${text("env") ? ` (key from ${text("env")})` : ""}`] });
         return;
       }
-      steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? " (effect not described)" : ""}`] });
+      const unknownWhy = !methodsOf(tool.name) ? " (its server says what this does only at run time: effect unknown)" : " (effect not described)";
+      steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? unknownWhy : ""}`] });
       return;
     }
     if (agent) {
@@ -198,8 +199,10 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
       for (const name of toolset) {
         const methods = methodsOf(name);
         if (!methods) {
-          step.effects.push({ target: `${name}.*`, effect: "unknown", via: agent.name });
-          step.notes.push(`${name}'s methods are listed by its server at run time`);
+          // A rule that approves every method of the tool still applies, whatever they turn out to be.
+          const approval = rulesOf(agent).find((r) => r.name === "ApproveTools" && r.args.some((p) => toolMatches(p, `${name}.*`)))?.policy;
+          step.effects.push({ target: `${name}.*`, effect: "unknown", approval, via: agent.name });
+          step.notes.push(`${name}'s methods, and what they do, are unknown until its server is asked at run time`);
           continue;
         }
         for (const m of methods) {
@@ -298,10 +301,13 @@ export function formatPlan(p: Plan, color: { bold(s: string): string; dim(s: str
   const ext = [...new Set(all.filter((e) => (e.effect === "external" || e.effect === "wallet") && !e.approval).map((e) => e.target))];
   const approved = [...new Set(all.filter((e) => e.approval).map((e) => e.target))];
   const unknown = [...new Set(all.filter((e) => e.effect === "unknown").map((e) => e.target))];
+  // A call whose effect is unknown may act on the world: it is never counted as nothing.
+  const unknownUnasked = [...new Set(all.filter((e) => e.effect === "unknown" && !e.approval).map((e) => e.target))];
+  const acts = [...(ext.length ? [color.red(ext.join(", "))] : []), ...(unknownUnasked.length ? [`maybe ${unknownUnasked.join(", ")} (effect unknown)`] : [])];
   lines.push("");
-  lines.push(`${color.bold("Acts on the world without asking:")} ${ext.length ? color.red(ext.join(", ")) : "nothing"}`);
+  lines.push(`${color.bold("Acts on the world without asking:")} ${acts.length ? acts.join("; ") : "nothing"}`);
   lines.push(`${color.bold("Needs a person's approval:")} ${approved.length ? approved.join(", ") : "nothing"}`);
-  if (unknown.length) lines.push(`${color.bold("Effects not described:")} ${unknown.join(", ")}`);
+  if (unknown.length) lines.push(`${color.bold("Effects unknown:")} ${unknown.join(", ")}`);
   const capped = p.cappedAt !== undefined && (p.maxCost === undefined || p.cappedAt < p.maxCost) ? `, but MaxSpend stops the run at $${p.cappedAt.toFixed(2)}` : "";
   lines.push(`${color.bold("Worst-case model cost:")} ${p.maxCost !== undefined ? `$${p.maxCost.toFixed(4)}` : p.costNote?.startsWith("no price") ? "unknown" : "unbounded"}${capped}${p.costNote ? color.dim(` (${p.costNote})`) : ""}`);
   for (const l of p.spendLimits) lines.push(`${color.bold("Spend limit:")} ${l.agent} stops once the run has spent $${l.limit.toFixed(2)} (policy ${l.policy})`);

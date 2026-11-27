@@ -109,6 +109,12 @@ export class Progress {
       case "tool":
         this.detail = `${e.tool}.${e.method} done`;
         break;
+      case "tool_progress": {
+        // The message is the server's text: no control characters reach the terminal.
+        const message = (e.message ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").slice(0, 80);
+        this.detail = `${e.tool}.${e.method} ${e.total ? `${Math.round((e.progress / e.total) * 100)}%` : e.progress}${message ? `: ${message}` : ""}`;
+        break;
+      }
       case "agent_tool":
         this.detail = `${e.agent} → ${e.target}${e.decision === "allowed" || e.decision === "approved" ? "" : ` (${e.decision})`}`;
         break;

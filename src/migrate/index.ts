@@ -450,6 +450,42 @@ export const MIGRATIONS: Migration[] = [
       return out;
     },
   },
+  {
+    id: "mcp-private-cwd",
+    since: "1.12.0",
+    title: "A stdio MCP server starts in a private empty folder",
+    detail:
+      "Bun and many dotenv libraries load .env from the folder a program starts in, so a server started in the project could read its keys. Without cwd:, a stdio MCP server now starts in a new empty folder, and relative paths in its command (./server.ts, server.ts, .) are made absolute against the project first. A server that needs to start in the project (python -m, uv run, a node_modules/.bin program, one that reads settings from its folder) needs cwd: \".\". Listed: each MCP tool with a command and no cwd:.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const tool of file.ast.tools) {
+          if (tool.provider !== "MCP" || tool.argList.some((a) => a.name === "cwd" || a.name === "url")) continue;
+          const first = tool.argList.find((a) => !a.name)?.value;
+          if (first?.kind !== "string" || /^https?:\/\//i.test(first.value.trim())) continue;
+          out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} ("${first.value}") starts in an empty folder; add cwd: "." if it needs the project's` });
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "mcp-unknown-settings",
+    since: "1.12.0",
+    title: "An MCP setting Halo doesn't read is an error",
+    detail:
+      "Before 1.12.0, MCP(\"...\", timeout: 5) loaded and the setting did nothing: the call still waited the default 60 seconds. Now the file doesn't load. Rename each one to the setting you meant (timeout_ms, apiKey, ...) or remove it.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        if (file.ast.errors.length) continue;
+        for (const d of validate(file.ast)) {
+          if (d.severity === "error" && /MCP has no setting|MCP takes one server/.test(d.message)) out.push({ file: file.path, line: d.line, message: d.message });
+        }
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {

@@ -48,7 +48,7 @@ import { checkExpectations, expectationsOf } from "./expect.js";
 import { findSteps, readSteps, stateAt } from "./runtime/history.js";
 import { ThreadStore } from "./runtime/threads.js";
 import { newReplayStats, pruneRecordings, readRecording, Recorder, replayMocks } from "./runtime/replay.js";
-import { createMcpServer, serveMcpStdio } from "./serve/mcp-server.js";
+import { annotationsFromEffects, createMcpServer, describePipelineTool, pipelineEffects, serveMcpStdio, type McpToolAnnotations } from "./serve/mcp-server.js";
 import { cmdWallet } from "./wallet-cli.js";
 import { Progress, progressWanted, seconds } from "./progress.js";
 import { installedProviderNames, loadPackageProviders, type LoadedProvider } from "./registry/resolver.js";
@@ -1437,7 +1437,7 @@ async function cmdMcp(flags: Flags): Promise<number> {
   if (!files.length) fail("No .halo files found");
   const providers = await installed();
   const toStderr = { log: (...a: unknown[]) => console.error(...a), warn: (...a: unknown[]) => console.error(...a) };
-  const entries = new Map<string, { rt: HaloRuntime; decl: PipelineDeclaration; file: string }>();
+  const entries = new Map<string, { rt: HaloRuntime; decl: PipelineDeclaration; file: string; description: string; annotations: McpToolAnnotations }>();
   const runtimes: HaloRuntime[] = [];
   for (const file of files) {
     // Each file is linked with what it uses; its own pipelines are the tools.
@@ -1449,11 +1449,16 @@ async function cmdMcp(flags: Flags): Promise<number> {
     const rt = new HaloRuntime({ logger: toStderr, runStore: new FileRunStore(".halo/runs"), serving: true, walletLog: ".halo/wallet.log", prices: (await haloConfig()).prices }).load(ast);
     registerInstalled(rt, providers);
     runtimes.push(rt);
-    for (const decl of entryPipelines(ast)) entries.set(decl.name, { rt, decl, file: rel });
+    for (const decl of entryPipelines(ast)) {
+      // The plan, once: the tool's description and annotations say what the pipeline can do.
+      const effects = pipelineEffects(ast, decl.name, (provider) => rt.toolProviderInfo(provider));
+      const description = describePipelineTool({ name: decl.name, params: decl.params, returnType: decl.returnType, file: rel }, effects);
+      entries.set(decl.name, { rt, decl, file: rel, description, annotations: effects ? annotationsFromEffects(effects) : {} });
+    }
   }
   const server = createMcpServer(
     {
-      list: () => [...entries.values()].map((e) => ({ name: e.decl.name, description: `Halo pipeline ${e.decl.name} from ${e.file}`, params: e.decl.params })),
+      list: () => [...entries.values()].map((e) => ({ name: e.decl.name, description: e.description, params: e.decl.params, annotations: e.annotations })),
       call: async (name, args, signal) => {
         const e = entries.get(name);
         if (!e) return { status: "failed", runId: "", error: `No pipeline "${name}"` };

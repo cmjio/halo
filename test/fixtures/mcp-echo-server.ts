@@ -1,6 +1,8 @@
 /**
  * A tiny MCP server over stdio, for tests. Tools: echo, add (read-only), fail
- * (isError), env (reports its environment), picture (image content), die (exits).
+ * (isError), env (reports its environment), picture (image content), die (exits),
+ * cwd (its working folder), slow (answers after `steps` × `every_ms`, sending progress
+ * each step when the call has a progressToken).
  * tools/list pages two tools at a time. One resource: memo://hello.
  */
 
@@ -16,7 +18,11 @@ const TOOLS = [
   { name: "env", description: "Report environment variable names and the value of PROBE", inputSchema: { type: "object", properties: {} } },
   { name: "picture", description: "Return an image", inputSchema: { type: "object", properties: {} }, annotations: { openWorldHint: true } },
   { name: "die", description: "Exit the process", inputSchema: { type: "object", properties: {} } },
+  { name: "cwd", description: "Report the working folder", inputSchema: { type: "object", properties: {} } },
+  { name: "slow", description: "Answer slowly, with progress", inputSchema: { type: "object", properties: { steps: { type: "number" }, every_ms: { type: "number" } } } },
 ];
+
+const send = (msg: unknown) => process.stdout.write(`${JSON.stringify(msg)}\n`);
 
 const PAGE = 2;
 
@@ -60,6 +66,20 @@ function handle(msg: any): unknown {
           return result(id, { content: [{ type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" }] });
         case "die":
           process.exit(3);
+        case "cwd":
+          return result(id, { content: [{ type: "text", text: JSON.stringify({ cwd: process.cwd() }) }] });
+        case "slow": {
+          const token = params._meta?.progressToken;
+          const steps = Number(args.steps ?? 3);
+          void (async () => {
+            for (let i = 1; i <= steps; i++) {
+              await Bun.sleep(Number(args.every_ms ?? 100));
+              if (token !== undefined) send({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token, progress: i, total: steps, message: `step ${i}` } });
+            }
+            send(result(id, { content: [{ type: "text", text: JSON.stringify({ done: steps, token: token !== undefined }) }] }));
+          })();
+          return undefined;
+        }
         default:
           return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${params.name}` } };
       }
@@ -79,6 +99,6 @@ for await (const chunk of Bun.stdin.stream()) {
     buf = buf.slice(nl + 1);
     if (!line) continue;
     const answer = handle(JSON.parse(line));
-    if (answer) process.stdout.write(`${JSON.stringify(answer)}\n`);
+    if (answer) send(answer);
   }
 }

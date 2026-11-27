@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { haloRange, MIGRATIONS, migrateProject, migrationHint, minVersion, MigrateError, type Migration } from "../src/migrate/index";
 import { install as installV1 } from "../src/registry/packages";
 import { readAnyLock } from "../src/registry/lockfile";
+import { compare } from "../src/registry/semver";
 import { TOOL_PROVIDERS } from "../src/parser/builtins";
 import { initProject } from "../src/init";
 import { main } from "../src/cli";
@@ -183,7 +184,9 @@ pipeline Q(x: String) -> Result:
     try {
       expect(await main(["migrate", dir])).toBe(0);
       expect(out.join("\n")).toContain("pay.halo:1  tool Ledger is equipped by an agent and has no rule for path");
-      expect(out.join("\n")).toContain(`record "halo": "${MIGRATIONS.map((m) => `^${m.since}`).at(-1)}" in halo.json`);
+      // The newest change this Halo has (a migration for the next release can be written before the version moves).
+      const newest = MIGRATIONS.map((m) => m.since).filter((v) => compare(v, pkg.version.replace(/-.*$/, "")) <= 0).at(-1);
+      expect(out.join("\n")).toContain(`record "halo": "^${newest}" in halo.json`);
       expect(await main(["migrate", dir, "--check"])).toBe(1);
       out.length = 0;
       expect(await main(["migrate", dir, "--json"])).toBe(0);
@@ -256,6 +259,27 @@ pipeline Fix(task: String) -> Result<Reply>:
       await migrateProject(dir, { haloVersion: "1.9.0", write: true, from: "1.8.0" });
       expect(readFileSync(join(dir, "fix.halo"), "utf8")).toBe(text);
     });
+  });
+
+  test("1.12.0: stdio MCP servers without cwd:, and MCP settings Halo doesn't read", async () => {
+    const dir = project({
+      "tools.halo": `tool Local : MCP("bun ./server.ts")
+tool Here  : MCP("uv run server.py", cwd: ".")
+tool Docs  : MCP(url: "https://docs.example/mcp")
+tool Far   : MCP("https://far.example/mcp")
+tool Slow  : MCP("npx -y slow-server", cwd: ".", timeout: 5)
+
+pipeline P(x: String) -> Result:
+  x |> Local.list_tools()
+`,
+      "halo.json": JSON.stringify({ halo: "^1.11.0" }),
+    });
+    const report = await migrateProject(dir, { haloVersion: "1.12.0" });
+    const by = Object.fromEntries(report.results.map((r) => [r.id, r]));
+    expect(Object.keys(by)).toEqual(["mcp-private-cwd", "mcp-unknown-settings"]);
+    expect(by["mcp-private-cwd"]!.findings).toEqual([{ file: "tools.halo", line: 1, message: `Local ("bun ./server.ts") starts in an empty folder; add cwd: "." if it needs the project's` }]);
+    expect(by["mcp-unknown-settings"]!.findings).toEqual([{ file: "tools.halo", line: 5, message: expect.stringContaining('MCP has no setting "timeout"') }]);
+    expect((await migrateProject(dir, { haloVersion: "1.11.0" })).results).toEqual([]);
   });
 });
 

@@ -143,6 +143,8 @@ export interface ToolServices {
   walletEvent?(event: WalletEvent): void;
   /** Whether this runtime serves pipelines to others (halo serve, halo mcp). */
   serving?: boolean;
+  /** Report how far a long call has got (an MCP server's progress notifications), as a run event. */
+  progress?(p: { progress: number; total?: number; message?: string }): void;
 }
 
 export type ToolProvider = (call: ToolCall, services: ToolServices) => Promise<unknown>;

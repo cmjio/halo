@@ -26,6 +26,7 @@ Pass `onEvent` in `RuntimeConfig` to observe a run as it happens, or iterate `ru
 | `llm` | Each model call: agent, model, system, prompt, output, latency, cost, tokens, mocked |
 | `token` | A model's text (the whole answer as one chunk) |
 | `tool` | Each tool call: tool, method, output, latency, mocked |
+| `tool_progress` | A tool call still running said how far it has got: tool, method, progress, total, message (an MCP server's progress reports; see [MCP](mcp.md#long-calls)) |
 | `agent_tool` | A tool call an agent chose: target, args, and whether it was allowed, approved, declined, refused, or failed (see [Agents with Tools](../agents-with-tools.md#events)) |
 | `retry` | A retry under `@retry` |
 | `correction` | `@correct` asking an agent again |

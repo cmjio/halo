@@ -658,6 +658,18 @@ describe("watches, Slack buttons, and MCP", () => {
       expect(list.result.tools[2].inputSchema).toMatchObject({ type: "object", properties: { n: { type: "number" } }, required: ["n"] });
       const call = (await (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "Quick", arguments: { n: 5 } } })).json()) as any;
       expect(JSON.stringify(call.result.content)).toContain("count 5");
+      // Descriptions and annotations come from each pipeline's plan: these call no tools.
+      const [draft, , quick] = list.result.tools;
+      expect(quick.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+      expect(quick.description).toBe("Runs the Halo pipeline Quick(n: Number) -> Result from flow.halo and returns its output. It calls no tools.");
+      expect(draft.description).toContain("It can pause for a person's approval");
+      // A paused run says so as data too: its id, what it waits for, and the link for a person.
+      const paused = (await (await rpc({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "Draft", arguments: { topic: "owls" } } })).json()) as any;
+      expect(paused.result.isError).toBeUndefined();
+      const { status, runId, waitingFor, approveUrl } = paused.result.structuredContent;
+      expect([status, waitingFor]).toEqual(["paused", "yield"]);
+      expect(approveUrl).toBe(`${s.url}/approve/${runId}?sig=${new URL(approveUrl).searchParams.get("sig")}`);
+      expect(paused.result.content[0].text).toContain(approveUrl);
     } finally {
       await s.stop();
     }

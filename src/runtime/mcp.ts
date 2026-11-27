@@ -10,12 +10,18 @@
  *
  * A command runs the server as a child process speaking JSON-RPC over stdio. It is
  * spawned without a shell, and sees only PATH, HOME and the variables named in `env:`
- * (or given as `env: { NAME: value }`). A URL speaks Streamable HTTP. One connection
+ * (or given as `env: { NAME: value }`). Unless the declaration sets `cwd:`, it starts in a
+ * private empty folder (so a runtime that loads `.env` from its working folder, like Bun,
+ * can't read the project's), with relative paths in the command resolved against the
+ * project first. A URL speaks Streamable HTTP. One connection
  * per declaration config is opened on first use, initialized once, and reused across
  * calls and runs; a stdio server that exits is restarted on the next call.
  * `closeMcpClients()` shuts them all down.
  */
 
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { HaloError, TimeoutError } from "./errors.js";
 import { inlineFiles } from "./media.js";
 import pkg from "../../package.json" with { type: "json" };
@@ -26,6 +32,15 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_SUPPORTED_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+/** The most a tools/call that keeps reporting progress may take, unless the declaration sets max_ms:. */
+const DEFAULT_MAX_MS = 15 * 60_000;
+
+/** One notifications/progress from the server, for a call in flight. */
+export interface McpProgress {
+  progress: number;
+  total?: number;
+  message?: string;
+}
 const CLIENT_INFO = { name: "halo", version: pkg.version };
 
 /** Methods every MCP tool has, in addition to the server's own tools. */
@@ -123,16 +138,23 @@ class StdioTransport implements Transport {
   protocolVersion?: string;
   onNotification?: (msg: JsonRpcMessage) => void;
 
+  /** The private empty folder the server runs in, when the declaration has no cwd: (removed when it exits). */
+  private scratch?: string;
+
   constructor(private label: string, argv: string[], env: Record<string, string>, cwd?: string) {
     try {
-      this.proc = Bun.spawn(argv, { env, cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      // mkdtemp makes the folder 0700: only this user can look in it.
+      if (cwd === undefined) this.scratch = mkdtempSync(join(tmpdir(), "halo-mcp-"));
+      this.proc = Bun.spawn(argv, { env, cwd: cwd ?? this.scratch, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     } catch (err) {
+      this.removeScratch();
       throw new HaloError(`${label}: could not start MCP server "${argv.join(" ")}": ${(err as Error).message}`, { code: "TOOL_CONFIG", cause: err });
     }
     void this.readStdout();
     void this.readStderr();
     void this.proc.exited.then((code) => {
       this.exited = true;
+      this.removeScratch();
       const tail = this.stderrTail.trim();
       const err = new HaloError(`${label}: MCP server exited (code ${code})${tail ? `: ${tail.slice(-500)}` : ""}`, { code: "TOOL_FAILED", retryable: true });
       for (const p of this.pending.values()) p.reject(err);
@@ -142,6 +164,14 @@ class StdioTransport implements Transport {
 
   get alive(): boolean {
     return !this.exited;
+  }
+
+  private removeScratch(): void {
+    if (!this.scratch) return;
+    try {
+      rmSync(this.scratch, { recursive: true, force: true });
+    } catch {}
+    this.scratch = undefined;
   }
 
   private async readStdout(): Promise<void> {
@@ -365,10 +395,18 @@ export class McpClient {
   private ready?: Promise<Transport>;
   private nextId = 1;
   private toolCache?: McpToolInfo[];
+  /** Requests that carry a progressToken (their id), and what to do with each progress notification. */
+  private progress = new Map<unknown, (p: McpProgress) => void>();
   /** What the server said about itself in initialize. */
   server?: { protocolVersion: string; capabilities: Record<string, unknown>; serverInfo?: { name: string; version?: string }; instructions?: string };
 
-  constructor(readonly label: string, private target: McpTarget, private fetchFn: typeof fetch = fetch, private timeoutMs = DEFAULT_TIMEOUT_MS) {}
+  constructor(
+    readonly label: string,
+    private target: McpTarget,
+    private fetchFn: typeof fetch = fetch,
+    private timeoutMs = DEFAULT_TIMEOUT_MS,
+    private maxMs = DEFAULT_MAX_MS,
+  ) {}
 
   private open(): Transport {
     const t = this.target;
@@ -381,6 +419,10 @@ export class McpClient {
     const transport = this.open();
     transport.onNotification = (m) => {
       if (m.method === "notifications/tools/list_changed") this.toolCache = undefined;
+      if (m.method === "notifications/progress") {
+        const p = m.params ?? {};
+        this.progress.get(p.progressToken)?.({ progress: Number(p.progress), ...(typeof p.total === "number" ? { total: p.total } : {}), ...(typeof p.message === "string" ? { message: p.message.slice(0, 500) } : {}) });
+      }
     };
     this.transport = transport;
     const ready = (async () => {
@@ -406,28 +448,54 @@ export class McpClient {
     return ready;
   }
 
-  private async send(transport: Transport, method: string, params: unknown, signal: AbortSignal): Promise<any> {
-    const timeout = AbortSignal.timeout(this.timeoutMs);
-    const both = AbortSignal.any([signal, timeout]);
+  /**
+   * Send one request. It may go `timeoutMs` without an answer; with `onProgress`, it carries a
+   * progressToken, and each progress notification for it restarts that wait, up to `maxMs` in all.
+   */
+  private async send(transport: Transport, method: string, params: unknown, signal: AbortSignal, onProgress?: (p: McpProgress) => void): Promise<any> {
+    const id = this.nextId++;
+    const timer = new AbortController();
+    let why: string | undefined;
+    const stop = (reason: string) => {
+      why = reason;
+      timer.abort(new TimeoutError(reason));
+    };
+    const idleText = `${this.label}: MCP ${method} took longer than ${this.timeoutMs}ms${onProgress ? " without reporting progress" : ""}`;
+    let idle = setTimeout(() => stop(idleText), this.timeoutMs);
+    const total = onProgress ? setTimeout(() => stop(`${this.label}: MCP ${method} took longer than ${this.maxMs}ms in all (max_ms)`), this.maxMs) : undefined;
+    if (onProgress) {
+      params = { ...(params as object), _meta: { ...((params as { _meta?: object })._meta ?? {}), progressToken: id } };
+      this.progress.set(id, (p) => {
+        clearTimeout(idle);
+        idle = setTimeout(() => stop(idleText), this.timeoutMs);
+        try {
+          onProgress(p);
+        } catch {}
+      });
+    }
     try {
-      const res = await transport.request({ jsonrpc: "2.0", id: this.nextId++, method, params }, both);
+      const res = await transport.request({ jsonrpc: "2.0", id, method, params }, AbortSignal.any([signal, timer.signal]));
       if (res.error) throw new McpError(`${this.label}: ${method} failed: ${res.error.message}`, res.error.code, res.error.data);
       return res.result;
     } catch (err) {
-      if (timeout.aborted && !signal.aborted) throw new TimeoutError(`${this.label}: MCP ${method} took longer than ${this.timeoutMs}ms`);
+      if (why && !signal.aborted) throw new TimeoutError(why);
       throw err;
+    } finally {
+      clearTimeout(idle);
+      clearTimeout(total);
+      this.progress.delete(id);
     }
   }
 
   /** Send a request, connecting (or reconnecting) first. */
-  async request(method: string, params: unknown, signal: AbortSignal = new AbortController().signal): Promise<any> {
+  async request(method: string, params: unknown, signal: AbortSignal = new AbortController().signal, onProgress?: (p: McpProgress) => void): Promise<any> {
     try {
-      return await this.send(await this.connect(signal), method, params, signal);
+      return await this.send(await this.connect(signal), method, params, signal, onProgress);
     } catch (err) {
       // The HTTP server forgot our session: initialize again, once.
       if (err instanceof HaloError && err.code === "MCP_SESSION_EXPIRED") {
         this.ready = undefined;
-        return this.send(await this.connect(signal), method, params, signal);
+        return this.send(await this.connect(signal), method, params, signal, onProgress);
       }
       throw err;
     }
@@ -474,7 +542,7 @@ const clients = new Map<string, McpClient>();
 type Config = (name: string | number) => unknown;
 
 /** Where a declaration's server lives: a URL (positional or `url:`) or a command. */
-export function mcpTarget(label: string, config: Config, environ: Record<string, string | undefined> = process.env): McpTarget {
+export function mcpTarget(label: string, config: Config, environ: Record<string, string | undefined> = process.env, projectDir = process.cwd()): McpTarget {
   const first = config(0);
   const url = config("url") ?? (typeof first === "string" && /^https?:\/\//i.test(first.trim()) ? first.trim() : undefined);
   if (url !== undefined) {
@@ -490,7 +558,14 @@ export function mcpTarget(label: string, config: Config, environ: Record<string,
   if (typeof command !== "string" || !command.trim()) {
     throw new HaloError(`Tool "${label}" needs a server command or url:, e.g. MCP("npx -y @modelcontextprotocol/server-everything") or MCP(url: "https://example.com/mcp")`, { code: "TOOL_CONFIG" });
   }
-  const argv = splitCommand(command);
+  const cwdArg = config("cwd");
+  if (cwdArg !== undefined && cwdArg !== null && (typeof cwdArg !== "string" || !cwdArg)) throw new HaloError(`Tool "${label}": cwd: must be a folder, e.g. cwd: "."`, { code: "TOOL_CONFIG" });
+  const cwd = typeof cwdArg === "string" ? resolve(projectDir, cwdArg) : undefined;
+  let argv = splitCommand(command);
+  // Without cwd: the server starts in a private empty folder, so paths in the command mean the project's files.
+  if (cwd === undefined) argv = resolveCommandPaths(argv, projectDir);
+  // Bun loads .env from its working folder: in the project's own folder, that is the project's secrets.
+  else if (cwd === resolve(projectDir)) argv = withoutBunEnvFile(argv);
   // The child sees only PATH and HOME, plus what the declaration passes on.
   const env: Record<string, string> = {};
   for (const name of ["PATH", "HOME"]) if (process.env[name] !== undefined) env[name] = process.env[name]!;
@@ -506,19 +581,51 @@ export function mcpTarget(label: string, config: Config, environ: Record<string,
   } else if (pass !== undefined && pass !== null) {
     throw new HaloError(`Tool "${label}": env: must be a list of variable names, e.g. env: ["GITHUB_TOKEN"]`, { code: "TOOL_CONFIG" });
   }
-  const cwd = config("cwd");
-  return { kind: "stdio", argv, env, ...(typeof cwd === "string" ? { cwd } : {}) };
+  return { kind: "stdio", argv, env, ...(cwd !== undefined ? { cwd } : {}) };
+}
+
+/**
+ * Make the command's relative paths absolute, against the project folder, for a server that
+ * starts somewhere else: a program named by path (`./bin/server`, `dist/server.js`), an
+ * argument that is `.`, `..` or starts with `./` or `../` (also after `--flag=`), and any
+ * other argument that names a file or folder that exists in the project (`bun server.ts`).
+ * A bare program name (`npx`, `bun`) is still found on PATH.
+ */
+export function resolveCommandPaths(argv: string[], projectDir: string): string[] {
+  const explicit = (a: string) => a === "." || a === ".." || a.startsWith("./") || a.startsWith("../");
+  return argv.map((arg, i) => {
+    if (!arg || isAbsolute(arg)) return arg;
+    if (i === 0) return arg.includes("/") ? resolve(projectDir, arg) : arg;
+    if (explicit(arg)) return resolve(projectDir, arg);
+    const flag = arg.match(/^(--?[\w-]+=)(.+)$/);
+    if (flag) return explicit(flag[2]!) ? flag[1] + resolve(projectDir, flag[2]!) : arg;
+    if (arg.startsWith("-") || arg.includes("://") || arg.startsWith("@")) return arg;
+    return existsSync(join(projectDir, arg)) ? resolve(projectDir, arg) : arg;
+  });
+}
+
+/** `bun <script>` or `bun run ...` with --no-env-file, so Bun doesn't read the folder's .env. */
+function withoutBunEnvFile(argv: string[]): string[] {
+  const [exe, next] = argv;
+  const bun = !!exe && /^bun(\.exe|\.native)?$/i.test(basename(exe));
+  if (!bun || next === undefined || next === "x" || argv.includes("--no-env-file")) return argv;
+  return [exe, "--no-env-file", ...argv.slice(1)];
 }
 
 /** The shared client for a declaration's config (a new one when the config differs). */
 export function mcpClient(label: string, config: Config, fetchFn: typeof fetch = fetch, environ?: Record<string, string | undefined>): McpClient {
   const target = mcpTarget(label, config, environ);
-  const timeoutMs = Number(config("timeout_ms") ?? DEFAULT_TIMEOUT_MS);
+  const ms = (name: string, fallback: number) => {
+    const n = Number(config(name) ?? fallback);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  const timeoutMs = ms("timeout_ms", DEFAULT_TIMEOUT_MS);
+  const maxMs = Math.max(timeoutMs, ms("max_ms", DEFAULT_MAX_MS));
   // Hash the config, so keys and tokens don't sit in the map's keys as plain text.
-  const key = String(Bun.hash(JSON.stringify([target, timeoutMs])));
+  const key = String(Bun.hash(JSON.stringify([target, timeoutMs, maxMs])));
   let client = clients.get(key);
   if (!client) {
-    client = new McpClient(label, target, fetchFn, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS);
+    client = new McpClient(label, target, fetchFn, timeoutMs, maxMs);
     clients.set(key, client);
   }
   return client;
@@ -636,7 +743,8 @@ export const mcpProvider: ToolProvider = async (call, services) => {
     if (!services.media) throw new HaloError(`${call.tool.name}: this runtime can't read the files its runs hold, so it can't send them`, { code: "TOOL_CONFIG" });
     return services.media(ref);
   });
-  const result = await client.request("tools/call", { name: tool.name, arguments: args }, signal);
+  // A progressToken on every call: a server that reports progress keeps a long call alive (up to max_ms).
+  const result = await client.request("tools/call", { name: tool.name, arguments: args }, signal, (p) => services.progress?.(p));
   if (result?.isError) throw new HaloError(`${call.tool.name}.${call.method}: ${errorText(result)}`, { code: "TOOL_FAILED" });
   return mcpResultValue(result);
 };

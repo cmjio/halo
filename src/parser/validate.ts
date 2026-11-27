@@ -144,6 +144,7 @@ class Validator {
       if (t.provider === "SQLite") this.checkSqliteTool(t);
       if (t.provider === "Remote") this.checkRemoteSecrets(t);
       if (t.provider === "Bash") this.checkBashEnv(t);
+      if (t.provider === "MCP") this.checkMcp(t);
       this.checkArgRules(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
@@ -362,6 +363,25 @@ class Validator {
       }
     }
     for (const p of walletItemProblems(t.name, (k) => literal(t.argList.find((a) => a.name === k)?.value))) this.add("error", `Tool "${t.name}" (Vault): ${p}`, t.loc);
+  }
+
+  /** An MCP declaration's settings: the ones the client reads, and one server (a command or a url). */
+  private checkMcp(t: ParseResult["tools"][number]) {
+    const KNOWN = ["command", "url", "apiKey", "headers", "env", "cwd", "timeout_ms", "max_ms", "wallet_safe"];
+    const positional = t.argList.filter((a) => !a.name);
+    if (positional.length > 1) this.add("error", `Tool "${t.name}": MCP takes one server, a command or a URL, as its first argument; the others would be ignored (write the command as one string, e.g. MCP("npx -y @modelcontextprotocol/server-github"))`, t.loc);
+    for (const a of t.argList) {
+      if (!a.name || KNOWN.includes(a.name)) continue;
+      const near = didYouMean(a.name, KNOWN);
+      this.add("error", `Tool "${t.name}": MCP has no setting "${a.name}"${near ? `; did you mean ${near}?` : ` (it has ${KNOWN.join(", ")})`}`, t.loc, a.name);
+    }
+    for (const name of ["timeout_ms", "max_ms"]) {
+      const v = t.argList.find((a) => a.name === name)?.value;
+      if (v && v.kind !== "number" && v.kind !== "ref") this.add("error", `Tool "${t.name}": ${name}: is a number of milliseconds, e.g. ${name}: 120000`, t.loc, name);
+      else if (v?.kind === "number" && !(v.value > 0)) this.add("error", `Tool "${t.name}": ${name}: must be more than 0`, t.loc, name);
+    }
+    const env = t.argList.find((a) => a.name === "env");
+    if (env?.value.kind === "list") this.checkBashEnv(t);
   }
 
   /** A Bash env: list names variables to pass on; Env.X there would be the value, not a name. */

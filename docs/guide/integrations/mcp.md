@@ -55,10 +55,36 @@ Every MCP tool also has three built-in methods that a pipeline can call. These t
 | `apiKey:` | Sent as `Authorization: Bearer ...` (HTTP only). |
 | `headers:` | Extra HTTP headers, e.g. `headers: { "X-Org": "acme" }` (HTTP only). |
 | `env:` | Names of environment variables the stdio server may see, e.g. `env: ["GITHUB_TOKEN"]`, read from the runtime's environment (`RuntimeConfig.env`, which defaults to the process environment), like `Env.NAME`. Or a record of values: `env: { LOG_LEVEL: "warn" }`. |
-| `cwd:` | Working directory for the stdio server. |
-| `timeout_ms:` | How long one request may take. The default is 60000. |
+| `cwd:` | Working folder for the stdio server, relative to the folder Halo runs in. Without it, the server starts in a private empty folder (see below). Write `cwd: "."` to run it in the project. |
+| `timeout_ms:` | How long one request may go without an answer. The default is 60000. For a tool call, each progress report from the server starts this wait again (see [Long calls](#long-calls)). |
+| `max_ms:` | The most one tool call may take in all, however often it reports progress. The default is 900000 (15 minutes). |
+| `wallet_safe:` | `true` lets a local server share a program with a [wallet](../../stdlib/wallet.md), when you know it can't be steered into running commands. |
+
+Any other setting is an error, with the name it was close to: `MCP("...", timeout: 5)` asks whether you meant `timeout_ms`.
 
 A stdio server gets a clean environment: `PATH`, `HOME`, and only the variables you list in `env:`. Your other secrets are not passed to it. It still runs as your user, with your files and network: a stdio server is a program you install and run, so only use servers you trust.
+
+#### Where a stdio server runs
+
+Bun, and many dotenv libraries, load `.env` from the folder a program starts in. If a server started in your project, it could read `HALO_API_KEY` and the rest of your `.env`, even though `env:` doesn't pass them. So, unless the declaration sets `cwd:`, Halo starts each stdio server in a new empty folder that only you can read, and removes it when the server exits.
+
+The command still means your project's files. Before it starts, Halo makes its relative paths absolute, against the folder Halo runs in:
+
+- a program named by a path: `./bin/server`, `dist/server.js`
+- an argument that is `.` or `..`, or starts with `./` or `../`, also after `--flag=`
+- any other argument that names a file or folder in the project, such as `server.ts` in `bun server.ts`
+
+A bare program name such as `npx`, `uvx` or `bun` is still found on `PATH`. So `MCP("bun ./server.ts")` and `MCP("npx -y @modelcontextprotocol/server-filesystem .")` work as before.
+
+Some servers need to start in the project: one that finds its modules or settings from the folder it starts in (`python -m pkg`, `uv run`, a binary in `node_modules/.bin`). Give those `cwd: "."`. When `cwd:` is the project folder and the command is `bun`, Halo adds `--no-env-file`, so Bun still skips the project's `.env`. Other runtimes in the project folder may load it: keep the keys a server shouldn't see out of `.env`, or don't use `cwd: "."` for it.
+
+The empty folder doesn't help against a library that searches for `.env` from the server script's own folder (python-dotenv's default). A server script that lives in your project can still find the project's `.env` that way.
+
+#### Long calls
+
+Every tool call carries a `progressToken`. A server that sends `notifications/progress` for it keeps the call alive: each report starts the `timeout_ms` wait again. So a call that reports every few seconds can run for longer than `timeout_ms`, up to `max_ms` in all. A server that reports nothing still has `timeout_ms`.
+
+Each report is also a `tool_progress` run event (`tool`, `method`, `progress`, `total`, `message`). `halo run` shows it on its status line, and Studio lists it with the run's events.
 
 Halo opens one connection per declaration and reuses it across calls and runs. If a stdio server exits, Halo restarts it on the next call. Halo connects with protocol version `2025-06-18` and also works with servers that answer with `2025-03-26` or `2024-11-05`.
 
@@ -72,11 +98,18 @@ Halo opens one connection per declaration and reuses it across calls and runs. I
 
 Annotations are hints from the server, and a server can say anything. A server that marks a destructive tool `readOnlyHint: true` gets past `AllowEffects(read)`. To rely on a policy, name tools: `AllowTools("Git.list_pull_requests", "Git.get_pull_request")`.
 
-`halo plan` doesn't start servers, so it can't list an MCP tool's methods or their effects. It shows them as `Git.*`, with the effect not described.
+`halo plan` doesn't start servers, so it can't list an MCP tool's methods or their effects. It shows them as `Git.*: unknown`, and its summary counts them as `maybe Git.* (effect unknown)` under "Acts on the world without asking", never as nothing. A rule that sends every call of the tool to a person, such as `ApproveTools("Git")`, counts as asking.
 
 ## Exposing pipelines as MCP tools
 
 Each pipeline becomes an MCP tool. Its parameters become the tool's input schema, all required: `String`, `Number`, `Integer`, `Boolean`, `Array<T>`/`List`, `Object`/`Map` and `JSON`/`Any` map to the matching JSON Schema types, and schema types map to objects.
+
+Halo plans each pipeline, as [`halo plan`](../plan-and-replay.md) does, and the tool says what it found:
+
+- Its description gives the signature and file, the tool calls the pipeline may make with their effects (and which ask a person first), and whether it can pause for approval.
+- Its annotations come from those effects. A pipeline whose calls only read (or that calls no tools) is `readOnlyHint: true`. One that writes or calls out is `readOnlyHint: false` and `destructiveHint: true` (Halo can't tell adding from deleting), with `openWorldHint: true` when a call is external. A pipeline with an effect the plan can't know, such as an MCP tool's, gets no annotations, so the client treats it as able to do anything.
+
+Annotations are hints for the client, as they are for Halo's own MCP client: they don't stop anything.
 
 ### stdio
 
@@ -121,10 +154,10 @@ Runs started over `/mcp` appear in Studio and the API like any other run.
 | Run status | What the client gets |
 | --- | --- |
 | completed | The output as text, plus `structuredContent` when the output is an object |
-| paused | A message such as `Paused waiting for yield, run id 4f1c…`. Under `halo serve`, answer it with the approval link, Studio, or the HTTP API. Under `halo mcp`, the run is saved in `.halo/runs` (in the folder `halo mcp` started in): continue it with `halo resume <file> <runId> --payload approve`. |
+| paused | A message such as `Paused waiting for yield, run id 4f1c…`, and the same as `structuredContent`: `{ status: "paused", runId, waitingFor, approveUrl }`. Under `halo serve`, `approveUrl` is the signed approval link, which is also in the text; answer it there, in Studio, or with the HTTP API. The link lets whoever opens it answer the pause, like the API token does, so a client should show it to a person rather than open it itself. Under `halo mcp`, the run is saved in `.halo/runs` (in the folder `halo mcp` started in): continue it with `halo resume <file> <runId> --payload approve`. |
 | halted or failed | A tool error (`isError: true`) with the reason and the run id |
 
-If the client cancels a call (or, over HTTP, drops the request), Halo aborts the run.
+If the client cancels a call (or, over HTTP, drops the request), Halo aborts the run. A request id belongs to the caller that sent it: the API token, or under `halo serve --package` each consumer key. So a `notifications/cancelled` stops only that caller's own call with that id, never another client's.
 
 Neither `halo mcp` nor `/mcp` asks anyone at `|! yield`, `~> listen`, or a tool call that needs approval: the run pauses. A tool call that needs approval inside a fan-out, `each`, branch, or called pipeline fails with `APPROVAL_NEEDED` (see [Approvals](../agents-with-tools.md#approvals)).
 
@@ -138,6 +171,7 @@ const server = createMcpServer({
   call: async (name, args) => ({ status: "completed", output: `hello ${args.name}`, runId: crypto.randomUUID() }),
 });
 
-Bun.serve({ routes: { "/mcp": (req) => server.handleHttp(req) } }); // Streamable HTTP
-// or: await serveMcpStdio(server);                                // stdio
+// Streamable HTTP. Check who is calling first, and pass it: a request id (for cancelling) is that caller's own.
+Bun.serve({ routes: { "/mcp": (req) => server.handleHttp(req, callerOf(req)) } });
+// or, over stdio: await serveMcpStdio(server);
 ```

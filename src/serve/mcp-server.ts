@@ -8,25 +8,78 @@
  * Each pipeline is one tool; its params become the tool's input schema. A run that
  * completes returns its output (as text, and as structuredContent). A run that fails or
  * halts is a tool error; one that pauses for approval says so, with its run id, so it
- * can be resumed through the HTTP API or Studio.
+ * can be resumed through the HTTP API or Studio. A tool's annotations (readOnlyHint,
+ * destructiveHint, openWorldHint) come from its pipeline's plan, when the source gives one.
  *
  * Stateless: no sessions, no server-sent streams. Each POST carries its own answer.
  */
 
 import pkg from "../../package.json" with { type: "json" };
-import { MCP_PROTOCOL_VERSION, MCP_SUPPORTED_VERSIONS } from "../runtime/mcp.js";
+import { MCP_PROTOCOL_VERSION, MCP_SUPPORTED_VERSIONS, type McpToolInfo } from "../runtime/mcp.js";
 import type { JsonSchema } from "../runtime/tools.js";
+import type { ParseResult } from "../parser/types.js";
+import { plan, type PlanOptions } from "../plan.js";
+
+export type McpToolAnnotations = NonNullable<McpToolInfo["annotations"]>;
 
 export interface McpPipelineSource {
-  list(): Array<{ name: string; description?: string; params: Array<{ name: string; type: string }> }>;
-  call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: string; output?: unknown; runId: string; error?: string; waitingFor?: string }>;
+  list(): Array<{ name: string; description?: string; params: Array<{ name: string; type: string }>; annotations?: McpToolAnnotations }>;
+  call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: string; output?: unknown; runId: string; error?: string; waitingFor?: string; approveUrl?: string }>;
+}
+
+/** What a pipeline's plan says it can do: the effect of every call it may make, and whether it can wait for a person. */
+export interface PipelineEffects {
+  effects: Array<{ target: string; effect: string; approval?: string }>;
+  pauses: boolean;
+}
+
+/**
+ * MCP annotations from a plan's effects. Only reads: readOnlyHint. Anything that writes or
+ * reaches out: not read-only, and destructive (Halo can't tell an append from a delete), and
+ * openWorldHint when a call is external. An effect the plan can't know (an MCP tool's)
+ * claims nothing, so the client's own defaults (not read-only, destructive) apply.
+ */
+export function annotationsFromEffects(p: PipelineEffects): McpToolAnnotations {
+  const kinds = new Set(p.effects.map((e) => e.effect));
+  if (kinds.has("unknown")) return {};
+  const open = kinds.has("external") || kinds.has("wallet");
+  if ([...kinds].every((k) => k === "read")) return { readOnlyHint: true, openWorldHint: false };
+  return { readOnlyHint: false, destructiveHint: true, openWorldHint: open };
+}
+
+/** A pipeline's effects from `halo plan`'s analysis, or undefined when it can't be planned. */
+export function pipelineEffects(ast: ParseResult, pipeline: string, providerInfo: PlanOptions["providerInfo"]): PipelineEffects | undefined {
+  try {
+    const steps = plan(ast, pipeline, { providerInfo }).steps;
+    return { effects: steps.flatMap((s) => s.effects), pauses: steps.some((s) => s.kind === "human" || s.effects.some((e) => e.approval)) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** A tool description from a pipeline's signature and plan, for an agent choosing what to call. */
+export function describePipelineTool(d: { name: string; params: Array<{ name: string; type: string }>; returnType?: string; file?: string }, plan?: PipelineEffects): string {
+  const sig = `${d.name}(${d.params.map((p) => `${p.name}: ${p.type}`).join(", ")})${d.returnType ? ` -> ${d.returnType}` : ""}`;
+  const parts = [`Runs the Halo pipeline ${sig}${d.file ? ` from ${d.file}` : ""} and returns its output.`];
+  if (plan) {
+    const seen = new Map<string, string>();
+    for (const e of plan.effects) if (!seen.has(e.target)) seen.set(e.target, `${e.target} (${e.effect}${e.approval ? ", asks a person first" : ""})`);
+    if (seen.size) parts.push(`It may call ${[...seen.values()].slice(0, 12).join(", ")}${seen.size > 12 ? `, and ${seen.size - 12} more` : ""}.`);
+    else parts.push("It calls no tools.");
+    if (plan.pauses) parts.push("It can pause for a person's approval; the result then says so, with the run id.");
+  }
+  return parts.join(" ");
 }
 
 export interface McpServer {
-  /** Answer one JSON-RPC message; undefined for notifications and responses. */
-  handleMessage(msg: unknown, signal?: AbortSignal): Promise<object | undefined>;
-  /** Streamable HTTP: mount at /mcp. */
-  handleHttp(req: Request): Promise<Response>;
+  /**
+   * Answer one JSON-RPC message; undefined for notifications and responses. `caller` says who
+   * sent it (a token, a consumer key): a request id means something only to the caller that
+   * used it, so one caller's notifications/cancelled can't stop another's call.
+   */
+  handleMessage(msg: unknown, signal?: AbortSignal, caller?: string): Promise<object | undefined>;
+  /** Streamable HTTP: mount at /mcp. Pass who the request comes from, once it is authenticated. */
+  handleHttp(req: Request, caller?: string): Promise<Response>;
 }
 
 type Id = string | number;
@@ -91,20 +144,23 @@ function outputText(output: unknown): string {
 }
 
 export function createMcpServer(source: McpPipelineSource, info: { name: string; version: string } = { name: "halo", version: pkg.version }): McpServer {
-  /** In-flight tools/call requests, so notifications/cancelled can stop them. */
-  const inflight = new Map<Id, AbortController>();
+  /** In-flight tools/call requests, by caller and id, so notifications/cancelled can stop them. */
+  const inflight = new Map<string, Set<AbortController>>();
+  const callKey = (caller: string, id: unknown) => `${caller}\u0000${typeof id}:${String(id)}`;
 
   const ok = (id: Id, result: unknown) => ({ jsonrpc: "2.0", id, result });
   const fail = (id: Id | null, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
-  async function callTool(id: Id, params: any, signal?: AbortSignal): Promise<object> {
+  async function callTool(id: Id, params: any, signal: AbortSignal | undefined, caller: string): Promise<object> {
     const name = params?.name;
     if (typeof name !== "string") return fail(id, INVALID_PARAMS, "tools/call needs a tool name");
     if (!source.list().some((p) => p.name === name)) return fail(id, INVALID_PARAMS, `Unknown tool: ${name}`);
     const args = params.arguments ?? {};
     if (typeof args !== "object" || Array.isArray(args)) return fail(id, INVALID_PARAMS, "tools/call arguments must be an object");
     const controller = new AbortController();
-    inflight.set(id, controller);
+    const key = callKey(caller, id);
+    const running = inflight.get(key) ?? new Set<AbortController>();
+    inflight.set(key, running.add(controller));
     const both = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     try {
       const run = await source.call(name, args, both);
@@ -116,8 +172,15 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
           const structured = out !== null && typeof out === "object" && !Array.isArray(out) ? { structuredContent: out } : {};
           return ok(id, { content: [{ type: "text", text: outputText(out) }], ...structured });
         }
-        case "paused":
-          return text(`Paused waiting for ${run.waitingFor ?? "approval"}, run id ${run.runId}. Resume it through the Halo HTTP API or Studio.`);
+        case "paused": {
+          // The same, as data, so a client can show the run or hand the link to a person.
+          const waitingFor = run.waitingFor ?? "approval";
+          const how = run.approveUrl ? `A person can answer it at ${run.approveUrl}` : "Resume it through the Halo HTTP API or Studio";
+          return ok(id, {
+            content: [{ type: "text", text: `Paused waiting for ${waitingFor}, run id ${run.runId}. ${how}.` }],
+            structuredContent: { status: "paused", runId: run.runId, waitingFor, ...(run.approveUrl ? { approveUrl: run.approveUrl } : {}) },
+          });
+        }
         case "halted":
           return text(`Halted${run.error ? `: ${run.error}` : ""} (run id ${run.runId})${run.output !== undefined ? `\n${outputText(run.output)}` : ""}`, true);
         default:
@@ -126,18 +189,20 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     } catch (err) {
       return ok(id, { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true });
     } finally {
-      inflight.delete(id);
+      running.delete(controller);
+      if (!running.size) inflight.delete(key);
     }
   }
 
-  async function handleMessage(raw: unknown, signal?: AbortSignal): Promise<object | undefined> {
+  async function handleMessage(raw: unknown, signal?: AbortSignal, caller = ""): Promise<object | undefined> {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail(null, INVALID_REQUEST, "Invalid request");
     const msg = raw as { jsonrpc?: string; id?: Id | null; method?: unknown; params?: any };
     // Responses to requests we never send: ignore.
     if (typeof msg.method !== "string") return undefined;
     const isRequest = msg.id !== undefined && msg.id !== null;
     if (!isRequest) {
-      if (msg.method === "notifications/cancelled") inflight.get(msg.params?.requestId)?.abort(new Error("cancelled by the client"));
+      // Only the caller that sent the request can cancel it: another caller's id 1 is a different call.
+      if (msg.method === "notifications/cancelled") for (const c of inflight.get(callKey(caller, msg.params?.requestId)) ?? []) c.abort(new Error("cancelled by the client"));
       return undefined;
     }
     const id = msg.id as Id;
@@ -155,10 +220,15 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
           return ok(id, {});
         case "tools/list":
           return ok(id, {
-            tools: source.list().map((p) => ({ name: p.name, description: p.description ?? `Run the ${p.name} pipeline.`, inputSchema: inputSchema(p.params) })),
+            tools: source.list().map((p) => ({
+              name: p.name,
+              description: p.description ?? describePipelineTool(p),
+              inputSchema: inputSchema(p.params),
+              ...(p.annotations && Object.keys(p.annotations).length ? { annotations: p.annotations } : {}),
+            })),
           });
         case "tools/call":
-          return await callTool(id, msg.params, signal);
+          return await callTool(id, msg.params, signal, caller);
         default:
           return fail(id, METHOD_NOT_FOUND, `Method not found: ${msg.method}`);
       }
@@ -167,7 +237,7 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     }
   }
 
-  async function handleHttp(req: Request): Promise<Response> {
+  async function handleHttp(req: Request, caller = ""): Promise<Response> {
     if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405, headers: { Allow: "POST" } });
     // Guard against DNS rebinding: a browser page from another origin can't drive the server.
     const origin = req.headers.get("origin");
@@ -190,10 +260,10 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     }
     if (Array.isArray(body)) {
       if (!body.length) return Response.json(fail(null, INVALID_REQUEST, "Empty batch"), { status: 400 });
-      const answers = (await Promise.all(body.map((m) => handleMessage(m, req.signal)))).filter((a) => a !== undefined);
+      const answers = (await Promise.all(body.map((m) => handleMessage(m, req.signal, caller)))).filter((a) => a !== undefined);
       return answers.length ? Response.json(answers) : new Response(null, { status: 202 });
     }
-    const answer = await handleMessage(body, req.signal);
+    const answer = await handleMessage(body, req.signal, caller);
     return answer ? Response.json(answer) : new Response(null, { status: 202 });
   }
 

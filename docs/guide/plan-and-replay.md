@@ -58,7 +58,7 @@ For each stage (numbered as in the pipeline; `3.1` is a stage inside a pipeline 
 - **Tool calls** the pipeline makes (`calls`) and the ones an agent may choose (`may call`), each with its effect: `read`, `write`, or `external` (see [tool rules](../stdlib/policies.md#tool-rules)). Methods the agent's policies hide aren't listed, and calls a policy sends to a person are marked.
 - **How often** a stage can run: `×3` inside a `|<> loop` with `max: 3` (3 when no `max` is given), `× each item` inside `|* each`, `if …` for a branch arm.
 
-The summary names every `external` call that runs without asking, every call that needs approval, and every `MaxSpend` limit.
+The summary names every `external` call that runs without asking, every call that needs approval, and every `MaxSpend` limit. A call whose effect is unknown until run time (an MCP tool's) is never counted as safe: it is listed under "Acts on the world without asking" as `maybe Tool.* (effect unknown)`, unless a rule such as `ApproveTools("Tool")` sends every call of it to a person.
 
 ### What the cost means
 
@@ -74,7 +74,7 @@ When every agent that calls a model has a `MaxSpend`, the run can't spend more t
 
 ### What it doesn't know
 
-- An MCP tool's methods come from its server, which `halo plan` doesn't start. They show as `Tool.*`, with the effect not described.
+- An MCP tool's methods come from its server, which `halo plan` doesn't start. They show as `Tool.*`, and their effects as `unknown`.
 - A provider registered in TypeScript without `info` (see [Custom Tools](./integrations/custom-tools.md)) has no effects to show.
 - `DenyArgs` rules aren't shown: a method they restrict is still listed.
 - An effect is what the provider says about itself. For MCP servers and [packages](./tool-packages.md), that is the server's or publisher's claim.
@@ -202,7 +202,7 @@ Spent $0.3100 of $1.00 · report: compare.md (unredacted)
 Limits:
 
 - It compares against recorded runs only, so it needs `halo run` (which records by default) to have run the original. Runs recorded before 0.5.0 have no model fingerprints, so every model call goes live; runs recorded before 0.5.1 have no tool fingerprints, so a stale tool result can't be spotted, and it says so. Record them again. `halo serve` doesn't record unless asked, and only the newest 50 recordings are kept unless `recordings.keep` in `halo.json` says otherwise.
-- Effects are what each tool provider says about itself. An MCP tool's methods show as `Tool.*` with the effect not described, so the fence can only check that b calls no `Tool.*` that a didn't.
+- Effects are what each tool provider says about itself. An MCP tool's methods show as `Tool.*` with the effect unknown, so the fence can only check that b calls no `Tool.*` that a didn't.
 - The approvals check counts yields and listens, and checks approval rules per call. It doesn't check that a yield still comes before the same effects.
 - A `@thread` pipeline's runs depend on state the replay doesn't restore.
 - Lowering a `MaxSpend` changes the policy's declaration, so it counts as outside the fence.
