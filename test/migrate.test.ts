@@ -298,4 +298,24 @@ describe("1.12.0", () => {
       ]],
     ]);
   });
+
+  test("Gmail and Outlook tools that sign in with clientId: are listed: their tokens go through the OAuth broker", async () => {
+    const dir = project({
+      "mail.halo": `tool Gmail : Email(Env.GMAIL_REFRESH_TOKEN, via: "gmail", clientId: Env.GOOGLE_CLIENT_ID, clientSecret: Env.GOOGLE_CLIENT_SECRET, user: "me@gmail.com")
+tool Outlook : Email(Env.MS_CLIENT_SECRET, via: "outlook", tenant: "contoso.com", clientId: Env.MS_CLIENT_ID, user: "support@contoso.com")
+tool Pasted : Email(via: "gmail", accessToken: Env.GMAIL_ACCESS_TOKEN, clientId: Env.GOOGLE_CLIENT_ID)
+tool Resend : Email(Env.RESEND_API_KEY, from: "bot@example.com")
+pipeline P(x: String) -> Result:
+  x |> Resend.send(to: x, subject: "Hi", body: "Hello")
+`,
+      "halo.json": JSON.stringify({ halo: "^1.11.0" }),
+    });
+    const report = await migrateProject(dir, { haloVersion: "1.12.0" });
+    const mail = report.results.find((r) => r.id === "mail-oauth-broker")!;
+    expect(mail.findings).toEqual([
+      { file: "mail.halo", line: 1, message: "Gmail (Email via gmail) signs in through the OAuth broker: a refresh token the provider rotates is kept outside the project and used next time" },
+      { file: "mail.halo", line: 2, message: "Outlook (Email via outlook) signs in through the OAuth broker: a refresh token the provider rotates is kept outside the project and used next time" },
+    ]);
+    expect(mail.automatic).toBe(false);
+  });
 });

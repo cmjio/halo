@@ -229,7 +229,54 @@ function Inspector({ span, trace, onClose }: { span: Span; trace: Trace; onClose
 function waitingTitle(waitingFor: string): string {
   if (waitingFor === "yield") return "This run is waiting for your go-ahead";
   if (waitingFor === "approval") return "An agent is asking to use a tool";
+  if (waitingFor.startsWith("connect:")) return `This run needs ${waitingFor.slice("connect:".length)} connected`;
   return `This run is waiting for "${waitingFor}"`;
+}
+
+/** A run waiting for an OAuth connection: connect it in the browser, or say it's done (connected on the server with halo auth login). */
+function ConnectBanner({ runId, paused, onAnswered }: { runId: string; paused: NonNullable<RunDetail["paused"]>; onAnswered: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const name = paused.connection ?? paused.waitingFor.slice("connect:".length);
+  const check = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/runs/${runId}/signal`, { method: "POST", body: JSON.stringify({}) });
+      onAnswered();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="ask">
+      <div className="ask-text">
+        <strong>{waitingTitle(paused.waitingFor)}</strong>
+        {paused.message && <p>{paused.message}</p>}
+        {paused.connectUrl ? (
+          <p className="note">Whoever signs in chooses the account this run acts as. The link works once, for 10 minutes.</p>
+        ) : (
+          <p className="note">
+            Connect it on the server with <code>halo auth login {name}</code>, then check again.
+          </p>
+        )}
+      </div>
+      <div className="ask-actions">
+        {paused.connectUrl && (
+          <a className="btn primary" href={paused.connectUrl} target="_blank" rel="noreferrer" onClick={() => setTimeout(onAnswered, 2000)}>
+            <IconExternalLink size={14} stroke={1.75} />
+            Connect {name}
+          </a>
+        )}
+        <button type="button" className="btn" disabled={busy} onClick={check}>
+          {busy ? "Checking…" : "Check again"}
+        </button>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+    </section>
+  );
 }
 
 function WaitingBanner({ runId, paused, onAnswered }: { runId: string; paused: NonNullable<RunDetail["paused"]>; onAnswered: () => void }) {
@@ -695,7 +742,7 @@ export function RunView({ id }: { id: string }) {
         )}
 
         {error && <div className="callout error">{error}. Trying again…</div>}
-        {detail.paused && trace.status === "waiting" && <WaitingBanner runId={id} paused={detail.paused} onAnswered={() => reload.current()} />}
+        {detail.paused && trace.status === "waiting" && (detail.paused.waitingFor.startsWith("connect:") ? <ConnectBanner runId={id} paused={detail.paused} onAnswered={() => reload.current()} /> : <WaitingBanner runId={id} paused={detail.paused} onAnswered={() => reload.current()} />)}
         {trace.status === "failed" && (
           <div className={`callout ${trace.stopped ? "" : "error"}`}>
             <IconAlertTriangle size={16} stroke={1.75} />

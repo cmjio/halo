@@ -542,6 +542,26 @@ export const MIGRATIONS: Migration[] = [
       return out;
     },
   },
+  {
+    id: "mail-oauth-broker",
+    since: "1.12.0",
+    title: "Gmail and Outlook tokens go through the OAuth broker, and a rotated refresh token is kept",
+    detail:
+      "An Email tool with via: \"gmail\" or \"outlook\" that signs in with clientId: (a refresh token, or an app's client secret) now gets its tokens from Halo's OAuth broker. Its settings work as before. What changes: when the provider sends a new refresh token (Microsoft does on every refresh), Halo keeps it outside the project, in ~/.config/halo/credentials.json or the macOS Keychain, keyed by this project and the tool's name, and spends it next time instead of the one in Env (which Halo used to keep sending, until the provider refused it). A new value put in Env wins over the kept one. halo auth list shows it. Where nothing can answer a Keychain prompt (CI on a Mac), set HALO_CREDENTIALS_STORE=file. You can also move the tool to auth: with an OAuth declaration and connect it once with halo auth login. Listed: each such Email tool.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const file of project.files) {
+        for (const tool of file.ast.tools) {
+          if (tool.provider !== "Email" || !tool.argList.some((a) => a.name === "clientId") || tool.argList.some((a) => a.name === "auth" || a.name === "accessToken")) continue;
+          const via = tool.argList.find((a) => a.name === "via")?.value;
+          const service = via?.kind === "string" ? via.value.toLowerCase() : "";
+          if (service !== "gmail" && service !== "outlook") continue;
+          out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} (Email via ${service}) signs in through the OAuth broker: a refresh token the provider rotates is kept outside the project and used next time` });
+        }
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {

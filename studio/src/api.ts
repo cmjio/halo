@@ -118,7 +118,7 @@ export interface RunControls {
 export interface RunDetail {
   runId: string;
   running: boolean;
-  paused?: { waitingFor: string; message?: string; stage: number; approveUrl: string };
+  paused?: { waitingFor: string; message?: string; stage: number; approveUrl: string; /** Waiting for an OAuth connection (`connect:Google`): its name, and a fresh link to connect it (when this run may be offered one). */ connection?: string; connectUrl?: string };
   /** Missing from older servers. */
   controls?: RunControls;
   events: TelemetryEvent[];

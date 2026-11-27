@@ -136,6 +136,7 @@ export default defineConfig({
         items: [
           { text: 'Custom Tools', link: '/guide/integrations/custom-tools' },
           { text: 'MCP', link: '/guide/integrations/mcp' },
+          { text: 'OAuth', link: '/guide/integrations/oauth' },
           { text: 'Telemetry & Tracing', link: '/guide/integrations/telemetry-and-tracing' },
         ]
       },

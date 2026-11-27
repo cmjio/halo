@@ -7,3 +7,10 @@ if (!process.env.HALO_TRUST_FILE) {
   const { join } = await import("node:path");
   process.env.HALO_TRUST_FILE = join(mkdtempSync(join(tmpdir(), "halo-trust-")), "trust.json");
 }
+// So do OAuth tokens: a file of the tests' own, never the Keychain (which would ask a person).
+if (!process.env.HALO_CREDENTIALS_FILE) {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  process.env.HALO_CREDENTIALS_FILE = join(mkdtempSync(join(tmpdir(), "halo-credentials-")), "credentials.json");
+}

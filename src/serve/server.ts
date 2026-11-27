@@ -48,6 +48,7 @@ import { checkPackageHeader, consumerKeys, keyOf, loadServedPackage, PACKAGE_KEY
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
 import { privateDir, privateFile } from "../runtime/private-files.js";
+import { authorizationRequest, checkRedirect } from "../runtime/oauth.js";
 
 /** halo.json (all optional). Strings like "Env.NAME" are read from the environment. */
 export interface ServeConfig {
@@ -470,7 +471,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     for (const name of hostedHere ?? []) if (privateNames.get(name) === rel) throw new ServeError(`${served!.manifest.name}: hosted pipeline ${name} is @private; a hosted export has to be callable from outside`);
     const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
     if (!own.length) continue;
-    const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, ...recorder, env, runStore, progressStore, onEvent, serving: true }).load(ast);
+    const runtime = new HaloRuntime({ logger, projectRoot: resolve(options.root ?? process.cwd()), ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, ...recorder, env, runStore, progressStore, onEvent, serving: true }).load(ast);
     for (const p of installed) runtime.registerToolProvider(p.name, p.provider, p.info);
     options.onRuntime?.(runtime, rel);
     runtimes.push(runtime);
@@ -514,7 +515,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     let rt = dryRuntimes.get(e.path);
     if (!rt) {
       // Thread state stays in memory, so a rehearsal never changes a real thread.
-      rt = new HaloRuntime({ logger, ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:", serving: true }).load(e.ast);
+      rt = new HaloRuntime({ logger, projectRoot: resolve(options.root ?? process.cwd()), ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, env, runStore, progressStore, onEvent, threadPath: ":memory:", serving: true }).load(e.ast);
       for (const p of installed) rt.registerToolProvider(p.name, p.provider, p.info);
       mockForDryRun(rt, e.ast);
       dryRuntimes.set(e.path, rt);
@@ -740,7 +741,11 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     logger.log(`[halo] ${pipeline} started by ${source}${dryRun ? " as a dry run" : ""} (run ${runId.slice(0, 8)})`);
     const rt = runtimeFor(e, dryRun);
     // An Image or Document argument may be a data: URI or an https URL; never a path on this machine.
-    const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun, media: "urls" });
+    // Until serve knows people: the operator (the token holder, through the API and Studio, and its own
+    // schedules and watches) owns what it starts; a webhook's or a text's run is the service's; a
+    // package's consumers own theirs. Only an operator's run is offered a /connect link.
+    const owner = /^consumer\b/.test(source) ? `consumer:${source.replace(/^consumer\s*/, "")}` : /^(API|schedule |a change in )/.test(source) ? "operator" : "service";
+    const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun, media: "urls", owner });
     // A dry run's answers are made up, so it isn't kept as something to replay or learn from.
     track(runId, pipeline, dryRun ? work() : recorded(runId, pipeline, args, work));
     return { runId, duplicate: false };
@@ -863,12 +868,125 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     return pauseId ? linkFor(runId, pauseId) : undefined;
   };
 
+  // ── Connecting an OAuth connection for a paused run (/connect) ──
+  //
+  // A run waiting for `connect:Google` gets a link: signed with the serve key under its own label
+  // (so an approval signature can't be replayed as one), for that pause and connection, good for
+  // 10 minutes and once. Opening it shows a page; going on sends the person to the provider, with
+  // state and a PKCE verifier kept in <stateDir>/connect (0600, 10 minutes). The callback checks
+  // them, stores the token, and resumes the run. Until serve knows people, only runs the operator
+  // started are offered one: whoever opens it chooses the account the run acts as.
+  const CONNECT_MS = 10 * 60_000;
+  const connectDir = join(stateDir, "connect");
+  const signConnect = (runId: string, pauseId: string, connection: string, exp: number) => createHmac("sha256", signingKey!).update(`connect:${runId}:${pauseId}:${connection}:${exp}`).digest("hex").slice(0, 32);
+  const waitingConnection = (snap: { waitingFor?: string } | undefined) => (snap?.waitingFor?.startsWith("connect:") ? snap.waitingFor.slice("connect:".length) : undefined);
+  /** Whether a paused run may be offered a connect link. */
+  const connectOffered = (snap: { meta: { owner?: string; paused?: { id?: string } } }) => !served && snap.meta.owner === "operator" && !!snap.meta.paused?.id;
+  const connectUrl = async (runId: string): Promise<string | undefined> => {
+    const snap = await runStore.load(runId);
+    const connection = waitingConnection(snap);
+    if (!snap || !connection || !connectOffered(snap)) return undefined;
+    const exp = Date.now() + CONNECT_MS;
+    return `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/connect/${runId}/${encodeURIComponent(connection)}?exp=${exp}&sig=${signConnect(runId, snap.meta.paused!.id!, connection, exp)}`;
+  };
+  const connectRedirect = () => `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/connect/callback`;
+  const pendingPath = (state: string) => join(connectDir, `${createHmac("sha256", "halo-connect-state").update(state).digest("hex").slice(0, 40)}.json`);
+  const usedFile = join(connectDir, "used.json");
+  /** Remember a link's signature as spent (until it expires); false if it already was. */
+  const spend = (sig: string, exp: number): boolean => {
+    privateDir(connectDir);
+    let used: Record<string, number> = {};
+    try {
+      used = JSON.parse(readFileSync(usedFile, "utf8"));
+    } catch {}
+    for (const [k, until] of Object.entries(used)) if (until < Date.now()) delete used[k];
+    if (Object.hasOwn(used, sig)) return false;
+    used[sig] = exp;
+    writeFileSync(`${usedFile}.tmp`, JSON.stringify(used), { mode: 0o600 });
+    renameSync(`${usedFile}.tmp`, usedFile);
+    return true;
+  };
+  /** The paused run a connect link is for, or why it can't be used. */
+  const linkedConnect = async (runId: string, connection: string, url: URL) => {
+    const exp = Number(url.searchParams.get("exp"));
+    const sig = url.searchParams.get("sig") ?? "";
+    const snap = await runStore.load(runId);
+    const pauseId = snap?.meta.paused?.id;
+    if (!snap || !pauseId || waitingConnection(snap) !== connection || !Number.isFinite(exp) || !safeEqual(sig, signConnect(runId, pauseId, connection, exp))) return { error: "This link is invalid, or the run is no longer waiting for it." };
+    if (exp < Date.now()) return { error: "This link has expired. Open the run in Halo Studio for a new one." };
+    if (!connectOffered(snap)) return { error: "This run can't be connected from a link." };
+    return { snap, pauseId, sig, exp };
+  };
+  const connectPage = (title: string, body: string, status = 200) =>
+    new Response(
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Halo: connect</title><style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#1f2937}button{font:inherit;padding:8px 16px;border-radius:8px;border:1px solid #10b981;background:#10b981;color:#fff;cursor:pointer}.note{color:#6b7280}</style><h2>${escapeHtml(title)}</h2>${body}`,
+      { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } },
+    );
+
+  async function connectRoute(req: Request, url: URL, runId: string, connection: string): Promise<Response> {
+    const linked = await linkedConnect(runId, connection, url);
+    if ("error" in linked) return connectPage("Can't connect", `<p>${escapeHtml(linked.error!)}</p>`, 403);
+    const { snap, pauseId, sig, exp } = linked;
+    let conn;
+    try {
+      conn = runtimeFor(entry(snap.pipeline), snap.meta.dryRun).connection(connection);
+    } catch (err) {
+      return connectPage("Can't connect", `<p>${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`, 409);
+    }
+    if (!conn.authorizeUrl || conn.grant !== "authorization_code") return connectPage("Can't connect here", `<p>${escapeHtml(connection)} doesn't sign in through a browser (${escapeHtml(conn.grant)}). Run <code>halo auth login ${escapeHtml(connection)}</code> on the server, then resume the run.</p>`, 409);
+    const providerHost = new URL(conn.authorizeUrl).host;
+    // A GET only shows the page (link previews open links too); going on is a POST, which spends the link.
+    if (req.method === "GET") {
+      return connectPage(
+        `Connect ${connection}`,
+        `<p>${escapeHtml(snap.pipeline)} is waiting for ${escapeHtml(connection)}${snap.meta.paused?.message ? `: ${escapeHtml(snap.meta.paused.message)}` : "."}</p>
+<p>You'll sign in at <strong>${escapeHtml(providerHost)}</strong>${conn.scopes.length ? `, which will ask to allow: ${conn.scopes.map(escapeHtml).join(", ")}` : ""}.</p>
+<p class="note">Whoever opens this link chooses the account this run acts as. Until Halo knows who you are, it is offered only for runs this server's operator started. It works once, until ${escapeHtml(new Date(exp).toISOString().slice(11, 16))} UTC.</p>
+<form method="post" action="${escapeHtml(url.pathname + url.search)}"><button>Continue to ${escapeHtml(providerHost)}</button></form>`,
+      );
+    }
+    if (!spend(sig, exp)) return connectPage("Can't connect", "<p>This link was already used. Open the run in Halo Studio for a new one.</p>", 403);
+    const auth = authorizationRequest(conn, connectRedirect());
+    privateDir(connectDir);
+    writeFileSync(pendingPath(auth.state), JSON.stringify({ runId, pauseId, connection, pipeline: snap.pipeline, state: auth.state, verifier: auth.verifier, redirectUri: connectRedirect(), until: Date.now() + CONNECT_MS }), { mode: 0o600 });
+    logger.log(`[halo] run ${runId.slice(0, 8)}: someone opened its link to connect ${connection} at ${providerHost}`);
+    return new Response(null, { status: 303, headers: { Location: auth.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  }
+
+  async function connectCallback(url: URL): Promise<Response> {
+    const state = url.searchParams.get("state") ?? "";
+    const file = pendingPath(state);
+    let pending: { runId: string; pauseId: string; connection: string; pipeline: string; state: string; verifier: string; redirectUri: string; until: number } | undefined;
+    try {
+      pending = JSON.parse(readFileSync(file, "utf8"));
+    } catch {}
+    // One use: the pending sign-in goes whatever happens next.
+    try {
+      rmSync(file, { force: true });
+    } catch {}
+    if (!pending || pending.until < Date.now()) return connectPage("Can't connect", "<p>This sign-in is unknown or expired. Open the run in Halo Studio for a new link.</p>", 403);
+    const snap = await runStore.load(pending.runId);
+    if (!snap || snap.meta.paused?.id !== pending.pauseId || waitingConnection(snap) !== pending.connection) return connectPage("Nothing to connect", "<p>The run is no longer waiting for this connection.</p>", 409);
+    try {
+      const rt = runtimeFor(entry(snap.pipeline), snap.meta.dryRun);
+      const conn = rt.connection(pending.connection);
+      const code = checkRedirect(conn, url.searchParams, pending.state);
+      const got = await rt.tokenBroker.exchangeCode(conn, code, pending.verifier, pending.redirectUri, { fetch: options.fetch });
+      logger.log(`[halo] ${pending.connection} connected${got.account ? ` as ${got.account}` : ""} for run ${pending.runId.slice(0, 8)}`);
+      const outcome = await resume(pending.runId, { connected: true }, `connect:${pending.connection}`, pending.pauseId);
+      return connectPage(`Connected ${pending.connection}`, `<p>${got.account ? `Signed in as ${escapeHtml(got.account)}. ` : ""}${"work" in outcome ? "The run continues." : `The run didn't continue: ${escapeHtml(outcome.error)}`}</p><p class="note">You can close this tab.</p>`);
+    } catch (err) {
+      return connectPage("Can't connect", `<p>${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`, 400);
+    }
+  }
+
   async function announcePause(runId: string) {
     const snap = await runStore.load(runId);
     if (!snap?.waitingFor) return;
     const what = snap.waitingFor === "yield" ? "a human" : snap.waitingFor;
     const link = snap.meta.paused?.id ? linkFor(runId, snap.meta.paused.id) : "(no link: resume it with the API)";
-    const text = `‖ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}`;
+    const connect = waitingConnection(snap) ? await connectUrl(runId) : undefined;
+    const text = `‖ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}${connect ? `\nConnect: ${connect}` : ""}`;
     logger.log(`[halo] ${text.replace("\n", " · ")}`);
     if (!slackUrl) return;
     // With a signing secret, Slack can tell us about clicks: answer right in the message.
@@ -879,13 +997,17 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
             { type: "section", text: { type: "mrkdwn", text } },
             {
               type: "actions",
-              elements: (["approve", "reject"] as const).map((answer) => ({
-                type: "button",
-                text: { type: "plain_text", text: answer === "approve" ? "Approve" : "Reject" },
-                style: answer === "approve" ? "primary" : "danger",
-                action_id: `halo_${answer}`,
-                value: JSON.stringify({ runId, pauseId, answer, sig: sign(runId, pauseId) }),
-              })),
+              elements: [
+                ...(["approve", "reject"] as const).map((answer) => ({
+                  type: "button",
+                  text: { type: "plain_text", text: answer === "approve" ? "Approve" : "Reject" },
+                  style: answer === "approve" ? "primary" : "danger",
+                  action_id: `halo_${answer}`,
+                  value: JSON.stringify({ runId, pauseId, answer, sig: sign(runId, pauseId) }),
+                })),
+                // A link button: Slack opens it in the browser, and never sees the token or the code.
+                ...(connect ? [{ type: "button", text: { type: "plain_text", text: `Connect ${waitingConnection(snap)}` }, url: connect, action_id: "halo_connect" }] : []),
+              ],
             },
           ]
         : undefined;
@@ -1365,6 +1487,10 @@ ${files}
           if (!linked || !collectMedia(linked.snap.current).some((m) => m.sha256 === approveFile[2])) return new Response("This link is invalid, or that step was already answered.", { status: 403 });
           return blobResponse(approveFile[2]!);
         }
+        // Connect links carry their own signature too (see connectRoute).
+        if (path === "/connect/callback" && req.method === "GET") return connectCallback(url);
+        const connect = path.match(/^\/connect\/([\w-]+)\/([A-Za-z_][\w.]*)$/);
+        if (connect && (req.method === "GET" || req.method === "POST")) return connectRoute(req, url, connect[1]!, connect[2]!);
         const approve = path.match(/^\/approve\/([\w-]+)$/);
         if (approve) {
           const runId = approve[1]!;
@@ -1519,7 +1645,7 @@ ${files}
           const runId = run[1]!;
           const snap = await runStore.load(runId);
           const paused = snap?.waitingFor
-            ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: await approvalUrl(runId) }
+            ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: await approvalUrl(runId), ...(waitingConnection(snap) ? { connection: waitingConnection(snap), connectUrl: await connectUrl(runId) } : {}) }
             : undefined;
           const events = telemetry.run(runId);
           const pipeline = events.find((r) => r.type === "stream_start")?.stage as string | undefined;

@@ -48,6 +48,8 @@ import { parseCondition } from "./index.js";
 import { splitToolPath } from "../linker/names.js";
 import { WALLET_PATTERN, walletItemProblems, walletNames, walletUnsafeTool } from "../runtime/wallet-rules.js";
 import { reparseChecks } from "../runtime/shell.js";
+import { HOSTED_PROVIDER } from "../linker/hosted.js";
+import { endpointProblem, OAUTH_EMAIL_SERVICES, OAUTH_GRANTS, OAUTH_PRESET_NAMES, OAUTH_PRESETS, OAUTH_SETTINGS, OAUTH_TOOL_PROVIDERS } from "../runtime/oauth-presets.js";
 
 /** The calls a stage makes (a fan-out's, an each's, every branch arm's). */
 function stageCalls(st: PipelineStage): CallStage[] {
@@ -83,6 +85,8 @@ export interface ValidateOptions {
   systemMethods?: string[];
   /** Model prefixes that have an adapter; when given, agents with no matching adapter are flagged. */
   canHandleModel?: (modelId: string) => boolean;
+  /** Extra providers (installed packages' http providers with "type": "oauth") whose tools take `auth:`. */
+  oauthProviders?: string[];
 }
 
 export function validate(ast: ParseResult, options: ValidateOptions = {}): Diagnostic[] {
@@ -148,6 +152,8 @@ class Validator {
       }
       if (t.provider === "Bash") this.checkBashEnv(t);
       if (t.provider === "MCP") this.checkMcp(t);
+      if (t.provider === "OAuth") this.checkOAuth(t);
+      this.checkAuthArg(t);
       this.checkArgRules(t);
     }
     for (const m of this.ast.agents) this.checkAgent(m);
@@ -378,6 +384,83 @@ class Validator {
   }
 
   /** An MCP declaration's settings: the ones the client reads, and one server (a command or a url). */
+  /** An `OAuth(...)` declaration: known settings, a provider Halo knows or endpoints, a client id, a grant. */
+  private checkOAuth(t: ParseResult["tools"][number]) {
+    const where = `OAuth connection "${t.name}"`;
+    const arg = (name: string) => t.argList.find((a) => a.name === name)?.value;
+    const lit = (name: string) => ((v) => (v?.kind === "string" ? v.value : undefined))(arg(name));
+    if (t.argList.some((a) => !a.name)) this.add("error", `${where} takes named settings, like OAuth(provider: "google", clientId: Env.GOOGLE_CLIENT_ID, scopes: [...])`, t.loc);
+    for (const a of t.argList) {
+      if (!a.name || includes(OAUTH_SETTINGS, a.name)) continue;
+      const near = didYouMean(a.name, OAUTH_SETTINGS);
+      this.add("error", `${where} has no setting "${a.name}"${near ? `; did you mean ${near}?` : ` (it has ${OAUTH_SETTINGS.join(", ")})`}`, t.loc, a.name);
+    }
+    const provider = lit("provider")?.toLowerCase();
+    if (arg("provider") && provider === undefined) this.add("error", `${where}: provider: is a name in quotes, e.g. provider: "google"`, t.loc);
+    if (provider !== undefined && !OAUTH_PRESET_NAMES.includes(provider)) {
+      const near = didYouMean(provider, OAUTH_PRESET_NAMES);
+      this.add("error", `${where}: provider "${provider}" is not one Halo knows${near ? `; did you mean "${near}"?` : ` (${OAUTH_PRESET_NAMES.join(", ")}); give authorizeUrl: and tokenUrl: instead`}`, t.loc, provider);
+    }
+    const preset = provider && OAUTH_PRESETS[provider] ? OAUTH_PRESETS[provider]!(lit("tenant")) : {};
+    if (!arg("clientId")) this.add("error", `${where} needs clientId: (your app's client id, e.g. clientId: Env.${t.name.toUpperCase()}_CLIENT_ID). Halo ships none`, t.loc);
+    const grantV = arg("grant");
+    const grant = grantV === undefined ? "authorization_code" : lit("grant");
+    if (grant === undefined || !includes(OAUTH_GRANTS, grant)) {
+      const near = grant ? didYouMean(grant, OAUTH_GRANTS) : undefined;
+      this.add("error", `${where}: grant "${grant ?? "?"}" is not a grant Halo has${near ? `; did you mean "${near}"?` : ` (${OAUTH_GRANTS.join(", ")})`}`, t.loc, grant);
+    }
+    const scopes = arg("scopes");
+    if (scopes && !(scopes.kind === "list" && scopes.items.every((i) => i.kind === "string")) && scopes.kind !== "string") this.add("error", `${where}: scopes: is a list of strings, e.g. scopes: ["read"]`, t.loc);
+    for (const k of ["authorizeUrl", "tokenUrl", "deviceUrl", "revokeUrl"] as const) {
+      const v = arg(k);
+      if (v?.kind === "string") {
+        const problem = endpointProblem(v.value);
+        if (problem) this.add("error", `${where}: ${k} ${problem}`, t.loc);
+      } else if (v && !(v.kind === "ref" && v.path[0] === "Env")) this.add("error", `${where}: ${k} is a URL in quotes`, t.loc);
+    }
+    const has = (k: "authorizeUrl" | "tokenUrl" | "deviceUrl") => !!arg(k) || !!preset[k];
+    if (!has("tokenUrl")) this.add("error", `${where} needs tokenUrl: (or a provider: Halo knows)`, t.loc);
+    if (grant === "authorization_code" && !has("authorizeUrl")) this.add("error", `${where} needs authorizeUrl: for the authorization_code grant`, t.loc);
+    if (grant === "device" && !has("deviceUrl")) this.add("error", `${where} needs deviceUrl: for the device grant${provider ? ` (${provider} has none Halo knows)` : ""}`, t.loc);
+    if (grant === "client_credentials" && !arg("clientSecret")) this.add("error", `${where} needs clientSecret: for the client_credentials grant (e.g. clientSecret: Env.${t.name.toUpperCase()}_CLIENT_SECRET)`, t.loc);
+    // A secret written in the file ends up in git.
+    const secret = arg("clientSecret");
+    if (secret?.kind === "string" && !/^Env\.\w+$/.test(secret.value)) this.add("warning", `${where}: clientSecret is written in the file; read it from the environment (clientSecret: Env.${t.name.toUpperCase()}_CLIENT_SECRET)`, t.loc);
+    if (arg("tenant") && provider !== "microsoft") this.add("warning", `${where}: tenant: is only for provider: "microsoft"`, t.loc);
+  }
+
+  /** A tool's `auth:` names an OAuth declaration, isn't Env, isn't with apiKey:, and is on a provider that can use it. */
+  private checkAuthArg(t: ParseResult["tools"][number]) {
+    // A package's hosted pipeline (the linker's stub) has an auth: of its own, for the publisher's key.
+    if (t.provider === HOSTED_PROVIDER) return;
+    const a = t.argList.find((x) => x.name === "auth");
+    if (!a) return;
+    const where = `Tool "${t.name}"`;
+    if (t.provider === "OAuth") return void this.add("error", `${where}: an OAuth connection has no auth: of its own`, t.loc);
+    const v = a.value;
+    if (v.kind === "ref" && v.path[0] === "Env") return void this.add("error", `${where}: auth: names an OAuth declaration, not Env.${v.path.slice(1).join(".")} (an environment value can't hold a connection)`, t.loc);
+    const name = v.kind === "ref" ? v.path.join(".") : v.kind === "string" ? v.value : undefined;
+    const target = name ? this.tools.get(name) : undefined;
+    if (!name || !target) {
+      const near = name ? didYouMean(name, [...this.tools.values()].filter((x) => x.provider === "OAuth").map((x) => x.name)) : undefined;
+      this.add("error", `${where}: auth: ${name ?? "?"} is not an OAuth declaration${near ? `; did you mean ${near}?` : ` (declare one: tool ${name ?? "Google"} : OAuth(provider: ..., clientId: ...))`}`, t.loc, name);
+    } else if (target.provider !== "OAuth") {
+      this.add("error", `${where}: auth: ${name} is a ${target.provider} tool, not an OAuth declaration`, t.loc, name);
+    }
+    if (t.argList.some((x) => x.name === "apiKey")) this.add("error", `${where} takes auth: or apiKey:, not both`, t.loc);
+    const builtin = includes(TOOL_PROVIDERS, t.provider);
+    if (builtin && !includes(OAUTH_TOOL_PROVIDERS, t.provider)) {
+      this.add("error", `${where}: ${t.provider} can't use auth: (tools that can: ${OAUTH_TOOL_PROVIDERS.join(", ")}, and packages whose manifest says "type": "oauth")`, t.loc);
+    } else if (!builtin && this.options.oauthProviders && !this.options.oauthProviders.includes(t.provider)) {
+      this.add("warning", `${where}: ${t.provider} doesn't say it signs in with OAuth, so auth: may do nothing`, t.loc);
+    }
+    if (t.provider === "Email") {
+      const via = t.argList.find((x) => x.name === "via")?.value;
+      const service = via?.kind === "string" ? via.value.toLowerCase() : "resend";
+      if (!includes(OAUTH_EMAIL_SERVICES, service)) this.add("error", `${where}: Email(via: "${service}") signs in with a key or a password; auth: is for via: "gmail" or "outlook"`, t.loc);
+    }
+  }
+
   private checkMcp(t: ParseResult["tools"][number]) {
     const KNOWN = ["command", "url", "apiKey", "headers", "env", "cwd", "timeout_ms", "max_ms", "wallet_safe"];
     const positional = t.argList.filter((a) => !a.name);
@@ -482,6 +565,7 @@ class Validator {
     }
     for (const e of m.equips ?? []) {
       if (!this.tools.has(e)) this.add("error", `Agent "${m.name}" equips undefined tool "${e}"`, m.loc);
+      else if (this.tools.get(e)!.provider === "OAuth") this.add("error", `Agent "${m.name}" equips ${e}, an OAuth connection: equip the tool that uses it (one with auth: ${e}) instead`, m.loc, e);
     }
     const sandbox = sandboxProblem(m, this.tools, this.policies);
     if (sandbox) this.add("error", sandbox, m.loc);
@@ -748,9 +832,16 @@ class Validator {
           }
         }
         break;
-      case "interrupt":
+      case "interrupt": {
         this.checkArgs(stage.argList, s, params, data, stage.loc);
+        // yield(connect: X): X is an OAuth declaration.
+        const connect = stage.argList.find((a) => a.name === "connect")?.value;
+        if (connect) {
+          const name = connect.kind === "ref" ? connect.path.join(".") : connect.kind === "string" ? connect.value : undefined;
+          if (!name || this.tools.get(name)?.provider !== "OAuth") this.add("error", `Pipeline "${s.name}": yield(connect: ${name ?? "?"}) names an OAuth declaration${name && this.tools.has(name) ? `; ${name} is a ${this.tools.get(name)!.provider} tool` : ""}`, stage.loc, name);
+        }
         break;
+      }
       case "listen":
         if (stage.targetValue.kind === "context") this.checkContextRef(stage.targetValue.path, s, data, stage.loc);
         break;
@@ -811,6 +902,7 @@ class Validator {
     }
     const tool = this.tools.get(call.callee);
     if (tool) {
+      if (tool.provider === "OAuth") this.add("error", `${where}: ${call.callee} is an OAuth connection, not a tool to call: call a tool that has auth: ${call.callee}`, call.loc);
       if (tool.provider === "Bash") this.checkShell(call, where);
       if (PARAMETERISED_SQL_PROVIDERS.has(tool.provider)) this.checkSql(tool, call, where, true);
       return;
