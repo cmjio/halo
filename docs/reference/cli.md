@@ -28,3 +28,19 @@ Every `halo run` keeps a recording in `.halo/recordings` for [`halo replay`](/gu
 | `halo login`, `logout`, `whoami`, `token`, `owner`, `scope` | Accounts, tokens, and who can publish in a scope |
 
 Every package command takes `--registry <https URL or folder>`. Without it: `HALO_REGISTRY`, then `"registry"` in `halo.json`, then Halo's registry; `"registries"` in `halo.json` maps a scope to its own. `halo login` saves a token per registry in `~/.halo/credentials.json`; `HALO_TOKEN` overrides it for Halo's registry, or for the registry `HALO_TOKEN_REGISTRY` names (and no other). The token is sent only on writes and account commands, never on reads. See [Packages](/guide/tool-packages).
+
+## Auth
+
+`halo auth` connects an [OAuth declaration](/guide/integrations/oauth) to an account, once, for every run in the project. Run it in the project folder. Each command reads the `.halo` files under the folder, or the file you name.
+
+| Command | Does |
+|---|---|
+| `halo auth login <Connection> [file.halo]` | Opens the browser at the provider's sign-in, takes the answer on `127.0.0.1` (one request, 5 minutes, `state` checked) and stores the tokens. Prints the link when it can't open a browser. `--no-browser` only prints it |
+| `halo auth login <Connection> --device` | Signs in with a code on another device (the device flow). The default when there is no browser, and for `grant: "device"` |
+| `halo auth logout <Connection> [--no-revoke]` | Revokes the token at the provider, when it has a revoke URL, and forgets it |
+| `halo auth list [file.halo]` | Every connection, its grant, and whether this machine is connected, as whom, until when |
+| `halo auth status [<Connection>]` | One connection's account, scopes granted and declared, expiry, and where its tokens are kept |
+
+A client credentials connection needs no login: `halo auth login` checks that its client works. Tokens are kept in the macOS Keychain or `~/.config/halo/credentials.json` (`HALO_CREDENTIALS_FILE` moves it; `HALO_CREDENTIALS_STORE=file` keeps them in the file on macOS too), never in the project. That file is not `halo login`'s registry tokens, which stay in `~/.halo/credentials.json`.
+
+A run paused for a connection (`waitingFor: connect:Google`) continues with `halo resume <file.halo> <runId>` once it is connected.

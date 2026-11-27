@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft proposal. Nothing here is built. |
+| Status | Phases 1 to 3 built for 1.12.0 (see [As built](#as-built)). Phases 4 (MCP) and 5 (multi-user serve) are not. |
 | Date | 27 November 2026 |
 | Builds on | The mail provider's token refresh (`src/runtime/mail/provider.ts`), REST and package http providers, `MCP` over HTTP, the trust file (`src/registry/trust.ts`), the wallet's Keychain and 1Password sources, signed approval links, `\|! yield` and paused runs, `@checkpoint`, idempotency keys, `halo plan` |
 
@@ -443,3 +443,22 @@ All against local fixtures: a small OAuth server on `Bun.serve` that issues, ref
 - **Serve's encryption key.** `HALO_OAUTH_KEY` in the environment is the simplest; the Keychain doesn't exist on Linux servers; a KMS is a dependency. Which for phase 5?
 - **DPoP (RFC 9449).** Binding tokens to a key Halo holds makes a stolen token useless elsewhere. Few providers support it. Worth doing when the broker is written, or later?
 - **Who may disconnect a service connection** under multi-user serve: any signed-in person, or a named admin list?
+
+## As built
+
+Phases 1 to 3 shipped for 1.12.0, with the maintainer's decisions where they differ from the text above. User docs: `docs/guide/integrations/oauth.md`.
+
+- **Syntax.** `tool X : OAuth(...)` and `auth: X`, as section 1. Presets fill in URLs only, for `google`, `github`, `microsoft` (`tenant:`) and `slack`; no `notion` preset, and no `issuer:` discovery (RFC 8414 waits for phase 4). No client ids are shipped. `as:`, `store:` and `AllowAuth` are not built.
+- **Broker.** `src/runtime/oauth.ts` (one file, not `oauth/broker.ts`). Providers call `authFetch(call, services, origins)`, which returns a fetch that adds the header, refuses other origins, follows only same-origin redirects with it, and on a 401 refreshes once and retries once. A second 401 is `AUTH_REQUIRED` (for client credentials, the 401 is returned). The refresh margin is a flat 60 seconds. A 403 is not special-cased.
+- **Store.** `src/runtime/oauth-store.ts`. The index and (off macOS) the tokens are in `~/.config/halo/credentials.json`, not `~/.config/halo/oauth/<key>.json`; on macOS the tokens are one Keychain item per connection (service `halo-oauth`, `security -i`, `-T ""`), the pair cut to the refresh token alone when it is too long for one `security` line. `HALO_CREDENTIALS_FILE` and `HALO_CREDENTIALS_STORE=file` choose the file. The key is the project's real path, the connection name, the token URL, the client id and a user (`"local"`). Refreshes take an in-process mutex and an `O_EXCL` lock file next to the index, and re-read the store inside it. No secret-service, 1Password or env stores yet.
+- **Mail.** Gmail and Outlook use the broker. Their settings-based connection is named after the tool and keyed like any other; a rotated refresh token is kept, and a new value in `Env` wins over the kept chain (the store records a hash of the `Env` value it started from).
+- **Runs.** `AUTH_REQUIRED` at any depth pauses the run at its top-level stage with `waitingFor: "connect:<Name>"` (a colon, not a space). Resuming (`signal`, `halo resume`, Studio) runs that stage again; an agent keeps its conversation and runs the pending call again. `|! yield(connect: X, msg: ...)` is built. The account-change question, `authPauseTimeout`, and the interactive "sign in now?" prompt in `halo run` are not.
+- **Serve.** `/connect/<runId>/<Connection>?exp=&sig=` (the connection name, not a pause id, in the path; the pause id is in the signature), 10 minutes, single use, a GET page and a POST that spends it. Offered only for runs whose `meta.owner` is `"operator"` (API, Studio, the server's own schedules and watches). The Slack announcement gets a Connect URL button next to Approve and Reject (the maintainer's call; the text above said never from Slack).
+- **Plan and validate.** As section 5, without `--strict` and the "narrower than declared" warning.
+
+### Extension points for phases 4 and 5
+
+- `TokenBroker.fetch(conn, url, init, { origins, fetch, signal, onSecret })`, `TokenBroker.token(conn, { rejected })`, `TokenBroker.exchangeCode(...)`, `TokenBroker.connect(conn, tokenResponse)` and `authorizationRequest(conn, redirectUri)`: MCP's client can sign its requests with `broker.fetch` and run discovery's login through the same calls. `OAuthConnection.resource` is sent on authorize and token requests.
+- `OAuthConnection.user` and `StoreKey.user` (default `"local"`) are part of the store key: per-person tokens under serve set it from the run's owner. `RunMeta.owner` is recorded by serve for every run it starts.
+- `TokenStore` is an interface (`get`, `put`, `delete`, `list`, `info`, `lock`): serve's encrypted state-database store implements it and is passed as `new TokenBroker({ store })`, then `RuntimeConfig.broker`.
+- `HaloRuntime.connection(name)` builds a declared connection with its `Env` settings read now.

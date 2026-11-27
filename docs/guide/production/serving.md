@@ -199,6 +199,22 @@ In your Slack app's settings, turn on Interactivity and set its Request URL to `
 
 A [`Slack` tool](../../stdlib/tools.md#slack) that posts `buttons:` during a run also gets its clicks here. Each button carries the run id, how many times the run had paused when it posted, and its label. A click answers only the run's **next** pause after the post, with the label as the answer, and only while the run is waiting there: post the buttons, then `|! yield` or `~> listen`. A click on a button whose pause is over, or that came before the run paused, changes nothing. These buttons never answer a tool-call approval (`waitingFor: "approval"`); use the announcement's buttons or the approval link for those.
 
+### Connecting an account
+
+A run that needs an [OAuth connection](../integrations/oauth.md) nobody has connected, or whose refresh token was revoked, pauses waiting for `connect:<Name>`. So does `|! yield(connect: Google)`. The server offers a link to connect it:
+
+```
+‖ Weekly is waiting for connect:Google: Google needs signing in: it isn't connected on this machine. ...
+Respond: https://halo.example.com/approve/6f9696ef-…?sig=94cea2…
+Connect: https://halo.example.com/connect/6f9696ef-…/Google?exp=1764259200000&sig=1b7c0e…
+```
+
+- The link is signed for that run, that pause and that connection, with its own label, so an approval link's signature can't stand in for it. It works once, for 10 minutes. Studio and `GET /api/runs/<id>` (`paused.connectUrl`) make a fresh one each time.
+- Opening it shows a page naming the provider and the scopes. Continuing sends the person to the provider. Halo keeps the `state` and PKCE verifier in `<stateDir>/connect` (readable only by the server's user) for 10 minutes.
+- The provider sends them back to `https://<publicUrl>/connect/callback`. Register that address with the provider. Halo checks the `state`, the verifier and the issuer, stores the token, and resumes the run.
+- Studio shows **Connect Google** on the run, and **Check again** to resume it after connecting on the server with `halo auth login Google`. With Slack buttons on, the announcement has a **Connect Google** button next to Approve and Reject. Slack never sees the token or the code.
+- Whoever opens the link chooses the account the run acts as. Until Halo knows who people are, a link is offered only for runs the operator started: through the API or Studio (with the token), or by the server's own schedules and watches. A run a webhook started gets no link; connect it on the server with `halo auth login`, then resume it.
+
 ## Serving a hosted package
 
 `halo serve --package <dir>` serves the hosted pipelines of a package you publish, on your models and keys, to the people who installed it: exactly the pipelines in its `hosted.exports`, behind the key in `hosted.auth`, checked against the `Halo-Package` version each call sends. See [Hosted packages](../hosted-packages.md).

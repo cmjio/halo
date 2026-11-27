@@ -78,6 +78,7 @@ pipeline Issues(repo: String) -> Result:
 
 - The first argument is the base URL. `https://` is added if it's missing.
 - `apiKey:` adds `Authorization: Bearer …`.
+- `auth: Google` signs requests with an [OAuth connection](../guide/integrations/oauth.md) instead: a token Halo refreshes, sent only to the tool's own origin. A tool takes `auth:` or `apiKey:`, not both.
 - **GET** requests `base + path`. When there is no `path:`, it requests `base/<method>`; a method named `get`, `fetch`, `request`, `call`, `execute`, or `send` (or a call by an agent) requests just `base`. Named arguments become query parameters. `query: "a=1&b=2"` appends raw query parameters. `{{key}}` placeholders in the base URL are filled from named arguments (URL-encoded, so a value can't add path segments or a query), which are then not sent again as parameters.
 - A request must stay under the declared URL: a `path:` that climbs out with `../` or names another host is refused, and so is one with `?` or `#` (pass query parameters as named arguments or `query:`).
 - **POST** sends the named arguments as a JSON body to `base + path`, or with `body: "form"` as a form, or with `body: "multipart"` as an upload. A file in the arguments goes as a `data:` URI in JSON (`files: "base64"` for bare base64) and as a file part in multipart; a form or a GET request can't carry one (see [Files to tools](../guide/files.md#files-to-tools)). The method name is ignored. A model that chooses the call can't set `path` unless the tool is declared `& Unlocked("path")` (see [Rules on a tool's arguments](#rules-on-a-tool-s-arguments)).
@@ -212,6 +213,16 @@ tool Mail : Email(Env.MAIL_PASSWORD, via: "smtp", host: "smtp.example.com", user
 
 **Outlook** uses Microsoft Graph as an app (client credentials): register an app in Entra, give it the `Mail.Send` and `Mail.ReadWrite` application permissions, and name the mailbox in `user:`. For one person's mailbox instead, pass `refreshToken:` (or `accessToken:`) with `clientId:`. Graph sends one body, so `html:` wins over `body:` when both are given.
 
+**OAuth for Gmail and Outlook.** Their tokens come from Halo's [OAuth broker](../guide/integrations/oauth.md), which refreshes them and keeps a refresh token the provider rotates (outside the project). Instead of a refresh token in `Env`, you can give the tool an `OAuth` connection and sign in once with `halo auth login`:
+
+```halo
+tool Google : OAuth(provider: "google", clientId: Env.GOOGLE_CLIENT_ID, clientSecret: Env.GOOGLE_CLIENT_SECRET,
+                    scopes: ["https://www.googleapis.com/auth/gmail.send"])
+tool Mail   : Email(via: "gmail", auth: Google, user: "me@gmail.com")
+```
+
+With `auth:` and `grant: "client_credentials"`, Outlook acts as an app on the mailbox in `user:`; otherwise as the person who signed in.
+
 **Not sending twice.** Resend gets the call's [idempotency key](#idempotency-keys). Over SMTP and the Gmail API the key becomes the message's `Message-ID`, so a repeat is the same message to whoever receives it, though the server will still accept it. `via: "cloudflare"` reports `delivered`, `queued` and `bounced` addresses in place of an id.
 
 **A mailbox an agent can read but not write to:**
@@ -277,6 +288,8 @@ pipeline FileIssue(title: String) -> Result:
 | `list_issues` | `state` (default `open`), `limit` (default 30) |
 
 `repo:` can be set on the declaration or on each call. `Repo.execute(method: "comment", ...)` also works.
+
+`Slack`, `GitHub`, `Linear` and `Figma` take `auth:` (an [OAuth connection](../guide/integrations/oauth.md)) in place of their token: `tool Repo : GitHub(auth: GitHubApp, repo: "acme/app")`. The token goes only to the service's own API.
 
 ## `Linear` and `Figma`
 
