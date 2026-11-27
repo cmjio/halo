@@ -63,6 +63,8 @@ export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow 
       return { runId: e.runId, timestamp: now, type: "tool_call", stage: `${e.tool}.${e.method}`, payload: { ...(e.sent?.length ? { sent: e.sent } : {}), output: e.output, mocked: e.mocked }, durationMs: e.latencyMs };
     case "paused":
       return { runId: e.runId, timestamp: now, type: "stream_end", stage: e.pipeline, payload: { status: "paused", waitingFor: e.waitingFor } };
+    case "tool_progress":
+      return { runId: e.runId, timestamp: now, type: "event", stage: `${e.tool}.${e.method}`, payload: { progress: e.progress, total: e.total, message: e.message } };
     case "budget":
       return { runId: e.runId, timestamp: now, type: "event", stage: "budget", payload: { added: e.added, budgetAdded: e.budgetAdded, spent: e.spent } };
     default:

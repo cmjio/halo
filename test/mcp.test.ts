@@ -2,7 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "../src/parser/index.js";
 import type { ToolDeclaration } from "../src/parser/types.js";
+import { HaloRuntime, type RuntimeEvent } from "../src/runtime/runtime.js";
 import { HaloError } from "../src/runtime/errors.js";
 import { closeMcpClients, MCP_INFO, mcpProvider, mcpTarget, resolveCommandPaths, splitCommand } from "../src/runtime/mcp.js";
 import type { ToolCall, ToolServices } from "../src/runtime/tools.js";
@@ -165,6 +167,39 @@ describe("MCP client over stdio", () => {
 
   test("accepts older protocol versions", async () => {
     expect(await mcpProvider(call({ 0: COMMAND, env: { FAKE_PROTOCOL: "2024-11-05" } }, "echo", { text: "old" }), services)).toBe("old");
+  });
+
+  test("progress keeps a long call alive past timeout_ms, up to max_ms, and is reported", async () => {
+    const seen: unknown[] = [];
+    const withProgress = { ...services, progress: (p: unknown) => seen.push(p) } as ToolServices;
+    // 5 steps of 150ms: 750ms in all, longer than timeout_ms, but never 400ms without progress.
+    const out = await mcpProvider(call({ 0: COMMAND, timeout_ms: 400 }, "slow", { steps: 5, every_ms: 150 }), withProgress);
+    expect(out).toEqual({ done: 5, token: true });
+    expect(seen).toHaveLength(5);
+    expect(seen[0]).toEqual({ progress: 1, total: 5, message: "step 1" });
+    // A gap longer than timeout_ms between reports still times out.
+    const idle: any = await mcpProvider(call({ 0: COMMAND, timeout_ms: 200 }, "slow", { steps: 1, every_ms: 500 }), services).catch((e: any) => e);
+    expect(idle.code).toBe("TIMEOUT");
+    expect(idle.message).toContain("without reporting progress");
+    // max_ms caps the whole call, however often it reports.
+    const capped: any = await mcpProvider(call({ 0: COMMAND, timeout_ms: 300, max_ms: 500 }, "slow", { steps: 10, every_ms: 100 }), services).catch((e: any) => e);
+    expect(capped.code).toBe("TIMEOUT");
+    expect(capped.message).toContain("max_ms");
+  });
+
+  test("a run reports a call's progress as tool_progress events", async () => {
+    const events: RuntimeEvent[] = [];
+    const src = `tool Echo : MCP(${JSON.stringify(COMMAND)})\npipeline P(x: String) -> Result:\n  x |> Echo.slow(steps: 2, every_ms: 50)`;
+    const rt = new HaloRuntime({ logger: { log() {}, warn() {} }, onEvent: (e) => events.push(e) }).load(parse(src));
+    try {
+      expect(await rt.execute("P", { x: "" })).toEqual({ done: 2, token: true });
+      expect(events.filter((e) => e.type === "tool_progress")).toEqual([
+        { type: "tool_progress", pipeline: "P", runId: expect.any(String), tool: "Echo", method: "slow", progress: 1, total: 2, message: "step 1" },
+        { type: "tool_progress", pipeline: "P", runId: expect.any(String), tool: "Echo", method: "slow", progress: 2, total: 2, message: "step 2" },
+      ]);
+    } finally {
+      await rt.close();
+    }
   });
 
   test("times out with timeout_ms", async () => {

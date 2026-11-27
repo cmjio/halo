@@ -56,7 +56,8 @@ Every MCP tool also has three built-in methods that a pipeline can call. These t
 | `headers:` | Extra HTTP headers, e.g. `headers: { "X-Org": "acme" }` (HTTP only). |
 | `env:` | Names of environment variables the stdio server may see, e.g. `env: ["GITHUB_TOKEN"]`, read from the runtime's environment (`RuntimeConfig.env`, which defaults to the process environment), like `Env.NAME`. Or a record of values: `env: { LOG_LEVEL: "warn" }`. |
 | `cwd:` | Working folder for the stdio server, relative to the folder Halo runs in. Without it, the server starts in a private empty folder (see below). Write `cwd: "."` to run it in the project. |
-| `timeout_ms:` | How long one request may take. The default is 60000. |
+| `timeout_ms:` | How long one request may go without an answer. The default is 60000. For a tool call, each progress report from the server starts this wait again (see [Long calls](#long-calls)). |
+| `max_ms:` | The most one tool call may take in all, however often it reports progress. The default is 900000 (15 minutes). |
 | `wallet_safe:` | `true` lets a local server share a program with a [wallet](../../stdlib/wallet.md), when you know it can't be steered into running commands. |
 
 Any other setting is an error, with the name it was close to: `MCP("...", timeout: 5)` asks whether you meant `timeout_ms`.
@@ -78,6 +79,12 @@ A bare program name such as `npx`, `uvx` or `bun` is still found on `PATH`. So `
 Some servers need to start in the project: one that finds its modules or settings from the folder it starts in (`python -m pkg`, `uv run`, a binary in `node_modules/.bin`). Give those `cwd: "."`. When `cwd:` is the project folder and the command is `bun`, Halo adds `--no-env-file`, so Bun still skips the project's `.env`. Other runtimes in the project folder may load it: keep the keys a server shouldn't see out of `.env`, or don't use `cwd: "."` for it.
 
 The empty folder doesn't help against a library that searches for `.env` from the server script's own folder (python-dotenv's default). A server script that lives in your project can still find the project's `.env` that way.
+
+#### Long calls
+
+Every tool call carries a `progressToken`. A server that sends `notifications/progress` for it keeps the call alive: each report starts the `timeout_ms` wait again. So a call that reports every few seconds can run for longer than `timeout_ms`, up to `max_ms` in all. A server that reports nothing still has `timeout_ms`.
+
+Each report is also a `tool_progress` run event (`tool`, `method`, `progress`, `total`, `message`). `halo run` shows it on its status line, and Studio lists it with the run's events.
 
 Halo opens one connection per declaration and reuses it across calls and runs. If a stdio server exits, Halo restarts it on the next call. Halo connects with protocol version `2025-06-18` and also works with servers that answer with `2025-03-26` or `2024-11-05`.
 

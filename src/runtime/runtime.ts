@@ -398,6 +398,8 @@ export type RuntimeEvent =
   | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
   | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; media?: MediaRef[]; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean; priced?: false }
   | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean; sent?: MediaRef[] }
+  /** A tool call still running said how far it has got (an MCP server's notifications/progress). */
+  | { type: "tool_progress"; pipeline: string; runId: string; tool: string; method: string; progress: number; total?: number; message?: string }
   /** A tool call an agent chose, and what happened to it: run, approved and run, declined by a person, refused by a policy, or failed. */
   | { type: "agent_tool"; pipeline: string; runId: string; agent: string; target: string; args: unknown; decision: "allowed" | "approved" | "declined" | "refused" | "error"; detail?: string }
   | { type: "retry"; runId: string; target: string; attempt: number; error: string; delayMs: number }
@@ -2909,6 +2911,9 @@ export class HaloRuntime {
         return this.ask(ctx, { target, key: req.key, message: req.message, attachments: [], named: req.named, ...(req.wallet ? { wallet: req.wallet } : {}) }, chosenBy ?? tool.name, `${tool.name} needs a person's approval`);
       },
       walletEvent: (e: WalletEvent) => this.walletEvent(ctx, e),
+      progress: (p) => {
+        if (tool) this.emit({ type: "tool_progress", pipeline: ctx.pipeline.name, runId: ctx.meta.runId, tool: tool.name, method: method ?? "", ...p });
+      },
       spend: (usd) => {
         if (!(usd > 0)) return;
         ctx.meta.cost += usd;

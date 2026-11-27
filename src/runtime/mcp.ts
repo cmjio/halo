@@ -32,6 +32,15 @@ export const MCP_PROTOCOL_VERSION = "2025-06-18";
 export const MCP_SUPPORTED_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+/** The most a tools/call that keeps reporting progress may take, unless the declaration sets max_ms:. */
+const DEFAULT_MAX_MS = 15 * 60_000;
+
+/** One notifications/progress from the server, for a call in flight. */
+export interface McpProgress {
+  progress: number;
+  total?: number;
+  message?: string;
+}
 const CLIENT_INFO = { name: "halo", version: pkg.version };
 
 /** Methods every MCP tool has, in addition to the server's own tools. */
@@ -386,10 +395,18 @@ export class McpClient {
   private ready?: Promise<Transport>;
   private nextId = 1;
   private toolCache?: McpToolInfo[];
+  /** Requests that carry a progressToken (their id), and what to do with each progress notification. */
+  private progress = new Map<unknown, (p: McpProgress) => void>();
   /** What the server said about itself in initialize. */
   server?: { protocolVersion: string; capabilities: Record<string, unknown>; serverInfo?: { name: string; version?: string }; instructions?: string };
 
-  constructor(readonly label: string, private target: McpTarget, private fetchFn: typeof fetch = fetch, private timeoutMs = DEFAULT_TIMEOUT_MS) {}
+  constructor(
+    readonly label: string,
+    private target: McpTarget,
+    private fetchFn: typeof fetch = fetch,
+    private timeoutMs = DEFAULT_TIMEOUT_MS,
+    private maxMs = DEFAULT_MAX_MS,
+  ) {}
 
   private open(): Transport {
     const t = this.target;
@@ -402,6 +419,10 @@ export class McpClient {
     const transport = this.open();
     transport.onNotification = (m) => {
       if (m.method === "notifications/tools/list_changed") this.toolCache = undefined;
+      if (m.method === "notifications/progress") {
+        const p = m.params ?? {};
+        this.progress.get(p.progressToken)?.({ progress: Number(p.progress), ...(typeof p.total === "number" ? { total: p.total } : {}), ...(typeof p.message === "string" ? { message: p.message.slice(0, 500) } : {}) });
+      }
     };
     this.transport = transport;
     const ready = (async () => {
@@ -427,28 +448,54 @@ export class McpClient {
     return ready;
   }
 
-  private async send(transport: Transport, method: string, params: unknown, signal: AbortSignal): Promise<any> {
-    const timeout = AbortSignal.timeout(this.timeoutMs);
-    const both = AbortSignal.any([signal, timeout]);
+  /**
+   * Send one request. It may go `timeoutMs` without an answer; with `onProgress`, it carries a
+   * progressToken, and each progress notification for it restarts that wait, up to `maxMs` in all.
+   */
+  private async send(transport: Transport, method: string, params: unknown, signal: AbortSignal, onProgress?: (p: McpProgress) => void): Promise<any> {
+    const id = this.nextId++;
+    const timer = new AbortController();
+    let why: string | undefined;
+    const stop = (reason: string) => {
+      why = reason;
+      timer.abort(new TimeoutError(reason));
+    };
+    const idleText = `${this.label}: MCP ${method} took longer than ${this.timeoutMs}ms${onProgress ? " without reporting progress" : ""}`;
+    let idle = setTimeout(() => stop(idleText), this.timeoutMs);
+    const total = onProgress ? setTimeout(() => stop(`${this.label}: MCP ${method} took longer than ${this.maxMs}ms in all (max_ms)`), this.maxMs) : undefined;
+    if (onProgress) {
+      params = { ...(params as object), _meta: { ...((params as { _meta?: object })._meta ?? {}), progressToken: id } };
+      this.progress.set(id, (p) => {
+        clearTimeout(idle);
+        idle = setTimeout(() => stop(idleText), this.timeoutMs);
+        try {
+          onProgress(p);
+        } catch {}
+      });
+    }
     try {
-      const res = await transport.request({ jsonrpc: "2.0", id: this.nextId++, method, params }, both);
+      const res = await transport.request({ jsonrpc: "2.0", id, method, params }, AbortSignal.any([signal, timer.signal]));
       if (res.error) throw new McpError(`${this.label}: ${method} failed: ${res.error.message}`, res.error.code, res.error.data);
       return res.result;
     } catch (err) {
-      if (timeout.aborted && !signal.aborted) throw new TimeoutError(`${this.label}: MCP ${method} took longer than ${this.timeoutMs}ms`);
+      if (why && !signal.aborted) throw new TimeoutError(why);
       throw err;
+    } finally {
+      clearTimeout(idle);
+      clearTimeout(total);
+      this.progress.delete(id);
     }
   }
 
   /** Send a request, connecting (or reconnecting) first. */
-  async request(method: string, params: unknown, signal: AbortSignal = new AbortController().signal): Promise<any> {
+  async request(method: string, params: unknown, signal: AbortSignal = new AbortController().signal, onProgress?: (p: McpProgress) => void): Promise<any> {
     try {
-      return await this.send(await this.connect(signal), method, params, signal);
+      return await this.send(await this.connect(signal), method, params, signal, onProgress);
     } catch (err) {
       // The HTTP server forgot our session: initialize again, once.
       if (err instanceof HaloError && err.code === "MCP_SESSION_EXPIRED") {
         this.ready = undefined;
-        return this.send(await this.connect(signal), method, params, signal);
+        return this.send(await this.connect(signal), method, params, signal, onProgress);
       }
       throw err;
     }
@@ -568,12 +615,17 @@ function withoutBunEnvFile(argv: string[]): string[] {
 /** The shared client for a declaration's config (a new one when the config differs). */
 export function mcpClient(label: string, config: Config, fetchFn: typeof fetch = fetch, environ?: Record<string, string | undefined>): McpClient {
   const target = mcpTarget(label, config, environ);
-  const timeoutMs = Number(config("timeout_ms") ?? DEFAULT_TIMEOUT_MS);
+  const ms = (name: string, fallback: number) => {
+    const n = Number(config(name) ?? fallback);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  const timeoutMs = ms("timeout_ms", DEFAULT_TIMEOUT_MS);
+  const maxMs = Math.max(timeoutMs, ms("max_ms", DEFAULT_MAX_MS));
   // Hash the config, so keys and tokens don't sit in the map's keys as plain text.
-  const key = String(Bun.hash(JSON.stringify([target, timeoutMs])));
+  const key = String(Bun.hash(JSON.stringify([target, timeoutMs, maxMs])));
   let client = clients.get(key);
   if (!client) {
-    client = new McpClient(label, target, fetchFn, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS);
+    client = new McpClient(label, target, fetchFn, timeoutMs, maxMs);
     clients.set(key, client);
   }
   return client;
@@ -691,7 +743,8 @@ export const mcpProvider: ToolProvider = async (call, services) => {
     if (!services.media) throw new HaloError(`${call.tool.name}: this runtime can't read the files its runs hold, so it can't send them`, { code: "TOOL_CONFIG" });
     return services.media(ref);
   });
-  const result = await client.request("tools/call", { name: tool.name, arguments: args }, signal);
+  // A progressToken on every call: a server that reports progress keeps a long call alive (up to max_ms).
+  const result = await client.request("tools/call", { name: tool.name, arguments: args }, signal, (p) => services.progress?.(p));
   if (result?.isError) throw new HaloError(`${call.tool.name}.${call.method}: ${errorText(result)}`, { code: "TOOL_FAILED" });
   return mcpResultValue(result);
 };
