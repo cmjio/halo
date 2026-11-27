@@ -3,7 +3,8 @@
 The web UI served by `halo serve` at `/`.
 
 - **Pipelines** (the home page): every pipeline the server runs, its schedules and webhooks, and a form to start it.
-- **Runs**: recent runs with their status, duration and cost. Each run opens as a timeline of its stages, model calls and tool calls; select a step to read its prompt, answer and result. Time a run spent waiting for someone is left off the timeline.
+- **Runs**: recent runs with their status, duration and cost. Each run opens as a timeline of its stages, model calls and tool calls; select a step to read its prompt, answer and result. Time a run spent waiting for someone, or stopped before it was resumed, is left off the timeline. Expand all, collapse all, and show the steps oldest or newest first.
+- **Run controls**: the run's header (duration, cost, tokens, and spend against its budget) stays in view as you scroll. Stop a running run; resume a failed or stopped one, or rewind it to a step (pipelines with `@checkpoint`); and raise a run's budget once it has spent 80% of it, or add budget and resume one that ran out.
 - **Paused runs**: Approve, Reject, or send another answer.
 - **Evolve**: start `halo evolve` runs, read the variants and their diffs, and apply one.
 

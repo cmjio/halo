@@ -1,7 +1,7 @@
 // Studio's trace: how a run's flat telemetry rows become the steps on its timeline.
 
 import { test, expect, describe } from "bun:test";
-import { axisTicks, buildTrace, tickLabel, type TelemetryEvent } from "../studio/src/trace";
+import { axisTicks, buildTrace, rowsOf, tickLabel, type TelemetryEvent, type TraceRow } from "../studio/src/trace";
 import { cronInWords, duration, money } from "../studio/src/format";
 
 let nextId = 1;
@@ -207,5 +207,68 @@ describe("Studio formatting", () => {
     expect(cronInWords("0 12 * * 0")).toBe("Every Sunday at 12:00");
     expect(cronInWords("0 0 1 * *")).toBe("Day 1 of every month at 00:00");
     expect(cronInWords("30 8 1,15 jan *")).toBe("30 8 1,15 jan *");
+  });
+});
+
+describe("Studio trace: stopping, resuming, budgets and order", () => {
+  const rowNames = (rows: TraceRow[]) => rows.map((r) => ("span" in r ? `${r.parent ? "  " : ""}${r.span.label}` : "raise" in r ? `+$${r.raise.added}` : "pause"));
+
+  test("a stopped run says so, and resuming it leaves the gap off the timeline", () => {
+    const stopped = [
+      ev(0, "stream_start", "Go"),
+      ev(0, "node_start", "0: A.one"),
+      ev(100, "llm_call", "A via openai/gpt-4o", { prompt: "p", output: "o", cost: 0.5 }, 100),
+      ev(100, "node_end", "0: A.one", "o", 100),
+      ev(100, "node_start", "1: A.two"),
+      ev(150, "error", "Go", { error: "Stopped from Studio", cost: 0.5, stopped: true }),
+    ];
+    const t = buildTrace(stopped, idle);
+    expect(t).toMatchObject({ status: "failed", stopped: true, error: "Stopped from Studio" });
+
+    // An hour later it is resumed from its checkpoint and finishes.
+    const resumed = buildTrace(
+      [
+        ...stopped,
+        ev(3_600_150, "stream_start", "Go"),
+        ev(3_600_150, "node_start", "1: A.two"),
+        ev(3_600_250, "llm_call", "A via openai/gpt-4o", { prompt: "p", output: "o", cost: 0.5 }, 100),
+        ev(3_600_250, "node_end", "1: A.two", "o", 100),
+        ev(3_600_250, "stream_end", "Go", { status: "completed", output: "o", cost: 1 }),
+      ],
+      idle,
+    );
+    expect(resumed).toMatchObject({ status: "completed", stopped: false, cost: 1 });
+    expect(resumed.pauses).toEqual([{ start: T0 + 150, end: T0 + 3_600_150, kind: "stopped" }]);
+    expect(resumed.active).toBe(250);
+  });
+
+  test("budget raises are markers in the trace, and newest first keeps each step's insides under it", () => {
+    const t = buildTrace(
+      [
+        ev(0, "stream_start", "Go"),
+        ev(0, "node_start", "0: x"),
+        ev(1, "node_end", "0: x", "x", 1),
+        ev(1, "node_start", "1: Build(pkg)"),
+        ev(2, "node_start", "0: B.write"),
+        ev(10, "llm_call", "B via openai/gpt-4o", { prompt: "p", output: "o", cost: 0.1 }, 8),
+        ev(10, "node_end", "0: B.write", "o", 8),
+        ev(11, "node_start", "1: Tests.run"),
+        ev(20, "tool_call", "Tests.run", { output: { exitCode: 0 } }, 9),
+        ev(20, "node_end", "1: Tests.run", { exitCode: 0 }, 9),
+        ev(25, "event", "budget", { added: 1, budgetAdded: 1, spent: 0.1 }),
+        ev(30, "node_end", "1: Build(pkg)", "done", 29),
+        ev(31, "node_start", "2: R.review"),
+        ev(40, "llm_call", "R via openai/gpt-4o", { prompt: "p", output: "ok", cost: 0.1 }, 9),
+        ev(40, "node_end", "2: R.review", "ok", 9),
+        ev(41, "stream_end", "Go", { status: "completed", output: "ok", cost: 0.2 }),
+      ],
+      idle,
+    );
+    expect(t.budgetRaises).toEqual([{ at: T0 + 25, added: 1, total: 1 }]);
+    const none = new Set<string>();
+    expect(rowNames(rowsOf(t, none))).toEqual(["x", "Build(pkg)", "  B.write", "  Tests.run", "+$1", "R.review"]);
+    expect(rowNames(rowsOf(t, none, "newest"))).toEqual(["R.review", "+$1", "Build(pkg)", "  Tests.run", "  B.write", "x"]);
+    const build = t.spans.find((s) => s.label === "Build(pkg)")!;
+    expect(rowNames(rowsOf(t, new Set([build.id]), "newest"))).toEqual(["R.review", "+$1", "Build(pkg)", "x"]);
   });
 });

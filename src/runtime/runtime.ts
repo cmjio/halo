@@ -69,7 +69,7 @@ import { HOSTED_PROVIDER, HOSTED_PROVIDER_INFO, hostedProvider } from "./hosted.
 import { MEDIA_INFO, MEDIA_PROVIDER, MEDIA_TOOL, mediaProvider, type Transcriber } from "./providers/media-files.js";
 import { clock, isService, TRANSCRIBE_KEYS, TRANSCRIBE_SERVICES, transcriptionCost, transcriptText } from "./providers/transcribe.js";
 import { aKind, kinds } from "./media-ref.js";
-import { HttpError, HaloError, LoopLimitError, PolicyViolation, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
+import { HttpError, HaloError, LoopLimitError, PolicyViolation, RunStoppedError, SchemaValidationError, SignalError, TimeoutError, isRetryable } from "./errors.js";
 import { validateReturn } from "./schema.js";
 import { placeholderSpots, quoteFor } from "./shell.js";
 import { asNumber, asText, compactJson, declineReason, formatValue, isApproval, getPath, hasOwnKey, humanize, interpolate, isPlainObject, isSafeKey, looseEquals, parseOutput, pick, sleep, truthy } from "./values.js";
@@ -229,6 +229,8 @@ export interface RunMeta {
   rewoundFrom?: { runId: string; step: number };
   /** How many times the run was picked up again after the process running it died. */
   resumes?: number;
+  /** USD a person added to every MaxSpend limit for this run (`extendBudget`). Kept through checkpoints, resumes and rewinds. */
+  budgetAdded?: number;
 }
 
 export interface TraceEntry {
@@ -389,7 +391,7 @@ export class FileRunStore implements RunStore {
 }
 
 export type RuntimeEvent =
-  | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number }
+  | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number; stopped?: true }
   | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
   | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; media?: MediaRef[]; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean }
   | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean; sent?: MediaRef[] }
@@ -412,6 +414,8 @@ export type RuntimeEvent =
   /** A wallet value was typed, refused, declined, or a submission after one was approved (never the value). */
   | ({ type: "wallet"; pipeline: string; runId: string; at: string } & WalletEvent)
   | { type: "checkpoint"; runId: string; path: string }
+  /** A person added `added` USD to every MaxSpend limit of a running run (`budgetAdded` in all). */
+  | { type: "budget"; runId: string; added: number; budgetAdded: number; spent: number }
   | ({ type: "violation"; runId: string } & Violation);
 
 export interface RuntimeConfig {
@@ -639,6 +643,12 @@ async function branches<T>(signal: AbortSignal, start: (signal: AbortSignal) => 
   }
 }
 
+/** A budget extension: a positive, finite number of USD. */
+function checkedBudget(usd: number): number {
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0) throw new HaloError(`A budget extension must be a positive amount of USD (got ${usd})`, { code: "BUDGET_EXTENSION" });
+  return usd;
+}
+
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   work.catch(() => {}); // the loser of the race must not surface as an unhandled rejection
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -694,6 +704,8 @@ export class HaloRuntime {
   private tools = new Map<string, ToolDeclaration>();
   private schemas = new Map<string, SchemaDeclaration>();
   private listeners = new Set<(event: RuntimeEvent) => void>();
+  /** Runs this runtime is running now, so `stop` and `extendBudget` can reach them. */
+  private live = new Map<string, { ctx: ExecutionContext; stopper: AbortController }>();
   /** Runs being claimed right now (guards stores without an atomic take). */
   private resuming = new Set<string>();
   private guard = new PolicyEngine(this.policies);
@@ -1026,7 +1038,7 @@ export class HaloRuntime {
         let heard = cache.get(m.sha256);
         if (!heard) {
           const t = this.transcriber();
-          const limit = this.guard.spendLimit(agent);
+          const limit = this.limitFor(agent, ctx);
           if (!("missing" in t) && limit !== undefined && this.spent(ctx) + transcriptionCost(m, t.model ?? "") > limit) this.guard.refuseOverBudget(agent, this.guardHooks(ctx));
           cache.set(m.sha256, (heard = (await this.toolCall(MEDIA_TOOL, "transcript", [m], {}, ctx, false)) as { text?: unknown }));
         }
@@ -1044,7 +1056,7 @@ export class HaloRuntime {
         let seen = cache.get(m.sha256) as { duration?: number; transcript?: { text?: unknown; segments?: unknown }; noTranscript?: string; frames?: Array<{ at: number; image: unknown }> } | undefined;
         if (!seen) {
           const t = this.transcriber();
-          const limit = this.guard.spendLimit(agent);
+          const limit = this.limitFor(agent, ctx);
           if (!("missing" in t) && limit !== undefined && this.spent(ctx) + transcriptionCost(m, t.model ?? "") > limit) this.guard.refuseOverBudget(agent, this.guardHooks(ctx));
           seen = (await this.toolCall(MEDIA_TOOL, "digest", [m], {}, ctx, false)) as typeof seen;
           cache.set(m.sha256, seen as never);
@@ -1153,13 +1165,18 @@ export class HaloRuntime {
     }
   }
 
-  /** Continue a run from a @checkpoint file. */
-  async resume(checkpointPath: string): Promise<RunResult> {
+  /**
+   * Continue a run from a @checkpoint file. `addBudget` (USD) raises every MaxSpend limit
+   * for this run on top of what was added before, for a run that stopped on its budget.
+   */
+  async resume(checkpointPath: string, options: { signal?: AbortSignal; addBudget?: number } = {}): Promise<RunResult> {
     const cp = await readSnapshot(checkpointPath);
     if (!cp) throw new HaloError(`No checkpoint at ${checkpointPath}`);
     // A run that ended has saved its thread changes already; only later ones are new.
     if (cp.thread && this.threads().savedBy(cp.thread.name, cp.thread.key, cp.meta.runId)) cp.thread.saved = cp.thread.ops.length;
-    return this.runTop(this.restore(cp), cp.nextStage);
+    const ctx = this.restore(cp, options.signal);
+    if (options.addBudget) ctx.meta.budgetAdded = (ctx.meta.budgetAdded ?? 0) + checkedBudget(options.addBudget);
+    return this.runTop(ctx, cp.nextStage);
   }
 
   /**
@@ -1181,7 +1198,7 @@ export class HaloRuntime {
    * that step (and, with @checkpoint, the history up to it). The old run is untouched.
    * Every stage after the step runs again: models, tools and approvals.
    */
-  async rewind(checkpointPath: string, step: number, options: { runId?: string } = {}): Promise<RunResult> {
+  async rewind(checkpointPath: string, step: number, options: { runId?: string; signal?: AbortSignal; addBudget?: number } = {}): Promise<RunResult> {
     const cp = await readSnapshot(checkpointPath);
     if (!cp) throw new HaloError(`No checkpoint at ${checkpointPath}`);
     const steps = await readSteps(stepsPathFor(checkpointPath));
@@ -1208,6 +1225,8 @@ export class HaloRuntime {
         violations: [],
         shadows: [],
         rewoundFrom: { runId: cp.meta.runId, step: s.step },
+        // It carries the old run's spend, so it carries what a person added to its budget too.
+        ...(cp.meta.budgetAdded || options.addBudget ? { budgetAdded: (cp.meta.budgetAdded ?? 0) + (options.addBudget ? checkedBudget(options.addBudget) : 0) } : {}),
         // The same key as the run it came from, so a call it already made isn't made a second time.
         idempotencyKey: cp.meta.idempotencyKey ?? cp.meta.runId,
       },
@@ -1218,7 +1237,7 @@ export class HaloRuntime {
       const saved = this.threads().savedBy(cp.thread.name, cp.thread.key, cp.meta.runId) ? ops.length : 0;
       snap.thread = { ...cp.thread, ops, state: applyOps(cp.thread.base, ops), saved };
     }
-    const ctx = this.restore(snap);
+    const ctx = this.restore(snap, options.signal);
     // Its sandboxes start from the files they had after that step.
     seedRemoteSessions(runId, at.sandboxes);
     // The new run's history begins with the steps it shares with the old one.
@@ -1294,10 +1313,10 @@ export class HaloRuntime {
     }
   }
 
-  private restore(snap: RunSnapshot): ExecutionContext {
+  private restore(snap: RunSnapshot, signal?: AbortSignal): ExecutionContext {
     const pipeline = this.pipelines.get(snap.pipeline);
     if (!pipeline) throw new HaloError(`Saved run is for pipeline "${snap.pipeline}", which is not loaded`);
-    const ctx = this.newContext(pipeline, snap.input, 0);
+    const ctx = this.newContext(pipeline, snap.input, 0, signal);
     Object.assign(ctx, { data: snap.data, trace: snap.trace, current: snap.current, loops: snap.loops ?? {}, loopFeedback: snap.loopFeedback, sessions: snap.sessions, thread: snap.thread });
     ctx.meta = { ...snap.meta, halted: undefined, paused: undefined, finishedAt: undefined, durationMs: undefined };
     seedRemoteSessions(ctx.meta.runId, snap.sandboxes);
@@ -1307,6 +1326,11 @@ export class HaloRuntime {
   /** Run a top-level pipeline from `start`, reporting run events and checking the declared output schema. */
   private async runTop(ctx: ExecutionContext, start: number): Promise<RunResult> {
     const base = { pipeline: ctx.pipeline.name, runId: ctx.meta.runId };
+    // `stop(runId)` aborts the run as well as whatever signal the caller passed.
+    const stopper = new AbortController();
+    ctx.signal = AbortSignal.any([ctx.signal, stopper.signal]);
+    const live = { ctx, stopper };
+    this.live.set(ctx.meta.runId, live);
     this.emit({ type: "run", ...base, status: "start" });
     try {
       ctx.thread ??= this.openThread(ctx);
@@ -1325,15 +1349,82 @@ export class HaloRuntime {
     } catch (err) {
       await Promise.all([closeChromeSessions(ctx.meta.runId), closeRemoteSessions(ctx.meta.runId)]);
       await Promise.resolve(this.config.progressStore?.delete(ctx.meta.runId)).catch(() => {});
+      await this.keepBudgetAdded(ctx).catch(() => {});
       // Errors name things as people know them, not by the linker's internal names.
       if (err instanceof Error && err.message.includes("#")) {
         try {
           err.message = this.displayName(err.message);
         } catch {}
       }
-      this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost });
+      this.emit({ type: "run", ...base, status: "error", error: err instanceof Error ? err.message : String(err), cost: ctx.meta.cost, ...(err instanceof RunStoppedError ? { stopped: true as const } : {}) });
       throw err;
+    } finally {
+      if (this.live.get(ctx.meta.runId) === live) this.live.delete(ctx.meta.runId);
     }
+  }
+
+  /**
+   * A budget raised part-way through a stage isn't in the checkpoint until the next stage saves
+   * one. A run that fails or is stopped first writes it there, so resuming it keeps the extension.
+   */
+  private async keepBudgetAdded(ctx: ExecutionContext): Promise<void> {
+    const path = this.checkpointPath(ctx);
+    if (!path || !ctx.meta.budgetAdded) return;
+    const file = Bun.file(path);
+    if (!(await file.exists())) return;
+    const core = (await file.json()) as { meta?: { budgetAdded?: number } };
+    if (!core.meta || core.meta.budgetAdded === ctx.meta.budgetAdded) return;
+    core.meta.budgetAdded = ctx.meta.budgetAdded;
+    await Bun.write(path, JSON.stringify(core));
+  }
+
+  /** Whether this runtime is running `runId` right now (not paused, not finished). */
+  isRunning(runId: string): boolean {
+    return this.live.has(runId);
+  }
+
+  /** A running run's spend so far and what has been added to its budget, or undefined if it isn't running here. */
+  liveRun(runId: string): { cost: number; tokens: RunMeta["tokens"]; budgetAdded: number } | undefined {
+    const ctx = this.live.get(runId)?.ctx;
+    if (!ctx) return undefined;
+    return { cost: this.spent(ctx), tokens: { ...ctx.meta.tokens }, budgetAdded: ctx.meta.budgetAdded ?? 0 };
+  }
+
+  /**
+   * Stop a running run: the stage it is on is aborted and the run fails with a RunStoppedError.
+   * With @checkpoint it can be continued later from its last finished stage. False if it isn't running here.
+   */
+  stop(runId: string, reason = "Stopped"): boolean {
+    const live = this.live.get(runId);
+    if (!live) return false;
+    live.stopper.abort(new RunStoppedError(reason));
+    return true;
+  }
+
+  /**
+   * Raise every MaxSpend limit of a running run by `usd`, from its next model call on. The
+   * extension is saved with the run, so a checkpoint, resume or rewind keeps it. Returns the
+   * total added so far, or undefined if the run isn't running here.
+   */
+  extendBudget(runId: string, usd: number): number | undefined {
+    const ctx = this.live.get(runId)?.ctx;
+    if (!ctx) return undefined;
+    ctx.meta.budgetAdded = (ctx.meta.budgetAdded ?? 0) + checkedBudget(usd);
+    // Calls waiting for room in the budget may fit now.
+    const flight = this.inflight.get(ctx.meta);
+    flight?.waiting.shift()?.();
+    this.emit({ type: "budget", runId, added: usd, budgetAdded: ctx.meta.budgetAdded, spent: this.spent(ctx) });
+    return ctx.meta.budgetAdded;
+  }
+
+  /** The MaxSpend limits of the loaded agents, lowest first (before anything a person adds to a run). */
+  spendLimits(): number[] {
+    const limits = new Set<number>();
+    for (const agent of this.agents.values()) {
+      const l = this.guard.spendLimit(agent);
+      if (l !== undefined) limits.add(l);
+    }
+    return [...limits].sort((a, b) => a - b);
   }
 
   private newContext(pipeline: PipelineDeclaration, args: Record<string, unknown>, depth: number, signal?: AbortSignal): ExecutionContext {
@@ -1907,7 +1998,7 @@ export class HaloRuntime {
 
   /** The options a call fits the budget with, or a promise to wait on (for a call in flight) before trying again. */
   private fitBudget(agent: Agent, model: string, prompt: string, system: string | undefined, options: LLMOptions, ctx: ExecutionContext, again = false): LLMOptions | Promise<void> {
-    const limit = this.guard.spendLimit(agent);
+    const limit = this.limitFor(agent, ctx);
     const adapter = this.adapterRegistry.findAdapter(model);
     if (limit === undefined || !adapter?.estimateCost) return options;
     const input = adapter.estimateCost(model, estimateTokens(prompt + (system ?? "")) + mediaAllowance(options.media), 0);
@@ -1932,9 +2023,16 @@ export class HaloRuntime {
     return f;
   }
 
+  /** The lowest MaxSpend limit on an agent, plus whatever a person added to this run's budget. */
+  private limitFor(agent: Agent, ctx: ExecutionContext): number | undefined {
+    const limit = this.guard.spendLimit(agent);
+    return limit === undefined ? undefined : limit + (this.topMeta(ctx).budgetAdded ?? 0);
+  }
+
   private guardHooks(ctx: ExecutionContext): PolicyHooks {
     return {
       spent: () => this.spent(ctx),
+      added: () => this.topMeta(ctx).budgetAdded ?? 0,
       lookup: (path) => this.lookup(path.split("."), ctx),
       onViolation: (v, log) => {
         ctx.meta.violations.push(v);

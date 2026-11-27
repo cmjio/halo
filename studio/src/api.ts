@@ -99,9 +99,38 @@ export interface RunSummary {
   running?: boolean;
 }
 
+/** What can be done to a run from Studio, as the server sees it now. */
+export interface RunControls {
+  /** It is running on this server: it can be stopped, and its budget raised. */
+  stoppable: boolean;
+  /** It failed, was stopped, or halted, and has a @checkpoint to continue from. */
+  resumable: boolean;
+  /** It has a step history (@checkpoint) to go back to. */
+  rewindable: boolean;
+  /** How many steps its history holds. */
+  steps: number;
+  /** It ended because someone stopped it. */
+  stopped: boolean;
+  /** Its MaxSpend limits (`limit` is the lowest, where the first agent stops) and what has been added; null when no agent has one. */
+  budget: { limit: number; limits: number[]; added: number; spent: number | null } | null;
+}
+
 export interface RunDetail {
   runId: string;
   running: boolean;
   paused?: { waitingFor: string; message?: string; stage: number; approveUrl: string };
+  /** Missing from older servers. */
+  controls?: RunControls;
   events: TelemetryEvent[];
+}
+
+/** One step of a @checkpoint run's history, to rewind to. */
+export interface RunStep {
+  step: number;
+  stage: number;
+  label: string;
+  at: string;
+  cost: number;
+  tokens: { prompt: number; completion: number };
+  halted?: true;
 }

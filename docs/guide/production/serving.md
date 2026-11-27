@@ -218,6 +218,11 @@ Every `/api` request needs `Authorization: Bearer <token>` when a token is set. 
 | `GET /api/runs` | Recent runs: pipeline, status, duration, cost |
 | `GET /api/runs/<id>` | A run's events, and `paused` (`waitingFor`, `message`, `approveUrl`) while it waits |
 | `POST /api/runs/<id>/signal` | Resume a paused run. Body `{"answer": "approve"}`, or `{"payload": {...}, "event": "Slack.Reaction"}` |
+| `POST /api/runs/<id>/stop` | Stop a running run: the stage it's on is cut short and the run fails as stopped. Body `{"reason": "..."}` (optional). With `@checkpoint`, it can be resumed. See [Stopping, resuming and budgets](#stopping-resuming-and-budgets) |
+| `POST /api/runs/<id>/budget` | Raise every `MaxSpend` limit of a running or paused run, for that run only. Body `{"add": 1.00}` (USD) |
+| `POST /api/runs/<id>/resume` | Continue a failed, stopped or halted `@checkpoint` run from its last finished stage, as the same run. Body `{"addBudget": 1.00}` (optional), `"wait": true` to wait |
+| `POST /api/runs/<id>/rewind` | Run a `@checkpoint` run again from one of its steps, as a new run. Body `{"step": 3, "addBudget": 1.00}`; returns `202 {"runId", "rewoundFrom"}` |
+| `GET /api/runs/<id>/steps` | A `@checkpoint` run's steps, to rewind to: `step`, `label`, `at`, `cost`, `tokens` |
 | `GET /api/evolve` | Evolve runs, running and finished, newest first |
 | `POST /api/evolve` | Start one in the background. Body `{"pipeline": "Name", "variants": 4, "rounds": 2, "budget": 3, "criteria": "..."}`; returns `202 {"id"}`. Needs `minRuns` (default 10) finished recordings |
 | `GET /api/evolve/<id>` | Its progress while it runs (`log`, and `now`: what it's doing at the moment, since `nowSince`), then its `evolve.json` (`record`), every variant's diff, and the report |
@@ -311,6 +316,30 @@ curl -X POST localhost:8080/api/pipelines/PayWinners/runs \
 - `"dryRun": true` in the body, or a `Halo-Dry-Run: 1` header, makes that one run dry; other runs on the same server are real.
 - A dry run that pauses stays dry when it is answered. It keeps `@thread` state in memory, isn't recorded for `halo replay`, and has its own idempotency keys, so a rehearsal can't use up the key of the real run.
 - `halo serve --mocks <file>` (or `--mock`) makes every run a dry run. `/healthz` then says `"dryRun": true`, so nobody mistakes a rehearsal server for the real one.
+
+## Stopping, resuming and budgets
+
+`GET /api/runs/<id>` includes `controls`: what can be done to the run right now.
+
+```json
+"controls": {
+  "stoppable": true,
+  "resumable": false,
+  "rewindable": true,
+  "steps": 4,
+  "stopped": false,
+  "budget": { "limit": 2.0, "limits": [2.0], "added": 0.5, "spent": 1.62 }
+}
+```
+
+- **Stop** works on a run this server is running. A run waiting for an answer isn't running: reject it to end it.
+- **Resume** and **rewind** need `@checkpoint` on the pipeline, since they start from the state it saved after each stage. Resume continues the same run after its last finished stage (the stage it failed or was stopped in runs again from its start). Rewind starts a new run from any step. Both use the pipeline as the server loaded it.
+- **The budget** is the lowest `MaxSpend` among the agents (`limit`; `limits` lists them all) plus what has been `added`, against what the run has `spent`. A resumed or rewound run carries its spend over, so a run that ran out needs more added to get anywhere: send `addBudget` with the resume. An extension belongs to that run, is kept through checkpoints, resumes and rewinds, and never changes the file. Studio offers it once a run has spent 80% of its budget.
+
+```bash
+curl -X POST localhost:8080/api/runs/$RUN/budget -H 'Content-Type: application/json' -d '{"add": 1}'
+curl -X POST localhost:8080/api/runs/$RUN/resume -H 'Content-Type: application/json' -d '{"addBudget": 1}'
+```
 
 ## Security
 

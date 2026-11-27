@@ -63,6 +63,16 @@ export interface Pause {
   /** Null while the run is still waiting. */
   end: number | null;
   waitingFor?: string;
+  /** "stopped": the run failed or was stopped here, and was resumed later. Otherwise it waited for an answer. */
+  kind?: "stopped";
+}
+
+/** A person raised the run's budget while it ran. */
+export interface BudgetRaise {
+  at: number;
+  added: number;
+  /** All that has been added to the run's budget by then. */
+  total: number;
 }
 
 export interface Trace {
@@ -75,6 +85,9 @@ export interface Trace {
   hasOutput: boolean;
   output?: unknown;
   error?: string;
+  /** The run failed because someone stopped it. */
+  stopped: boolean;
+  budgetRaises: BudgetRaise[];
   cost?: number;
   tokens: number;
   modelCalls: number;
@@ -83,6 +96,27 @@ export interface Trace {
   active: number;
   /** Where a moment falls on that working-time axis, in ms from the start. */
   at: (t: number) => number;
+}
+
+export type TraceRow = { span: Span; parent?: Span } | { pause: Pause } | { raise: BudgetRaise };
+export type TraceOrder = "oldest" | "newest";
+type Marker = { at: number; row: TraceRow };
+
+/**
+ * The tree as the rows to draw, with a marker wherever the run sat waiting or its budget was
+ * raised. Newest first reverses the steps and the steps inside each, but keeps each step's
+ * insides under it.
+ */
+export function rowsOf(trace: Trace, closed: Set<string>, order: TraceOrder = "oldest"): TraceRow[] {
+  const markers: Marker[] = [...trace.pauses.map((pause) => ({ at: pause.start, row: { pause } })), ...trace.budgetRaises.map((raise) => ({ at: raise.at, row: { raise } }))].sort((a, b) => a.at - b.at);
+  const groups: TraceRow[][] = [];
+  for (const span of trace.spans) {
+    while (markers[0] && span.start >= markers[0].at) groups.push([markers.shift()!.row]);
+    const kids = closed.has(span.id) ? [] : span.children.map((child) => ({ span: child, parent: span }));
+    groups.push([{ span }, ...(order === "newest" ? kids.reverse() : kids)]);
+  }
+  for (const m of markers) groups.push([m.row]);
+  return (order === "newest" ? groups.reverse() : groups).flat();
 }
 
 /** A run with no end recorded counts as still going if it logged something this recently. */
@@ -123,6 +157,9 @@ export function buildTrace(events: TelemetryEvent[], live: { running: boolean; p
   let output: unknown;
   let hasOutput = false;
   let error: string | undefined;
+  let stopped = false;
+  let failedAt: number | undefined;
+  const budgetRaises: BudgetRaise[] = [];
   let cost: number | undefined;
   let summedCost = 0;
   let tokens = 0;
@@ -142,7 +179,11 @@ export function buildTrace(events: TelemetryEvent[], live: { running: boolean; p
           waiting.end = t;
           for (const s of open) if (s.status === "waiting") s.status = "running";
         }
+        // A run that failed and was resumed: the time in between is left off the timeline too.
+        if (ended === "failed" && failedAt !== undefined) pauses.push({ start: failedAt, end: t, kind: "stopped" });
         ended = undefined;
+        stopped = false;
+        failedAt = undefined;
         break;
       }
       case "node_start": {
@@ -256,6 +297,8 @@ export function buildTrace(events: TelemetryEvent[], live: { running: boolean; p
         const payload = parsePayload(ev.payload);
         const info = isRecord(payload) ? payload : {};
         ended = "failed";
+        failedAt = t;
+        stopped = info.stopped === true;
         error = typeof info.error === "string" ? info.error : typeof payload === "string" ? payload : "The run failed";
         if (typeof info.cost === "number") cost = info.cost;
         // Everything still open was cut short; the step it failed in is the one that started last
@@ -266,6 +309,12 @@ export function buildTrace(events: TelemetryEvent[], live: { running: boolean; p
           s.end = t;
         }
         top = null;
+        break;
+      }
+      case "event": {
+        if (ev.stage !== "budget") break;
+        const info = parsePayload(ev.payload);
+        if (isRecord(info) && typeof info.added === "number") budgetRaises.push({ at: t, added: info.added, total: typeof info.budgetAdded === "number" ? info.budgetAdded : info.added });
         break;
       }
     }
@@ -311,6 +360,8 @@ export function buildTrace(events: TelemetryEvent[], live: { running: boolean; p
     hasOutput,
     output,
     error,
+    stopped,
+    budgetRaises,
     cost: cost ?? (summedCost > 0 ? summedCost : undefined),
     tokens,
     modelCalls,

@@ -42,7 +42,7 @@ export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow 
   switch (e.type) {
     case "run":
       if (e.status === "start") return { runId: e.runId, timestamp: now, type: "stream_start", stage: e.pipeline, payload: null };
-      if (e.status === "error") return { runId: e.runId, timestamp: now, type: "error", stage: e.pipeline, payload: { error: e.error, cost: e.cost } };
+      if (e.status === "error") return { runId: e.runId, timestamp: now, type: "error", stage: e.pipeline, payload: { error: e.error, cost: e.cost, ...(e.stopped ? { stopped: true } : {}) } };
       return { runId: e.runId, timestamp: now, type: "stream_end", stage: e.pipeline, payload: { status: e.status, output: e.output, cost: e.cost }, durationMs: e.durationMs };
     case "stage":
       return e.status === "start"
@@ -62,6 +62,8 @@ export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow 
       return { runId: e.runId, timestamp: now, type: "tool_call", stage: `${e.tool}.${e.method}`, payload: { ...(e.sent?.length ? { sent: e.sent } : {}), output: e.output, mocked: e.mocked }, durationMs: e.latencyMs };
     case "paused":
       return { runId: e.runId, timestamp: now, type: "stream_end", stage: e.pipeline, payload: { status: "paused", waitingFor: e.waitingFor } };
+    case "budget":
+      return { runId: e.runId, timestamp: now, type: "event", stage: "budget", payload: { added: e.added, budgetAdded: e.budgetAdded, spent: e.spent } };
     default:
       return undefined;
   }

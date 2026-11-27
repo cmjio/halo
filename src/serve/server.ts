@@ -25,6 +25,8 @@ import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
 import { FileRunStore, HaloRuntime, SignalError, type RunResult, type RuntimeConfig, type RuntimeEvent } from "../runtime/runtime.js";
+import { readSnapshot } from "../runtime/snapshots.js";
+import { readSteps, stepsPathFor } from "../runtime/history.js";
 import { mailFromRaw } from "../runtime/mail/provider.js";
 import { mockEverything, splitMocks } from "../runtime/mocks.js";
 import { SIGNATURE_HEADER, signBody } from "../runtime/signing.js";
@@ -733,6 +735,55 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   const settled = (runId: string) => inflight.get(runId) ?? Promise.resolve(recent.get(runId));
 
+  // ── Stopping, resuming and rewinding runs, and raising their budgets ──
+  const checkpointDir = options.runtime?.checkpointDir ?? kept.checkpointDir ?? ".halo/checkpoints";
+  /** The @checkpoint file of a run, if it has one. */
+  const checkpointOf = (runId: string): string | undefined => {
+    if (!/^[\w-]+$/.test(runId) || !existsSync(checkpointDir)) return undefined;
+    const file = readdirSync(checkpointDir).find((f) => f.endsWith(`-${runId}.json`));
+    return file ? join(checkpointDir, file) : undefined;
+  };
+  /** The runtime running a run right now, if one of this server's is. */
+  const runningIn = (runId: string) => runtimes.find((rt) => rt.isRunning(runId));
+  /** How a run ended, from its telemetry: the last end or error row. */
+  const endOf = (runId: string): { status: string; stopped?: boolean } | undefined => {
+    const end = telemetry.run(runId).findLast((r) => r.type === "stream_end" || r.type === "error");
+    if (!end) return undefined;
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = typeof end.payload === "string" ? (JSON.parse(end.payload) as Record<string, unknown>) : {};
+    } catch {}
+    return end.type === "error" ? { status: "error", ...(payload.stopped ? { stopped: true } : {}) } : { status: String(payload.status ?? "completed") };
+  };
+  /** What Studio needs to offer stop, resume, rewind and a budget extension for a run. */
+  const controlsFor = async (runId: string, pipeline: string | undefined) => {
+    const cp = checkpointOf(runId);
+    const snap = cp ? await readSnapshot(cp) : undefined;
+    const name = snap?.pipeline ?? pipeline;
+    const e = name ? entries.get(name) : undefined;
+    const live = runningIn(runId)?.liveRun(runId);
+    const paused = await runStore.load(runId);
+    const limits = e?.runtime.spendLimits() ?? [];
+    const steps = cp && existsSync(stepsPathFor(cp)) ? (await readSteps(stepsPathFor(cp))).length : 0;
+    const end = live ? undefined : endOf(runId);
+    return {
+      stoppable: !!live,
+      resumable: !live && !inflight.has(runId) && !paused?.waitingFor && !!snap && !!e && end?.status !== "completed",
+      rewindable: !live && !!e && steps > 0,
+      steps,
+      stopped: !!end?.stopped,
+      budget: limits.length
+        ? { limit: limits[0]!, limits, added: live?.budgetAdded ?? paused?.meta.budgetAdded ?? snap?.meta.budgetAdded ?? 0, spent: live?.cost ?? paused?.meta.cost ?? snap?.meta.cost ?? null }
+        : null,
+    };
+  };
+  const positiveUsd = (v: unknown, what: string): number | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0 || n > 10_000) throw new ServeError(`${what} must be a positive amount of USD, at most 10000`);
+    return n;
+  };
+
   function scheduledRunEnded(runId: string, status: string) {
     const key = scheduledRuns.get(runId);
     const st = key ? scheduleState[key] : undefined;
@@ -1416,7 +1467,89 @@ ${files}
           const paused = snap?.waitingFor
             ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: await approvalUrl(runId) }
             : undefined;
-          return json({ runId, running: inflight.has(runId), paused, events: telemetry.run(runId) });
+          const events = telemetry.run(runId);
+          const pipeline = events.find((r) => r.type === "stream_start")?.stage as string | undefined;
+          return json({ runId, running: inflight.has(runId), paused, controls: await controlsFor(runId, pipeline), events });
+        }
+
+        const control = path.match(/^\/api\/runs\/([\w-]+)\/(stop|budget|resume|rewind|steps)$/);
+        if (control) {
+          const runId = control[1]!;
+          const action = control[2]!;
+          if (action === "steps" && req.method === "GET") {
+            const cp = checkpointOf(runId);
+            if (!cp || !existsSync(stepsPathFor(cp))) return json({ error: "This run has no step history: only pipelines with @checkpoint keep one" }, 404);
+            const steps = await readSteps(stepsPathFor(cp));
+            return json({ runId, steps: steps.map((st) => ({ step: st.step, stage: st.stage, label: st.label, at: st.at, cost: st.cost, tokens: st.tokens, ...(st.halted ? { halted: true } : {}) })) });
+          }
+          if (req.method !== "POST") return json({ error: "Not found" }, 404);
+          const body = ((await readJson(req)) ?? {}) as { reason?: string; add?: unknown; addBudget?: unknown; step?: unknown; wait?: boolean };
+
+          if (action === "stop") {
+            const rt = runningIn(runId);
+            if (!rt) {
+              const snap = await runStore.load(runId);
+              return json({ error: snap?.waitingFor ? "This run is waiting for an answer, not running: reject it to end it" : "This run isn't running on this server" }, 409);
+            }
+            const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 200) : "Stopped from the API";
+            rt.stop(runId, reason);
+            logger.log(`[halo] run ${runId.slice(0, 8)} stopped: ${reason}`);
+            await settled(runId);
+            return json({ runId, status: "stopped", resumable: !!checkpointOf(runId) });
+          }
+
+          if (action === "budget") {
+            const add = positiveUsd(body.add, "add");
+            if (add === undefined) throw new ServeError('Send {"add": <USD>} to raise the run\'s budget');
+            const rt = runningIn(runId);
+            if (rt) {
+              const added = rt.extendBudget(runId, add)!;
+              logger.log(`[halo] run ${runId.slice(0, 8)}: budget raised by $${add.toFixed(2)} ($${added.toFixed(2)} added in all)`);
+              return json({ runId, added, spent: rt.liveRun(runId)?.cost ?? null });
+            }
+            // A paused run keeps the extension in its saved state, for when it is answered.
+            const snap = await runStore.load(runId);
+            if (snap?.waitingFor) {
+              snap.meta.budgetAdded = (snap.meta.budgetAdded ?? 0) + add;
+              await runStore.save(runId, snap);
+              logger.log(`[halo] run ${runId.slice(0, 8)} (paused): budget raised by $${add.toFixed(2)}`);
+              return json({ runId, added: snap.meta.budgetAdded, spent: snap.meta.cost });
+            }
+            return json({ error: checkpointOf(runId) ? "This run isn't running: resume it with addBudget to raise its budget" : "This run isn't running on this server" }, 409);
+          }
+
+          // resume and rewind both start from the run's @checkpoint.
+          if (runningIn(runId) || inflight.has(runId)) return json({ error: "This run is still running" }, 409);
+          const cp = checkpointOf(runId);
+          if (!cp) return json({ error: "This run has no checkpoint to continue from: only pipelines with @checkpoint can be resumed or rewound" }, 409);
+          const snap = await readSnapshot(cp);
+          if (!snap) return json({ error: "This run's checkpoint couldn't be read" }, 409);
+          const e = entries.get(snap.pipeline);
+          if (!e) return json({ error: `This run is of ${snap.pipeline}, which this server doesn't serve` }, 409);
+          const addBudget = positiveUsd(body.addBudget, "addBudget");
+          const rt = runtimeFor(e, snap.meta.dryRun);
+
+          if (action === "resume") {
+            if ((await runStore.load(runId))?.waitingFor) return json({ error: "This run is waiting for an answer: answer it with /signal" }, 409);
+            if (endOf(runId)?.status === "completed") return json({ error: "This run completed. Rewind it to a step to run from there again" }, 409);
+            logger.log(`[halo] ${snap.pipeline} resumed from its checkpoint (run ${runId.slice(0, 8)})${addBudget ? ` with $${addBudget.toFixed(2)} more budget` : ""}`);
+            const p = track(runId, snap.pipeline, rt.resume(cp, { addBudget }));
+            if (!body.wait) return json({ runId, status: "running" }, 202);
+            const r = await p;
+            return json(r ? { runId, status: r.status, output: linkMedia(r.output), cost: r.context.meta.cost } : { runId, status: "error", error: failures.get(runId) });
+          }
+
+          // rewind: a new run from an earlier step.
+          const step = Number(body.step);
+          if (!Number.isInteger(step) || step < 1) throw new ServeError('Send {"step": <n>}: the step to continue from (GET /api/runs/<id>/steps lists them)');
+          const steps = existsSync(stepsPathFor(cp)) ? await readSteps(stepsPathFor(cp)) : [];
+          if (!steps.some((st) => st.step === step)) return json({ error: `This run has no step ${step}` }, 400);
+          const newId = crypto.randomUUID();
+          logger.log(`[halo] ${snap.pipeline} rewound to step ${step} of run ${runId.slice(0, 8)} (run ${newId.slice(0, 8)})`);
+          const p = track(newId, snap.pipeline, rt.rewind(cp, step, { runId: newId, addBudget }));
+          if (!body.wait) return json({ runId: newId, rewoundFrom: { runId, step }, status: "running" }, 202);
+          const r = await p;
+          return json(r ? { runId: newId, rewoundFrom: { runId, step }, status: r.status, output: linkMedia(r.output), cost: r.context.meta.cost } : { runId: newId, rewoundFrom: { runId, step }, status: "error", error: failures.get(newId) });
         }
 
         const signal = path.match(/^\/api\/runs\/([\w-]+)\/signal$/);

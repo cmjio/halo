@@ -59,6 +59,14 @@ export class LoopLimitError extends HaloError {
   }
 }
 
+/** A person (or the host) stopped the run with `runtime.stop(runId)`. Never retried. */
+export class RunStoppedError extends HaloError {
+  constructor(message: string) {
+    super(message, { code: "RUN_STOPPED" });
+    this.name = "RunStoppedError";
+  }
+}
+
 /** `signal()` was called for a run that is not paused, or with the wrong event. */
 export class SignalError extends HaloError {
   constructor(message: string, code: "RUN_NOT_FOUND" | "SIGNAL_MISMATCH") {

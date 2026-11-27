@@ -349,6 +349,8 @@ interface BoundRule {
 export interface PolicyHooks {
   /** Total spend (USD) of the current run so far. */
   spent(): number;
+  /** USD added to every MaxSpend limit for this run (a person extended its budget). */
+  added?(): number;
   onViolation(v: Violation, log: boolean): void;
   /** Resolve `context.data.x.y` (and similar) for `Validate(...)`. */
   lookup?(path: string): unknown;
@@ -377,7 +379,7 @@ export class PolicyEngine {
   checkBudget(agent: Agent, hooks: PolicyHooks): void {
     for (const b of this.rulesFor(agent)) {
       if (b.rule.name !== "MaxSpend") continue;
-      const limit = Number(b.rule.args[0]);
+      const limit = Number(b.rule.args[0]) + (hooks.added?.() ?? 0);
       if (hooks.spent() >= limit) this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}`, "budget", hooks);
     }
   }
@@ -470,7 +472,7 @@ export class PolicyEngine {
       }
       if (name === "Validate") this.validateField(b, out, hooks);
       if (name === "MaxSpend") {
-        const limit = Number(args[0]);
+        const limit = Number(args[0]) + (hooks.added?.() ?? 0);
         if (hooks.spent() > limit) this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}`, "budget", hooks);
       }
     }
@@ -537,7 +539,7 @@ export class PolicyEngine {
   /** Fail a call that can't fit in what is left of the agent's budget. */
   refuseOverBudget(agent: Agent, hooks: PolicyHooks): never {
     const b = this.rulesFor(agent).find((x) => x.rule.name === "MaxSpend")!;
-    const limit = Number(b.rule.args[0]);
+    const limit = Math.min(...this.rulesFor(agent).filter((x) => x.rule.name === "MaxSpend").map((x) => Number(x.rule.args[0]))) + (hooks.added?.() ?? 0);
     this.violate(b, `Budget exceeded: spent $${hooks.spent().toFixed(4)} of $${limit.toFixed(2)}, with no room left for another call`, "budget", hooks);
   }
 

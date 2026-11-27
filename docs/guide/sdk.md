@@ -54,6 +54,9 @@ Key lookup order for each provider: `apiKeys[id]`, then the provider's env var (
 | `signal(runId, event, payload)` | Resume a paused run. `event` is `"yield"`, the listen target, or `"approval"`. |
 | `resume(checkpointPath)` | Continue from a `@checkpoint` file. |
 | `rewind(checkpointPath, step)` | Continue from an earlier step of a `@checkpoint` run, as a new run ([`halo rewind`](./plan-and-replay.md#halo-rewind)). |
+| `stop(runId, reason?)` | Stop a running run: it fails with a `RunStoppedError`. `false` if it isn't running here. |
+| `extendBudget(runId, usd)` | Raise every `MaxSpend` limit of a running run by `usd`, for that run only. `resume` and `rewind` take `{ addBudget }` for a run that isn't running. |
+| `isRunning(runId)`, `liveRun(runId)` | Whether a run is running here, and its spend so far and budget added. |
 | `onInterrupt(fn)`, `onListen(fn)` | Set human and event handlers. |
 | `registerToolProvider(name, fn)` | Add a tool provider ([Custom Tools](./integrations/custom-tools.md)). |
 | `registerSystem(name, fn)` | Add a `System.Name(...)` method. |
