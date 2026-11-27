@@ -91,12 +91,55 @@ const PHONE = combine(
   // Ten bare digits after a word that says it's a phone number.
   pattern(/(?<=\b(?:phone|tel|telephone|call|cell|mobile|text|sms|fax|whatsapp)\b[^\d\n]{0,15})(?:1[ .-]?)?\d{10}(?!\d)/i, "Phone"),
 );
+// A private key block, PEM or PGP, with its END or (cut off) without it: then the header lines and
+// base64 lines that follow BEGIN. Lines may be split by real or JSON-escaped newlines.
+const KEY_NL = String.raw`(?:[ \t]|\r?\n|\\[nr])+`;
+const PRIVATE_KEY = pattern(
+  new RegExp(
+    String.raw`-----BEGIN (?:[A-Z0-9]+ ){0,3}PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]{0,20000}?-----END (?:[A-Z0-9]+ ){0,3}PRIVATE KEY(?: BLOCK)?-----|(?:${KEY_NL}[A-Za-z][\w-]{0,30}: [^\r\n\\]{0,200})*(?:${KEY_NL}[A-Za-z0-9+/=]{8,})*)`,
+  ),
+  "APIKey",
+);
 const API_KEY = combine(
   pattern(
-    /\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/,
+    new RegExp(
+      String.raw`\b(?:` +
+        [
+          String.raw`sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}`,
+          String.raw`(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}`,
+          // Stripe webhook signing secrets
+          String.raw`whsec_[A-Za-z0-9+/=]{24,}`,
+          String.raw`(?:AKIA|ASIA)[0-9A-Z]{16}`,
+          String.raw`gh[pousr]_[A-Za-z0-9]{36,}`,
+          String.raw`github_pat_[A-Za-z0-9_]{22,}`,
+          String.raw`glpat-[A-Za-z0-9_-]{20,}`,
+          String.raw`xox[abprs]-[A-Za-z0-9-]{10,}`,
+          String.raw`xapp-[A-Za-z0-9-]{10,}`,
+          String.raw`AIza[0-9A-Za-z_-]{35}`,
+          String.raw`npm_[A-Za-z0-9]{36}`,
+          String.raw`hf_[A-Za-z0-9]{30,}`,
+          String.raw`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}`,
+          String.raw`AGE-SECRET-KEY-1[0-9A-Z]{50,}`,
+          // A JWT: its header is always JSON ("eyJ"), its payload needn't start with "{".
+          String.raw`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`,
+          // Webhook URLs are their own credential.
+          String.raw`https?://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9_/-]{20,}`,
+          String.raw`https?://(?:\w+\.)?discord(?:app)?\.com/api/webhooks/\d+/[A-Za-z0-9_-]{20,}`,
+        ].join("|") +
+        String.raw`)\b`,
+    ),
     "APIKey",
   ),
-  pattern(/-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----[\s\S]{0,10000}?-----END [A-Z ]{0,20}PRIVATE KEY-----/, "APIKey"),
+  PRIVATE_KEY,
+  // The password in a URL's user info: postgres://app:[REDACTED:APIKey]@db/app.
+  pattern(/(?<=\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:/@"'<>]{0,128}:)[^\s@/"'<>]{1,256}(?=@)/i, "APIKey"),
+  // An AWS secret access key: 40 characters of base64, only next to its name (or under it: Block
+  // reads an object's key and value on lines of their own).
+  pattern(/(?<=secret_?access_?key(?:["']?\s{0,5}[:=]>?\s{0,5}["']?|\n))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/i, "APIKey"),
+  // A long hex secret assigned to a name that says it's one: "client_secret = 9f8e…".
+  pattern(/(?<=(?:secret|token|api[_-]?key|private[_-]?key|signing[_-]?key|password|passwd|\bkey)[\w-]{0,20}(?:["']?\s{0,5}[:=]\s{0,5}["']?|\n))[0-9a-f]{32,}(?![0-9a-f])/i, "APIKey"),
+  // A bearer token, as an Authorization header (or an error page quoting one) shows it.
+  pattern(/(?<=\bBearer\s{1,5})[A-Za-z0-9._~+/-]{20,}=*/, "APIKey"),
 );
 // Dots may be "defanged" ("10[.]0[.]0[.]1") or spaced.
 const OCTET = String.raw`(?:25[0-5]|2[0-4]\d|1?\d?\d)`;
@@ -650,6 +693,8 @@ export class PolicyEngine {
 
 /** `text` with every category a `Redact(...)` rule names masked, as an agent's prompt would be. */
 export function redact(text: string, categories: string[]): string {
+  // A private key spans lines, which may be JSON-escaped: mask it whole before splitting at the escapes.
+  if (categories.includes("APIKey")) text = PRIVATE_KEY.redact!(text);
   // Redact between JSON escapes, so "\n123-45-6789" in a prompt is read as a new line, not "n123…".
   return text.split(JSON_ESCAPE).map((part, i) => (i % 2 ? part : redactText(part, categories))).join("");
 }
@@ -715,9 +760,19 @@ function mapStringsDeep(value: unknown, fn: (s: string) => string): unknown {
   }
   if (Array.isArray(value)) return value.map((v) => mapStringsDeep(v, fn));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), mapStringsDeep(v, fn)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [fn(k), typeof v === "string" && SECRET_FIELD.test(k) ? withKey(k, v, fn) : mapStringsDeep(v, fn)]));
   }
   return value;
+}
+
+/** A field whose name says its value is a secret: some secrets are only recognisable by their name. */
+const SECRET_FIELD = /secret|token|key|passw|pwd/i;
+
+/** A secret field's value redacted as "name=value" reads (an AWS secret key is just 40 characters of base64). */
+function withKey(k: string, v: string, fn: (s: string) => string): string {
+  const head = `${k}=`;
+  const out = fn(head + v);
+  return out.startsWith(head) ? out.slice(head.length) : fn(v);
 }
 
 /**
