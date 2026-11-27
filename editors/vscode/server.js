@@ -36597,7 +36597,7 @@ class RefOperandContext extends OperandContext {
 }
 
 // src/parser/builtins.ts
-var DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "cascade", "thread", "expect"];
+var DIRECTIVES = ["timeout", "retry", "checkpoint", "shadow", "correct", "cascade", "thread", "expect", "private"];
 var SCHEMA_TYPES = ["String", "Number", "Integer", "Boolean", "Array", "List", "Object", "Map", "JSON", "Any", "Result", "Image", "Document", "Audio", "Video"];
 var MEDIA_TYPE_NAMES = ["Image", "Document", "Audio", "Video"];
 var MEDIA_FIELDS = { type: "String", size: "Integer", name: "String", sha256: "String", format: "String", width: "Integer", height: "Integer", pages: "Integer", duration: "Number", url: "String" };
@@ -37836,6 +37836,7 @@ class Validator {
       this.checkSchema(sc);
     for (const s of this.ast.pipelines)
       this.checkPipeline(s);
+    this.checkPrivate();
     this.checkWallet();
     const seen = new Set;
     this.diags = this.diags.filter((d) => {
@@ -37843,6 +37844,16 @@ class Validator {
       return !seen.has(key) && !!seen.add(key);
     });
     return this.diags.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
+  }
+  checkPrivate() {
+    const called = new Set(this.ast.pipelines.flatMap((p) => p.pipeline.flatMap(stageCalls)).map((c) => c.callee));
+    for (const p of this.ast.pipelines) {
+      if (!p.directives?.some((d) => d.name === "private") || called.has(p.name))
+        continue;
+      if (p.name.includes("#"))
+        continue;
+      this.add("warning", `Pipeline "${p.name}" is @private and nothing in this file calls it, so it can never run`, p.loc);
+    }
   }
   checkSqliteTool(t) {
     const path = t.argList.find((a) => !a.name)?.value ?? t.argList.find((a) => a.name === "path")?.value;
@@ -38211,6 +38222,10 @@ class Validator {
       this.add("warning", `@cascade only applies to agents`, loc);
     if (d.name === "checkpoint" && on === "agent")
       this.add("warning", `@checkpoint only applies to pipelines`, loc);
+    if (d.name === "private" && on === "agent")
+      this.add("error", `@private only applies to pipelines`, loc);
+    if (d.name === "private" && (d.value || d.args?.length))
+      this.add("error", `@private takes no arguments`, loc);
     if (d.name === "thread" && on === "agent")
       this.add("warning", `@thread only applies to pipelines`, loc);
     if (d.name === "expect") {
@@ -39885,9 +39900,12 @@ class Linker {
       return unit;
     }
     const declare = (kind, list) => {
-      for (const d of list)
-        if (!unit.own.has(d.name))
-          unit.own.set(d.name, { qualified: this.qualify(unit, d.name), kind, name: d.name, file: path, loc: d.loc });
+      for (const d of list) {
+        if (unit.own.has(d.name))
+          continue;
+        const hidden = kind === "pipeline" && !!d.directives?.some((x) => x.name === "private");
+        unit.own.set(d.name, { qualified: this.qualify(unit, d.name), kind, name: d.name, file: path, loc: d.loc, ...hidden ? { private: true } : {} });
+      }
     };
     declare("pipeline", ast.pipelines);
     declare("agent", ast.agents);
@@ -39952,6 +39970,10 @@ class Linker {
       const sym = importable.get(item.name);
       if (!sym) {
         this.report("error", unit.path, missing(item.name), loc);
+        continue;
+      }
+      if (sym.private) {
+        this.report("error", unit.path, `use "${src}": pipeline "${item.name}" is @private to ${sym.file ? this.label(sym.file) : src}, so only pipelines in that file can call it. Import a public pipeline that calls it, or remove @private`, loc);
         continue;
       }
       const local = item.as ?? item.name;
@@ -40678,7 +40700,7 @@ async function multipartBody(fields, read) {
 // package.json
 var package_default = {
   name: "halo",
-  version: "1.10.0",
+  version: "1.11.0",
   description: "Halo: a declarative language for AI workflows",
   license: "MIT",
   homepage: "https://halolang.com",

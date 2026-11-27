@@ -11,6 +11,7 @@ Directives go before an `agent` or `pipeline` declaration. A directive Halo does
 | `@checkpoint` | — | snapshot after every stage |
 | `@shadow(target)` | run alongside another agent | — |
 | `@thread(input, Name?)` | — | keep state between runs, per value of `input` |
+| `@private` | — | only the file's other pipelines can call it |
 
 Durations are `ms`, `s`, `m`, `h`, or `d`: `500ms`, `30s`, `5m`.
 
@@ -135,3 +136,31 @@ No model is involved, so they are hard checks:
 - `halo run` and `halo test` print `✓` or `✗` for each after a run that completes. `halo test` exits with status 1 when one is broken, except when every answer is a placeholder from `--mock` without `--mocks` (it says so instead).
 - `halo compare` and `halo evolve` hold every variant to the **original's** expectations, never the variant's own, so a variant can't loosen what it's checked against. A variant whose output breaks one the original's met loses that run without asking the judge; one that meets every expectation the original broke wins it. `halo evolve` also shows them to the proposer.
 - `halo validate` reports a condition that doesn't parse.
+
+## `@private`
+
+```halo
+agent Planner [anthropic/claude-sonnet-5-5, preset: Planner]
+agent Coder [anthropic/claude-sonnet-5-5]
+
+@private
+pipeline BuildPackage(pkg: JSON, workdir: String) -> Result:
+  pkg |> Coder.build("Build {{pkg.title}}")
+
+@checkpoint
+pipeline Factory(workdir: String, brief: String) -> Result:
+  brief
+    |> Planner.plan() as plan
+    |! yield(msg: "Build these packages?") as review
+    |? (context.data.review.approved == true)
+    |* each(pkg in context.data.plan.packages) => BuildPackage(pkg, workdir)
+```
+
+A `@private` pipeline is a helper: the other pipelines in its file call it, and nothing else can start it.
+
+- `halo serve` gives it no API route, MCP tool or Studio form, and a schedule, webhook or watch in `halo.json` that names it stops the server with a message that says so. `halo mcp` doesn't list it either. Without `@private`, `BuildPackage` above could be started directly over the API and skip `Factory`'s approval.
+- `halo run --pipeline BuildPackage` refuses it. `halo test --pipeline BuildPackage` (or any `--mock` run) and `halo plan --pipeline BuildPackage` take it, so a helper can be tested on its own.
+- Another file can't import it: `use "./factory.halo" { BuildPackage }` is an error. Import a public pipeline that calls it instead. In a package, a `@private` pipeline in an exported file isn't exported.
+- `halo validate` warns about a `@private` pipeline nothing in its file calls (it could never run), and `@private` on an agent, or with arguments, is an error.
+
+Pipelines are public unless they say `@private`. In the SDK, `runtime.run()` still runs any loaded pipeline: the host decides what it exposes.

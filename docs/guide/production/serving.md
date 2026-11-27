@@ -15,7 +15,7 @@ Halo is serving 3 pipeline(s) at http://127.0.0.1:8080
   Schedule   0 9 * * 1-5 America/New_York → TriageIssues (next 11/3/2026, 9:00:00 AM)
 ```
 
-Every file must validate, and pipeline names must be unique across the files you serve.
+Every file must validate, and pipeline names must be unique across the files you serve. Every pipeline in a served file is served (an API route, an MCP tool, a Studio form) except one marked [`@private`](../../reference/compiler-directives.md#private), which only the file's other pipelines can call.
 
 ## Configuration: `halo.json`
 

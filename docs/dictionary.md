@@ -199,6 +199,13 @@ Annotations placed above agents or pipelines that control how they run.
 | **Definition** | On an agent: runs it alongside every call to the named agent (or model) and records its output, which is never used |
 | **Use case** | Comparing a new model or prompt on real traffic |
 
+### `@private`
+
+| Field | Value |
+|---|---|
+| **Definition** | On a pipeline: only the other pipelines in its file can call it. It isn't an entry point: not served by `halo serve` or `halo mcp`, not run by `halo run`, not importable with `use` |
+| **Use case** | A helper that should only run inside the pipeline that calls it, after its gates and approvals |
+
 ### `@retry(count, backoff)`
 
 | Field | Value |

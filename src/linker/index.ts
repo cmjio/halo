@@ -101,6 +101,8 @@ interface Sym {
   qualified: string;
   kind: Kind;
   name: string;
+  /** A pipeline marked @private: callable in its own file only, never imported. */
+  private?: boolean;
   /** Where it was declared, for messages. */
   file?: string;
   loc?: Loc;
@@ -144,8 +146,17 @@ export function importableNames(from: string, source: string, options: LinkOptio
 }
 
 /** The pipelines that are the program's entry points: the entry file's own (not imported ones). */
-export function entryPipelines(program: ParseResult): PipelineDeclaration[] {
-  return program.pipelines.filter((p) => !isQualified(p.name));
+/** A pipeline marked `@private`: only pipelines in its own file may call it. */
+export const isPrivate = (p: PipelineDeclaration) => !!p.directives?.some((d) => d.name === "private");
+
+/**
+ * The pipelines that can be started from outside the file: halo run, halo serve (its API, MCP
+ * tools, Studio, webhooks, schedules, watches) and halo mcp. A program's own pipelines, not ones
+ * it imports, and not `@private` ones, which only its other pipelines call. `includePrivate`
+ * adds those back, for halo test and halo plan.
+ */
+export function entryPipelines(program: ParseResult, options: { includePrivate?: boolean } = {}): PipelineDeclaration[] {
+  return program.pipelines.filter((p) => !isQualified(p.name) && (options.includePrivate || !isPrivate(p)));
 }
 
 /**
@@ -250,8 +261,12 @@ class Linker {
       }
       return unit;
     }
-    const declare = (kind: Kind, list: Array<{ name: string; loc?: Loc }>) => {
-      for (const d of list) if (!unit.own.has(d.name)) unit.own.set(d.name, { qualified: this.qualify(unit, d.name), kind, name: d.name, file: path, loc: d.loc });
+    const declare = (kind: Kind, list: Array<{ name: string; loc?: Loc; directives?: Array<{ name: string }> }>) => {
+      for (const d of list) {
+        if (unit.own.has(d.name)) continue;
+        const hidden = kind === "pipeline" && !!d.directives?.some((x) => x.name === "private");
+        unit.own.set(d.name, { qualified: this.qualify(unit, d.name), kind, name: d.name, file: path, loc: d.loc, ...(hidden ? { private: true } : {}) });
+      }
     };
     declare("pipeline", ast.pipelines);
     declare("agent", ast.agents);
@@ -309,6 +324,10 @@ class Linker {
       const sym = importable.get(item.name);
       if (!sym) {
         this.report("error", unit.path, missing(item.name), loc);
+        continue;
+      }
+      if (sym.private) {
+        this.report("error", unit.path, `use "${src}": pipeline "${item.name}" is @private to ${sym.file ? this.label(sym.file) : src}, so only pipelines in that file can call it. Import a public pipeline that calls it, or remove @private`, loc);
         continue;
       }
       const local = item.as ?? item.name;

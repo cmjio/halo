@@ -82,6 +82,8 @@ agent Fixer [anthropic/claude-sonnet-4-5, temp: 0.0, max_tokens: 8000, max_steps
   requires Team, FixerTools
 
 // One module: write it, then check it loads and has its exports.
+// @private: only BuildProject calls it, so it isn't served or run on its own.
+@private
 pipeline BuildModule(m: JSON, workdir: String, spec: String, types: String) -> Result:
   m
     |> Coder.implement(
@@ -100,6 +102,7 @@ pipeline BuildModule(m: JSON, workdir: String, spec: String, types: String) -> R
 
 // The fixer runs the tests, reads and edits files, and reruns them, until
 // they pass. Then the pipeline checks for itself, and sends it back if not.
+@private
 pipeline FixUntilGreen(workdir: String, spec: String) -> Result:
   workdir
     |> Fixer.fix("Make the acceptance tests pass. The spec:", spec, tools: [Code, Tests]) as report

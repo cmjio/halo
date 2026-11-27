@@ -68,7 +68,7 @@ describe("validate", () => {
       '@shadow(Nobody) on "M": "Nobody" is not a defined agent or model, so it will never run',
       "@timeout needs one duration, e.g. @timeout(30s)",
       "@retry needs a count and optional delay, e.g. @retry(3, 2s)",
-      "@fast is not a directive (directives: @timeout, @retry, @checkpoint, @shadow, @correct, @cascade, @thread, @expect)",
+      "@fast is not a directive (directives: @timeout, @retry, @checkpoint, @shadow, @correct, @cascade, @thread, @expect, @private)",
     ]);
   });
 

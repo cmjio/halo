@@ -172,6 +172,7 @@ A call is `Agent.method(...)`, `Tool.method(...)`, `System.Method(...)`, `Thread
 | `@shadow(Primary)` | On an agent: run it alongside every call to `Primary` and record its output, which is never used. `@shadow(openai/gpt-4o)` runs the same prompt on that model instead | `@shadow(Baseline)` |
 | `@cascade(model, ...)` | On an agent: when a call fails (after `@retry`), an output policy rejects the answer (after `@correct`), or the answer misses the pipeline's schema, ask the next model in the list. Budget violations never move up | `@cascade(anthropic/claude-opus-4-5)` |
 | `@correct(n)` | On an agent or pipeline: when an output policy rejects an answer, tell the agent what was wrong and ask again, up to n times | `@correct(2)` |
+| `@private` | On a pipeline: only the other pipelines in its file can call it. It isn't served (API, MCP, Studio, triggers), run with `halo run`, or importable with `use`; `halo test` can still run it | `@private` |
 | `@expect("cond", ...)` | On a pipeline: conditions its output must meet, in gate syntax over `output` and the inputs. `halo run`/`halo test` report them (`test` fails on a broken one); `halo compare` and `halo evolve` hold every variant to the original's, with no judge | `@expect("output.labels.length <= 3")` |
 
 ## Bindings, Conditions & Strings

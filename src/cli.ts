@@ -423,13 +423,20 @@ async function cmdParse(flags: Flags): Promise<number> {
   return 0;
 }
 
-function pickStream(ast: ParseResult, name: string | undefined): PipelineDeclaration {
-  // Only the file's own pipelines are entry points; imported ones are called from them.
+/**
+ * The pipeline a command runs. Only the file's own pipelines are entry points (imported ones are
+ * called from them), and a @private one only with `allowPrivate` (halo test, --mock, halo plan):
+ * it's there for the file's other pipelines to call, so a real run can't start at it.
+ */
+function pickStream(ast: ParseResult, name: string | undefined, allowPrivate = false): PipelineDeclaration {
   const own = entryPipelines(ast);
   if (name) {
     const s = own.find((s) => s.name === name);
-    if (!s) fail(`Pipeline "${name}" not found. Available: ${own.map((s) => s.name).join(", ")}`);
-    return s;
+    if (s) return s;
+    const hidden = entryPipelines(ast, { includePrivate: true }).find((p) => p.name === name);
+    if (hidden && allowPrivate) return hidden;
+    if (hidden) fail(`Pipeline "${name}" is @private: only the file's other pipelines call it. Run one of those (${own.map((s) => s.name).join(", ") || "none"}), or try it on its own offline with halo test --pipeline ${name}`);
+    fail(`Pipeline "${name}" not found. Available: ${own.map((s) => s.name).join(", ")}`);
   }
   if (own.length === 0) fail("No pipelines found in file");
   // Default to the entry point: the one pipeline no other pipeline calls.
@@ -643,7 +650,8 @@ async function cmdRun(flags: Flags, debug: boolean, resumeRun?: string, replayRu
     } else if (replaying) {
       result = await rt.run(replaying.pipeline, replaying.args, { media: "files" });
     } else {
-      const pipeline = pickStream(ast, last(flags, "pipeline"));
+      // halo test (and any --mock run) may start at a @private pipeline, to test it on its own.
+      const pipeline = pickStream(ast, last(flags, "pipeline"), flags.bools.has("mock"));
       // --body <file.json>: the arguments a webhook would get from that body; --arg/--args add to them.
       const bodyPath = last(flags, "body");
       let body: unknown;
@@ -932,7 +940,7 @@ async function cmdPlan(flags: Flags): Promise<number> {
   const rt = new HaloRuntime({ logger: { log() {}, warn() {} } });
   registerInstalled(rt, await installed());
   const target = last(flags, "pipeline");
-  const names = target ? [pickStream(ast, target).name] : entryPipelines(ast).map((p) => p.name);
+  const names = target ? [pickStream(ast, target, true).name] : entryPipelines(ast).map((p) => p.name);
   const prices = (await haloConfig()).prices;
   const plans = names.map((name) => plan(ast, name, { providerInfo: (provider) => rt.toolProviderInfo(provider), prices }));
   if (flags.bools.has("json")) console.log(JSON.stringify(plans.length === 1 ? plans[0] : plans, null, 2));

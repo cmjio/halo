@@ -133,6 +133,7 @@ class Validator {
     for (const m of this.ast.agents) this.checkAgent(m);
     for (const sc of this.ast.schemas) this.checkSchema(sc);
     for (const s of this.ast.pipelines) this.checkPipeline(s);
+    this.checkPrivate();
     this.checkWallet();
     const seen = new Set<string>();
     this.diags = this.diags.filter((d) => {
@@ -140,6 +141,17 @@ class Validator {
       return !seen.has(key) && !!seen.add(key);
     });
     return this.diags.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
+  }
+
+  /** A @private pipeline can only be called from its own file, so one that nothing calls can never run. */
+  private checkPrivate() {
+    const called = new Set(this.ast.pipelines.flatMap((p) => p.pipeline.flatMap(stageCalls)).map((c) => c.callee));
+    for (const p of this.ast.pipelines) {
+      if (!p.directives?.some((d) => d.name === "private") || called.has(p.name)) continue;
+      // An imported file's pipelines are named by the linker (pkg#File/Name): only a local one is checked.
+      if (p.name.includes("#")) continue;
+      this.add("warning", `Pipeline "${p.name}" is @private and nothing in this file calls it, so it can never run`, p.loc);
+    }
   }
 
   /** A SQLite database file is relative to the project folder and stays inside it. */
@@ -468,6 +480,8 @@ class Validator {
     if (d.name === "cascade" && !args.length) this.add("error", `@cascade needs at least one model to move up to, e.g. @cascade(anthropic/claude-opus-4-5)`, loc);
     if (d.name === "cascade" && on === "pipeline") this.add("warning", `@cascade only applies to agents`, loc);
     if (d.name === "checkpoint" && on === "agent") this.add("warning", `@checkpoint only applies to pipelines`, loc);
+    if (d.name === "private" && on === "agent") this.add("error", `@private only applies to pipelines`, loc);
+    if (d.name === "private" && (d.value || d.args?.length)) this.add("error", `@private takes no arguments`, loc);
     if (d.name === "thread" && on === "agent") this.add("warning", `@thread only applies to pipelines`, loc);
     if (d.name === "expect") {
       if (on === "agent") this.add("warning", `@expect only applies to pipelines`, loc);

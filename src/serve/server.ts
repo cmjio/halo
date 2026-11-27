@@ -20,7 +20,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { checkLinked, entryPipelines } from "../linker/index.js";
+import { checkLinked, entryPipelines, isPrivate } from "../linker/index.js";
 import { linkFile } from "../linker/node.js";
 import type { ParseResult, PipelineDeclaration } from "../parser/types.js";
 import { AdapterRegistry } from "../runtime/adapter.js";
@@ -448,6 +448,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   /** The programs this process loads, by file: a wallet in one is only as safe as every other one here. */
   const loaded: Array<{ rel: string; ast: ParseResult }> = [];
   if (!files.length) throw new ServeError(`No .halo files found in ${(options.files ?? ["."]).join(", ")}`);
+  /** Pipelines marked @private, by name, with the file they're in: for messages that name one. */
+  const privateNames = new Map<string, string>();
   for (const file of files) {
     const rel = relative(process.cwd(), file) || file;
     // Each file is linked with everything it `use`s, so its pipelines can call pipelines in other files.
@@ -463,6 +465,9 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
       const pause = pausePath(ast, name);
       if (pause) throw new ServeError(`${served!.manifest.name}: hosted pipeline ${name} can pause (${pause}). Hosted pipelines can't pause yet`);
     }
+    // @private pipelines are only for the file's other pipelines: no API route, MCP tool, Studio form or trigger.
+    for (const p of entryPipelines(ast, { includePrivate: true })) if (isPrivate(p)) privateNames.set(p.name, rel);
+    for (const name of hostedHere ?? []) if (privateNames.get(name) === rel) throw new ServeError(`${served!.manifest.name}: hosted pipeline ${name} is @private; a hosted export has to be callable from outside`);
     const own = entryPipelines(ast).filter((p) => !hostedHere || hostedHere.includes(p.name));
     if (!own.length) continue;
     const runtime = new HaloRuntime({ logger, ...kept, blobs, media: options.media, prices: options.prices, walletLog: join(stateDir, "wallet.log"), ...options.runtime, ...recorder, env, runStore, progressStore, onEvent, serving: true }).load(ast);
@@ -497,6 +502,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
 
   const entry = (name: string) => {
     const e = entries.get(name);
+    if (!e && privateNames.has(name)) throw new ServeError(`Pipeline "${name}" in ${privateNames.get(name)} is @private: only that file's other pipelines can call it, so it can't be started by the API, a schedule, a webhook or a watch`);
     if (!e) throw new ServeError(`Unknown pipeline "${name}" (have: ${[...entries.keys()].join(", ")})`);
     return e;
   };
