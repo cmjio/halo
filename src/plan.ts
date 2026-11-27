@@ -19,12 +19,45 @@ import { displayText } from "./linker/names.js";
 import { HOSTED_PROVIDER } from "./linker/hosted.js";
 import { walletNames } from "./runtime/wallet-rules.js";
 import type { ToolDeclaration, Value } from "./parser/types.js";
+import { backendOf, parseSshTarget } from "./runtime/providers/remote.js";
 
 /** A declaration's setting as written: literals as themselves, a list item by item, a name as its text. */
-function literalArg(tool: Pick<ToolDeclaration, "argList">, name: string): unknown {
+function literalArg(tool: Pick<ToolDeclaration, "argList">, name: string | number): unknown {
   const lit = (v: Value): unknown => (v.kind === "string" || v.kind === "number" || v.kind === "bool" ? v.value : v.kind === "list" ? v.items.map(lit) : v.kind === "ref" ? v.path.join(".") : v.kind === "null" ? null : v.kind);
-  const v = tool.argList.find((x) => x.name === name)?.value;
+  const v = typeof name === "number" ? tool.argList.filter((x) => !x.name)[name]?.value : tool.argList.find((x) => x.name === name)?.value;
   return v === undefined ? undefined : lit(v);
+}
+
+/** What a Remote tool reaches: for SSH, the host, login, port, key and how its host key is checked. */
+export function remoteSummary(tool: Pick<ToolDeclaration, "argList" | "provider">): string | undefined {
+  if (tool.provider !== "Remote") return undefined;
+  const spec = literalArg(tool, 0);
+  const backend = backendOf(spec);
+  if (!backend) return undefined;
+  if (backend !== "ssh") return `Remote: ${backend === "auto" ? "a sandbox (Docker if it's running, else E2B, else Daytona)" : `a ${backend} sandbox`}, made for the run and deleted after`;
+  let t: ReturnType<typeof parseSshTarget>;
+  try {
+    t = parseSshTarget(spec as string);
+  } catch (e) {
+    return `Remote over SSH: ${(e as Error).message}`;
+  }
+  const key = literalArg(tool, "key");
+  const pins = literalArg(tool, "hostKey");
+  const known = literalArg(tool, "knownHosts");
+  const hostKey = pins
+    ? `pinned (${Array.isArray(pins) ? pins.length : 1} key${Array.isArray(pins) && pins.length > 1 ? "s" : ""})`
+    : typeof known === "string"
+      ? `checked against ${known} only`
+      : literalArg(tool, "accept_new_hosts") === true
+        ? "trusted the first time (accept_new_hosts), then checked"
+        : "must already be in known_hosts";
+  return [
+    `Remote over SSH to ${t.host}`,
+    `user ${t.user ?? "from ~/.ssh/config, else yours"}`,
+    `port ${t.port ?? "from ~/.ssh/config, else 22"}`,
+    `key ${typeof key === "string" ? key : "from your ssh agent and ~/.ssh/config"}`,
+    `host key ${hostKey}`,
+  ].join(", ");
 }
 
 export interface PlanStep {
@@ -95,9 +128,9 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
   const methodsOf = (toolName: string): ToolMethod[] | undefined => {
     const tool = tools.get(toolName);
     const info = tool ? options.providerInfo(tool.provider) : undefined;
-    if (Array.isArray(info?.methods)) return info.methods;
-    // Methods that depend on the declaration's settings (Chrome's evaluate, its wallet), from the settings as written.
+    // Methods that depend on the declaration's settings (Chrome's evaluate, its wallet, Remote over SSH), from the settings as written.
     if (tool && info?.methodsFor) return info.methodsFor((k) => literalArg(tool, k));
+    if (Array.isArray(info?.methods)) return info.methods;
     return undefined;
   };
   /** The wallet items a browser asks a person about before typing: every secret item, and any that doesn't say ask: false. */
@@ -183,7 +216,7 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect: "external" }], notes: [`hosted by ${text("package")}: sends its inputs to ${host}${text("env") ? ` (key from ${text("env")})` : ""}`] });
         return;
       }
-      steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [`${tool.provider}${effect === "unknown" ? " (effect not described)" : ""}`] });
+      steps.push({ at, label: target, kind: "tool", times, effects: [{ target, effect }], notes: [remoteSummary(tool) ?? `${tool.provider}${effect === "unknown" ? " (effect not described)" : ""}`] });
       return;
     }
     if (agent) {
@@ -196,6 +229,9 @@ export function plan(ast: ParseResult, pipelineName: string, options: PlanOption
         step.effects.push({ target: `${name}.${stage.method}`, effect: effectOf(name, stage.method) });
       }
       for (const name of toolset) {
+        const remote = tools.get(name);
+        const summary = remote ? remoteSummary(remote) : undefined;
+        if (summary) step.notes.push(`${name}: ${summary}`);
         const methods = methodsOf(name);
         if (!methods) {
           step.effects.push({ target: `${name}.*`, effect: "unknown", via: agent.name });

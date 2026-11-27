@@ -2299,7 +2299,9 @@ export class HaloRuntime {
     for (const name of names) {
       const tool = this.tools.get(name)!;
       const info = this.providerInfo.get(tool.provider);
-      const methods = Array.isArray(info?.methods)
+      const methods = info?.methodsFor && Array.isArray(info.methods)
+        ? info.methodsFor(this.toolConfig(tool, ctx).config)
+        : Array.isArray(info?.methods)
         ? info.methods
         : info?.methods
           ? await info.methods({ tool, config: this.toolConfig(tool, ctx).config, signal: ctx.signal }, this.toolServices(ctx))

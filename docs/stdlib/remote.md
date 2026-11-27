@@ -251,6 +251,8 @@ tool Box : Remote("staging")                       // a Host alias from ~/.ssh/c
 
 Halo runs the `ssh` on this machine, so your keys, your agent and the host aliases in `~/.ssh/config` (`HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump`) all apply. It never prompts for anything (`BatchMode`). Each call is its own connection. Other options: `key:`, `connect_timeout:` (seconds, default 15), `cwd:` (the default folder for `run`), `timeout_ms:`, `ssh:` (the ssh program).
 
+`diff`, `apply` and `keep` are for sandboxes, so an agent isn't offered them on a machine over SSH. `halo plan` shows where each SSH tool goes: the host, the login and port (or that `~/.ssh/config` decides), which key, and how the host's key is checked.
+
 ### What your ssh config can't change
 
 Some settings in `~/.ssh/config` would hand the remote host more than a place to run commands. Halo sets these on every call, and ssh takes the first value it gets, so a `Host *` block can't turn them back on:

@@ -344,6 +344,42 @@ describe("Remote over SSH", () => {
     await expect(ssh("upload", { from: ".env.example", to: "x" })).rejects.toThrow(/doesn't exist/);
   });
 
+  test("halo plan shows where SSH goes, and doesn't offer diff, apply or keep", () => {
+    const p = plan(parse(`
+tool Box : Remote("ssh://deploy@build.example.com:2222", key: "~/.ssh/ci", hostKey: "SHA256:rqHBoqTqavuOg1MchxTFBTtPkCiMS3pyWA4UzaE4tn8")
+tool Stage : Remote("staging", accept_new_hosts: true)
+tool Lab : Remote("docker")
+agent Ops [anthropic/claude-haiku-4-5, tools: auto]
+  equips Box, Lab
+pipeline Go(t: String) -> Result:
+  t |> Stage.run(command: "uptime") |> Ops.check()
+`), "Go", { providerInfo: (name) => LOCAL_PROVIDER_INFO[name] });
+    const notes = p.steps.flatMap((s) => s.notes).join("\n");
+    expect(notes).toContain("Remote over SSH to staging, user from ~/.ssh/config, else yours, port from ~/.ssh/config, else 22, key from your ssh agent and ~/.ssh/config, host key trusted the first time (accept_new_hosts), then checked");
+    expect(notes).toContain("Box: Remote over SSH to build.example.com, user deploy, port 2222, key ~/.ssh/ci, host key pinned (1 key)");
+    expect(notes).toContain("Lab: Remote: a docker sandbox");
+    const offered = p.steps.flatMap((s) => s.effects.map((e) => e.target));
+    expect(offered).toContain("Box.run");
+    expect(offered).not.toContain("Box.diff");
+    expect(offered).not.toContain("Box.keep");
+    expect(offered).toContain("Lab.diff");
+  });
+
+  test("an agent isn't offered diff, apply or keep on a machine over SSH", async () => {
+    const asked: MockRequest[] = [];
+    const rt = new HaloRuntime({ env: {}, logger: { log() {}, warn() {} } })
+      .load(parse(`
+tool Box : Remote("me@box", ssh: "${fakeSsh}")
+agent Ops [anthropic/claude-haiku-4-5, tools: auto]
+  equips Box
+pipeline Go(t: String) -> Result:
+  t |> Ops.check()
+`))
+      .mockAll({ "Ops.check": (req: MockRequest) => (asked.push(structuredClone(req)), "ok") });
+    expect((await rt.run("Go", { t: "x" })).status).toBe("completed");
+    expect(asked[0]!.tools).toEqual(["Box.run", "Box.read", "Box.write", "Box.list", "Box.upload", "Box.download", "Box.info"]);
+  });
+
   test("read takes timeout_ms:", async () => {
     Bun.spawnSync(["mkfifo", join(home, "never.fifo")]);
     const started = Date.now();

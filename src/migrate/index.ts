@@ -443,8 +443,8 @@ export const MIGRATIONS: Migration[] = [
       for (const file of project.files) {
         for (const tool of file.ast.tools) {
           if (tool.provider !== "Remote") continue;
-          const spec = tool.args?.[0] as { kind?: string; value?: unknown } | undefined;
-          if (spec?.kind !== "string" || typeof spec.value !== "string" || /^(e2b|daytona|docker|auto)$/i.test(spec.value.trim())) continue;
+          const spec = tool.argList.find((a) => !a.name)?.value;
+          if (spec?.kind !== "string" || /^(e2b|daytona|docker|auto)$/i.test(spec.value.trim())) continue;
           out.push({ file: file.path, line: tool.loc?.line, message: `${tool.name} (${spec.value}): ssh now ignores StrictHostKeyChecking no, ForwardAgent, port forwards, ControlMaster and SendEnv from your ssh config` });
         }
       }
