@@ -19,7 +19,7 @@ import { displayText } from "./linker/names.js";
 import { HOSTED_PROVIDER } from "./linker/hosted.js";
 import { walletNames } from "./runtime/wallet-rules.js";
 import type { ToolDeclaration, Value } from "./parser/types.js";
-import { backendOf, parseSshTarget } from "./runtime/providers/remote.js";
+import { backendOf, parseSshTarget } from "./runtime/providers/remote-target.js";
 
 /** A declaration's setting as written: literals as themselves, a list item by item, a name as its text. */
 function literalArg(tool: Pick<ToolDeclaration, "argList">, name: string | number): unknown {
