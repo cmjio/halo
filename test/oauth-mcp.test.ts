@@ -213,6 +213,42 @@ describe('auth: "discover"', () => {
   });
 });
 
+describe("under halo serve", () => {
+  test("a run paused for a discovered tool is connected through /connect: discovery, registration for the callback, resource=", async () => {
+    const { startServer } = await import("../src/serve/server");
+    const { s, m } = servers();
+    const p = project(discoverDecl(m));
+    const TOKEN = "serve-token-for-mcp-tests";
+    const server = await startServer({ files: [p.file], root: p.dir, port: 0, stateDir: join(p.dir, ".halo"), scheduler: false, logger: { log() {}, warn() {}, error() {} }, env: {}, token: TOKEN, runtime: { broker: p.broker } });
+    stops.push(() => server.stop());
+    const auth = { Authorization: `Bearer ${TOKEN}` };
+    const started = (await (await fetch(`${server.url}/api/pipelines/P/runs`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ args: { q: "x" }, wait: true }) })).json()) as { runId: string; status: string };
+    expect(started.status).toBe("paused");
+    const detail = async () => (await (await fetch(`${server.url}/api/runs/${started.runId}`, { headers: auth })).json()) as { running: boolean; paused?: { connectUrl?: string } };
+    const link = (await detail()).paused!.connectUrl!;
+    const page = await (await fetch(link)).text();
+    expect(page).toContain(`Continue to ${new URL(s.issuer).host}`);
+    expect(page).toContain("Halo registers itself there as a new client");
+    // Looking registered nothing.
+    expect(s.state.registered).toHaveLength(0);
+    const go = await fetch(link, { method: "POST", redirect: "manual" });
+    expect(go.status).toBe(303);
+    expect(s.state.registered).toHaveLength(1);
+    expect((s.state.registered[0]!.body as { redirect_uris: string[] }).redirect_uris).toEqual([`${server.url}/connect/callback`]);
+    const authorize = new URL(go.headers.get("location")!);
+    expect(authorize.searchParams.get("resource")).toBe(m.url);
+    const back = (await fetch(authorize, { redirect: "manual" })).headers.get("location")!;
+    expect((await fetch(back)).status).toBe(200);
+    for (let i = 0; i < 100; i++) {
+      const d = await detail();
+      if (!d.paused && !d.running) break;
+      await Bun.sleep(20);
+    }
+    expect((await detail()).paused).toBeUndefined();
+    expect(m.state.requests.some((r) => r.method === "tools/call" && r.status === 200)).toBe(true);
+  });
+});
+
 describe("a declared connection on an MCP server", () => {
   test("its tokens are sent to the server, and login checks the server's metadata names the declared token endpoint", async () => {
     const { s, m } = servers();
