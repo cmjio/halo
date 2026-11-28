@@ -562,6 +562,21 @@ export const MIGRATIONS: Migration[] = [
       return out;
     },
   },
+  {
+    id: "serve-run-owners",
+    since: "1.12.0",
+    title: "halo serve records who started each run; schedules' and watches' runs are the service's",
+    detail:
+      "Every run halo serve starts records its owner: the operator (HALO_SERVE_TOKEN, through the API, Studio or /mcp), a user (halo.json's new \"users\", each with a token of their own), the service (a webhook, a schedule or a watch) or a package's consumer. In 1.12.0's first OAuth build, a schedule's or a watch's run counted as the operator's, so when it paused for an OAuth connection Studio offered a /connect link. Now it is the service's, like a webhook's: connect the account on the host with halo auth login <Connection>, then resume the run. Runs started over /mcp now record the operator too. With \"users\" set, each user sees and acts on only their own runs (an admin on all), a request needs a token, and Slack buttons act only for users whose \"slack\" id is set. Listed: schedules and watches in halo.json.",
+    find(project) {
+      const out: Finding[] = [];
+      for (const kind of ["schedules", "watches"] as const) {
+        const list = Array.isArray(project.config[kind]) ? (project.config[kind] as Array<{ pipeline?: unknown }>) : [];
+        for (const s of list) if (typeof s?.pipeline === "string") out.push({ file: "halo.json", message: `${kind === "schedules" ? "schedule" : "watch"} for ${s.pipeline}: its runs are the service's; a connection one pauses for is connected with halo auth login on the host` });
+      }
+      return out;
+    },
+  },
 ];
 
 export interface MigrationResult {

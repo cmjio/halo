@@ -45,7 +45,8 @@ All optional. `halo serve` reads `./halo.json` (or `--config <file>`). Strings l
 |---|---|
 | `files` | `.halo` files or folders to load (command-line paths take precedence). Default: the current folder |
 | `port`, `host` | Where to listen. Default `127.0.0.1:8080`. `PORT` and `HALO_HOST` in the environment win over these, and `--port` and `--host` win over everything (see [On a hosting platform](#on-a-hosting-platform)) |
-| `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one |
+| `token` | API token; the same as setting `HALO_SERVE_TOKEN`. If it names a variable (`Env.X`) that is empty or not set, the server refuses to start rather than run without one. Its holder is the operator, an admin |
+| `users` | The people who use the server, each with a token of their own: `{"alice": {"token": "Env.ALICE_TOKEN", "slack": "U0123"}, "bob": {"token": "Env.BOB_TOKEN", "admin": true}}`. See [Users and who owns a run](#users-and-who-owns-a-run) |
 | `publicUrl` | The address people reach the server at, used in approval links. It can name a variable (`"Env.PUBLIC_URL"`); without it, `HALO_PUBLIC_URL` is used, then the address Render, Railway or Fly gives the app |
 | `timezone` | The IANA time zone schedules run in unless they name their own `tz`, e.g. `"Europe/London"`. Default: the server's, which is usually UTC in a container |
 | `schedules` | Start `pipeline` with `args` on a cron schedule (see [Schedules](#schedules)) |
@@ -195,7 +196,8 @@ In your Slack app's settings, turn on Interactivity and set its Request URL to `
 - Halo checks every request's Slack signature and refuses requests more than 5 minutes old (`401`).
 - A button on a pause announcement carries the run, the pause, and the same signature as the approval link, so it answers only that pause. A click after the pause was answered changes nothing.
 - The answer is `approve` or `reject`, plus `by` (the Slack user name) and `via: "slack"`. Halo then replaces the buttons with who answered.
-- Anyone in the channel who can click the button can answer. Post announcements only to channels whose members may approve.
+- Without [users](#users-and-who-owns-a-run), anyone in the channel who can click the button can answer. Post announcements only to channels whose members may approve.
+- With users, a click counts only from a Slack account a user's `"slack"` names, and acts as that user: they answer their own runs (an admin, anyone's). Anyone else is told so, privately, and the run keeps waiting. `by` is the user's name.
 
 A [`Slack` tool](../../stdlib/tools.md#slack) that posts `buttons:` during a run also gets its clicks here. Each button carries the run id, how many times the run had paused when it posted, and its label. A click answers only the run's **next** pause after the post, with the label as the answer, and only while the run is waiting there: post the buttons, then `|! yield` or `~> listen`. A click on a button whose pause is over, or that came before the run paused, changes nothing. These buttons never answer a tool-call approval (`waitingFor: "approval"`); use the announcement's buttons or the approval link for those.
 
@@ -209,11 +211,50 @@ Respond: https://halo.example.com/approve/6f9696ef-…?sig=94cea2…
 Connect: https://halo.example.com/connect/6f9696ef-…/Google?exp=1764259200000&sig=1b7c0e…
 ```
 
-- The link is signed for that run, that pause and that connection, with its own label, so an approval link's signature can't stand in for it. It works once, for 10 minutes. Studio and `GET /api/runs/<id>` (`paused.connectUrl`) make a fresh one each time.
+- The link is signed for that run, that pause, that connection and the person it was made for (`&as=user%3Aalice`), with its own label, so an approval link's signature can't stand in for it. It works once, for 10 minutes. Studio and `GET /api/runs/<id>` (`paused.connectUrl`) make a fresh one each time.
 - Opening it shows a page naming the provider and the scopes. Continuing sends the person to the provider. Halo keeps the `state` and PKCE verifier in `<stateDir>/connect` (readable only by the server's user) for 10 minutes.
 - The provider sends them back to `https://<publicUrl>/connect/callback`. Register that address with the provider. Halo checks the `state`, the verifier and the issuer, stores the token, and resumes the run.
 - Studio shows **Connect Google** on the run, and **Check again** to resume it after connecting on the server with `halo auth login Google`. With Slack buttons on, the announcement has a **Connect Google** button next to Approve and Reject. Slack never sees the token or the code.
-- Whoever opens the link chooses the account the run acts as. Until Halo knows who people are, a link is offered only for runs the operator started: through the API or Studio (with the token), or by the server's own schedules and watches. A run a webhook started gets no link; connect it on the server with `halo auth login`, then resume it.
+- Whoever opens the link chooses the account. So it is offered only to the person whose account it should be. For a service connection (the default, one token every run shares): the operator or an admin, on a run a person started (through the API, Studio or `/mcp`). For an `as: "invoker"` connection: only the user who started the run, and the callback stores the token under their name. A run a webhook, schedule or watch started gets no link; connect it on the server with `halo auth login`, then resume it.
+- An `MCP` tool with `auth: "discover"` is connected the same way. Opening the link discovers the server's authorization server (refusing addresses inside the network) and shows where you'll sign in; continuing registers a client there for `/connect/callback` if the tool declares no `clientId:`.
+- The announcement's `Connect:` line and URL button are only for the operator's runs. On a user's run, the Slack button asks Slack who clicked and answers that person alone with their own link, if the run is theirs to connect.
+
+## Users and who owns a run
+
+Several people can share one server. Give each a token in `halo.json`:
+
+```json
+{
+  "users": {
+    "alice": { "token": "Env.ALICE_TOKEN", "slack": "U0123ABCD" },
+    "bob": { "token": "Env.BOB_TOKEN", "admin": true }
+  }
+}
+```
+
+- A request with `Authorization: Bearer <alice's token>` (to `/api`, `/mcp` or Studio) is alice. A token that names an unset variable, or repeats another, stops the server from starting. Tokens are compared in constant time.
+- `HALO_SERVE_TOKEN` (or `token`) still works, as the operator: an admin. With `users` and no serve token, there is no operator, and every request needs a user's token. With neither, the server works as before, on loopback only.
+- `admin: true` sees and acts on every run. `slack` is their Slack user id, so the [Slack buttons](#slack-buttons) they click act as them.
+
+Every run records who started it (`owner` in `GET /api/runs` and `GET /api/runs/<id>`, and "Started by" in Studio):
+
+| Owner | Who |
+|---|---|
+| `user:alice` | A user, through the API, Studio or `/mcp` |
+| `operator` | The serve token's holder |
+| `service` | A webhook, a text, a schedule or a watch |
+| `consumer:acme` | A [hosted package](#serving-a-hosted-package)'s consumer |
+
+Who can do what:
+
+- `GET /api/runs` lists a user's own runs; an admin's lists everyone's. `GET /api/runs/<id>` of someone else's run is `404`.
+- Answering (`/signal`, Slack), stopping, resuming, rewinding and raising the budget of a run take its owner or an admin. Anyone else gets `403`.
+- An idempotency key is each user's own: alice's and bob's runs never find each other's.
+- Studio's Evolve tab, which runs pipelines on everyone's recorded traffic, is for admins.
+- An approval link (`/approve/<id>?sig=`) still works for whoever has it, as before: it's a capability for one question. Send it only to people who may answer.
+- A connection declared [`as: "invoker"`](../integrations/oauth.md#each-person-s-own-account) uses the token of the run's user. A run owned by the service or the operator can't use one.
+
+`GET /api/me` says who a token is: `{"owner": "user:alice", "admin": false, "user": "alice", "users": true}`.
 
 ## Serving a hosted package
 
@@ -359,7 +400,7 @@ curl -X POST localhost:8080/api/runs/$RUN/resume -H 'Content-Type: application/j
 
 ## Security
 
-- It listens on `127.0.0.1` by default (on `0.0.0.0` when `PORT` is set). To listen on any other interface you must set `HALO_SERVE_TOKEN` (or `token`); it refuses to start otherwise, because the API starts runs that spend money and run data includes prompts and answers.
+- It listens on `127.0.0.1` by default (on `0.0.0.0` when `PORT` is set). To listen on any other interface you must set `HALO_SERVE_TOKEN` (or `token`), or `users`; it refuses to start otherwise, because the API starts runs that spend money and run data includes prompts and answers.
 - Web pages can't drive the API from a browser. A request with an `Origin` other than localhost or `publicUrl` is refused, and so is a `POST` that isn't JSON (the kind a page can send without asking). The `Host` header must be localhost, the address it listens on, or `publicUrl`'s host, which stops DNS rebinding (a site pointing its own name at `127.0.0.1`).
 - `/mcp` has the same `Origin`, `Host` and JSON checks as `/api`, and needs the token when one is set (see [MCP](../integrations/mcp.md#http)).
 - `/slack/actions` accepts only requests signed with `slack.signingSecret`.

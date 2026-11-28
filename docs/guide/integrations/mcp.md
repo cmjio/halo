@@ -53,6 +53,8 @@ Every MCP tool also has three built-in methods that a pipeline can call. These t
 | first arg | The command that starts a stdio server. It is split into arguments with simple `'...'`/`"..."` quoting and run **without a shell**. |
 | `url:` | A Streamable HTTP endpoint. Halo keeps the server's `Mcp-Session-Id` and accepts JSON or `text/event-stream` responses. |
 | `apiKey:` | Sent as `Authorization: Bearer ...` (HTTP only). |
+| `auth:` | Sign in with OAuth instead (HTTP only): an [`OAuth` declaration](./oauth.md), or `"discover"` to find the server's own sign-in. See [Servers that sign in with OAuth](#servers-that-sign-in-with-oauth). |
+| `scopes:`, `clientId:`, `clientSecret:`, `as:` | With `auth: "discover"`: the scopes to ask for, an app you registered at the server's authorization server (else Halo registers one), and whose token it uses (`"service"` or `"invoker"`). |
 | `headers:` | Extra HTTP headers, e.g. `headers: { "X-Org": "acme" }` (HTTP only). |
 | `env:` | Names of environment variables the stdio server may see, e.g. `env: ["GITHUB_TOKEN"]`, read from the runtime's environment (`RuntimeConfig.env`, which defaults to the process environment), like `Env.NAME`. Or a record of values: `env: { LOG_LEVEL: "warn" }`. |
 | `cwd:` | Working folder for the stdio server, relative to the folder Halo runs in. Without it, the server starts in a private empty folder (see below). Write `cwd: "."` to run it in the project. |
@@ -63,6 +65,21 @@ Every MCP tool also has three built-in methods that a pipeline can call. These t
 Any other setting is an error, with the name it was close to: `MCP("...", timeout: 5)` asks whether you meant `timeout_ms`.
 
 A stdio server gets a clean environment: `PATH`, `HOME`, and only the variables you list in `env:`. Your other secrets are not passed to it. It still runs as your user, with your files and network: a stdio server is a program you install and run, so only use servers you trust.
+
+#### Servers that sign in with OAuth
+
+Hosted MCP servers often take OAuth, not a key. Give the tool `auth:`:
+
+```halo
+tool Tracker : MCP(url: "https://mcp.tracker.example/mcp", auth: "discover", scopes: ["read"])
+tool Docs    : MCP(url: "https://docs.internal/mcp", auth: InternalSSO)
+```
+
+Then sign in once with `halo auth login Tracker`. With `"discover"`, Halo reads the server's `401` and its metadata to find where to sign in (MCP's authorization spec: RFC 9728, RFC 8414), prints that host and the scopes before the browser opens, registers itself there as a client when the tool has no `clientId:` (RFC 7591), and asks for a token for this server only (`resource=`, RFC 8707). A metadata `issuer` that isn't the address it came from, a `resource` that isn't this server, or a registration with other redirect addresses is refused.
+
+Every request to the server then carries the token, for the server's own origin only. A `401` refreshes it and tries once more; a redirect to another origin is refused. When a person has to sign in (never connected, revoked, or a `403` asking for more scope), the run pauses waiting for `connect:Tracker`, as other [OAuth tools](./oauth.md#when-a-run-needs-a-connection) do. `halo plan` shows `auth: Tracker (oauth, discovered: auth.tracker.example)`.
+
+A server that answers `401` to a tool without `auth:` gets the hint to add `auth: "discover"`. The MCP specification forbids a server passing your token on to other services; Halo can't check that, but the token is good only for that server. See [OAuth](./oauth.md#mcp-servers-that-sign-in-with-oauth) for the details and the checks.
 
 #### Where a stdio server runs
 
@@ -144,6 +161,7 @@ claude mcp add --transport http halo http://localhost:8080/mcp --header "Authori
 
 - It has the same browser checks as `/api`: a request with an `Origin` other than localhost or `publicUrl` is refused, the `Host` header must be localhost, the address it listens on, or `publicUrl`'s host (which stops DNS rebinding), and a `POST` must be `Content-Type: application/json`. Refused requests get `403`.
 - Then it uses the API token: when one is set, a request needs `Authorization: Bearer <token>`, or it gets `401` (a token in the URL is refused: URLs end up in logs). **Without a token, any program that can reach the port can run your pipelines**: on localhost, any program on the machine.
+- A [user's](../production/serving.md#users-and-who-owns-a-run) token works too: the runs it starts are that user's, and use their own tokens for `as: "invoker"` connections.
 - It is stateless and returns JSON, not server-sent streams. Batches work.
 - `"mcp": false` in `halo.json` turns it off.
 

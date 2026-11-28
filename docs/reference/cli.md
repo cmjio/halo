@@ -37,6 +37,8 @@ Every package command takes `--registry <https URL or folder>`. Without it: `HAL
 |---|---|
 | `halo auth login <Connection> [file.halo]` | Opens the browser at the provider's sign-in, takes the answer on `127.0.0.1` (one request, 5 minutes, `state` checked) and stores the tokens. Prints the link when it can't open a browser. `--no-browser` only prints it |
 | `halo auth login <Connection> --device` | Signs in with a code on another device (the device flow). The default when there is no browser, and for `grant: "device"` |
+| `halo auth login <McpTool>` | For an `MCP` tool with `auth: "discover"`: finds the server's authorization server, prints its host and the scopes, registers a client there if the tool has no `clientId:`, then signs in as above (see [MCP servers that sign in with OAuth](/guide/integrations/oauth#mcp-servers-that-sign-in-with-oauth)) |
+| `halo auth login <Connection> --user <name>` | Signs in for one of `halo serve`'s users, on an `as: "invoker"` connection, so that user's runs use it. `logout` and `status` take `--user` too |
 | `halo auth logout <Connection> [--no-revoke]` | Revokes the token at the provider, when it has a revoke URL, and forgets it |
 | `halo auth list [file.halo]` | Every connection, its grant, and whether this machine is connected, as whom, until when |
 | `halo auth status [<Connection>]` | One connection's account, scopes granted and declared, expiry, and where its tokens are kept |

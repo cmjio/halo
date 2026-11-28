@@ -32,6 +32,7 @@ Halo ships no client ids. Register an app with the provider and give its client 
 | `authorizeUrl:`, `tokenUrl:`, `deviceUrl:`, `revokeUrl:` | The provider's endpoints, for one Halo has no preset for. `https` only |
 | `issuer:` | The issuer a sign-in answer must come from, when the provider says (RFC 9207) |
 | `audience:`, `resource:` | Sent with the token request, for providers that use them |
+| `as:` | `"service"` (the default: one token every run shares) or `"invoker"` (each run uses the token of the person who started it; see [Each person's own account](#each-person-s-own-account)) |
 
 The authorization code grant always uses PKCE and a random `state`.
 
@@ -73,9 +74,43 @@ Register the redirect address with the provider. For `halo auth login` that is `
 - `REST`, `GET` and `POST`. The token goes only to the tool's own origin.
 - `Slack`, `GitHub`, `Linear` and `Figma`, in place of their token.
 - `Email` with `via: "gmail"` or `"outlook"`. Its older settings still work: a refresh token in `Env` with `clientId:`, or an app's client secret. Halo keeps a refresh token the provider rotates, and uses it next time.
+- `MCP` with `url:`. Every request to the server carries the token. Or `auth: "discover"`, and Halo finds the server's own sign-in (see [MCP servers that sign in with OAuth](#mcp-servers-that-sign-in-with-oauth)). A server run as a command signs in by itself and takes no `auth:`.
 - A package's http tool whose manifest says `"type": "oauth"`. The tool is its own connection: `tool Notes : notes()`, then `halo auth login Notes`. Its client id comes from the variable the manifest names, or `clientId:` on the declaration. To use your own connection instead, write `notes(auth: MyNotes)`.
 
 A tool takes `auth:` or `apiKey:`, not both. `halo validate` says so, and checks that `auth:` names an `OAuth` declaration.
+
+## MCP servers that sign in with OAuth
+
+A hosted MCP server that wants OAuth says so the way the [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) describes: a request without a token gets `401` and a `WWW-Authenticate` header naming its metadata. `auth: "discover"` follows it:
+
+```halo
+tool Tracker : MCP(url: "https://mcp.tracker.example/mcp", auth: "discover", scopes: ["read"])
+```
+
+```sh
+$ halo auth login Tracker
+Tracker's server (mcp.tracker.example) signs in at auth.tracker.example, asking for: read.
+Tracker declares no clientId:, so Halo registers itself at auth.tracker.example as a new client (dynamic client registration).
+Opening auth.tracker.example to connect Tracker (1 scope)...
+Connected you@example.com. Granted: read.
+```
+
+What `halo auth login` does:
+
+1. Asks the server for nothing, without a token, and reads its `401`'s `resource_metadata` (or looks at `/.well-known/oauth-protected-resource`).
+2. Reads that protected resource metadata (RFC 9728). Its `resource` must be this server's URL. It names the authorization server.
+3. Reads the authorization server's metadata (RFC 8414, else OpenID Connect discovery). Its `issuer` must be the address it was fetched for. One that names another issuer is refused: that is how a mix-up, or a lookalike sign-in page, shows itself.
+4. Prints where you'll sign in and the scopes, before anything else happens. Check the host: a malicious server can point at any sign-in page.
+5. Without `clientId:`, registers Halo there as a public client for this sign-in (RFC 7591). Only the client id (and a secret, if one is issued) is kept, outside the project with the tokens. Registered redirect addresses other than the one Halo sent are refused.
+6. Signs you in with PKCE, sending `resource=<the server's URL>` with the authorize and the token requests (RFC 8707), so the token is good for that server only.
+
+The scopes asked for are the tool's `scopes:`, else the ones the server's `401` names, else the ones its metadata lists. A server that answers a call `403` with `error="insufficient_scope"` pauses the run, as a revoked token does: add the scope to `scopes:` and sign in again. Halo never widens scopes by itself.
+
+Discovery only follows `https` (`http` only on `127.0.0.1`, for local servers), sends no cookies or credentials, follows no redirects, and gives up after 5 seconds or 64 KB. Under `halo serve` it also refuses addresses inside the network (private, link-local, `169.254.169.254`), and loopback unless serve itself listens on loopback.
+
+An `MCP` tool with `auth: "discover"` also takes `clientId:` and `clientSecret:` (an app you registered there yourself), and `as:`. `halo plan` shows it as `oauth, discovered: auth.tracker.example`, or `discovered at sign-in` before you've signed in.
+
+With a declared connection instead (`auth: TrackerSSO`), `halo auth login` still reads the server's metadata when it publishes some, and refuses to sign in if it says tokens come from another origin than the declaration's `tokenUrl:`. Give the declaration `resource:` with the server's URL if its authorization server wants one.
 
 ## Where tokens live
 
@@ -123,11 +158,35 @@ It goes on at once when Google is connected. Otherwise the run pauses with that 
 
 A paused run waiting for a connection gets a link to connect it: `/connect/<runId>/Google?exp=…&sig=…`. Studio shows a **Connect Google** button, and a Slack announcement has one next to Approve and Reject.
 
-- The link is signed for that run, that pause and that connection. It works once, for 10 minutes. Studio makes a new one each time it shows the run.
+- The link is signed for that run, that pause, that connection and the person it was made for. It works once, for 10 minutes. Studio makes a new one each time it shows the run.
 - Opening it shows a page that names the provider and the scopes. Continuing sends you to the provider's sign-in. The callback checks the `state` and the PKCE verifier, stores the token, and resumes the run.
-- Whoever opens the link chooses the account the run acts as. Until Halo knows who people are, a link is offered only for runs the server's operator started (through the API, Studio, or its own schedules and watches). For any other run, run `halo auth login Google` on the server, then press **Check again** in Studio.
+- Whoever opens the link chooses the account. So a link is offered only to the right person. For a service connection (the default), that's the operator or an admin, for a run a person started through the API, Studio or `/mcp`. For an `as: "invoker"` connection, it's the user who started the run, and the token is stored for them. A run a webhook, schedule or watch started gets no link: run `halo auth login Google` on the server, then press **Check again** in Studio.
 
 See [Serving pipelines](../production/serving.md#connecting-an-account).
+
+## Each person's own account
+
+When several people share one `halo serve` (see [users](../production/serving.md#users-and-who-owns-a-run)), a connection can act as whoever started the run:
+
+```halo
+tool MyDrive : OAuth(provider: "google", clientId: Env.GOOGLE_CLIENT_ID, as: "invoker",
+                     scopes: ["https://www.googleapis.com/auth/drive.file"])
+tool TeamBot : OAuth(provider: "slack", clientId: Env.SLACK_CLIENT_ID, clientSecret: Env.SLACK_CLIENT_SECRET,
+                     scopes: ["chat:write"])
+```
+
+- `as: "service"` (the default): one token, which every run uses.
+- `as: "invoker"`: the token of the user who started the run. Alice's run uses Alice's Drive. Her token is stored under her name, next to the shared ones.
+
+A run with no person behind it (a webhook's, a schedule's, a watch's, one started with the operator's `HALO_SERVE_TOKEN`, a package consumer's) can't use an invoker connection: the call fails and says so. `halo validate` warns when a pipeline that `halo.json`'s schedules, webhooks or watches start reaches one. With `halo run` on your own machine, an invoker connection is simply yours.
+
+Each user connects their own: the Connect link a paused run offers them, or on the server:
+
+```sh
+halo auth login MyDrive --user alice
+```
+
+An `MCP` tool with `auth: "discover"` takes `as: "invoker"` too.
 
 ## halo plan and halo validate
 
@@ -143,4 +202,4 @@ Acts as: Drive through Google (oauth, authorization_code) [https://www.googleapi
 
 It warns when the provider granted wider scopes than the declaration asks for.
 
-`halo validate` checks each `OAuth` declaration (a provider Halo knows, a client id, a grant, the URLs that grant needs) and each `auth:`.
+`halo validate` checks each `OAuth` declaration (a provider Halo knows, a client id, a grant, the URLs that grant needs, `as:`) and each `auth:`, including an `MCP` tool's.
