@@ -97,6 +97,8 @@ export interface RunSummary {
   cost: number | null;
   /** Whether this server is running it right now. */
   running?: boolean;
+  /** Who started it: "user:alice", "operator", "service" (a webhook, schedule or watch), "consumer:acme". Missing from older servers and runs. */
+  owner?: string | null;
 }
 
 /** What can be done to a run from Studio, as the server sees it now. */
@@ -118,6 +120,8 @@ export interface RunControls {
 export interface RunDetail {
   runId: string;
   running: boolean;
+  /** Who started it (see RunSummary.owner). */
+  owner?: string;
   paused?: { waitingFor: string; message?: string; stage: number; approveUrl: string; /** Waiting for an OAuth connection (`connect:Google`): its name, and a fresh link to connect it (when this run may be offered one). */ connection?: string; connectUrl?: string };
   /** Missing from older servers. */
   controls?: RunControls;

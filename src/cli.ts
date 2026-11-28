@@ -17,7 +17,7 @@
 import { currentProject, ProjectError, pullProject, pushProject } from "./serve/project.js";
 import { openStateStore, StateStoreError } from "./serve/state-mirror.js";
 import { mockEverything } from "./runtime/mocks.js";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parse } from "./parser/index.js";
@@ -363,7 +363,19 @@ async function installed(): Promise<LoadedProvider[]> {
 }
 
 // Checking a file only needs the names of installed providers: no package code is loaded for it.
-const validateOptions = async () => ({ canHandleModel, toolProviders: installedProviderNames(process.cwd()), oauthProviders: oauthPackageProviders() });
+const validateOptions = async () => ({ canHandleModel, toolProviders: installedProviderNames(process.cwd()), oauthProviders: oauthPackageProviders(), serviceStarted: serviceStartedPipelines() });
+
+/** The pipelines halo.json's schedules, webhooks and watches start (as the service, with no person to act as). */
+function serviceStartedPipelines(): string[] {
+  try {
+    if (!existsSync("halo.json")) return [];
+    const c = JSON.parse(readFileSync("halo.json", "utf8")) as { schedules?: Array<{ pipeline?: unknown }>; webhooks?: Array<{ pipeline?: unknown }>; watches?: Array<{ pipeline?: unknown }> };
+    const names = [...(c.schedules ?? []), ...(c.webhooks ?? []), ...(c.watches ?? [])].map((x) => x?.pipeline).filter((p): p is string => typeof p === "string");
+    return [...new Set(names)];
+  } catch {
+    return [];
+  }
+}
 
 /** Installed http providers whose tools sign in with OAuth (read from their manifests: no package code runs). */
 function oauthPackageProviders(): string[] {

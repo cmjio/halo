@@ -24,7 +24,8 @@ export type McpToolAnnotations = NonNullable<McpToolInfo["annotations"]>;
 
 export interface McpPipelineSource {
   list(): Array<{ name: string; description?: string; params: Array<{ name: string; type: string }>; annotations?: McpToolAnnotations }>;
-  call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: string; output?: unknown; runId: string; error?: string; waitingFor?: string; approveUrl?: string }>;
+  /** `caller` is who sent the request, as handleHttp was given it. */
+  call(name: string, args: Record<string, unknown>, signal?: AbortSignal, caller?: string): Promise<{ status: string; output?: unknown; runId: string; error?: string; waitingFor?: string; approveUrl?: string }>;
 }
 
 /** What a pipeline's plan says it can do: the effect of every call it may make, and whether it can wait for a person. */
@@ -163,7 +164,7 @@ export function createMcpServer(source: McpPipelineSource, info: { name: string;
     inflight.set(key, running.add(controller));
     const both = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     try {
-      const run = await source.call(name, args, both);
+      const run = await source.call(name, args, both, caller);
       const text = (t: string, isError = false) => ok(id, { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
       switch (run.status) {
         case "completed": {

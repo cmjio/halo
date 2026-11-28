@@ -13,6 +13,16 @@ export function duration(ms: number | null | undefined): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
+/** Who started a run, in words: "alice" (a user), "the operator", "a webhook, schedule or watch", "consumer acme". */
+export function ownerLabel(owner: string | null | undefined): string {
+  if (!owner) return "";
+  if (owner.startsWith("user:")) return owner.slice("user:".length);
+  if (owner === "operator") return "the operator";
+  if (owner === "service") return "a webhook, schedule or watch";
+  if (owner.startsWith("consumer:")) return `consumer ${owner.slice("consumer:".length)}`;
+  return owner;
+}
+
 export function money(n: number | null | undefined): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "";
   if (n === 0) return "$0";

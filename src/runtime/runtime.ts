@@ -238,9 +238,11 @@ export interface RunMeta {
   /** USD a person added to every MaxSpend limit for this run (`extendBudget`). Kept through checkpoints, resumes and rewinds. */
   budgetAdded?: number;
   /**
-   * Who started the run, when the host says: `halo serve` sets "operator" (its token holder, through
-   * the API, Studio or its own schedules) or "consumer:<name>". Until serve knows people, a connect
-   * link (`/connect/...`) is offered only for an operator's runs.
+   * Who started the run, when the host says: `halo serve` sets "user:<name>" (one of halo.json's
+   * users), "operator" (the HALO_SERVE_TOKEN holder), "service" (a webhook, schedule or watch) or
+   * "consumer:<name>" (a package's consumer). A connection declared `as: "invoker"` uses the tokens
+   * of the run's user; only that user (or, for a service connection, an admin) is offered a link to
+   * connect it. Undefined for a run on this machine (`halo run`), which acts as "local".
    */
   owner?: string;
 }
@@ -403,7 +405,7 @@ export class FileRunStore implements RunStore {
 }
 
 export type RuntimeEvent =
-  | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number; stopped?: true }
+  | { type: "run"; pipeline: string; runId: string; status: "start" | "completed" | "halted" | "paused" | "error"; output?: unknown; error?: string; durationMs?: number; cost?: number; stopped?: true; /** On "start": who started the run (RunMeta.owner), when the host says. */ owner?: string }
   | { type: "stage"; pipeline: string; runId: string; index: number; kind: PipelineStage["kind"]; label: string; status: "start" | "end"; value?: unknown; durationMs?: number }
   | { type: "llm"; pipeline: string; runId: string; agent: string; model: string; system?: string; prompt: string; media?: MediaRef[]; output: unknown; latencyMs: number; cost: number; tokens?: { prompt: number; completion: number }; mocked: boolean; priced?: false }
   | { type: "tool"; pipeline: string; runId: string; tool: string; method: string; output: unknown; latencyMs: number; mocked: boolean; sent?: MediaRef[] }
@@ -1368,7 +1370,7 @@ export class HaloRuntime {
     ctx.signal = AbortSignal.any([ctx.signal, stopper.signal]);
     const live = { ctx, stopper };
     this.live.set(ctx.meta.runId, live);
-    this.emit({ type: "run", ...base, status: "start" });
+    this.emit({ type: "run", ...base, status: "start", ...(ctx.meta.owner ? { owner: ctx.meta.owner } : {}) });
     try {
       ctx.thread ??= this.openThread(ctx);
       // Files an earlier run kept in the thread are this run's to use.
@@ -3060,6 +3062,17 @@ export class HaloRuntime {
     const target = mcpTarget(decl.name, config, this.env, this.projectRoot);
     if (target.kind !== "http") return undefined;
     return { url: target.url, project: this.projectRoot, ...this.discoverSettings(decl, ctx) };
+  }
+
+  /**
+   * Whose tokens a connection (an OAuth declaration, or an MCP tool with `auth: "discover"`) uses:
+   * "invoker" (the run's user) or "service" (one shared token). Undefined for anything else.
+   */
+  connectionAs(name: string): "invoker" | "service" | undefined {
+    const decl = this.tools.get(name);
+    if (!decl || !(decl.provider === "OAuth" || (decl.provider === "MCP" && authName(decl) === "discover"))) return undefined;
+    const v = decl.argList.find((a) => a.name === "as")?.value;
+    return v?.kind === "string" && v.value === "invoker" ? "invoker" : "service";
   }
 
   private ownedContext(owner?: string): ExecutionContext {

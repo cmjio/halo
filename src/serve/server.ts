@@ -48,7 +48,8 @@ import { checkPackageHeader, consumerKeys, keyOf, loadServedPackage, PACKAGE_KEY
 import pkg from "../../package.json" with { type: "json" };
 import studioPage from "../../studio/index.html";
 import { privateDir, privateFile } from "../runtime/private-files.js";
-import { authorizationRequest, checkRedirect } from "../runtime/oauth.js";
+import { authorizationRequest, checkRedirect, type OAuthConnection } from "../runtime/oauth.js";
+import { discoveredConnection, discoverMcp, prepareMcpLogin, probeMcp } from "../runtime/mcp-auth.js";
 
 /** halo.json (all optional). Strings like "Env.NAME" are read from the environment. */
 export interface ServeConfig {
@@ -57,8 +58,17 @@ export interface ServeConfig {
   port?: number;
   /** Interface to listen on. Default 127.0.0.1; anything else requires a token. */
   host?: string;
-  /** API token (or set HALO_SERVE_TOKEN). Required for every /api request when set. */
+  /** API token (or set HALO_SERVE_TOKEN). Required for every /api request when set. Its holder is the "operator", an admin. */
   token?: string;
+  /**
+   * The people who use this server, each with an API token of their own ("Env.ALICE_TOKEN"). A
+   * request with `Authorization: Bearer <alice's token>` is alice: the runs she starts are hers,
+   * and she sees and acts on (answers, stops, resumes, rewinds, raises the budget of) only those.
+   * `admin: true` sees and acts on everyone's. `slack` is their Slack user id ("U0123"): only then
+   * do Slack buttons they click act as them. A connection declared `as: "invoker"` uses the token
+   * of the person who started the run.
+   */
+  users?: Record<string, ServeUser>;
   /** Base URL for approval links, e.g. https://halo.example.com, or "Env.X". Default: HALO_PUBLIC_URL, else the server's own address. */
   publicUrl?: string;
   /** IANA time zone for schedules that don't name one, e.g. "Europe/London". Default: the server's. */
@@ -121,6 +131,27 @@ export interface ServeConfig {
   /** Defaults for `halo evolve` and Studio's Evolve tab. */
   evolve?: EvolveConfig;
 }
+
+/** One entry of halo.json `users`. */
+export interface ServeUser {
+  /** Their API token, usually "Env.NAME". */
+  token: string;
+  /** Sees and acts on every run, like the operator. */
+  admin?: boolean;
+  /** Their Slack user id, so the Slack buttons they click act as them. */
+  slack?: string;
+}
+
+/** Who a request (or a Slack click) comes from. */
+interface Caller {
+  /** What runs they start record as meta.owner: "operator" or "user:<name>". */
+  owner: string;
+  admin: boolean;
+  /** The user's name, for a user. */
+  user?: string;
+}
+
+const OPERATOR: Caller = { owner: "operator", admin: true };
 
 /** One entry of halo.json `schedules`. */
 export interface ScheduleConfig {
@@ -253,6 +284,8 @@ export interface StartOptions {
   idempotencyKey?: string;
   /** Answer every model and tool from mocks. */
   dryRun?: boolean;
+  /** Who starts it ("user:alice", "operator"); by default, from the source: the API's is the operator's, a webhook's, schedule's or watch's the service's. */
+  owner?: string;
 }
 
 /** What a run callback carries. */
@@ -341,6 +374,17 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   const token = fromEnv(options.token) ?? env.HALO_SERVE_TOKEN;
   // A token that names an unset variable must not silently turn into "no token".
   if (options.token !== undefined && !token) throw new ServeError(`The API token "${options.token}" is empty or not set`);
+  // People, each with a token of their own. A token that names an unset variable is refused like the operator's.
+  const users = new Map<string, { token: string; admin: boolean; slack?: string }>();
+  for (const [name, u] of Object.entries(options.users ?? {})) {
+    if (!/^[A-Za-z0-9][\w.-]{0,63}$/.test(name) || ["local", "operator", "service"].includes(name)) throw new ServeError(`users: "${name}" can't be a user's name (letters, digits, _ . -; not local, operator or service)`);
+    const raw = u && typeof u === "object" ? u.token : undefined;
+    const t = typeof raw === "string" ? fromEnv(raw) : undefined;
+    if (!t) throw new ServeError(`users.${name}.token ${raw === undefined ? "is missing" : `"${raw}" is empty or not set`}`);
+    if ((token && safeEqual(t, token)) || [...users.values()].some((o) => safeEqual(o.token, t))) throw new ServeError(`users.${name}.token is the same as another token: each person needs their own`);
+    if (u.slack !== undefined && (typeof u.slack !== "string" || !/^[UW][A-Z0-9]+$/.test(u.slack))) throw new ServeError(`users.${name}.slack "${u.slack}" should be a Slack user id, like U0123ABCD`);
+    users.set(name, { token: t, admin: u.admin === true, ...(u.slack ? { slack: u.slack } : {}) });
+  }
   // --package: only the package's hosted pipelines, behind consumer keys.
   let served: ServedPackage | undefined;
   try {
@@ -349,7 +393,7 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (err instanceof PackageServeError) throw new ServeError(err.message);
     throw err;
   }
-  if (!LOOPBACK.has(host) && !token && !served) {
+  if (!LOOPBACK.has(host) && !token && !users.size && !served) {
     const why = options.hostFrom === "PORT" ? " (PORT is set, so Halo listens on every interface; set HALO_HOST=127.0.0.1 to keep it local)" : "";
     throw new ServeError(`Refusing to listen on ${host} without a token: set HALO_SERVE_TOKEN (runs spend money and their data includes prompts)${why}`);
   }
@@ -457,8 +501,12 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const linked = linkFile(file, served ? { root: served.dir, projectModels: served.manifest.models } : options.root ? { root: options.root } : {});
     const ast = linked.program;
     if (ast.errors.length) throw new ServeError(`${rel} has syntax errors:\n  ${ast.errors.join("\n  ")}`);
-    const errors = checkLinked(linked, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name) }).filter((d) => d.severity === "error");
+    // Pipelines this server's schedules, webhooks and watches start run as the service: an invoker connection there is a warning.
+    const serviceStarted = [...new Set([...(options.schedules ?? []), ...(options.webhooks ?? []), ...(options.watches ?? [])].map((x) => x.pipeline))];
+    const diags = checkLinked(linked, { canHandleModel: (id) => !!registry.findAdapter(id), toolProviders: installed.map((p) => p.name), serviceStarted });
+    const errors = diags.filter((d) => d.severity === "error");
     const where = (d: { file: string; line?: number }) => `${d.file === resolve(file) ? "" : `${relative(process.cwd(), d.file)}:`}${d.line ?? "?"}`;
+    for (const d of diags) if (d.severity === "warning" && d.message.includes('as: "invoker"')) logger.warn(`[halo] ${rel}:${where(d)}: ${d.message}`);
     if (errors.length) throw new ServeError(`${rel} has errors:\n  ${errors.map((d) => `${where(d)}: ${d.message}`).join("\n  ")}`);
     // A package serves only its hosted exports, and only ones that can't pause.
     const hostedHere = served ? served.manifest.hosted!.exports.filter((n) => served.sources[n] === file) : undefined;
@@ -724,8 +772,13 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     const dryRun = how.dryRun || options.dryRun || undefined;
     const key = how.idempotencyKey?.trim() || undefined;
     if (key !== undefined && key.length > 255) throw new ServeError("An idempotency key is at most 255 characters");
-    // A rehearsal and the real thing are different runs, even with one key.
-    const slot = key === undefined ? undefined : `${dryRun ? "dry:" : ""}${pipeline}\n${key}`;
+    // Who owns the run: the person who started it (a user, or the operator: the serve token's holder,
+    // through the API, Studio or MCP); the service, for a webhook, a text, a schedule or a watch; a
+    // package's consumer. Only the owner (or an admin) sees it and acts on it, and an invoker
+    // connection uses the owner's tokens.
+    const owner = how.owner ?? (/^consumer\b/.test(source) ? `consumer:${source.replace(/^consumer\s*/, "")}` : /^(API|MCP)\b/.test(source) ? "operator" : "service");
+    // A rehearsal and the real thing are different runs, even with one key; and one user's key never finds another's run.
+    const slot = key === undefined ? undefined : `${dryRun ? "dry:" : ""}${owner.startsWith("user:") ? `${owner}\n` : ""}${pipeline}\n${key}`;
     const earlier = slot === undefined ? undefined : idempotent[slot];
     if (earlier && Date.now() - earlier.at < IDEMPOTENCY_KEEP) {
       logger.log(`[halo] ${pipeline} asked for again by ${source} with the same idempotency key (run ${earlier.runId.slice(0, 8)})`);
@@ -741,10 +794,6 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     logger.log(`[halo] ${pipeline} started by ${source}${dryRun ? " as a dry run" : ""} (run ${runId.slice(0, 8)})`);
     const rt = runtimeFor(e, dryRun);
     // An Image or Document argument may be a data: URI or an https URL; never a path on this machine.
-    // Until serve knows people: the operator (the token holder, through the API and Studio, and its own
-    // schedules and watches) owns what it starts; a webhook's or a text's run is the service's; a
-    // package's consumers own theirs. Only an operator's run is offered a /connect link.
-    const owner = /^consumer\b/.test(source) ? `consumer:${source.replace(/^consumer\s*/, "")}` : /^(API|schedule |a change in )/.test(source) ? "operator" : "service";
     const work = () => rt.run(pipeline, args, { runId, idempotencyKey: key, dryRun, media: "urls", owner });
     // A dry run's answers are made up, so it isn't kept as something to replay or learn from.
     track(runId, pipeline, dryRun ? work() : recorded(runId, pipeline, args, work));
@@ -871,25 +920,59 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   // ── Connecting an OAuth connection for a paused run (/connect) ──
   //
   // A run waiting for `connect:Google` gets a link: signed with the serve key under its own label
-  // (so an approval signature can't be replayed as one), for that pause and connection, good for
-  // 10 minutes and once. Opening it shows a page; going on sends the person to the provider, with
-  // state and a PKCE verifier kept in <stateDir>/connect (0600, 10 minutes). The callback checks
-  // them, stores the token, and resumes the run. Until serve knows people, only runs the operator
-  // started are offered one: whoever opens it chooses the account the run acts as.
+  // (so an approval signature can't be replayed as one), for that pause, that connection and the
+  // person it was made for, good for 10 minutes and once. Opening it shows a page; going on sends
+  // the person to the provider, with state and a PKCE verifier kept in <stateDir>/connect (0600, 10
+  // minutes). The callback checks them, stores the token (an invoker connection's under the run's
+  // user), and resumes the run.
+  //
+  // Who is offered one: for an invoker connection (`as: "invoker"`), only the run's own user, whose
+  // token it becomes. For a service connection (one token every run shares), an admin (the operator,
+  // or a user with admin: true), for a run a person started: whoever opens the link chooses the
+  // account. A run a webhook, schedule or watch started is connected with halo auth login on the host.
   const CONNECT_MS = 10 * 60_000;
   const connectDir = join(stateDir, "connect");
-  const signConnect = (runId: string, pauseId: string, connection: string, exp: number) => createHmac("sha256", signingKey!).update(`connect:${runId}:${pauseId}:${connection}:${exp}`).digest("hex").slice(0, 32);
+  /** The operator's links keep the 1.12.0 form; a user's name their user in the signature (and in ?as=). */
+  const signConnect = (runId: string, pauseId: string, connection: string, who: string, exp: number) =>
+    createHmac("sha256", signingKey!)
+      .update(who === "operator" ? `connect:${runId}:${pauseId}:${connection}:${exp}` : `connect:${runId}:${pauseId}:${connection}:${who}:${exp}`)
+      .digest("hex")
+      .slice(0, 32);
   const waitingConnection = (snap: { waitingFor?: string } | undefined) => (snap?.waitingFor?.startsWith("connect:") ? snap.waitingFor.slice("connect:".length) : undefined);
-  /** Whether a paused run may be offered a connect link. */
-  const connectOffered = (snap: { meta: { owner?: string; paused?: { id?: string } } }) => !served && snap.meta.owner === "operator" && !!snap.meta.paused?.id;
-  const connectUrl = async (runId: string): Promise<string | undefined> => {
+  /** The person an owner names ("operator", "user:alice"), while they can still sign in here. */
+  const callerOf = (owner: string | undefined): Caller | undefined => {
+    if (owner === "operator") return token || !users.size ? OPERATOR : undefined;
+    const name = owner?.startsWith("user:") ? owner.slice("user:".length) : undefined;
+    const u = name ? users.get(name) : undefined;
+    return u ? { owner: owner!, admin: u.admin, user: name } : undefined;
+  };
+  type PausedSnap = { pipeline: string; waitingFor?: string; meta: { owner?: string; dryRun?: boolean; paused?: { id?: string; message?: string } } };
+  /** Whether `caller` may be offered a link to connect what a paused run waits for. */
+  const connectOffered = (snap: PausedSnap, caller: Caller | undefined): boolean => {
+    const connection = waitingConnection(snap);
+    if (served || !caller || !connection || !snap.meta.paused?.id) return false;
+    let as: "invoker" | "service" | undefined;
+    try {
+      as = runtimeFor(entry(snap.pipeline), snap.meta.dryRun).connectionAs(connection);
+    } catch {
+      return false;
+    }
+    const owner = snap.meta.owner;
+    if (as === "invoker") return !!owner?.startsWith("user:") && owner === caller.owner;
+    if (as === "service") return caller.admin && (owner === "operator" || !!owner?.startsWith("user:"));
+    return false;
+  };
+  const connectUrl = async (runId: string, caller: Caller | undefined): Promise<string | undefined> => {
     const snap = await runStore.load(runId);
     const connection = waitingConnection(snap);
-    if (!snap || !connection || !connectOffered(snap)) return undefined;
+    if (!snap || !connection || !caller || !connectOffered(snap, caller)) return undefined;
     const exp = Date.now() + CONNECT_MS;
-    return `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/connect/${runId}/${encodeURIComponent(connection)}?exp=${exp}&sig=${signConnect(runId, snap.meta.paused!.id!, connection, exp)}`;
+    const as = caller.owner === "operator" ? "" : `&as=${encodeURIComponent(caller.owner)}`;
+    return `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/connect/${runId}/${encodeURIComponent(connection)}?exp=${exp}${as}&sig=${signConnect(runId, snap.meta.paused!.id!, connection, caller.owner, exp)}`;
   };
   const connectRedirect = () => `${(options.publicUrl ?? baseUrl).replace(/\/+$/, "")}/connect/callback`;
+  /** Discovery for a link under serve: the server's URLs mustn't reach inside the network (loopback only when serve itself is on loopback). */
+  const discoveryGuard = { blockPrivate: true, allowLoopback: LOOPBACK.has(host) };
   const pendingPath = (state: string) => join(connectDir, `${createHmac("sha256", "halo-connect-state").update(state).digest("hex").slice(0, 40)}.json`);
   const usedFile = join(connectDir, "used.json");
   /** Remember a link's signature as spent (until it expires); false if it already was. */
@@ -906,16 +989,17 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     renameSync(`${usedFile}.tmp`, usedFile);
     return true;
   };
-  /** The paused run a connect link is for, or why it can't be used. */
+  /** The paused run a connect link is for, and who it was made for, or why it can't be used. */
   const linkedConnect = async (runId: string, connection: string, url: URL) => {
     const exp = Number(url.searchParams.get("exp"));
     const sig = url.searchParams.get("sig") ?? "";
+    const who = url.searchParams.get("as") ?? "operator";
     const snap = await runStore.load(runId);
     const pauseId = snap?.meta.paused?.id;
-    if (!snap || !pauseId || waitingConnection(snap) !== connection || !Number.isFinite(exp) || !safeEqual(sig, signConnect(runId, pauseId, connection, exp))) return { error: "This link is invalid, or the run is no longer waiting for it." };
+    if (!snap || !pauseId || waitingConnection(snap) !== connection || !Number.isFinite(exp) || !safeEqual(sig, signConnect(runId, pauseId, connection, who, exp))) return { error: "This link is invalid, or the run is no longer waiting for it." };
     if (exp < Date.now()) return { error: "This link has expired. Open the run in Halo Studio for a new one." };
-    if (!connectOffered(snap)) return { error: "This run can't be connected from a link." };
-    return { snap, pauseId, sig, exp };
+    if (!connectOffered(snap, callerOf(who))) return { error: "This run can't be connected from a link." };
+    return { snap, pauseId, sig, exp, who };
   };
   const connectPage = (title: string, body: string, status = 200) =>
     new Response(
@@ -926,37 +1010,57 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
   async function connectRoute(req: Request, url: URL, runId: string, connection: string): Promise<Response> {
     const linked = await linkedConnect(runId, connection, url);
     if ("error" in linked) return connectPage("Can't connect", `<p>${escapeHtml(linked.error!)}</p>`, 403);
-    const { snap, pauseId, sig, exp } = linked;
-    let conn;
+    const { snap, pauseId, sig, exp, who } = linked;
+    const rt = runtimeFor(entry(snap.pipeline), snap.meta.dryRun);
+    // An MCP tool with auth: "discover": its server says where to sign in (fetched with the SSRF checks).
+    let discover: ReturnType<HaloRuntime["discoverTarget"]>;
+    let conn: OAuthConnection | undefined;
+    let shown: { host: string; scopes: string[]; dynamic: boolean };
     try {
-      conn = runtimeFor(entry(snap.pipeline), snap.meta.dryRun).connection(connection);
+      discover = rt.discoverTarget(connection, snap.meta.owner);
+      if (discover) {
+        const d = await discoverMcp(discover.url, { challenge: (await probeMcp(discover.url, { fetch: options.fetch })) ?? {}, scopes: discover.settings.scopes, fetch: options.fetch, guard: discoveryGuard });
+        shown = { host: new URL(d.authorizeUrl).host, scopes: d.scopes, dynamic: !discover.settings.clientId };
+      } else {
+        conn = rt.connection(connection, snap.meta.owner);
+        if (!conn.authorizeUrl || conn.grant !== "authorization_code") return connectPage("Can't connect here", `<p>${escapeHtml(connection)} doesn't sign in through a browser (${escapeHtml(conn.grant)}). Run <code>halo auth login ${escapeHtml(connection)}</code> on the server, then resume the run.</p>`, 409);
+        shown = { host: new URL(conn.authorizeUrl).host, scopes: conn.scopes, dynamic: false };
+      }
     } catch (err) {
       return connectPage("Can't connect", `<p>${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`, 409);
     }
-    if (!conn.authorizeUrl || conn.grant !== "authorization_code") return connectPage("Can't connect here", `<p>${escapeHtml(connection)} doesn't sign in through a browser (${escapeHtml(conn.grant)}). Run <code>halo auth login ${escapeHtml(connection)}</code> on the server, then resume the run.</p>`, 409);
-    const providerHost = new URL(conn.authorizeUrl).host;
+    const as = rt.connectionAs(connection);
+    const person = who.startsWith("user:") ? who.slice("user:".length) : undefined;
     // A GET only shows the page (link previews open links too); going on is a POST, which spends the link.
     if (req.method === "GET") {
+      const note = person
+        ? `This link is for ${escapeHtml(person)}. ${as === "invoker" ? `The account you sign in with is the one ${escapeHtml(person)}'s runs act as.` : "The account you sign in with is the one every run that uses it acts as."} It works once, until ${escapeHtml(new Date(exp).toISOString().slice(11, 16))} UTC.`
+        : `Whoever opens this link chooses the account this run acts as. Until Halo knows who you are, it is offered only for runs this server's operator started. It works once, until ${escapeHtml(new Date(exp).toISOString().slice(11, 16))} UTC.`;
       return connectPage(
         `Connect ${connection}`,
         `<p>${escapeHtml(snap.pipeline)} is waiting for ${escapeHtml(connection)}${snap.meta.paused?.message ? `: ${escapeHtml(snap.meta.paused.message)}` : "."}</p>
-<p>You'll sign in at <strong>${escapeHtml(providerHost)}</strong>${conn.scopes.length ? `, which will ask to allow: ${conn.scopes.map(escapeHtml).join(", ")}` : ""}.</p>
-<p class="note">Whoever opens this link chooses the account this run acts as. Until Halo knows who you are, it is offered only for runs this server's operator started. It works once, until ${escapeHtml(new Date(exp).toISOString().slice(11, 16))} UTC.</p>
-<form method="post" action="${escapeHtml(url.pathname + url.search)}"><button>Continue to ${escapeHtml(providerHost)}</button></form>`,
+<p>You'll sign in at <strong>${escapeHtml(shown.host)}</strong>${shown.scopes.length ? `, which will ask to allow: ${shown.scopes.map(escapeHtml).join(", ")}` : ""}.${discover ? ` ${escapeHtml(new URL(discover.url).host)} named it as its sign-in.` : ""}${shown.dynamic ? " Halo registers itself there as a new client (dynamic client registration)." : ""}</p>
+<p class="note">${note}</p>
+<form method="post" action="${escapeHtml(url.pathname + url.search)}"><button>Continue to ${escapeHtml(shown.host)}</button></form>`,
       );
     }
     if (!spend(sig, exp)) return connectPage("Can't connect", "<p>This link was already used. Open the run in Halo Studio for a new one.</p>", 403);
-    const auth = authorizationRequest(conn, connectRedirect());
+    try {
+      if (discover) conn = await prepareMcpLogin({ name: connection, url: discover.url, project: discover.project, user: discover.user, settings: discover.settings, redirectUri: connectRedirect(), store: rt.tokenBroker.store, fetch: options.fetch, guard: discoveryGuard });
+    } catch (err) {
+      return connectPage("Can't connect", `<p>${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`, 409);
+    }
+    const auth = authorizationRequest(conn!, connectRedirect());
     privateDir(connectDir);
-    writeFileSync(pendingPath(auth.state), JSON.stringify({ runId, pauseId, connection, pipeline: snap.pipeline, state: auth.state, verifier: auth.verifier, redirectUri: connectRedirect(), until: Date.now() + CONNECT_MS }), { mode: 0o600 });
-    logger.log(`[halo] run ${runId.slice(0, 8)}: someone opened its link to connect ${connection} at ${providerHost}`);
+    writeFileSync(pendingPath(auth.state), JSON.stringify({ runId, pauseId, connection, pipeline: snap.pipeline, state: auth.state, verifier: auth.verifier, redirectUri: connectRedirect(), until: Date.now() + CONNECT_MS, who, ...(discover ? { discover: true } : {}) }), { mode: 0o600 });
+    logger.log(`[halo] run ${runId.slice(0, 8)}: ${person ?? "someone"} opened ${person ? "their" : "its"} link to connect ${connection} at ${shown.host}`);
     return new Response(null, { status: 303, headers: { Location: auth.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
   }
 
   async function connectCallback(url: URL): Promise<Response> {
     const state = url.searchParams.get("state") ?? "";
     const file = pendingPath(state);
-    let pending: { runId: string; pauseId: string; connection: string; pipeline: string; state: string; verifier: string; redirectUri: string; until: number } | undefined;
+    let pending: { runId: string; pauseId: string; connection: string; pipeline: string; state: string; verifier: string; redirectUri: string; until: number; who?: string; discover?: boolean } | undefined;
     try {
       pending = JSON.parse(readFileSync(file, "utf8"));
     } catch {}
@@ -967,12 +1071,16 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (!pending || pending.until < Date.now()) return connectPage("Can't connect", "<p>This sign-in is unknown or expired. Open the run in Halo Studio for a new link.</p>", 403);
     const snap = await runStore.load(pending.runId);
     if (!snap || snap.meta.paused?.id !== pending.pauseId || waitingConnection(snap) !== pending.connection) return connectPage("Nothing to connect", "<p>The run is no longer waiting for this connection.</p>", 409);
+    // Still offered to the person the link was made for (a user removed since, or the run's owner changed: no).
+    if (!connectOffered(snap, callerOf(pending.who ?? "operator"))) return connectPage("Can't connect", "<p>This run can't be connected from this link.</p>", 403);
     try {
       const rt = runtimeFor(entry(snap.pipeline), snap.meta.dryRun);
-      const conn = rt.connection(pending.connection);
+      // The token is kept for the run's owner's user (an invoker connection), or shared (a service one).
+      const target = pending.discover ? rt.discoverTarget(pending.connection, snap.meta.owner) : undefined;
+      const conn = target ? await discoveredConnection(rt.tokenBroker.store, { name: pending.connection, url: target.url, project: target.project, user: target.user, settings: target.settings }) : rt.connection(pending.connection, snap.meta.owner);
       const code = checkRedirect(conn, url.searchParams, pending.state);
       const got = await rt.tokenBroker.exchangeCode(conn, code, pending.verifier, pending.redirectUri, { fetch: options.fetch });
-      logger.log(`[halo] ${pending.connection} connected${got.account ? ` as ${got.account}` : ""} for run ${pending.runId.slice(0, 8)}`);
+      logger.log(`[halo] ${pending.connection} connected${got.account ? ` as ${got.account}` : ""}${conn.user && conn.user !== "local" ? ` for ${conn.user}` : ""} for run ${pending.runId.slice(0, 8)}`);
       const outcome = await resume(pending.runId, { connected: true }, `connect:${pending.connection}`, pending.pauseId);
       return connectPage(`Connected ${pending.connection}`, `<p>${got.account ? `Signed in as ${escapeHtml(got.account)}. ` : ""}${"work" in outcome ? "The run continues." : `The run didn't continue: ${escapeHtml(outcome.error)}`}</p><p class="note">You can close this tab.</p>`);
     } catch (err) {
@@ -985,12 +1093,16 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
     if (!snap?.waitingFor) return;
     const what = snap.waitingFor === "yield" ? "a human" : snap.waitingFor;
     const link = snap.meta.paused?.id ? linkFor(runId, snap.meta.paused.id) : "(no link: resume it with the API)";
-    const connect = waitingConnection(snap) ? await connectUrl(runId) : undefined;
+    const connection = waitingConnection(snap);
+    // A link in the announcement works for whoever has it: only for the operator's own runs.
+    const connect = connection && snap.meta.owner === "operator" ? await connectUrl(runId, OPERATOR) : undefined;
     const text = `‖ ${snap.pipeline} is waiting for ${what}${snap.meta.paused?.message ? `: ${snap.meta.paused.message}` : ""}\nRespond: ${link}${connect ? `\nConnect: ${connect}` : ""}`;
     logger.log(`[halo] ${text.replace("\n", " · ")}`);
     if (!slackUrl) return;
     // With a signing secret, Slack can tell us about clicks: answer right in the message.
     const pauseId = snap.meta.paused?.id;
+    // A person's run: a Connect button that asks Slack who clicked, and answers them alone with their link.
+    const personal = !!connection && !connect && users.size > 0 && !!snap.meta.owner?.startsWith("user:");
     const blocks =
       slackSecret && pauseId
         ? [
@@ -1006,7 +1118,8 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
                   value: JSON.stringify({ runId, pauseId, answer, sig: sign(runId, pauseId) }),
                 })),
                 // A link button: Slack opens it in the browser, and never sees the token or the code.
-                ...(connect ? [{ type: "button", text: { type: "plain_text", text: `Connect ${waitingConnection(snap)}` }, url: connect, action_id: "halo_connect" }] : []),
+                ...(connect ? [{ type: "button", text: { type: "plain_text", text: `Connect ${connection}` }, url: connect, action_id: "halo_connect" }] : []),
+                ...(personal ? [{ type: "button", text: { type: "plain_text", text: `Connect ${connection}` }, action_id: "halo_connect_user", value: JSON.stringify({ runId, pauseId, connect: connection, sig: sign(runId, pauseId) }) }] : []),
               ],
             },
           ]
@@ -1195,13 +1308,35 @@ export async function startServer(options: ServeOptions = {}): Promise<HaloServe
       },
     });
   };
-  const authorized = (req: Request, _url: URL) => {
-    if (!token) return true;
+  /**
+   * Who a request is from: the operator (HALO_SERVE_TOKEN, or anyone when there is no token and no
+   * users, on loopback), a user (their own token), or nobody (undefined: refused).
+   */
+  const identify = (req: Request): Caller | undefined => {
+    if (!token && !users.size) return OPERATOR;
     // Only the header: a token in the URL (?token=) ends up in access logs, proxies and browser history.
     // (Studio reads ?token= from its own page's address, client-side, and sends it as this header.)
     const header = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-    return safeEqual(header, token);
+    if (!header) return undefined;
+    let found: Caller | undefined = token && safeEqual(header, token) ? OPERATOR : undefined;
+    // Every user's token is compared, so how long it takes doesn't say which one matched.
+    for (const [name, u] of users) if (safeEqual(header, u.token) && !found) found = { owner: `user:${name}`, admin: u.admin, user: name };
+    return found;
   };
+  const NO_TOKEN = users.size ? "Missing or wrong token (Authorization: Bearer <your token>)" : "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)";
+
+  /** Who started a run: its first start event, else its paused or checkpointed state. Undefined for a run from before 1.12. */
+  const runOwner = async (runId: string): Promise<string | undefined> => {
+    const told = telemetry.ownerOf(runId);
+    if (told) return told;
+    const paused = await runStore.load(runId);
+    if (paused?.meta.owner) return paused.meta.owner;
+    const cp = checkpointOf(runId);
+    return cp ? (await readSnapshot(cp))?.meta.owner : undefined;
+  };
+  /** Whether a caller may see and act on a run: its owner, or an admin. */
+  const mayAct = (caller: Caller, owner: string | undefined) => caller.admin || (owner !== undefined && owner === caller.owner);
+  const NOT_YOURS = "This run was started by someone else: only they, or an admin, can act on it";
 
   // Hosts this server answers to: blocks DNS rebinding (a site resolving its own
   // name to 127.0.0.1 to read the API from the user's browser).
@@ -1314,7 +1449,7 @@ ${files}
     } catch {
       return json({ error: "No Slack payload" }, 400);
     }
-    let action: { runId?: string; pauseId?: string; answer?: string; sig?: string; after?: number };
+    let action: { runId?: string; pauseId?: string; answer?: string; sig?: string; after?: number; connect?: string };
     try {
       action = JSON.parse(payload.actions?.[0]?.value ?? "");
     } catch {
@@ -1323,6 +1458,26 @@ ${files}
     if (!action.runId || !/^[\w-]+$/.test(action.runId)) return new Response("", { status: 200 });
     // A pause notice's button answers only that pause.
     if (action.pauseId !== undefined && !(action.sig && safeEqual(action.sig, sign(action.runId, action.pauseId)))) return json({ error: "Bad button signature" }, 403);
+    /** Answer only the person who clicked (Slack shows it to them alone). */
+    const tell = (text: string) => {
+      if (payload.response_url && /^https:\/\/hooks\.slack\.com\//.test(payload.response_url)) {
+        void (options.fetch ?? fetch)(payload.response_url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text }) }).catch(() => {});
+      }
+      return new Response("", { status: 200 });
+    };
+    // With users, a click acts as the Halo user whose `slack` is the clicker's verified Slack id, and only then.
+    const slackId = payload.user?.id;
+    const mapped = users.size ? [...users].find(([, u]) => !!u.slack && !!slackId && u.slack === slackId) : undefined;
+    const clicker: Caller | undefined = mapped ? { owner: `user:${mapped[0]}`, admin: mapped[1].admin, user: mapped[0] } : undefined;
+    if (users.size && !clicker) return tell("Your Slack account isn't linked to a Halo user here, so this button can't act for you. Ask the server's operator to add your Slack id to halo.json's users.");
+    // A person's Connect button: a link for them alone, if the run is theirs to connect.
+    if (action.connect !== undefined) {
+      const snap = await runStore.load(action.runId);
+      if (!snap || snap.meta.paused?.id !== action.pauseId || waitingConnection(snap) !== action.connect) return tell("This run is no longer waiting for that connection.");
+      const link = await connectUrl(action.runId, clicker);
+      return tell(link ? `Connect ${action.connect} (this link is for you, works once, for 10 minutes): ${link}` : `This run's ${action.connect} can be connected only by the person who started it${clicker?.admin ? "" : " (or, for a shared connection, an admin)"}.`);
+    }
+    if (clicker && !mayAct(clicker, await runOwner(action.runId))) return tell(NOT_YOURS);
     // A Slack tool's button answers only the run's next pause after the post, and never a tool-call approval.
     if (action.pauseId === undefined) {
       const snap = await runStore.load(action.runId);
@@ -1331,7 +1486,7 @@ ${files}
       }
       action.pauseId = snap.meta.paused.id;
     }
-    const who = payload.user?.username ?? payload.user?.name ?? payload.user?.id ?? "someone";
+    const who = clicker?.user ?? payload.user?.username ?? payload.user?.name ?? payload.user?.id ?? "someone";
     const answer = String(action.answer ?? "approve");
     const event = answerToEvent(answer);
     const outcome = await resume(action.runId, isPlainObject(event) ? { ...event, by: who, via: "slack" } : event, undefined, action.pauseId);
@@ -1446,12 +1601,14 @@ ${files}
   const mcp = createMcpServer(
     {
       list: () => [...entries.values()].map((e) => ({ name: e.name, params: e.decl.params, ...mcpTool(e) })),
-      call: async (name, args, signal) => {
+      call: async (name, args, signal, caller) => {
         const e = entry(name);
         const runId = crypto.randomUUID();
-        logger.log(`[halo] ${name} started by MCP (run ${runId.slice(0, 8)})`);
+        // The caller is "owner" (the operator's token), "user:<name>", or a package's "consumer:<id>".
+        const owner = !caller || caller === "owner" ? "operator" : caller;
+        logger.log(`[halo] ${name} started by MCP${owner === "operator" ? "" : ` for ${owner}`} (run ${runId.slice(0, 8)})`);
         const t0 = performance.now();
-        const work = e.runtime.run(name, args, { runId, signal });
+        const work = e.runtime.run(name, args, { runId, signal, owner });
         track(runId, name, work);
         const key = callerKey.getStore();
         try {
@@ -1593,21 +1750,29 @@ ${files}
           // The same checks as /api: no other site's pages (DNS rebinding, cross-site posts), then the token.
           const refusedMcp = crossSite(req, url);
           if (refusedMcp) return json({ error: refusedMcp }, 403);
-          if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
-          return mcp.handleHttp(req, "owner");
+          const mcpCaller = identify(req);
+          if (!mcpCaller) return json({ error: NO_TOKEN }, 401);
+          // A user's MCP calls start runs that are theirs (the operator's token stays "owner", as before).
+          return mcp.handleHttp(req, mcpCaller.owner === "operator" ? "owner" : mcpCaller.owner);
         }
 
         if (!path.startsWith("/api/")) return new Response("Not found", { status: 404 });
         const refused = crossSite(req, url);
         if (refused) return json({ error: refused }, 403);
-        if (!authorized(req, url)) return json({ error: "Missing or wrong token (Authorization: Bearer <HALO_SERVE_TOKEN>)" }, 401);
+        const caller = identify(req);
+        if (!caller) return json({ error: NO_TOKEN }, 401);
 
         if (path === "/api/health") return json({ ok: true, pipelines: entries.size });
+
+        // Who this is, for Studio: their name and whether they see everyone's runs.
+        if (path === "/api/me" && req.method === "GET") return json({ owner: caller.owner, admin: caller.admin, ...(caller.user ? { user: caller.user } : {}), users: users.size > 0 });
 
         const blob = path.match(/^\/api\/blobs\/([0-9a-f]{64})$/);
         if (blob && req.method === "GET") return blobResponse(blob[1]!);
 
         if (path === "/api/evolve" || path.startsWith("/api/evolve/")) {
+          // Evolve runs any pipeline on recorded traffic (everyone's): for admins.
+          if (!caller.admin) return json({ error: "Evolve is for admins: it runs pipelines on everyone's recorded runs" }, 403);
           const handled = await evolveRoutes(req, path, readJson);
           if (handled) return handled;
         }
@@ -1630,7 +1795,7 @@ ${files}
           const multipart = (req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data");
           const body = (multipart ? await uploadBody(req, startRun[1]!) : ((await readJson(req)) ?? {})) as { args?: Record<string, unknown>; wait?: boolean; idempotencyKey?: string; dryRun?: boolean };
           const dryRun = body.dryRun === true || /^(1|true)$/i.test(req.headers.get("halo-dry-run") ?? "");
-          const { runId, duplicate } = startOnce(startRun[1]!, body.args ?? {}, "API", { idempotencyKey: req.headers.get("idempotency-key") ?? body.idempotencyKey, dryRun });
+          const { runId, duplicate } = startOnce(startRun[1]!, body.args ?? {}, caller.user ? `API (${caller.user})` : "API", { idempotencyKey: req.headers.get("idempotency-key") ?? body.idempotencyKey, dryRun, owner: caller.owner });
           const extra = { ...(duplicate ? { duplicate: true } : {}), ...(dryRun || options.dryRun ? { dryRun: true } : {}) };
           if (!body.wait) return json({ runId, status: inflight.has(runId) ? "running" : (recent.get(runId)?.status ?? "running"), ...extra }, 202);
           const result = await settled(runId);
@@ -1638,18 +1803,24 @@ ${files}
         }
 
         // `running` says this server is working on it now; a run with no end and no `running` was started elsewhere (the CLI) or cut short.
-        if (path === "/api/runs" && req.method === "GET") return json(telemetry.listRuns(Number(url.searchParams.get("limit") ?? 50)).map((r) => ({ ...r, running: inflight.has(r.run_id) })));
+        // A user sees their own runs; an admin (and the operator) everyone's.
+        if (path === "/api/runs" && req.method === "GET") return json(telemetry.listRuns(Number(url.searchParams.get("limit") ?? 50), caller.admin ? undefined : caller.owner).map((r) => ({ ...r, running: inflight.has(r.run_id) })));
+
+        // Everything below is about one run: only its owner, or an admin, sees it or acts on it.
+        const about = path.match(/^\/api\/runs\/([\w-]+)(?:\/|$)/)?.[1];
+        const ownerOfRun = about ? await runOwner(about) : undefined;
+        if (about && !mayAct(caller, ownerOfRun)) return req.method === "GET" ? json({ error: "No such run" }, 404) : json({ error: NOT_YOURS }, 403);
 
         const run = path.match(/^\/api\/runs\/([\w-]+)$/);
         if (run && req.method === "GET") {
           const runId = run[1]!;
           const snap = await runStore.load(runId);
           const paused = snap?.waitingFor
-            ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: await approvalUrl(runId), ...(waitingConnection(snap) ? { connection: waitingConnection(snap), connectUrl: await connectUrl(runId) } : {}) }
+            ? { waitingFor: snap.waitingFor, message: snap.meta.paused?.message, stage: snap.nextStage, approveUrl: await approvalUrl(runId), ...(waitingConnection(snap) ? { connection: waitingConnection(snap), connectUrl: await connectUrl(runId, caller) } : {}) }
             : undefined;
           const events = telemetry.run(runId);
           const pipeline = events.find((r) => r.type === "stream_start")?.stage as string | undefined;
-          return json({ runId, running: inflight.has(runId), paused, controls: await controlsFor(runId, pipeline), events });
+          return json({ runId, running: inflight.has(runId), ...(ownerOfRun ? { owner: ownerOfRun } : {}), paused, controls: await controlsFor(runId, pipeline), events });
         }
 
         const control = path.match(/^\/api\/runs\/([\w-]+)\/(stop|budget|resume|rewind|steps)$/);

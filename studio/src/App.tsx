@@ -4,7 +4,7 @@ import { IconEye, IconEyeOff, IconPlus } from "@tabler/icons-react";
 import "./App.css";
 import { api, ApiError, message, saveToken, type PipelineInfo, type RunSummary } from "./api";
 import { EvolveStart, EvolveView, evolveOutcome, type EvolveSummary } from "./Evolve";
-import { clock, dayLabel, duration, money } from "./format";
+import { clock, dayLabel, duration, money, ownerLabel } from "./format";
 import { Pipelines, runStatus } from "./Pipelines";
 import { RunView } from "./RunView";
 import { RUN_LABEL } from "./trace";
@@ -120,7 +120,7 @@ function RunList({ runs, selected, now, loaded }: { runs: RunSummary[]; selected
                   <StatusDot status={s} />
                   <span className="item-main">
                     <span className="item-title">{r.pipeline ?? "Unknown pipeline"}</span>
-                    <span className="item-sub">{[s === "completed" ? "" : RUN_LABEL[s], s === "waiting" ? "" : duration(Math.max(0, took)), r.cost ? money(r.cost) : ""].filter(Boolean).join(" · ")}</span>
+                    <span className="item-sub">{[s === "completed" ? "" : RUN_LABEL[s], s === "waiting" ? "" : duration(Math.max(0, took)), r.cost ? money(r.cost) : "", r.owner && r.owner !== "operator" ? ownerLabel(r.owner) : ""].filter(Boolean).join(" · ")}</span>
                   </span>
                   <time className="item-time">{clock(r.start_time)}</time>
                 </a>

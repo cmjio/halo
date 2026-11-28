@@ -396,10 +396,12 @@ async function status(flags: AuthFlags, deps: AuthDeps, io: AuthIo, root: string
   return 0;
 }
 
-export const AUTH_HELP = `halo auth login <Connection> [--device] [--no-browser] [file.halo]
-                                        Connect an OAuth declaration to an account: opens the
-                                        browser (or, with --device or no browser, prints a code)
-halo auth logout <Connection> [--no-revoke]   Revoke it at the provider and forget it
+export const AUTH_HELP = `halo auth login <Connection> [--device] [--no-browser] [--user <name>] [file.halo]
+                                        Connect an OAuth declaration (or an MCP tool with
+                                        auth: "discover") to an account: opens the browser (or,
+                                        with --device or no browser, prints a code). --user: for
+                                        one of halo serve's users, on an as: "invoker" connection
+halo auth logout <Connection> [--no-revoke] [--user <name>]   Revoke it at the provider and forget it
 halo auth list [file.halo]              Every connection and whether this machine is connected
 halo auth status [<Connection>]         Its account, scopes and expiry`;
 

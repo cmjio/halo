@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Splitter } from "@ark-ui/react";
 import { IconAlertTriangle, IconArrowLeft, IconBrain, IconChevronDown, IconChevronRight, IconCoin, IconExternalLink, IconHandStop, IconPlayerPlay, IconPlayerStop, IconPointFilled, IconChevronsDown, IconChevronsUp, IconHistory, IconTool, IconX } from "@tabler/icons-react";
 import { api, message, type RunControls, type RunDetail, type RunStep } from "./api";
-import { clock, count, duration, money, plural, when } from "./format";
+import { clock, count, duration, money, ownerLabel, plural, when } from "./format";
 import { axisTicks, tickLabel, buildTrace, parsePayload, rowsOf, RUN_LABEL, type TraceOrder as Order, type Span, type Trace } from "./trace";
 import { ConfirmDialog, CopyButton, Field, rowKeys, Segments, StatusPill, Tip, useNow, Value } from "./ui";
 
@@ -719,6 +719,7 @@ export function RunView({ id }: { id: string }) {
           </div>
           <p className="run-facts">
             <span>{when(trace.start)}</span>
+            {detail.owner && <span>Started by {ownerLabel(detail.owner)}</span>}
             <span>{trace.status === "waiting" ? `${duration(trace.active)} of work so far` : duration(trace.end - trace.start)}</span>
             {spent > 0 && <span>{money(spent)}</span>}
             {trace.tokens > 0 && <span>{count(trace.tokens)} tokens</span>}

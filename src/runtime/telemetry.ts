@@ -36,13 +36,15 @@ export interface RunSummary {
   /** completed, halted, paused, or error; null while running. */
   status: string | null;
   cost: number | null;
+  /** Who started it ("user:alice", "operator", "service", "consumer:acme"), when the host said; null otherwise. */
+  owner?: string | null;
 }
 
 /** Map a runtime event to a Studio row (undefined for events Studio doesn't show). */
 export function toTelemetryRow(e: RuntimeEvent, now = Date.now()): TelemetryRow | undefined {
   switch (e.type) {
     case "run":
-      if (e.status === "start") return { runId: e.runId, timestamp: now, type: "stream_start", stage: e.pipeline, payload: null };
+      if (e.status === "start") return { runId: e.runId, timestamp: now, type: "stream_start", stage: e.pipeline, payload: e.owner ? { owner: e.owner } : null };
       if (e.status === "error") return { runId: e.runId, timestamp: now, type: "error", stage: e.pipeline, payload: { error: e.error, cost: e.cost, ...(e.stopped ? { stopped: true } : {}) } };
       return { runId: e.runId, timestamp: now, type: "stream_end", stage: e.pipeline, payload: { status: e.status, output: e.output, cost: e.cost }, durationMs: e.durationMs };
     case "stage":
@@ -136,8 +138,13 @@ export class SqliteTelemetry {
     );
   }
 
-  /** Recent runs, newest first: pipeline, final status (null while running), duration, and cost. */
-  listRuns(limit = 50): RunSummary[] {
+  /**
+   * Recent runs, newest first: pipeline, final status (null while running), duration, cost, and who
+   * started it. With `owner`, only that owner's runs.
+   */
+  listRuns(limit = 50, owner?: string): RunSummary[] {
+    const n = Math.min(1000, Math.max(1, Math.floor(Number(limit)) || 50));
+    const mine = owner === undefined ? "" : `WHERE t.run_id IN (SELECT o.run_id FROM telemetry o WHERE o.type = 'stream_start' AND json_extract(o.payload, '$.owner') = ?)`;
     return this.db
       .query(
         `SELECT t.run_id, MIN(t.timestamp) AS start_time, MAX(t.timestamp) AS end_time, COUNT(*) AS event_count,
@@ -145,10 +152,17 @@ export class SqliteTelemetry {
            (SELECT CASE WHEN e.type = 'error' THEN 'error' ELSE json_extract(e.payload, '$.status') END
               FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS status,
            (SELECT json_extract(e.payload, '$.cost')
-              FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS cost
-         FROM telemetry t GROUP BY t.run_id ORDER BY start_time DESC LIMIT ?`,
+              FROM telemetry e WHERE e.run_id = t.run_id AND e.type IN ('stream_end', 'error') ORDER BY e.id DESC LIMIT 1) AS cost,
+           (SELECT json_extract(s.payload, '$.owner') FROM telemetry s WHERE s.run_id = t.run_id AND s.type = 'stream_start' ORDER BY s.id LIMIT 1) AS owner
+         FROM telemetry t ${mine} GROUP BY t.run_id ORDER BY start_time DESC LIMIT ?`,
       )
-      .all(Math.min(1000, Math.max(1, Math.floor(Number(limit)) || 50))) as RunSummary[];
+      .all(...(owner === undefined ? [n] : [owner, n])) as RunSummary[];
+  }
+
+  /** Who started a run, from its first start row (undefined when it wasn't said, or the run is unknown). */
+  ownerOf(runId: string): string | undefined {
+    const row = this.db.query(`SELECT json_extract(payload, '$.owner') AS owner FROM telemetry WHERE run_id = ? AND type = 'stream_start' ORDER BY id LIMIT 1`).get(runId) as { owner?: string | null } | null;
+    return row?.owner ?? undefined;
   }
 
   /** Rows for one run, oldest first. */
